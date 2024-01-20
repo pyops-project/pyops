@@ -1,9 +1,8 @@
-from fastapi import Depends, FastAPI
+from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from starlette.status import HTTP_200_OK
 
-from orm.database import Base, engine
-
+import routers.scriptlet.job
 import routers.scriptlet.inventory
 import routers.scriptlet.manager
 import routers.scriptlet.editor
@@ -16,10 +15,9 @@ from helper import sites, files
 app = FastAPI(docs_url=None)
 
 app.include_router(routers.scriptlet.inventory.router)
+app.include_router(routers.scriptlet.job.router)
 app.include_router(routers.scriptlet.manager.router)
 app.include_router(routers.scriptlet.editor.router)
-
-Base.metadata.create_all(engine)
 
 @app.get("/")
 async def root():
@@ -52,6 +50,16 @@ async def menu():
                         "id": "scriptlet_manager",
                         "name": "Manager",
                         "path": "/scriptlet/manager"
+                    },
+                    {
+                        "id": "scriptlet_scheduler",
+                        "name": "Scheduler",
+                        "path": "/scriptlet/scheduler"
+                    },
+                    {
+                        "id": "scriptlet_monitor",
+                        "name": "Monitor",
+                        "path": "/scriptlet/monitor"
                     },
                 ]
             }]

@@ -1,17 +1,14 @@
-import time
+from datetime import datetime
 
-from fastapi import Depends, APIRouter, HTTPException
-from fastapi.responses import HTMLResponse
-from starlette.status import HTTP_200_OK, HTTP_404_NOT_FOUND, HTTP_409_CONFLICT, HTTP_500_INTERNAL_SERVER_ERROR
-from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException
+from starlette.status import HTTP_404_NOT_FOUND, HTTP_409_CONFLICT, HTTP_500_INTERNAL_SERVER_ERROR
+from pydantic import BaseModel, create_model
 
-from sqlalchemy import select, and_, or_
+from sqlalchemy import select, and_
 from sqlalchemy.orm import Session
 
 from orm.database import engine
 from orm.scriptlet import Scriptlet, ScriptletDraft, ScriptletRevision
-
-from helper import sites, files
 
 router = APIRouter()
 
@@ -24,12 +21,6 @@ class SaveArgument(BaseModel):
     group: str
     name: str
     code: str
-
-class RunArgument(BaseModel):
-    group: str
-    name: str
-    param: str
-    debug: bool = False
 
 @router.get("/scriptlet/inventory/list", tags=["scriptlet"])
 async def list_get():
@@ -85,12 +76,12 @@ async def item_post(sa: SaveArgument):
         with Session(engine) as session:
             scriptlet = session.get(Scriptlet, (sa.group, sa.name))
             if scriptlet == None:
-                raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Scriptlet {}/{} not existing".format(group, name))
+                raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Scriptlet {}/{} not existing".format(sa.group, sa.name))
 
             revision = ScriptletRevision(
                 group       = sa.group,
                 name        = sa.name,
-                revision    = time.time(),
+                revision    = datetime.now(),
                 owner       = "TODO",
                 code        = sa.code
             )
@@ -138,7 +129,7 @@ async def draft_post(sa: SaveArgument):
         with Session(engine) as session:
             scriptlet = session.get(Scriptlet, (sa.group, sa.name))
             if scriptlet == None:
-                raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Scriptlet {}/{} not existing".format(group, name))
+                raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Scriptlet {}/{} not existing".format(sa.group, sa.name))
             
             draft = session.get(ScriptletDraft, (sa.group, sa.name, "TODO"))
             if draft == None:
@@ -158,7 +149,7 @@ async def draft_post(sa: SaveArgument):
         raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
     
 @router.delete("/scriptlet/inventory/draft", tags=["scriptlet"])
-async def draft_post(group: str, name: str):
+async def draft_del(group: str, name: str):
     """
     Deletes a Scriptlet's draft
     """
@@ -198,46 +189,6 @@ async def code_get(group: str, name: str):
                     return {"code": revision.code}
                 else:
                     return {"code": ""}
-
-    except HTTPException as ex:
-        raise ex
-    except Exception as ex:
-        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
-
-def run_code(param: str, code: str):
-    glob = {}
-    exec(param, glob)
-    exec(code, glob)
-    return glob['result']
-
-@router.post("/scriptlet/inventory/run", tags=["scriptlet"])
-async def run(ru: RunArgument):
-    try:
-        with Session(engine) as session:
-            scriptlet = session.get(Scriptlet, (ru.group, ru.name))
-            if scriptlet == None:
-                raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Scriptlet {}/{} not existing".format(group, name))
-
-            if ru.debug:
-                draft = session.get(ScriptletDraft, (ru.group, ru.name, "TODO"))
-            else:
-                draft = None
-
-            if draft != None:
-                return {"result": run_code(ru.param, draft.code)}
-            else:
-                stmt = select(ScriptletRevision).where(
-                    and_(
-                        ScriptletRevision.group == ru.group,
-                        ScriptletRevision.name == ru.name
-                    )
-                ).order_by(ScriptletRevision.revision.desc())
-                revision = session.scalar(stmt)
-                
-                if revision != None:
-                    return {"result": run_code(ru.param, revision.code)}
-                else:
-                    return {"result": "nothing to do"}
 
     except HTTPException as ex:
         raise ex

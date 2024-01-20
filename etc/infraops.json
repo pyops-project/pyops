@@ -1,0 +1,12 @@
+{
+    "web": {
+        "bind": "127.0.0.1:8000",
+        "worker": 4,
+        "timeout": 300
+    },
+    "log": {
+        "access": "../log/access.log",
+        "info": "../log/info.log",
+        "loglevel": "debug"
+    }
+}

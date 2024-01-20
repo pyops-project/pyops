@@ -10,7 +10,7 @@ RUN apt update && \
 
 # Python Base Requirements
 RUN DEBIAN_FRONTEND=noninteractive apt -y install \
-        python3-dev python3-full python3-schedule \
+        python3-dev python3-full \
         gunicorn python3-gunicorn uvicorn python3-uvicorn python3-fastapi python3-bonsai \
         python3-sqlalchemy python3-sqlalchemy-utils && \
     apt clean

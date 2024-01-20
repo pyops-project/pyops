@@ -25,8 +25,10 @@
             var param = null; var editor = null; var out = null; var errout = null;
             var draftLock = false;
 
+            var job_id = null;
+
             function log(o) {
-                errout.setValue("");
+                errout.setValue("");              
                 out.setValue(o);
                 out.moveCursorTo(0,0);
                 
@@ -54,12 +56,49 @@
                         editor.moveCursorTo(0,0);
                         draftLock = false;
                     } else
-                        errlog(r.statusText);
-                }).catch((e)=>errlog(e.toString()));
+                        console.error("refresh", r.statusText);
+                }).catch((e)=>console.error(e.toString()));
+            }
+
+            async function poll() {
+                console.debug(`poll()`)
+                fetch(`/scriptlet/job/item?id=${job_id}`).then(async (r)=>{
+                    if(r.ok) {
+                        const d = await r.json();
+                        console.debug("pull", d);
+
+                        if(["todo", "dequeued", "running", "cancel"].includes(d.state)) {
+                            setTimeout(function() { poll(); }, 500);
+                        } else {
+                            $("#btn_cancel").attr("disabled", "disabled")
+                            $("#btn_run").removeAttr("disabled")
+                            fetch(`/scriptlet/job/item?id=${job_id}`, {
+                                method: "DELETE"
+                            }).catch((e)=>console.error(e.toString()));
+
+                            if(d.state == "done")
+                                log(d.result);
+                            else if(d.result != null)
+                                errlog(d.result);
+                            else
+                                errlog(d.state);
+                            job_id = null;
+                        }
+                    } else
+                        console.error("poll", r.statusText);
+                }).catch((e)=>console.error(e));
+            }
+
+            function cancel() {
+                console.debug(`cancel()`)
+                $("#btn_cancel").attr("disabled", "disabled")
+                $("#btn_run").removeAttr("disabled")
+                fetch(`/scriptlet/job/cancel?id=${job_id}`);
+                console.debug("cancel", job_id);
             }
 
             function run() {
-                console.debug("run");
+                console.debug(`run()`);
                 
                 const data = {
                     "group": group,
@@ -68,8 +107,8 @@
                     "debug": true
                 };
                 
-                fetch(`/scriptlet/inventory/run`, {
-                    method: "POST",
+                fetch(`/scriptlet/job/item`, {
+                    method: "PUT",
                     headers: {
                         "Content-Type": "application/json"
                     },
@@ -77,10 +116,16 @@
                 }).then(async (r)=>{
                     if(r.ok) {
                         const d = await r.json();
-                        log(d.result);
+                        console.debug("run", d.job);
+
+                        job_id = d.job
+                        $("#btn_run").attr("disabled", "disabled")
+                        $("#btn_cancel").removeAttr("disabled")
+
+                        poll();
                     } else
-                        errlog(await r.text());
-                }).catch((e)=>errlog(e.toString()));
+                        console.error(await r.text());
+                }).catch((e)=>console.error(e.toString()));
             }
 
             function fontSizeChanged() {
@@ -121,12 +166,12 @@
                     }).then(async (r)=>{
                         if(r.ok) {
                             if(draft)
-                                log("Draft Stored");
+                                console.debug("save", "Draft Stored");
                             else
-                                log("Stored");
+                                console.debug("save", "Stored");
                         } else
-                            errlog(r.statusText);
-                    }).catch((e)=>errlog(e.toString()));
+                            console.error(r.statusText);
+                    }).catch((e)=>console.error("save", e.toString()));
                 }
             }
 
@@ -135,11 +180,11 @@
                     method: "DELETE"
                 }).then(async (r)=>{
                     if(r.ok) {
-                        log("Rolled Back to last revision");
+                        console.debug("rollback", "to last revision");
                         refresh();
                     } else
-                        errlog(r.statusText);
-                }).catch((e)=>errlog(e.toString()));
+                        console.error(r.statusText);
+                }).catch((e)=>console.error(e.toString()));
             }
 
             $(document).ready(() =>{
@@ -217,13 +262,18 @@
                     </button>
                 </li>
                 <li class="nav-item m-1">
-                    <button type="button" class="btn btn-warning" onclick="rollback()">
+                    <button type="button" class="btn btn-danger" onclick="rollback()">
                         <span class="material-icons-round">backspace</span>
                     </button>
                 </li>
                 <li class="nav-item m-1">
-                    <button type="button" class="btn btn-success" onclick="run()">
+                    <button id="btn_run" type="button" class="btn btn-success" onclick="run()">
                         <span class="material-icons-round">play_arrow</span>
+                    </button>
+                </li>
+                <li class="nav-item m-1">
+                    <button id="btn_cancel" type="button" class="btn btn-danger" onclick="cancel()" disabled="disabled">
+                        <span class="material-icons-round">cancel</span>
                     </button>
                 </li>
                 <li class="nav-item m-1">

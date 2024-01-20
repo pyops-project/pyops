@@ -1,12 +1,8 @@
-from fastapi import Depends, APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import HTMLResponse
 from starlette.status import HTTP_200_OK, HTTP_500_INTERNAL_SERVER_ERROR
-from pydantic import BaseModel
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session
-
-from helper import sites, files
+from helper import sites
 
 router = APIRouter()
 

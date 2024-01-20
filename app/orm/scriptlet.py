@@ -1,5 +1,4 @@
-from sqlalchemy import Boolean, Column, ForeignKey, Float, String
-from sqlalchemy.orm import relationship
+from sqlalchemy import Column, String, DateTime
 
 from orm.database import Base
 
@@ -14,7 +13,7 @@ class ScriptletRevision(Base):
     __tablename__ = "scriptlet_revision"
     group = Column(String, primary_key=True)
     name = Column(String, primary_key=True)
-    revision = Column(Float, primary_key=True)
+    revision = Column(DateTime, primary_key=True)
     owner = Column(String, index=True)
     code = Column(String)
 
