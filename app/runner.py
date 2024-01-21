@@ -39,7 +39,7 @@ def getNextToDo():
         else:
             return None
 
-def assignJob(id: int, pid: int):
+def assignJob(id: str, pid: int):
     print("assignJob(id={})".format(id))
 
     with Session(engine) as session:
@@ -47,7 +47,7 @@ def assignJob(id: int, pid: int):
         job.pid = pid
         session.commit()
 
-def loadJob(id: int):
+def loadJob(id: str):
     print("loadJob(id={})".format(id))
 
     with Session(engine) as session:
@@ -84,7 +84,7 @@ def loadJob(id: int):
 
         return job.param, code
 
-def finishJob(id: int, state: str, result: str):
+def finishJob(id: str, state: str, detail: str):
     print("finishJob(id={})".format(id))
 
     with Session(engine) as session:
@@ -95,7 +95,7 @@ def finishJob(id: int, state: str, result: str):
             if job.state == "running":
                 job.state = state
             job.end = datetime.now()
-            job.result = result
+            job.detail = detail
             job.pid = None
             session.commit()
 
@@ -106,19 +106,21 @@ def disposeJobs():
 
         session.commit()
 
-def run(id: int, param: str, code: str, q: Queue):
+def run(id: str, param: str, code: str, q: Queue, log_base: str):
     print("{:<10}start({})".format(current_process().pid, id))
-    try:
-        # TODO !!! python virtual environment
+    with open(os.path.join(log_base, "{}.out.log".format(id)), 'w', 1) as sys.stdout:
+        with open(os.path.join(log_base, "{}.err.log".format(id)), 'w', 1) as sys.stderr:
+            try:
+                # TODO !!! python virtual environment
 
-        glob = {}
-        exec(param, glob)
-        exec(code, glob)
+                glob = {}
+                exec(param, glob)
+                exec(code, glob)
 
-        q.put({"id": id, "state": "done", "result": glob['result']})
-    except Exception:
-        q.put({"id": id, "state": "failed", "result": traceback.format_exc()})
-    
+                q.put({"id": id, "state": "done", "detail": None})
+            except Exception:
+                q.put({"id": id, "state": "failed", "detail": traceback.format_exc()})
+            
     print("{:<10}end({})".format(current_process().pid, id))
 
 def cleanProcesses(processes: dict[int, Process]):
@@ -141,11 +143,11 @@ def getNextToTerm():
 
 def term(job, processes):
     print("term({})".format(job))
-    processes[job["pid"]].kill()
+    processes[job["pid"]].terminate()
 
     postTerm(job["id"])
 
-def postTerm(id: int):
+def postTerm(id: str):
     print("postTerm({})".format(id))
 
     with Session(engine) as session:
@@ -157,7 +159,7 @@ def postTerm(id: int):
                 job.state = "canceled"
             session.commit()
 
-def main():
+def main(log_base):
     killer = GracefulKiller()
     
     q = Queue()
@@ -190,7 +192,7 @@ def main():
         # handle jobs "failed" or "done"
         while not q.empty():
             msg = q.get()
-            finishJob(msg["id"], msg["state"], msg["result"])
+            finishJob(msg["id"], msg["state"], msg["detail"])
 
         try:
             job = getNextToDo()
@@ -199,7 +201,7 @@ def main():
                 try:
                     param, code = loadJob(job)
                     print("Run job {}".format(job))
-                    p = Process(target=run, kwargs={"id": job, "param": param, "code": code, "q": q})
+                    p = Process(target=run, kwargs={"id": job, "param": param, "code": code, "q": q, "log_base": log_base})
                     p.start()
                     assignJob(job, p.pid)
                     processes[p.pid] = p
@@ -219,7 +221,7 @@ def main():
     # handle finished or failed jobs
     while not q.empty():
         msg = q.get()
-        finishJob(msg["id"], msg["state"], msg["result"])
+        finishJob(msg["id"], msg["state"], msg["detail"])
 
     # dispose already remove jobs
     disposeJobs()

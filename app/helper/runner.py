@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from sqlalchemy import select, and_, or_
 from sqlalchemy.orm import Session
 
@@ -7,6 +9,7 @@ from orm.job import Job
 def enqueue(group: str, name: str, owner: str, kind: str, param: str):
     with Session(engine) as session:
         job = Job(
+            id = "{}_{}_{}_{}".format(group, name, datetime.now(), owner),
             group = group,
             name = name,
             owner = owner,
@@ -20,16 +23,16 @@ def enqueue(group: str, name: str, owner: str, kind: str, param: str):
 
         return job.id
 
-def query(id: int):
+def query(id: str):
     with Session(engine) as session:
         job = session.get(Job, id)
 
         if job != None:
-            return {"state": job.state, "result": job.result}
+            return {"state": job.state, "detail": job.detail}
         else:
             return None
 
-def remove(id: int):
+def remove(id: str):
     with Session(engine) as session:
         job = session.get(Job, id)
 
@@ -39,7 +42,7 @@ def remove(id: int):
 
         return job
 
-def cancel(id: int):
+def cancel(id: str):
     with Session(engine) as session:
         job = session.get(Job, id)
 

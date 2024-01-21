@@ -1,4 +1,4 @@
-import time
+import os.path
 
 from fastapi import APIRouter, HTTPException
 from starlette.status import HTTP_404_NOT_FOUND, HTTP_500_INTERNAL_SERVER_ERROR
@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from orm.database import engine
 from orm.scriptlet import Scriptlet
 
-from helper import runner
+from helper import runner, files
 
 router = APIRouter()
 
@@ -35,11 +35,23 @@ async def job_put(ru: RunArgument):
         raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
 
 @router.get("/scriptlet/job/item", tags=["scriptlet"])
-async def job_get(id: int):
+async def job_get(id: str):
     try:
         job = runner.query(id)
         if job == None:
             raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Job {} not existing".format(id))
+
+        log_base = files.conf_log()["base"]
+        stdout_log_path = os.path.join(log_base, "{}.out.log".format(id))
+        stderr_log_path = os.path.join(log_base, "{}.err.log".format(id))
+
+        if os.path.exists(stdout_log_path):
+            with open(stdout_log_path, 'r') as fout:
+                job["stdout"] = fout.read()
+        
+        if os.path.exists(stderr_log_path):
+            with open(stderr_log_path, 'r') as fout:
+                job["stderr"] = fout.read()
 
         return job
 
@@ -49,7 +61,7 @@ async def job_get(id: int):
         raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
 
 @router.delete("/scriptlet/job/item", tags=["scriptlet"])
-async def job_del(id: int):
+async def job_del(id: str):
     try:
         job = runner.remove(id)
         if job == None:
@@ -63,7 +75,7 @@ async def job_del(id: int):
         raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
 
 @router.get("/scriptlet/job/cancel", tags=["scriptlet"])
-async def cancel(id: int):
+async def cancel(id: str):
     try:
         job = runner.cancel(id)
 

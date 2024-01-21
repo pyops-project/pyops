@@ -27,19 +27,13 @@
 
             var job_id = null;
 
-            function log(o) {
-                errout.setValue("");              
+            function log(o, e) {             
                 out.setValue(o);
+                errout.setValue(e);
                 out.moveCursorTo(0,0);
-                
-                // hack because of editor render problem on writing out
-                setTimeout(function() { param.resize(); editor.resize(); out.resize(); errout.resize(); }, 500);
-            }
-
-            function errlog(o) {
-                out.setValue("");
-                errout.setValue(o);
                 errout.moveCursorTo(0,0);
+                out.renderer.scrollToLine(Number.POSITIVE_INFINITY)
+                errout.renderer.scrollToLine(Number.POSITIVE_INFINITY)
                 
                 // hack because of editor render problem on writing out
                 setTimeout(function() { param.resize(); editor.resize(); out.resize(); errout.resize(); }, 500);
@@ -68,6 +62,10 @@
                         console.debug("pull", d);
 
                         if(["todo", "dequeued", "running", "cancel"].includes(d.state)) {
+                            if(d.stdout !== undefined)
+                                log(d.stdout.trim(), d.state);
+                            else
+                                log("", d.state)
                             setTimeout(function() { poll(); }, 500);
                         } else {
                             $("#btn_cancel").attr("disabled", "disabled")
@@ -76,12 +74,11 @@
                                 method: "DELETE"
                             }).catch((e)=>console.error(e.toString()));
 
+                            console.debug("poll", d.state);
                             if(d.state == "done")
-                                log(d.result);
-                            else if(d.result != null)
-                                errlog(d.result);
+                                log(d.stdout.trim() ? d.stdout.trim() : d.state, d.stderr.trim());
                             else
-                                errlog(d.state);
+                                log(d.stdout+d.state, d.stderr+d.detail)
                             job_id = null;
                         }
                     } else
