@@ -27,7 +27,8 @@ RUN DEBIAN_FRONTEND=noninteractive apt -y install \
 RUN DEBIAN_FRONTEND=noninteractive apt -y install \
         python3-pandas python3-numpy python3-scipy \
         python3-pattern python3-docx python3-xlsxwriter python3-pypdf2 \
-        python3-zipp python3-zipstream-ng && \
+        python3-zipp python3-zipstream-ng \
+        python3-croniter && \
     apt clean
 
 RUN DEBIAN_FRONTEND=noninteractive apt -y install pwgen && \

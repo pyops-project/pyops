@@ -1,7 +1,7 @@
 # https://docs.vultr.com/how-to-deploy-fastapi-applications-with-gunicorn-and-nginx-on-ubuntu-20-04
 # https://docs.gunicorn.org/en/stable/settings.html#on-starting
 
-import json, os.path
+import json, os, os.path
 from multiprocessing import Process
 
 from orm.database import Base, engine
@@ -24,6 +24,7 @@ capture_output = True
 wsgi_app = "web:app"
 worker_class = "uvicorn.workers.UvicornWorker"
 
+os.makedirs(os.path.join(os.path.curdir, conf["log"]["jobs"]))
 p = Process(target=runner.main, kwargs={"log_base": os.path.join(os.path.curdir, conf["log"]["jobs"])})
 
 def on_starting(server):
