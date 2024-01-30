@@ -6,11 +6,23 @@ from helper import sites
 
 router = APIRouter()
 
-@router.get("/scriptlet/editor")
+@router.get("/scriptlet/editor_task")
 async def get():
     try:
         return HTMLResponse(
-            content=sites.get("scriptlet/editor"),
+            content=sites.get("scriptlet/editor_task"),
+            status_code=HTTP_200_OK
+        )
+    except HTTPException as ex:
+        raise ex
+    except Exception as ex:
+        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
+
+@router.get("/scriptlet/editor_library")
+async def get():
+    try:
+        return HTMLResponse(
+            content=sites.get("scriptlet/editor_library"),
             status_code=HTTP_200_OK
         )
     except HTTPException as ex:

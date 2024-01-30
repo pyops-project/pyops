@@ -1,5 +1,6 @@
-import signal, time, os, sys
+import signal, time, os, sys, re, json
 import traceback
+import croniter
 from datetime import datetime
 from multiprocessing import Process, current_process, Queue
 
@@ -9,6 +10,9 @@ from sqlalchemy.orm import Session
 from orm.database import engine
 from orm.scriptlet import Scriptlet, ScriptletDraft, ScriptletRevision
 from orm.job import Job
+from orm.schedule import Schedule
+
+from helper import runner
 
 class GracefulKiller:
     kill_now = False
@@ -47,11 +51,42 @@ def assignJob(id: str, pid: int):
         job.pid = pid
         session.commit()
 
+def loadLib(group: str, name: str, debug: bool):
+    print("loadLib(group={}, name={}, debug={})".format(group, name, debug))
+    with Session(engine) as session:
+        scriptlet = session.get(Scriptlet, (group, name))
+        if scriptlet == None:
+            raise Exception("Scriptlet {}/{} not existing".format(group, name))
+        else:
+            if debug:
+                draft = session.get(ScriptletDraft, (group, name, "TODO"))
+            else:
+                draft = None
+
+            if draft != None:
+                code = draft.code
+            else:
+                stmt = select(ScriptletRevision).where(
+                    and_(
+                        ScriptletRevision.group == group,
+                        ScriptletRevision.name == name
+                    )
+                ).order_by(ScriptletRevision.revision.desc())
+                revision = session.scalar(stmt)
+
+                if revision != None:
+                    code = revision.code
+                else:
+                    code = ""
+
+        return code
+
 def loadJob(id: str):
     print("loadJob(id={})".format(id))
 
     with Session(engine) as session:
         job = session.get(Job, id)
+        debug = job.kind == "debug"
         scriptlet = session.get(Scriptlet, (job.group, job.name))
         if scriptlet == None:
             raise Exception("Scriptlet {}/{} not existing".format(job.group, job.name))
@@ -82,7 +117,7 @@ def loadJob(id: str):
 
             session.commit()
 
-        return job.param, code
+        return job.param, code, debug
 
 def finishJob(id: str, state: str, detail: str):
     print("finishJob(id={})".format(id))
@@ -106,7 +141,7 @@ def disposeJobs():
 
         session.commit()
 
-def run(id: str, param: str, code: str, q: Queue, log_base: str):
+def run(id: str, param: str, code: str, libs: list[str], q: Queue, log_base: str):
     print("{:<10}start({})".format(current_process().pid, id))
     with open(os.path.join(log_base, "{}.out.log".format(id)), 'w', 1) as sys.stdout:
         with open(os.path.join(log_base, "{}.err.log".format(id)), 'w', 1) as sys.stderr:
@@ -115,6 +150,8 @@ def run(id: str, param: str, code: str, q: Queue, log_base: str):
 
                 glob = {}
                 exec(param, glob)
+                for l in libs:
+                    exec(l, glob)
                 exec(code, glob)
 
                 q.put({"id": id, "state": "done", "detail": None})
@@ -159,6 +196,28 @@ def postTerm(id: str):
                 job.state = "canceled"
             session.commit()
 
+def schedule():
+    now = datetime.now()
+
+    with Session(engine) as session:
+        stmt = select(Schedule.id,
+                        Schedule.group,
+                        Schedule.name,
+                        Schedule.schedule,
+                        Schedule.param,
+                        Schedule.last)
+        schedules = session.execute(stmt)
+
+        for s in schedules:
+            cron = croniter.croniter(s.schedule, now)
+            prev = cron.get_prev(datetime)
+            if not s.last or prev > s.last:
+                runner.enqueue(s.group, s.name, "TODO", "task", s.param)
+
+                schedule = session.get(Schedule, s.id)
+                schedule.last = prev
+                session.commit()
+
 def main(log_base):
     killer = GracefulKiller()
     
@@ -199,15 +258,23 @@ def main(log_base):
 
             if job != None:
                 try:
-                    param, code = loadJob(job)
+                    param, code, debug = loadJob(job)
+
+                    libs = []
+
+                    for lm in re.finditer(r'!\{([a-zA-Z0-9_]+)::([a-zA-Z0-9_]+)\}', code):
+                        libs.append(loadLib(lm.group(1), lm.group(2), debug))
+                    code = re.sub(r'\!{([a-zA-Z0-9_]+)::([a-zA-Z0-9_]+)\}', r'# importing \1::\2', code)
+
                     print("Run job {}".format(job))
-                    p = Process(target=run, kwargs={"id": job, "param": param, "code": code, "q": q, "log_base": log_base})
+                    p = Process(target=run, kwargs={"id": job, "param": param, "code": code, "libs": libs, "q": q, "log_base": log_base})
                     p.start()
                     assignJob(job, p.pid)
                     processes[p.pid] = p
                 except Exception:
                     finishJob(job, "failed", traceback.format_exc())
             else:
+                schedule()
                 time.sleep(0.1)
         except Exception:
             print(traceback.format_exc())

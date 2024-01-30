@@ -16,24 +16,21 @@
 
             function genTaskActions(group, name) {
                 return `
-                    <button type="button" onclick="onDelete('${group}', '${name}')" class="btn btn-danger p-0">
+                    <button type="button" onclick="del('${group}', '${name}')" class="btn btn-danger p-0">
                         <span class="material-icons-round">delete</span>
                     </button>
-                    <button type="button" onclick="onEdit('${group}', '${name}')" class="btn btn-warning p-0">
+                    <button type="button" onclick="onEditTask('${group}', '${name}')" class="btn btn-warning p-0">
                         <span class="material-icons-round">edit</span>
-                    </button>
-                    <button type="button" class="btn btn-success p-0">
-                        <span class="material-icons-round">play_arrow</span>
                     </button>
                 `
             }
 
-            function genViewActions(group, name) {
+            function genLibraryActions(group, name) {
                 return `
-                    <button type="button" onclick="onDelete('${group}', '${name}')" class="btn btn-danger p-0">
+                    <button type="button" onclick="del('${group}', '${name}')" class="btn btn-danger p-0">
                         <span class="material-icons-round">delete</span>
                     </button>
-                    <button type="button" onclick="onEdit('${group}', '${name}')" class="btn btn-warning p-0">
+                    <button type="button" onclick="onEditLibrary('${group}', '${name}', 'library')" class="btn btn-warning p-0">
                         <span class="material-icons-round">edit</span>
                     </button>
                 `
@@ -42,8 +39,8 @@
             function genActions(group, name, type) {
                 if(type == "task")
                     return genTaskActions(group, name);
-                else(type == "view")
-                    return genViewActions(group, name);
+                else if(type == "library")
+                    return genLibraryActions(group, name);
             }
 
             function genScriptletItem(group, name, description, type) {
@@ -79,10 +76,16 @@
                 $("#createModal-type").val("task");
             }
 
-            function onEdit(group, name) {
+            function onEditTask(group, name) {
                 console.debug("onEdit", group, name);
 
-                window.open(`${window.location.origin}/scriptlet/editor?group=${group}&name=${name}`,`InfraOps - Scriptlet/Editor ${group}/${name}`,"titlebar=no,toolbar=no,menubar=no,scrollbars=no");
+                window.open(`${window.location.origin}/scriptlet/editor_task?group=${group}&name=${name}`,`InfraOps - Scriptlet/Editor ${group}/${name}`,"titlebar=no,toolbar=no,menubar=no,scrollbars=no");
+            }
+
+            function onEditLibrary(group, name) {
+                console.debug("onEdit", group, name);
+
+                window.open(`${window.location.origin}/scriptlet/editor_library?group=${group}&name=${name}`,`InfraOps - Scriptlet/Editor ${group}/${name}`,"titlebar=no,toolbar=no,menubar=no,scrollbars=no");
             }
 
             function onCreate(edit = false) {
@@ -90,11 +93,12 @@
 
                 const group = $("#createModal-group").val();
                 const name = $("#createModal-name").val();
+                const type = $("#createModal-type").val();
 
                 const data = {
                     "group": group,
                     "name": name,
-                    "type": $("#createModal-type").val()
+                    "type": type
                 }
 
                 console.debug("PUT", "/scriptlet/inventory/item", data);
@@ -111,15 +115,21 @@
                         clearCreateModal();
                         refreshList();
 
-                        if(edit)
-                            onEdit(group, name);
-                    } else
-                        $("#createModal-error").text(r.statusText);
+                        if(edit) {
+                            if(type == "library")
+                                onEditLibrary(group, name);
+                            else if(type == "task")
+                                onEditTask(group, name);
+                        }
+                    } else {
+                        const d = await r.json();
+                        $("#createModal-error").text(d.detail);
+                    }
                 }).catch((e)=>$("#createModal-error").text(e.toString()));
             }
 
-            function onDelete(group, name) {
-                console.debug("onDelete");
+            function del(group, name) {
+                console.debug("del");
 
                 console.debug("DELETE", `/scriptlet/inventory/item?group=${group}&name=${name}`);
 
@@ -190,6 +200,7 @@
                             <label for="createModal-type" class="col-form-label">Type:</label>
                             <select  id="createModal-type" class="form-select">
                                 <option value="task" selected>Task</option>
+                                <option value="library">Library</option>
                                 <!--
                                 <option value="model">Model</option>
                                 <option value="controller">Controller</option>
