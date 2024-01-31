@@ -32,7 +32,7 @@ async def list_get():
             stmt = select(Scriptlet.group,
                           Scriptlet.name,
                           Scriptlet.description,
-                          Scriptlet.type)
+                          Scriptlet.type).order_by(Scriptlet.group, Scriptlet.name)
             scriptlets = session.execute(stmt)
             
             return [dict(r._mapping) for r in scriptlets]
