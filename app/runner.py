@@ -141,7 +141,7 @@ def disposeJobs():
 
         session.commit()
 
-def run(id: str, param: str, code: str, libs: list[str], q: Queue, log_base: str):
+def run(id: str, param: str, code: str, libs: list[str], q: Queue, data_base: str, log_base: str):
     print("{:<10}start({})".format(current_process().pid, id))
     with open(os.path.join(log_base, "{}.out.log".format(id)), 'w', 1) as sys.stdout:
         with open(os.path.join(log_base, "{}.err.log".format(id)), 'w', 1) as sys.stderr:
@@ -149,6 +149,7 @@ def run(id: str, param: str, code: str, libs: list[str], q: Queue, log_base: str
                 # TODO !!! python virtual environment
 
                 glob = {}
+                exec("workspace = {}".format(data_base), glob)
                 exec(param, glob)
                 for l in libs:
                     exec(l, glob)
@@ -218,7 +219,7 @@ def schedule():
                 schedule.last = prev
                 session.commit()
 
-def main(log_base):
+def main(data_base, log_base):
     killer = GracefulKiller()
     
     q = Queue()
@@ -267,7 +268,7 @@ def main(log_base):
                     code = re.sub(r'\!{([a-zA-Z0-9_]+)::([a-zA-Z0-9_]+)\}', r'# importing \1::\2', code)
 
                     print("Run job {}".format(job))
-                    p = Process(target=run, kwargs={"id": job, "param": param, "code": code, "libs": libs, "q": q, "log_base": log_base})
+                    p = Process(target=run, kwargs={"id": job, "param": param, "code": code, "libs": libs, "q": q, "data_base": data_base, "log_base": log_base})
                     p.start()
                     assignJob(job, p.pid)
                     processes[p.pid] = p

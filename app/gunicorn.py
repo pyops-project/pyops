@@ -24,9 +24,16 @@ capture_output = True
 wsgi_app = "web:app"
 worker_class = "uvicorn.workers.UvicornWorker"
 
+if not os.path.exists(os.path.join(os.path.curdir, conf["data"]["jobs"])):
+    os.makedirs(os.path.join(os.path.curdir, conf["data"]["jobs"]))
+
 if not os.path.exists(os.path.join(os.path.curdir, conf["log"]["jobs"])):
     os.makedirs(os.path.join(os.path.curdir, conf["log"]["jobs"]))
-p = Process(target=runner.main, kwargs={"log_base": os.path.join(os.path.curdir, conf["log"]["jobs"])})
+
+p = Process(target=runner.main, kwargs={
+    "data_base": os.path.join(os.path.curdir, conf["data"]["jobs"]),
+    "log_base": os.path.join(os.path.curdir, conf["log"]["jobs"])
+})
 
 def on_starting(server):
     Base.metadata.create_all(engine)

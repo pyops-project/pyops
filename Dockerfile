@@ -10,9 +10,9 @@ RUN apt update && \
 
 # Python Base Requirements
 RUN DEBIAN_FRONTEND=noninteractive apt -y install \
-        python3-dev python3-full \
+        python3-dev python3-full pipenv python3-venv \
         gunicorn python3-gunicorn uvicorn python3-uvicorn python3-fastapi python3-bonsai \
-        python3-sqlalchemy python3-sqlalchemy-utils && \
+        python3-sqlalchemy python3-sqlalchemy-utils python3-croniter && \
     apt clean
 
 # Python Connectivity Modules
@@ -25,16 +25,22 @@ RUN DEBIAN_FRONTEND=noninteractive apt -y install \
 
 # Python Data Modules
 RUN DEBIAN_FRONTEND=noninteractive apt -y install \
-        python3-pandas python3-numpy python3-scipy \
         python3-pattern python3-docx python3-xlsxwriter python3-pypdf2 \
-        python3-zipp python3-zipstream-ng \
-        python3-croniter && \
+        python3-zipp python3-zipstream-ng && \
     apt clean
 
-RUN DEBIAN_FRONTEND=noninteractive apt -y install pwgen && \
+# Python Science Modules
+RUN DEBIAN_FRONTEND=noninteractive apt -y install \
+        python3-pandas python3-numpy python3-scipy python3-matplotlib python3-matplotlib-venn \
+        python3-sklearn python3-sklearn-pandas python3-torch python3-skorch && \
     apt clean
 
-RUN mkdir -p /opt/infraops/app && mkdir -p /opt/infraops/data
+# Python Web Modules
+RUN DEBIAN_FRONTEND=noninteractive apt -y install \
+        python3-scrapy python3-bs4 && \
+    apt clean
+
+RUN mkdir -p /opt/infraops/app && mkdir -p /opt/infraops/data && mkdir -p /opt/infraops/logs && mkdir -p /opt/infraops/etc
 
 COPY app /opt/infraops/app
 COPY run.sh /opt/infraops/

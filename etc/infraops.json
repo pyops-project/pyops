@@ -4,6 +4,9 @@
         "worker": 4,
         "timeout": 300
     },
+    "data": {
+        "jobs": "../data/jobs"
+    },
     "log": {
         "access": "../log/access.log",
         "info": "../log/info.log",
