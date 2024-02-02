@@ -15,8 +15,10 @@ with open(os.path.join("..", "etc", "infraops.json"), "r") as file:
 bind = conf["web"]["bind"]
 workers = conf["web"]["worker"]
 timeout = conf["web"]["timeout"]
-accesslog = os.path.join(os.path.curdir, conf["log"]["access"])
-errorlog = os.path.join(os.path.curdir, conf["log"]["info"])
+if "access" in conf["log"] and conf["log"]["access"]:
+    accesslog = os.path.join(os.path.curdir, conf["log"]["access"])
+if "info" in conf["log"] and conf["log"]["info"]:
+    errorlog = os.path.join(os.path.curdir, conf["log"]["info"])
 loglevel = conf["log"]["loglevel"]
 capture_output = True
 

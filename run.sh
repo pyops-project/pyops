@@ -3,4 +3,4 @@
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 
 cd $DIR/app
-gunicorn -c gunicorn.py
+gunicorn -c gunicorn.py --access-logfile - --error-logfile -

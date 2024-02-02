@@ -148,8 +148,13 @@ def run(id: str, param: str, code: str, libs: list[str], q: Queue, data_base: st
             try:
                 # TODO !!! python virtual environment
 
-                glob = {}
-                exec("workspace = {}".format(data_base), glob)
+                glob = {
+                    "workspace": os.path.join(data_base, "{}".format(id))
+                }
+
+                if not os.path.exists(glob["workspace"]):
+                    os.makedirs(glob["workspace"])
+                    
                 exec(param, glob)
                 for l in libs:
                     exec(l, glob)
