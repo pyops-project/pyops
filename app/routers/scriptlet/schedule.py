@@ -3,9 +3,9 @@ from datetime import datetime
 
 from fastapi import APIRouter, HTTPException
 from starlette.status import HTTP_404_NOT_FOUND, HTTP_400_BAD_REQUEST, HTTP_500_INTERNAL_SERVER_ERROR
-from pydantic import BaseModel, create_model
+from pydantic import BaseModel
 
-from sqlalchemy import select, and_
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orm.database import engine

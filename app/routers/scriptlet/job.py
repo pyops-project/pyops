@@ -4,10 +4,12 @@ from fastapi import APIRouter, HTTPException
 from starlette.status import HTTP_404_NOT_FOUND, HTTP_500_INTERNAL_SERVER_ERROR
 from pydantic import BaseModel
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orm.database import engine
 from orm.scriptlet import Scriptlet
+from orm.job import Job
 
 from helper import runner, files
 
@@ -19,7 +21,27 @@ class RunArgument(BaseModel):
     param: str
     debug: bool = False
 
-@router.put("/scriptlet/job/item", tags=["scriptlet"])
+@router.get("/scriptlet/job/list", tags=["job"])
+async def list_get():
+    """
+    Returns a list of available Schedules
+    """
+    try:
+        with Session(engine) as session:
+            stmt = select(Job.id,
+                          Job.kind,
+                          Job.state,
+                          Job.detail,
+                          Job.param).where(Job.state != "remove").order_by(Job.id)
+            db_jobs = session.execute(stmt)
+            
+            jobs = [dict(r._mapping) for r in db_jobs] + runner.orphans()
+
+            return jobs
+    except Exception as ex:
+        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
+
+@router.put("/scriptlet/job/item", tags=["job"])
 async def job_put(ru: RunArgument):
     try:
         with Session(engine) as session:
@@ -34,14 +56,14 @@ async def job_put(ru: RunArgument):
     except Exception as ex:
         raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
 
-@router.get("/scriptlet/job/item", tags=["scriptlet"])
+@router.get("/scriptlet/job/item", tags=["job"])
 async def job_get(id: str):
     try:
         job = runner.query(id)
         if job == None:
             raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Job {} not existing".format(id))
 
-        log_base = files.conf_log()["base"]
+        log_base = files.conf_log()["jobs"]
         stdout_log_path = os.path.join(log_base, "{}.out.log".format(id))
         stderr_log_path = os.path.join(log_base, "{}.err.log".format(id))
 
@@ -60,12 +82,15 @@ async def job_get(id: str):
     except Exception as ex:
         raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
 
-@router.delete("/scriptlet/job/item", tags=["scriptlet"])
+@router.delete("/scriptlet/job/item", tags=["job"])
 async def job_del(id: str):
     try:
         job = runner.remove(id)
         if job == None:
-            raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Job {} not existing".format(id))
+            if runner.drop(id):
+                return {"id": id}
+            else:
+                raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Job {} not existing".format(id))
 
         return job
 
@@ -74,7 +99,7 @@ async def job_del(id: str):
     except Exception as ex:
         raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
 
-@router.get("/scriptlet/job/cancel", tags=["scriptlet"])
+@router.get("/scriptlet/job/cancel", tags=["job"])
 async def cancel(id: str):
     try:
         job = runner.cancel(id)

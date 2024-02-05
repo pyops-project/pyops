@@ -1,0 +1,212 @@
+<html>
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+
+    	<meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+
+		<link rel="stylesheet" href="/files/css/bootstrap/bootstrap.min.css">
+        <link rel="stylesheet" href="/files/css/material/material-icons.css">
+
+        <script src="/files/js/jquery.min.js"></script>
+        <script src="/files/js/js.cookie.min.js"></script>
+        <script src="/files/js/bootstrap/bootstrap.bundle.min.js"></script>
+
+        <script>
+            'use strict';
+
+            function genActions(j) {
+                if(["canceled", "failed", "done", "data"].includes(j.state))
+                    return genDoneActions(j);
+                else if(["cancel", "dequeued"].includes(j.state))
+                    return genTransActions(j);
+                else
+                    return genUndoneActions(j);
+            }
+
+            function genTransActions(j) {
+                return `
+                    <button type="button" onclick="view('${j.id}')" class="btn btn-success p-0">
+                        <span class="material-icons-round">view_headline</span>
+                    </button>
+                    <button type="button" onclick="copyParam('${j.id}')" class="btn btn-warning p-0">
+                        <span class="material-icons-round">copy_all</span>
+                    </button>
+                `
+            }
+
+            function genUndoneActions(j) {
+                return `
+                    <button type="button" onclick="cancel('${j.id}')" class="btn btn-danger p-0">
+                        <span class="material-icons-round">cancel</span>
+                    </button>
+                    <button type="button" onclick="view('${j.id}')" class="btn btn-success p-0">
+                        <span class="material-icons-round">view_headline</span>
+                    </button>
+                    <button type="button" onclick="copyParam('${j.id}')" class="btn btn-warning p-0">
+                        <span class="material-icons-round">copy_all</span>
+                    </button>
+                `
+            }
+
+            function genDoneActions(j) {
+                return `
+                    <button type="button" onclick="del('${j.id}')" class="btn btn-danger p-0">
+                        <span class="material-icons-round">delete</span>
+                    </button>
+                    <button type="button" onclick="view('${j.id}')" class="btn btn-success p-0">
+                        <span class="material-icons-round">view_headline</span>
+                    </button>
+                    <button type="button" onclick="copyParam('${j.id}')" class="btn btn-warning p-0">
+                        <span class="material-icons-round">copy_all</span>
+                    </button>
+                `
+            }
+
+            function genJobItem(j) {
+                return `
+                    <tr>
+                        <th scope="row">${j.id}</th>
+                        <td>${j.kind}</td>
+                        <td>
+                            <span class="d-inline-block" tabindex="0" data-toggle="tooltip" title='${j.detail ? j.detail.replace(/'/g, "&#39;") : ""}'>
+                                ${j.state}
+                            </span>
+                        </td>
+                        <td>${genActions(j)}</td>
+                        <td id="param_${j.id}" style="display:none;">${j.param}</td>
+                    </tr>
+                `;
+            }
+
+            function copyParam(id) {
+                const param = $(`#param_${id}`).text();
+                navigator.clipboard.writeText(param);
+            }
+
+            function refreshList() {
+                $("#jobs").empty();
+                fetch("/scriptlet/job/list").then(async (r)=>{
+                    console.debug("GET", "/scriptlet/job/list", r)
+                    if(r.ok) {
+                        const d = await r.json();
+                        console.debug("jobs", d);
+                        for(const i of d)
+                            $("#jobs").append(genJobItem(i));
+                    } else
+                        console.error("GET", "/scriptlet/job/list", r.statusText);
+                }).catch((e)=>console.error("GET", "/scriptlet/job/list", e.toString()));
+            }
+
+            function clearCreateModal() {
+                $("#createModal-error").text("");
+                $("#createModal-group").val("");
+                $("#createModal-name").val("");
+                $("#createModal-schedule").val("");
+                $("#createModal-param").val("");
+            }
+
+            function onCreate() {
+                console.debug("onCreate");
+
+                const group = $("#createModal-group").val();
+                const name = $("#createModal-name").val();
+                const schedule = $("#createModal-schedule").val();
+                const param = $("#createModal-param").val();
+
+                const data = {
+                    "group": group,
+                    "name": name,
+                    "schedule": schedule,
+                    "param": param
+                }
+
+                console.debug("PUT", "/scriptlet/schedule/item", data);
+
+                fetch("/scriptlet/schedule/item", {
+                    method: "PUT",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify(data)
+                }).then(async (r)=>{
+                    if(r.ok) {
+                        $("#createModal").modal('hide');
+                        clearCreateModal();
+                        refreshList();
+                    } else {
+                        const d = await r.json();
+                        $("#createModal-error").text(d.detail);
+                    }
+                }).catch((e)=>$("#createModal-error").text(e.toString()));
+            }
+
+            function cancel(id) {
+                console.debug("cancel(${id})");
+
+                console.debug("GET", `/scriptlet/job/cancel?id=${id}`);
+
+                fetch(`/scriptlet/job/cancel?id=${id}`).then(async (r)=>{
+                    if(r.ok)
+                        refreshList();
+                    else
+                        console.error("DELETE", `/scriptlet/job/cancel?id=${id}`, r.statusText);
+                }).catch((e)=>console.error("DELETE", `/scriptlet/job/cancel?id=${id}`, e.toString()));
+            }
+
+            function del(id) {
+                console.debug("del(${id})");
+
+                console.debug("DELETE", `/scriptlet/job/item?id=${id}`);
+
+                fetch(`/scriptlet/job/item?id=${id}`, {
+                    method: "DELETE"
+                }).then(async (r)=>{
+                    if(r.ok)
+                        refreshList();
+                    else
+                        console.error("DELETE", `/scriptlet/job/item?id=${id}`, r.statusText);
+                }).catch((e)=>console.error("DELETE", `/scriptlet/job/item?id=${id}`, e.toString()));
+            }
+
+            function view(id) {
+                console.debug(`view(${id})`);
+
+                window.open(`${window.location.origin}/scriptlet/view_job?id=${id}`,`InfraOps - Scriptlet/View ${id}`,"titlebar=no,toolbar=no,menubar=no,scrollbars=no");
+            }
+
+            $(document).ready(() => {
+                refreshList();
+            });
+        </script>
+    </head>
+    <body class="bg-light">
+        <nav class="navbar navbar-expand-sm navbar-dark bg-dark pt-3">
+            <ul class="navbar-nav">
+                <li class="navbar-brand">
+                    <span class="material-icons-round">description</span>
+                    <span>Scriptlet/Monitor</span>
+                </li>
+                
+                <li class="nav-item m-1">
+                    <button type="button" class="btn btn-success" data-bs-toggle="modal" data-bs-target="#createModal">
+                        <span class="material-icons-round">add</span>
+                    </button>
+                </li>
+            </ul>
+        </nav>
+
+        <table class="table table-secondary">
+            <thead>
+              <tr>
+                <th scope="col">ID</th>
+                <th scope="col">Kind</th>
+                <th scope="col">State</th>
+                <th scope="col">Actions</th>
+                <th style="display:none;"></th>
+              </tr>
+            </thead>
+            <tbody id="jobs">
+            </tbody>
+        </table>
+    </body>
+</html>

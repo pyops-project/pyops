@@ -104,7 +104,7 @@
             }
 
             function del(id) {
-                console.debug("del");
+                console.debug("del(${id})");
 
                 console.debug("DELETE", `/scriptlet/schedule/item?id=${id}`);
 
@@ -119,7 +119,7 @@
             }
 
             function run(id) {
-                console.debug(`run()`);
+                console.debug(`run(${id})`);
                 
                 fetch(`/scriptlet/schedule/run?id=${id}`).then(async (r)=>{
                     if(r.ok) {

@@ -6,6 +6,7 @@ import routers.scriptlet.job
 import routers.scriptlet.schedule
 import routers.scriptlet.inventory
 import routers.scriptlet.manager
+import routers.scriptlet.monitor
 import routers.scriptlet.scheduler
 import routers.scriptlet.editor
 
@@ -21,6 +22,7 @@ app.include_router(routers.scriptlet.job.router)
 app.include_router(routers.scriptlet.scheduler.router)
 app.include_router(routers.scriptlet.schedule.router)
 app.include_router(routers.scriptlet.manager.router)
+app.include_router(routers.scriptlet.monitor.router)
 app.include_router(routers.scriptlet.editor.router)
 
 @app.get("/")

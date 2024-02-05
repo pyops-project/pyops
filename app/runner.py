@@ -23,9 +23,22 @@ class GracefulKiller:
     def exit_gracefully(self, signum, frame):
         self.kill_now = True
 
-def restoreJobs():
-    # TODO update all where state == "dequeued" to state = "todo"
-    return
+def handleOddJobs():
+    with Session(engine) as session:
+        stmt = select(Job.id).where(
+            or_(Job.state == "dequeued", Job.state == "running")
+        ).order_by(Job.id.asc())
+
+        jobs = session.execute(stmt)
+
+        for j in jobs:
+            job = session.get(Job, j)
+            if job.state == "dequeued":
+                job.state = "todo"
+            else:
+                job.state = "failed"
+                job.detail = "incomplete execution detected on startup"
+        session.commit()
 
 def getNextToDo():
     with Session(engine) as session:
@@ -230,7 +243,7 @@ def main(data_base, log_base):
     q = Queue()
 
     # restore jobs which were taken out of queue but not executed due to crash
-    restoreJobs()
+    handleOddJobs()
 
     processes: dict[int, Process] = {}
 
