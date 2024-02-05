@@ -68,11 +68,8 @@
                                 log("", d.state)
                             setTimeout(function() { poll(); }, 500);
                         } else {
-                            $("#btn_cancel").attr("disabled", "disabled")
-                            $("#btn_run").removeAttr("disabled")
-                            fetch(`/scriptlet/job/item?id=${job_id}`, {
-                                method: "DELETE"
-                            }).catch((e)=>console.error(e.toString()));
+                            $("#btn_cancel").attr("disabled", "disabled");
+                            $("#btn_run").removeAttr("disabled");
 
                             console.debug("poll", d.state);
                             if(d.state == "done")

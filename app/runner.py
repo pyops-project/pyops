@@ -69,7 +69,7 @@ def loadLib(group: str, name: str, debug: bool):
     with Session(engine) as session:
         scriptlet = session.get(Scriptlet, (group, name))
         if scriptlet == None:
-            raise Exception("Scriptlet {}/{} not existing".format(group, name))
+            raise Exception("Scriptlet {}::{} not existing".format(group, name))
         else:
             if debug:
                 draft = session.get(ScriptletDraft, (group, name, "TODO"))
@@ -102,7 +102,7 @@ def loadJob(id: str):
         debug = job.kind == "debug"
         scriptlet = session.get(Scriptlet, (job.group, job.name))
         if scriptlet == None:
-            raise Exception("Scriptlet {}/{} not existing".format(job.group, job.name))
+            raise Exception("Scriptlet {}::{} not existing".format(job.group, job.name))
         else:
             if job.kind == "debug":
                 draft = session.get(ScriptletDraft, (job.group, job.name, "TODO"))
@@ -141,7 +141,7 @@ def finishJob(id: str, state: str, detail: str):
         if job != None:
             # only set new state if old is "running"
             if job.state == "running":
-                if state == "done" and job.drop_done:
+                if state == "done" and job.drop_done and not job.kind == "debug":
                     job.state = "remove"
                 else:
                     job.state = state
@@ -214,8 +214,7 @@ def postTerm(id: str):
         if job != None:
             if job.state == "remove":
                 session.delete(job)
-                if job.drop_done:
-                    runner.drop(id)
+                runner.drop(id)
             else:
                 job.state = "canceled"
             session.commit()
@@ -287,9 +286,9 @@ def main(data_base, log_base):
 
                     libs = []
 
-                    for lm in re.finditer(r'!\{([a-zA-Z0-9_]+)::([a-zA-Z0-9_]+)\}', code):
+                    for lm in re.finditer(r'!\{([a-zA-Z0-9_-]+)::([a-zA-Z0-9_-]+)\}', code):
                         libs.append(loadLib(lm.group(1), lm.group(2), debug))
-                    code = re.sub(r'\!{([a-zA-Z0-9_]+)::([a-zA-Z0-9_]+)\}', r'# importing \1::\2', code)
+                    code = re.sub(r'\!{([a-zA-Z0-9_-]+)::([a-zA-Z0-9_-]+)\}', r'# importing \1::\2', code)
 
                     print("Run job {}".format(job))
                     p = Process(target=run, kwargs={"id": job, "param": param, "code": code, "libs": libs, "q": q, "data_base": data_base, "log_base": log_base})

@@ -49,7 +49,7 @@ async def item_put(cr: CreateArgument):
             scriptlet = session.get(Scriptlet, (cr.group, cr.name))
             
             if scriptlet != None:
-                raise HTTPException(status_code=HTTP_409_CONFLICT, detail="Scriptlet {}/{} already existing".format(cr.group, cr.name))
+                raise HTTPException(status_code=HTTP_409_CONFLICT, detail="Scriptlet {}::{} already existing".format(cr.group, cr.name))
 
             scriptlet = Scriptlet(
                 group       = cr.group,
@@ -76,7 +76,7 @@ async def item_post(sa: SaveArgument):
         with Session(engine) as session:
             scriptlet = session.get(Scriptlet, (sa.group, sa.name))
             if scriptlet == None:
-                raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Scriptlet {}/{} not existing".format(sa.group, sa.name))
+                raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Scriptlet {}::{} not existing".format(sa.group, sa.name))
 
             revision = ScriptletRevision(
                 group       = sa.group,
@@ -108,7 +108,7 @@ async def item_del(group: str, name: str):
             scriptlet = session.get(Scriptlet, (group, name))
             draft = session.get(ScriptletDraft, (group, name, "TODO"))
             if scriptlet == None:
-                raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Scriptlet {}/{} not existing".format(group, name))
+                raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Scriptlet {}::{} not existing".format(group, name))
             
             session.delete(scriptlet)
             if draft != None:
@@ -129,7 +129,7 @@ async def draft_post(sa: SaveArgument):
         with Session(engine) as session:
             scriptlet = session.get(Scriptlet, (sa.group, sa.name))
             if scriptlet == None:
-                raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Scriptlet {}/{} not existing".format(sa.group, sa.name))
+                raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Scriptlet {}::{} not existing".format(sa.group, sa.name))
             
             draft = session.get(ScriptletDraft, (sa.group, sa.name, "TODO"))
             if draft == None:
@@ -170,7 +170,7 @@ async def code_get(group: str, name: str):
         with Session(engine) as session:
             scriptlet = session.get(Scriptlet, (group, name))
             if scriptlet == None:
-                raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Scriptlet {}/{} not existing".format(group, name))
+                raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Scriptlet {}::{} not existing".format(group, name))
 
             draft = session.get(ScriptletDraft, (group, name, "TODO"))
 

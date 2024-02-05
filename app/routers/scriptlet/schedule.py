@@ -48,7 +48,7 @@ async def item_get(id: int):
         with Session(engine) as session:
             schedule = session.get(Schedule, id)
             if schedule == None:
-                raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Schedule {}/{} not existing".format(group, name))
+                raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Schedule {}::{} not existing".format(group, name))
 
             return schedule
 
@@ -64,7 +64,7 @@ async def run_get(id: int):
             schedule = session.get(Schedule, id)
             scriptlet = session.get(Scriptlet, (schedule.group, schedule.name))
             if schedule == None:
-                raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Schedule {}/{} not existing".format(group, name))
+                raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Schedule {}::{} not existing".format(group, name))
 
             return {"job": runner.enqueue(schedule.group, schedule.name, "TODO", "debug", False, schedule.param)}
 
@@ -82,9 +82,9 @@ async def item_put(cr: CreateArgument):
         with Session(engine) as session:
             scriptlet = session.get(Scriptlet, (cr.group, cr.name))
             if scriptlet == None:
-                raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Scriptlet {}/{} not existing".format(cr.group, cr.name))
+                raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Scriptlet {}::{} not existing".format(cr.group, cr.name))
             elif scriptlet.type != "task":
-                raise HTTPException(status_code=HTTP_400_BAD_REQUEST, detail="Scriptlet {}/{} not of type task".format(cr.group, cr.name))
+                raise HTTPException(status_code=HTTP_400_BAD_REQUEST, detail="Scriptlet {}::{} not of type task".format(cr.group, cr.name))
 
             now = datetime.now()
             croniter.croniter(cr.schedule, now)
@@ -115,7 +115,7 @@ async def item_del(id: int):
         with Session(engine) as session:
             schedule = session.get(Schedule, id)
             if schedule == None:
-                raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Schedule {}/{} not existing".format(group, name))
+                raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Schedule {}::{} not existing".format(group, name))
             
             session.delete(schedule)
             session.commit()

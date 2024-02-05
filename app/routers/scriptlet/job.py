@@ -38,7 +38,7 @@ async def list_get():
                           Job.param).where(Job.state != "remove").order_by(Job.id.desc())
             db_jobs = session.execute(stmt)
             
-            jobs = [dict(r._mapping) for r in db_jobs] + runner.orphans()
+            jobs = [dict(r._mapping) for r in db_jobs]
 
             return jobs
     except Exception as ex:
@@ -50,7 +50,7 @@ async def job_put(ru: RunArgument):
         with Session(engine) as session:
             scriptlet = session.get(Scriptlet, (ru.group, ru.name))
             if scriptlet == None:
-                raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Scriptlet {}/{} not existing".format(ru.group, ru.name))
+                raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Scriptlet {}::{} not existing".format(ru.group, ru.name))
 
             return {"job": runner.enqueue(ru.group, ru.name, "TODO", "debug" if ru.debug else "task", ru.drop_done, ru.param)}
 
