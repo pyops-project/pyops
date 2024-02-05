@@ -32,7 +32,7 @@ async def list_get():
                           Job.kind,
                           Job.state,
                           Job.detail,
-                          Job.param).where(Job.state != "remove").order_by(Job.id)
+                          Job.param).where(Job.state != "remove").order_by(Job.id.desc())
             db_jobs = session.execute(stmt)
             
             jobs = [dict(r._mapping) for r in db_jobs] + runner.orphans()
