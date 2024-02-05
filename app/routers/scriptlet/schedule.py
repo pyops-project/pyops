@@ -19,6 +19,7 @@ router = APIRouter()
 class CreateArgument(BaseModel):
     group: str
     name: str
+    drop_done: bool
     schedule: str
     param: str
 
@@ -32,6 +33,7 @@ async def list_get():
             stmt = select(Schedule.id,
                           Schedule.group,
                           Schedule.name,
+                          Schedule.drop_done,
                           Schedule.schedule,
                           Schedule.param)
             schedules = session.execute(stmt)
@@ -64,7 +66,7 @@ async def run_get(id: int):
             if schedule == None:
                 raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Schedule {}/{} not existing".format(group, name))
 
-            return {"job": runner.enqueue(schedule.group, schedule.name, "TODO", "debug", schedule.param)}
+            return {"job": runner.enqueue(schedule.group, schedule.name, "TODO", "debug", False, schedule.param)}
 
     except HTTPException as ex:
         raise ex
@@ -90,6 +92,7 @@ async def item_put(cr: CreateArgument):
             schedule = Schedule(
                 group       = cr.group,
                 name        = cr.name,
+                drop_done   = cr.drop_done,
                 schedule    = cr.schedule,
                 param      = cr.param
             )

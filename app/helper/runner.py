@@ -10,13 +10,14 @@ from orm.job import Job
 
 from helper import files
 
-def enqueue(group: str, name: str, owner: str, kind: str, param: str):
+def enqueue(group: str, name: str, owner: str, kind: str, drop_done: bool, param: str):
     with Session(engine) as session:
         job = Job(
             id = "{}_{}_{}_{}".format(group, name, datetime.now(), owner),
             group = group,
             name = name,
             owner = owner,
+            drop_done = drop_done,
             kind = kind,
             state = "todo",
             param = param

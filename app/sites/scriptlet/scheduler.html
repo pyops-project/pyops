@@ -34,6 +34,7 @@
                         <th scope="row">${s.id}</th>
                         <th scope="row">${s.group}</th>
                         <th scope="row">${s.name}</th>
+                        <th scope="row">${s.drop_done}</th>
                         <td>${s.schedule}</td>
                         <td>${genActions(s)}</td>
                         <td id="param_${s.id}" style="display:none;">${s.param}</td>
@@ -64,6 +65,7 @@
                 $("#createModal-error").text("");
                 $("#createModal-group").val("");
                 $("#createModal-name").val("");
+                $("#createModal-dropDone").prop( "checked", false);
                 $("#createModal-schedule").val("");
                 $("#createModal-param").val("");
             }
@@ -73,12 +75,14 @@
 
                 const group = $("#createModal-group").val();
                 const name = $("#createModal-name").val();
+                const drop_done = $("#createModal-dropDone").is(':checked');
                 const schedule = $("#createModal-schedule").val();
                 const param = $("#createModal-param").val();
 
                 const data = {
                     "group": group,
                     "name": name,
+                    "drop_done": drop_done,
                     "schedule": schedule,
                     "param": param
                 }
@@ -159,6 +163,7 @@
                 <th scope="col">ID</th>
                 <th scope="col">Group</th>
                 <th scope="col">Name</th>
+                <th scope="col">Drops</th>
                 <th scope="col">Schedule</th>
                 <th scope="col">Actions</th>
                 <th style="display:none;"></th>
@@ -185,6 +190,10 @@
                         <div class="mb-3">
                             <label for="createModal-name" class="col-form-label">Name:</label>
                             <input id="createModal-name" type="text" class="form-control">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-check-label" for="createModal-dropDone">Drop logs/data if successful:</label>
+                            <input id="createModal-dropDone" class="form-check-input" type="checkbox" value="">
                         </div>
                         <div class="mb-3">
                             <label for="createModal-schedule" class="col-form-label">Schedule:</label>

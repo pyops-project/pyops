@@ -133,7 +133,7 @@ def loadJob(id: str):
         return job.param, code, debug
 
 def finishJob(id: str, state: str, detail: str):
-    print("finishJob(id={})".format(id))
+    print("finishJob(id={}, state={})".format(id, state))
 
     with Session(engine) as session:
         job = session.get(Job, id)
@@ -141,7 +141,10 @@ def finishJob(id: str, state: str, detail: str):
         if job != None:
             # only set new state if old is "running"
             if job.state == "running":
-                job.state = state
+                if state == "done" and job.drop_done:
+                    job.state = "remove"
+                else:
+                    job.state = state
             job.end = datetime.now()
             job.detail = detail
             job.pid = None
@@ -211,6 +214,8 @@ def postTerm(id: str):
         if job != None:
             if job.state == "remove":
                 session.delete(job)
+                if job.drop_done:
+                    runner.drop(id)
             else:
                 job.state = "canceled"
             session.commit()
@@ -222,6 +227,7 @@ def schedule():
         stmt = select(Schedule.id,
                         Schedule.group,
                         Schedule.name,
+                        Schedule.drop_done,
                         Schedule.schedule,
                         Schedule.param,
                         Schedule.last)
@@ -231,7 +237,7 @@ def schedule():
             cron = croniter.croniter(s.schedule, now)
             prev = cron.get_prev(datetime)
             if not s.last or prev > s.last:
-                runner.enqueue(s.group, s.name, "TODO", "task", s.param)
+                runner.enqueue(s.group, s.name, "TODO", "task", s.drop_done, s.param)
 
                 schedule = session.get(Schedule, s.id)
                 schedule.last = prev

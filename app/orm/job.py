@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime
+from sqlalchemy import Column, Integer, String, DateTime, Boolean
 
 from orm.database import Base
 
@@ -10,6 +10,7 @@ class Job(Base):
     owner = Column(String, index=True)
     kind = Column(String, index=True)
     state = Column(String, index=True)
+    drop_done = Column(Boolean)
     param = Column(String)
     pid = Column(Integer, index=True)
     detail = Column(String)

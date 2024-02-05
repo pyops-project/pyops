@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime
+from sqlalchemy import Column, Integer, String, DateTime, Boolean
 
 from orm.database import Base
 
@@ -9,5 +9,6 @@ class Schedule(Base):
     group = Column(String, index=True)
     name = Column(String, index=True)
     owner = Column(String, index=True)
+    drop_done = Column(Boolean)
     param = Column(String)
     last = Column(DateTime, index=True)

@@ -82,6 +82,8 @@
                 return `
                     <tr>
                         <th scope="row">${j.id}</th>
+                        <td>${j.start}</td>
+                        <td>${j.end}</td>
                         <td>${j.kind}</td>
                         <td>
                             <span class="d-inline-block" tabindex="0" data-toggle="tooltip" title='${j.detail ? j.detail.replace(/'/g, "&#39;") : ""}'>
@@ -267,6 +269,8 @@
             <thead>
               <tr>
                 <th scope="col">ID</th>
+                <th scope="col">Start</th>
+                <th scope="col">End</th>
                 <th scope="col">Kind</th>
                 <th scope="col">State</th>
                 <th scope="col">Actions</th>

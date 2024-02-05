@@ -18,6 +18,7 @@ router = APIRouter()
 class RunArgument(BaseModel):
     group: str
     name: str
+    drop_done: bool
     param: str
     debug: bool = False
 
@@ -29,6 +30,8 @@ async def list_get():
     try:
         with Session(engine) as session:
             stmt = select(Job.id,
+                          Job.start,
+                          Job.end,
                           Job.kind,
                           Job.state,
                           Job.detail,
@@ -49,7 +52,7 @@ async def job_put(ru: RunArgument):
             if scriptlet == None:
                 raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Scriptlet {}/{} not existing".format(ru.group, ru.name))
 
-            return {"job": runner.enqueue(ru.group, ru.name, "TODO", "debug" if ru.debug else "task", ru.param)}
+            return {"job": runner.enqueue(ru.group, ru.name, "TODO", "debug" if ru.debug else "task", ru.drop_done, ru.param)}
 
     except HTTPException as ex:
         raise ex
