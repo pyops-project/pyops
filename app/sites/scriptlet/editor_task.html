@@ -28,8 +28,8 @@
             var job_id = null;
 
             function log(o, e) {             
-                out.setValue(o);
-                errout.setValue(e);
+                out.setValue(o+"\n");
+                errout.setValue(e+"\n");
                 out.moveCursorTo(0,0);
                 errout.moveCursorTo(0,0);
                 out.renderer.scrollToLine(Number.POSITIVE_INFINITY)
