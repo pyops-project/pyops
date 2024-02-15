@@ -63,9 +63,9 @@
 
                         if(["todo", "dequeued", "running", "cancel"].includes(d.state)) {
                             if(d.stdout !== undefined)
-                                log(d.stdout.trim(), d.state);
+                                log(d.stdout.trim(), d.stderr ? d.stderr.trim() : d.state);
                             else
-                                log("", d.state)
+                                log("", d.stderr ? d.stderr.trim() : d.state)
                             setTimeout(function() { poll(); }, 500);
                         } else {
                             $("#btn_cancel").attr("disabled", "disabled");

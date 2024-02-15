@@ -57,7 +57,7 @@ def getNextToDo():
             return None
 
 def assignJob(id: str, pid: int):
-    print("assignJob(id={})".format(id))
+    print(f"assignJob(id='{id}' pid={pid})")
 
     with Session(engine) as session:
         job = session.get(Job, id)
@@ -65,11 +65,11 @@ def assignJob(id: str, pid: int):
         session.commit()
 
 def loadLib(group: str, name: str, debug: bool):
-    print("loadLib(group={}, name={}, debug={})".format(group, name, debug))
+    print(f"loadLib(group={group}, name={name}, debug={debug})")
     with Session(engine) as session:
         scriptlet = session.get(Scriptlet, (group, name))
         if scriptlet == None:
-            raise Exception("Scriptlet {}::{} not existing".format(group, name))
+            raise Exception(f"Scriptlet {group}::{name} not existing")
         else:
             if debug:
                 draft = session.get(ScriptletDraft, (group, name, "TODO"))
@@ -95,14 +95,14 @@ def loadLib(group: str, name: str, debug: bool):
         return code
 
 def loadJob(id: str):
-    print("loadJob(id={})".format(id))
+    print(f"loadJob(id={id})")
 
     with Session(engine) as session:
         job = session.get(Job, id)
         debug = job.kind == "debug"
         scriptlet = session.get(Scriptlet, (job.group, job.name))
         if scriptlet == None:
-            raise Exception("Scriptlet {}::{} not existing".format(job.group, job.name))
+            raise Exception(f"Scriptlet {job.group}::{job.name} not existing")
         else:
             if job.kind == "debug":
                 draft = session.get(ScriptletDraft, (job.group, job.name, "TODO"))
@@ -133,18 +133,16 @@ def loadJob(id: str):
         return job.param, code, debug
 
 def finishJob(id: str, state: str, detail: str):
-    print("finishJob(id={}, state={})".format(id, state))
+    print(f"finishJob(id='{id}', state='{state}', detail='{detail}')")
 
     with Session(engine) as session:
         job = session.get(Job, id)
 
         if job != None:
-            # only set new state if old is "running"
-            if job.state == "running":
-                if state == "done" and job.drop_done and not job.kind == "debug":
-                    job.state = "remove"
-                else:
-                    job.state = state
+            if job.state == "running" and state == "done" and job.drop_done and not job.kind == "debug":
+                job.state = "remove"
+            else:
+                job.state = state
             job.end = datetime.now()
             job.detail = detail
             job.pid = None
@@ -158,14 +156,14 @@ def disposeJobs():
         session.commit()
 
 def run(id: str, param: str, code: str, libs: list[str], q: Queue, data_base: str, log_base: str):
-    print("{:<10}start({})".format(current_process().pid, id))
-    with open(os.path.join(log_base, "{}.out.log".format(id)), 'w', 1) as sys.stdout:
-        with open(os.path.join(log_base, "{}.err.log".format(id)), 'w', 1) as sys.stderr:
+    print(f"{current_process().pid:<10}start({id})")
+    with open(os.path.join(log_base, f"{id}.out.log"), 'w', 1) as sys.stdout:
+        with open(os.path.join(log_base, f"{id}.err.log"), 'w', 1) as sys.stderr:
             try:
                 # TODO !!! python virtual environment
 
                 glob = {
-                    "workspace": os.path.join(data_base, "{}".format(id))
+                    "workspace": os.path.join(data_base, f"{id}")
                 }
 
                 if not os.path.exists(glob["workspace"]):
@@ -180,7 +178,7 @@ def run(id: str, param: str, code: str, libs: list[str], q: Queue, data_base: st
             except Exception:
                 q.put({"id": id, "state": "failed", "detail": traceback.format_exc()})
             
-    print("{:<10}end({})".format(current_process().pid, id))
+    print(f"{current_process().pid:<10}end({id})")
 
 def cleanProcesses(processes: dict[int, Process]):
     cleaned_processes: dict[int, Process] = {}
@@ -201,13 +199,13 @@ def getNextToTerm():
         return {"id": job.id, "pid": job.pid} if job != None else None
 
 def term(job, processes):
-    print("term({})".format(job))
+    print(f"term({job})")
     processes[job["pid"]].terminate()
 
     postTerm(job["id"])
 
 def postTerm(id: str):
-    print("postTerm({})".format(id))
+    print(f"postTerm({id})")
 
     with Session(engine) as session:
         job = session.get(Job, id)
@@ -226,6 +224,7 @@ def schedule():
         stmt = select(Schedule.id,
                         Schedule.group,
                         Schedule.name,
+                        Schedule.active,
                         Schedule.drop_done,
                         Schedule.schedule,
                         Schedule.param,
@@ -233,14 +232,15 @@ def schedule():
         schedules = session.execute(stmt)
 
         for s in schedules:
-            cron = croniter.croniter(s.schedule, now)
-            prev = cron.get_prev(datetime)
-            if not s.last or prev > s.last:
-                runner.enqueue(s.group, s.name, "TODO", "task", s.drop_done, s.param)
+            if s.active:
+                cron = croniter.croniter(s.schedule, now)
+                prev = cron.get_prev(datetime)
+                if not s.last or prev > s.last:
+                    runner.enqueue(s.group, s.name, "TODO", "task", s.drop_done, s.param)
 
-                schedule = session.get(Schedule, s.id)
-                schedule.last = prev
-                session.commit()
+                    schedule = session.get(Schedule, s.id)
+                    schedule.last = prev
+                    session.commit()
 
 def main(data_base, log_base):
     killer = GracefulKiller()
@@ -265,7 +265,7 @@ def main(data_base, log_base):
             
             if job != None:
                 if job["pid"] in processes:
-                    print("Trying to term job {}".format(job))
+                    print(f"Trying to term job {job}")
                     term(job, processes)
                 else:
                     postTerm(job["id"])
@@ -290,7 +290,7 @@ def main(data_base, log_base):
                         libs.append(loadLib(lm.group(1), lm.group(2), debug))
                     code = re.sub(r'\!{([a-zA-Z0-9_-]+)::([a-zA-Z0-9_-]+)\}', r'# importing \1::\2', code)
 
-                    print("Run job {}".format(job))
+                    print(f"Run job {job}")
                     p = Process(target=run, kwargs={"id": job, "param": param, "code": code, "libs": libs, "q": q, "data_base": data_base, "log_base": log_base})
                     p.start()
                     assignJob(job, p.pid)
@@ -305,7 +305,7 @@ def main(data_base, log_base):
 
     # join running processes for graceful shutdown
     for p in processes:
-        print("Waiting for {}".format(p))
+        print(f"Waiting for {p}")
         if processes[p].is_alive:
             processes[p].join()
 

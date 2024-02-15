@@ -78,20 +78,29 @@ async def item_post(sa: SaveArgument):
             if scriptlet == None:
                 raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Scriptlet {}::{} not existing".format(sa.group, sa.name))
 
-            revision = ScriptletRevision(
-                group       = sa.group,
-                name        = sa.name,
-                revision    = datetime.now(),
-                owner       = "TODO",
-                code        = sa.code
-            )
-            session.add(revision)
-            #scriptlet.code = sa.code
+            stmt = select(ScriptletRevision).where(
+                and_(
+                    ScriptletRevision.group == sa.group,
+                    ScriptletRevision.name == sa.name
+                )
+            ).order_by(ScriptletRevision.revision.desc())
+            lastrev = session.scalar(stmt)
 
-            draft = session.get(ScriptletDraft, (sa.group, sa.name, "TODO"))
-            session.delete(draft)
+            if not lastrev or lastrev.code != sa.code:
+                revision = ScriptletRevision(
+                    group       = sa.group,
+                    name        = sa.name,
+                    revision    = datetime.now(),
+                    owner       = "TODO",
+                    code        = sa.code
+                )
+                session.add(revision)
+                #scriptlet.code = sa.code
 
-            session.commit()
+                draft = session.get(ScriptletDraft, (sa.group, sa.name, "TODO"))
+                session.delete(draft)
+
+                session.commit()
 
     except HTTPException as ex:
         raise ex

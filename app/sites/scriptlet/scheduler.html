@@ -19,6 +19,9 @@
                     <button type="button" onclick="del('${s.id}')" class="btn btn-danger p-0">
                         <span class="material-icons-round">delete</span>
                     </button>
+                    <button type="button" onclick="${s.active ? 'deactivate' : 'activate'}('${s.id}')" class="btn btn-${s.active ? 'danger' : 'success'} p-0">
+                        <span class="material-icons-round">${s.active ? 'airplanemode_inactive' : 'airplanemode_active'}</span>
+                    </button>
                     <button type="button" onclick="run('${s.id}')" class="btn btn-success p-0">
                         <span class="material-icons-round">play_arrow</span>
                     </button>
@@ -131,6 +134,34 @@
                         console.debug("run", d.job);
 
                         alert(`Executed as job '${d.job}'`)
+                    } else
+                        console.error(await r.text());
+                }).catch((e)=>console.error(e.toString()));
+            }
+
+            function activate(id) {
+                console.debug(`run(${id})`);
+                
+                fetch(`/scriptlet/schedule/activate?id=${id}`).then(async (r)=>{
+                    if(r.ok) {
+                        const d = await r.json();
+                        console.debug("activate", d.job);
+
+                        refreshList();
+                    } else
+                        console.error(await r.text());
+                }).catch((e)=>console.error(e.toString()));
+            }
+
+            function deactivate(id) {
+                console.debug(`run(${id})`);
+                
+                fetch(`/scriptlet/schedule/deactivate?id=${id}`).then(async (r)=>{
+                    if(r.ok) {
+                        const d = await r.json();
+                        console.debug("deactivate", d.job);
+
+                        refreshList();
                     } else
                         console.error(await r.text());
                 }).catch((e)=>console.error(e.toString()));

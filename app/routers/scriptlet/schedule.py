@@ -33,6 +33,7 @@ async def list_get():
             stmt = select(Schedule.id,
                           Schedule.group,
                           Schedule.name,
+                          Schedule.active,
                           Schedule.drop_done,
                           Schedule.schedule,
                           Schedule.param)
@@ -92,6 +93,8 @@ async def item_put(cr: CreateArgument):
             schedule = Schedule(
                 group       = cr.group,
                 name        = cr.name,
+                owner       = "TODO",
+                active      = True,
                 drop_done   = cr.drop_done,
                 schedule    = cr.schedule,
                 param      = cr.param
@@ -119,6 +122,44 @@ async def item_del(id: int):
             
             session.delete(schedule)
             session.commit()
+
+    except HTTPException as ex:
+        raise ex
+    except Exception as ex:
+        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
+
+@router.get("/scriptlet/schedule/activate", tags=["schedule"])
+async def activate_get(id: int):
+    try:
+        with Session(engine) as session:
+            schedule = session.get(Schedule, id)
+            if schedule == None:
+                raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Schedule {}::{} not existing".format(group, name))
+
+            now = datetime.now()
+            schedule.active = True
+            schedule.last = now
+            session.commit()
+
+            return {"result": "OK"}
+
+    except HTTPException as ex:
+        raise ex
+    except Exception as ex:
+        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
+
+@router.get("/scriptlet/schedule/deactivate", tags=["schedule"])
+async def activate_get(id: int):
+    try:
+        with Session(engine) as session:
+            schedule = session.get(Schedule, id)
+            if schedule == None:
+                raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Schedule {}::{} not existing".format(group, name))
+
+            schedule.active = False
+            session.commit()
+
+            return {"result": "OK"}
 
     except HTTPException as ex:
         raise ex
