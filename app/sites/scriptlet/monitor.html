@@ -56,6 +56,9 @@
                     <button type="button" onclick="view('${j.id}')" class="btn btn-success p-0">
                         <span class="material-icons-round">view_headline</span>
                     </button>
+                    <button type="button" onclick="download('${j.id}')" class="btn btn-warning p-0">
+                        <span class="material-icons-round">download</span>
+                    </button>
                     <button type="button" onclick="copyParam('${j.id}')" class="btn btn-warning p-0">
                         <span class="material-icons-round">copy_all</span>
                     </button>
@@ -152,8 +155,8 @@
                         if(refresh)
                             refreshList();
                     } else
-                        console.error("DELETE", `/scriptlet/job/cancel?id=${id}`, r.statusText);
-                }).catch((e)=>console.error("DELETE", `/scriptlet/job/cancel?id=${id}`, e.toString()));
+                        console.error("GET", `/scriptlet/job/cancel?id=${id}`, r.statusText);
+                }).catch((e)=>console.error("GET", `/scriptlet/job/cancel?id=${id}`, e.toString()));
             }
 
             function cancelAll() {
@@ -202,6 +205,13 @@
                     } else
                         console.error("GET", "/scriptlet/job/list", r.statusText);
                 }).catch((e)=>console.error("GET", "/scriptlet/job/list", e.toString()));
+            }
+
+            function download(id) {
+                console.debug(`download(${id})`);
+
+                var ifrm = document.getElementById("download");
+                ifrm.src = `/scriptlet/job/download?id=${id}`;
             }
 
             function view(id) {
@@ -258,5 +268,6 @@
             <tbody id="jobs">
             </tbody>
         </table>
+        <iframe id="download" style="display:none"></iframe>
     </body>
 </html>

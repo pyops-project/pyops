@@ -1,6 +1,7 @@
 import os.path
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 from starlette.status import HTTP_404_NOT_FOUND, HTTP_500_INTERNAL_SERVER_ERROR
 from pydantic import BaseModel
 
@@ -12,6 +13,8 @@ from orm.scriptlet import Scriptlet
 from orm.job import Job
 
 from helper import runner, files
+
+from zipstream import ZipStream, ZIP_DEFLATED
 
 router = APIRouter()
 
@@ -111,6 +114,38 @@ async def cancel(id: str):
             raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Job {} not existing".format(id))
 
         return job
+
+    except HTTPException as ex:
+        raise ex
+    except Exception as ex:
+        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
+    
+@router.get("/scriptlet/job/download", tags=["job"])
+async def download_get(id: str):
+    try:
+        job = runner.query(id)
+        if job == None:
+            raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Job {} not existing".format(id))
+
+        log_base = files.conf_log()["jobs"]
+        data_base = files.conf_data()["jobs"]
+        stdout_log_path = os.path.join(log_base, f"{id}.out.log")
+        stderr_log_path = os.path.join(log_base, f"{id}.err.log")
+
+        zs = ZipStream(compress_type=ZIP_DEFLATED)
+
+        if os.path.exists(stdout_log_path):
+            zs.add_path(stdout_log_path, "stdout.log")
+        
+        if os.path.exists(stderr_log_path):
+            zs.add_path(stderr_log_path, "stderr.log")
+
+        workspace = os.path.join(data_base, f"{id}")
+        zs.add_path(workspace, "data")
+
+        return StreamingResponse(zs.finalize(), media_type="application/x-zip-compressed", headers={
+            'Content-Disposition': f'attachment; filename="{id}.zip"'
+        })
 
     except HTTPException as ex:
         raise ex
