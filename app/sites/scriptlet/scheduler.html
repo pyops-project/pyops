@@ -173,8 +173,8 @@
         </script>
     </head>
     <body class="bg-light">
-        <nav class="navbar navbar-expand-sm navbar-dark bg-dark pt-3">
-            <ul class="navbar-nav">
+        <nav class="navbar navbar-expand navbar-dark bg-dark pt-3">
+            <ul class="navbar-nav w-100">
                 <li class="navbar-brand">
                     <span class="material-icons-round">description</span>
                     <span>Scriptlet/Scheduler</span>
@@ -183,6 +183,14 @@
                 <li class="nav-item m-1">
                     <button type="button" class="btn btn-success" data-bs-toggle="modal" data-bs-target="#createModal">
                         <span class="material-icons-round">add</span>
+                    </button>
+                </li>
+
+                <li class="nav-item mx-auto"></li>
+
+                <li class="nav-item m-1">
+                    <button type="button" class="btn btn-success" onclick="refreshList()">
+                        <span class="material-icons-round">refresh</span>
                     </button>
                 </li>
             </ul>
