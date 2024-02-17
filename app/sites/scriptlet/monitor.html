@@ -25,9 +25,6 @@
 
             function genTransActions(j) {
                 return `
-                    <button type="button" onclick="view('${j.id}')" class="btn btn-success p-0">
-                        <span class="material-icons-round">view_headline</span>
-                    </button>
                     <button type="button" onclick="copyParam('${j.id}')" class="btn btn-warning p-0">
                         <span class="material-icons-round">copy_all</span>
                     </button>
@@ -38,9 +35,6 @@
                 return `
                     <button type="button" onclick="cancel('${j.id}')" class="btn btn-danger p-0">
                         <span class="material-icons-round">cancel</span>
-                    </button>
-                    <button type="button" onclick="view('${j.id}')" class="btn btn-success p-0">
-                        <span class="material-icons-round">view_headline</span>
                     </button>
                     <button type="button" onclick="download('${j.id}')" class="btn btn-warning p-0">
                         <span class="material-icons-round">download</span>
@@ -55,9 +49,6 @@
                 return `
                     <button type="button" onclick="del('${j.id}')" class="btn btn-danger p-0">
                         <span class="material-icons-round">delete</span>
-                    </button>
-                    <button type="button" onclick="view('${j.id}')" class="btn btn-success p-0">
-                        <span class="material-icons-round">view_headline</span>
                     </button>
                     <button type="button" onclick="download('${j.id}')" class="btn btn-warning p-0">
                         <span class="material-icons-round">download</span>
