@@ -13,7 +13,7 @@ from helper import files
 def enqueue(group: str, name: str, owner: str, kind: str, drop_done: bool, param: str):
     with Session(engine) as session:
         job = Job(
-            id = "{}_{}_{}_{}".format(group, name, datetime.now(), owner),
+            id = "{}_{}_{}_{}".format(owner, group, name, datetime.now().strftime("%Y%m%dT%H%M%S%f")),
             group = group,
             name = name,
             owner = owner,
