@@ -55,17 +55,20 @@ async def menu():
                     {
                         "id": "scriptlet_manager",
                         "name": "Manager",
-                        "path": "/scriptlet/manager"
+                        "path": "/scriptlet/manager",
+                        "default": False
                     },
                     {
                         "id": "scriptlet_scheduler",
                         "name": "Scheduler",
-                        "path": "/scriptlet/scheduler"
+                        "path": "/scriptlet/scheduler",
+                        "default": False
                     },
                     {
                         "id": "scriptlet_monitor",
                         "name": "Monitor",
-                        "path": "/scriptlet/monitor"
+                        "path": "/scriptlet/monitor",
+                        "default": True
                     },
                 ]
             }]

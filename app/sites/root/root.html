@@ -17,7 +17,7 @@
             'use strict';
 
             const urlParams = new URLSearchParams(window.location.search);
-            const goto = urlParams.get("goto");
+            var goto = urlParams.get("goto");
 
             function genMenuItem(id, name) {
                 return `
@@ -34,11 +34,26 @@
                 `;
             }
 
+            function unsetActive() {
+                if(goto) {
+                    $("#btn_"+goto).removeClass("btn-warning");
+                    $("#btn_"+goto).addClass("btn-secondary");
+                }
+            }
+
+            function setActive(id) {
+                unsetActive()
+
+                goto = id
+                $("#btn_"+id).removeClass("btn-secondary");
+                $("#btn_"+id).addClass("btn-warning");
+            }
+
             function genSubmenuItem(parent, id, name, path) {
                 //  onclick="window.location.replace(window.location.origin+'/?goto=${id}')"
                 return `
                     <li id="${id}">
-                        <a id="btn_${id}" class="btn btn-secondary w-100 p-0" onclick="history.replaceState('${id}', '', '/?goto=${id}')" href="${path}" target="frame">${name}</a>
+                        <a id="btn_${id}" class="btn btn-secondary w-100 p-0" onclick="history.replaceState('${id}', '', '/?goto=${id}'); setActive('${id}');" href="${path}" target="frame">${name}</a>
                     </li>
                 `;
             }
@@ -53,13 +68,13 @@
 
                             for(const si of i.items) {
                                 $("#submenu_"+i.id).append(genSubmenuItem(i.name, si.id, si.name, si.path));
+                                if(!goto && si.default)
+                                    $("#btn_"+si.id).get(0).click()
                             }
                         }
 
-                        if(goto && $("#btn_"+goto).length > 0) {
-                            console.debug("goto", goto);
+                        if(goto && $("#btn_"+goto).length > 0)
                             $("#btn_"+goto).get(0).click();
-                        }
                     } else
                         console.error("GET", "/menu", r.statusText);
                 }).catch((e)=>console.error("GET", "/menu", e.toString()));
