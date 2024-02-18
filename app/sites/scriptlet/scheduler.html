@@ -64,6 +64,10 @@
                 }).catch((e)=>console.error("GET", "/scriptlet/schedule/list", e.toString()));
             }
 
+            function enqueueRefreshList() {
+                setTimeout(function() { refreshList(); }, 500);
+            }
+
             function clearCreateModal() {
                 $("#createModal-error").text("");
                 $("#createModal-group").val("");
@@ -102,7 +106,7 @@
                     if(r.ok) {
                         $("#createModal").modal('hide');
                         clearCreateModal();
-                        refreshList();
+                        enqueueRefreshList();
                     } else {
                         const d = await r.json();
                         $("#createModal-error").text(d.detail);
@@ -119,7 +123,7 @@
                     method: "DELETE"
                 }).then(async (r)=>{
                     if(r.ok)
-                        refreshList();
+                        enqueueRefreshList();
                     else
                         console.error("DELETE", `/scriptlet/schedule/item?id=${id}`, r.statusText);
                 }).catch((e)=>console.error("DELETE", `/scriptlet/schedule/item?id=${id}`, e.toString()));
@@ -147,7 +151,7 @@
                         const d = await r.json();
                         console.debug("activate", d.job);
 
-                        refreshList();
+                        enqueueRefreshList();
                     } else
                         console.error(await r.text());
                 }).catch((e)=>console.error(e.toString()));
@@ -161,7 +165,7 @@
                         const d = await r.json();
                         console.debug("deactivate", d.job);
 
-                        refreshList();
+                        enqueueRefreshList();
                     } else
                         console.error(await r.text());
                 }).catch((e)=>console.error(e.toString()));

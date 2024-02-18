@@ -1,8 +1,7 @@
-import os, shutil, json
-from glob import glob
+import os, shutil
 from datetime import datetime
 
-from sqlalchemy import select, and_, or_
+from sqlalchemy import select, and_
 from sqlalchemy.orm import Session
 
 from orm.database import engine
@@ -32,22 +31,16 @@ def query(id: str):
     with Session(engine) as session:
         return session.get(Job, id)
 
-def count(owner: str, name: str, group: str, kind: str, state: str):
+def find(owner: str, group: str, name: str, kind: str, states: list[str]):
     with Session(engine) as session:
-        stmt = select(Job.id,
-                      Job.owner,
-                      Job.group,
-                      Job.name,
-                      Job.kind,
-                      Job.state).where(Job.state != "remove").order_by(Job.id.desc())
-        jobs = session.execute(stmt)
-
-        count = 0
-        for j in jobs:
-            if j.owner == owner and j.group == group and j.name == name and j.kind == kind and j.state == state:
-                count += 1
-
-        return count
+        stmt = select(Job.id).where(
+            Job.owner == owner,
+            Job.group == group,
+            Job.name == name,
+            Job.kind == kind,
+            Job.state.in_(states)
+        ).order_by(Job.id.desc())
+        return [j for j in session.execute(stmt)]
 
 def cancel(id: str):
     with Session(engine) as session:
