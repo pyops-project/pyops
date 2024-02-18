@@ -69,6 +69,10 @@
                 }).catch((e)=>console.error("GET", "/scriptlet/inventory/list", e.toString()));
             }
 
+            function enqueueRefreshList() {
+                setTimeout(function() { refreshList(); }, 500);
+            }
+
             function clearCreateModal() {
                 $("#createModal-error").text("");
                 $("#createModal-group").val("");
@@ -113,7 +117,7 @@
                     if(r.ok) {
                         $("#createModal").modal('hide');
                         clearCreateModal();
-                        refreshList();
+                        enqueueRefreshList();
 
                         if(edit) {
                             if(type == "library")
@@ -137,7 +141,7 @@
                     method: "DELETE"
                 }).then(async (r)=>{
                     if(r.ok)
-                        refreshList();
+                        enqueueRefreshList();
                     else
                         console.error("DELETE", `/scriptlet/inventory/item?group=${group}&name=${name}`, r.statusText);
                 }).catch((e)=>console.error("DELETE", `/scriptlet/inventory/item?group=${group}&name=${name}`, e.toString()));

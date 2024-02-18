@@ -254,13 +254,8 @@ def schedule():
                         schedule = session.get(Schedule, s.id)
                         schedule.last = prev
                         session.commit()
-                elif runner.count(s.owner, s.group, s.name, "service", "todo") < 1 and \
-                     runner.count(s.owner, s.group, s.name, "service", "dequeued") < 1 and \
-                     runner.count(s.owner, s.group, s.name, "service", "running") < 1 and \
-                     runner.count(s.owner, s.group, s.name, "service", "failed") < 3 and \
-                     runner.count(s.owner, s.group, s.name, "service", "cancel") < 1 and \
-                     runner.count(s.owner, s.group, s.name, "service", "canceled") < 1 and \
-                     runner.count(s.owner, s.group, s.name, "service", "done") < 1:
+                elif not runner.find(s.owner, s.group, s.name, "service", ["todo", "dequeued", "running", "cancel", "canceled", "done"]) and \
+                     len(runner.find(s.owner, s.group, s.name, "service", ["failed"])) < 3:
                     runner.enqueue(s.group, s.name, s.owner, "service", s.drop_done, s.param)
                     schedule = session.get(Schedule, s.id)
                     schedule.last = now

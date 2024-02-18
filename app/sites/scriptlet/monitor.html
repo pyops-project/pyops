@@ -96,6 +96,10 @@
                 }).catch((e)=>console.error("GET", "/scriptlet/job/list", e.toString()));
             }
 
+            function enqueueRefreshList() {
+                setTimeout(function() { refreshList(); }, 500);
+            }
+
             function clearCreateModal() {
                 $("#createModal-error").text("");
                 $("#createModal-group").val("");
@@ -131,7 +135,7 @@
                     if(r.ok) {
                         $("#createModal").modal('hide');
                         clearCreateModal();
-                        refreshList();
+                        enqueueRefreshList();
                     } else {
                         const d = await r.json();
                         $("#createModal-error").text(d.detail);
@@ -147,7 +151,7 @@
                 fetch(`/scriptlet/job/cancel?id=${id}`).then(async (r)=>{
                     if(r.ok) {
                         if(refresh)
-                            refreshList();
+                            enqueueRefreshList();
                     } else
                         console.error("GET", `/scriptlet/job/cancel?id=${id}`, r.statusText);
                 }).catch((e)=>console.error("GET", `/scriptlet/job/cancel?id=${id}`, e.toString()));
@@ -169,36 +173,44 @@
                 }).catch((e)=>console.error("GET", "/scriptlet/job/list", e.toString()));
             }
 
-            function del(id, refresh = true) {
+            async function del(id, refresh = true) {
                 console.debug(`del(${id}, ${refresh})`);
 
                 console.debug("DELETE", `/scriptlet/job/item?id=${id}`);
 
-                fetch(`/scriptlet/job/item?id=${id}`, {
-                    method: "DELETE"
-                }).then(async (r)=>{
+                try {
+                    const r = await fetch(`/scriptlet/job/item?id=${id}`, {
+                        method: "DELETE"
+                    })
                     if(r.ok) {
                         if(refresh)
-                            refreshList();
+                            enqueueRefreshList();
                     } else
                         console.error("DELETE", `/scriptlet/job/item?id=${id}`, r.statusText);
-                }).catch((e)=>console.error("DELETE", `/scriptlet/job/item?id=${id}`, e.toString()));
+                } catch(e) {
+                    console.error("DELETE", `/scriptlet/job/item?id=${id}`, e.toString());
+                }
             }
 
-            function delAllOf(state) {
+            async function delAllOf(state) {
                 console.debug(`delAllOf(${state})`);
 
-                fetch("/scriptlet/job/list").then(async (r)=>{
+                try {
+                    const r = await fetch("/scriptlet/job/list")
                     console.debug("GET", "/scriptlet/job/list", r)
                     if(r.ok) {
                         const d = await r.json();
                         console.debug("jobs", d);
                         for(const i of d)
                             if(state.includes(i.state))
-                                del(i.id, i == d[d.length - 1]);
+                                await del(i.id, false);
+                        
+                        enqueueRefreshList();
                     } else
                         console.error("GET", "/scriptlet/job/list", r.statusText);
-                }).catch((e)=>console.error("GET", "/scriptlet/job/list", e.toString()));
+                } catch(e) {
+                    console.error("GET", "/scriptlet/job/list", e.toString());
+                }
             }
 
             function download(id) {
