@@ -1,0 +1,303 @@
+<html>
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+
+    	<meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+
+		<link rel="stylesheet" href="/files/css/bootstrap/bootstrap.min.css">
+        <link rel="stylesheet" href="/files/css/material/material-icons.css">
+		<link rel="stylesheet" href="/files/css/ace/ace.css">
+
+        <script src="/files/js/jquery.min.js"></script>
+        <script src="/files/js/js.cookie.min.js"></script>
+        <script src="/files/js/bootstrap/bootstrap.bundle.min.js"></script>
+        <script src="/files/js/ace/ace.js"></script>
+        <script src="/files/js/ace/ext-linking.js"></script>
+
+
+        <script>
+            'use strict';
+
+            const urlParams = new URLSearchParams(window.location.search);
+            const group = urlParams.get("group");
+            const name = urlParams.get("name");
+
+            var param = null; var editor = null; var out = null; var errout = null;
+            var draftLock = false;
+
+            var job_id = null;
+
+            function log(o, e) {             
+                out.setValue(o+"\n");
+                errout.setValue(e+"\n");
+                out.moveCursorTo(0,0);
+                errout.moveCursorTo(0,0);
+                out.renderer.scrollToLine(Number.POSITIVE_INFINITY)
+                errout.renderer.scrollToLine(Number.POSITIVE_INFINITY)
+                
+                // hack because of editor render problem on writing out
+                setTimeout(function() { param.resize(); editor.resize(); out.resize(); errout.resize(); }, 500);
+            }
+
+            function refresh() {
+                console.debug("refresh");
+                
+                draftLock = true;
+                fetch(`/scriptlet/inventory/code?group=${group}&name=${name}`).then(async (r)=>{
+                    if(r.ok) {
+                        const d = await r.json();
+                        editor.setValue(d.code);
+                        editor.moveCursorTo(0,0);
+                        draftLock = false;
+                    } else
+                        console.error("refresh", r.statusText);
+                }).catch((e)=>console.error(e.toString()));
+            }
+
+            async function poll() {
+                console.debug(`poll()`)
+                fetch(`/scriptlet/job/item?id=${job_id}`).then(async (r)=>{
+                    if(r.ok) {
+                        const d = await r.json();
+                        console.debug("pull", d);
+
+                        if(["todo", "dequeued", "running", "cancel"].includes(d.state)) {
+                            if(d.stdout)
+                                log(d.stdout.trim(), d.stderr ? d.stderr.trim() : d.state);
+                            else
+                                log("", d.stderr ? d.stderr.trim() : d.state)
+                            setTimeout(function() { poll(); }, 500);
+                        } else {
+                            $("#btn_cancel").attr("disabled", "disabled");
+                            $("#btn_run").removeAttr("disabled");
+
+                            console.debug("poll", d.state);
+                            if(d.state == "done")
+                                log(d.stdout.trim() ? d.stdout.trim() : d.state, d.stderr ? d.stderr.trim() : "");
+                            else
+                                log((d.stdout ? d.stdout : "")+d.state, (d.stdout ? d.stdout : "")+d.stderr+d.detail)
+                            job_id = null;
+                        }
+                    } else
+                        console.error("poll", r.statusText);
+                }).catch((e)=>console.error(e));
+            }
+
+            function cancel() {
+                console.debug(`cancel()`)
+                $("#btn_cancel").attr("disabled", "disabled")
+                $("#btn_run").removeAttr("disabled")
+                fetch(`/scriptlet/job/cancel?id=${job_id}`);
+                console.debug("cancel", job_id);
+            }
+
+            function run() {
+                console.debug(`run()`);
+
+                save();
+                
+                const data = {
+                    "group": group,
+                    "name": name,
+                    "drop_done": false,
+                    "param": param.getValue(),
+                    "debug": true
+                };
+                
+                fetch(`/scriptlet/job/item`, {
+                    method: "PUT",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify(data)
+                }).then(async (r)=>{
+                    if(r.ok) {
+                        const d = await r.json();
+                        console.debug("run", d.job);
+
+                        job_id = d.job
+                        $("#btn_run").attr("disabled", "disabled")
+                        $("#btn_cancel").removeAttr("disabled")
+
+                        poll();
+                    } else
+                        console.error(await r.text());
+                }).catch((e)=>console.error(e.toString()));
+            }
+
+            function fontSizeChanged() {
+                param.setOptions({
+                    fontSize: $("#font-size").val()
+                });
+                editor.setOptions({
+                    fontSize: $("#font-size").val()
+                });
+                out.setOptions({
+                    fontSize: $("#font-size").val()
+                });
+                errout.setOptions({
+                    fontSize: $("#font-size").val()
+                });
+            }
+
+            function save(draft = true) {
+                if(!draft || !draftLock) {
+                    const data = {
+                        "group": group,
+                        "name": name,
+                        "code": editor.getValue()
+                    };
+
+                    let url;
+                    if(draft)
+                        url = "/scriptlet/inventory/draft";
+                    else
+                        url = "/scriptlet/inventory/item";
+
+                    fetch(url, {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json"
+                        },
+                        body: JSON.stringify(data)
+                    }).then(async (r)=>{
+                        if(r.ok) {
+                            if(draft)
+                                console.debug("save", "Draft Stored");
+                            else
+                                console.debug("save", "Stored");
+                        } else
+                            console.error(r.statusText);
+                    }).catch((e)=>console.error("save", e.toString()));
+                }
+            }
+
+            function rollback() {
+                fetch(`/scriptlet/inventory/draft?name=${name}&group=${group}`, {
+                    method: "DELETE"
+                }).then(async (r)=>{
+                    if(r.ok) {
+                        console.debug("rollback", "to last revision");
+                        refresh();
+                    } else
+                        console.error(r.statusText);
+                }).catch((e)=>console.error(e.toString()));
+            }
+
+            $(document).ready(() =>{
+                $("#scriptlet-id").text(`${group}::${name}`);
+
+                param = ace.edit("param", {
+                    mode: "ace/mode/python",
+                    theme: "ace/theme/twilight",
+                    minLines: 0,
+                    maxLines: 10,
+                    showPrintMargin: false,
+                    enableLinking: true,
+                    selectionStyle: "text",
+                    fontSize: $("#font-size").val(),
+                    useWorker: false
+                });
+
+                editor = ace.edit("editor", {
+                    mode: "ace/mode/python",
+                    theme: "ace/theme/twilight",
+                    showPrintMargin: false,
+                    enableLinking: true,
+                    selectionStyle: "text",
+                    fontSize: $("#font-size").val(),
+                    useWorker: false
+                });
+
+                out = ace.edit("out", {
+                    theme: "ace/theme/twilight",
+                    minLines: 0,
+                    maxLines: 20,
+                    readOnly: true,
+                    highlightActiveLine: false,
+                    highlightGutterLine: false,
+                    showPrintMargin: false,
+                    enableLinking: true,
+                    selectionStyle: "text",
+                    fontSize: $("#font-size").val(),
+                    useWorker: false
+                });
+
+                errout = ace.edit("errout", {
+                    theme: "ace/theme/twilight",
+                    minLines: 0,
+                    maxLines: 20,
+                    readOnly: true,
+                    highlightActiveLine: false,
+                    highlightGutterLine: false,
+                    showPrintMargin: false,
+                    enableLinking: true,
+                    selectionStyle: "text",
+                    fontSize: $("#font-size").val(),
+                    useWorker: false
+                });
+
+                editor.on("change", ()=>{
+                    save();
+                });               
+
+                refresh();
+            });
+        </script>
+    </head>
+    <body class="d-flex flex-column bg-dark h-100">
+        <nav class="d-flex flex-column navbar navbar-expand navbar-dark bg-dark align-items-stretch">
+            <ul class="navbar-nav">
+                <li class="navbar-brand m-1">
+                    <span class="material-icons-round">description</span>
+                    <span>Scriptlet/Editor</span>
+                    <span id="scriptlet-id"></span>
+                </li>
+                <li class="nav-item m-1">
+                    <button type="button" class="btn btn-danger" onclick="save(false)">
+                        <span class="material-icons-round">save_alt</span>
+                    </button>
+                </li>
+                <li class="nav-item m-1">
+                    <button type="button" class="btn btn-danger" onclick="rollback()">
+                        <span class="material-icons-round">backspace</span>
+                    </button>
+                </li>
+                <li class="nav-item m-1">
+                    <button id="btn_run" type="button" class="btn btn-success" onclick="run()">
+                        <span class="material-icons-round">play_arrow</span>
+                    </button>
+                </li>
+                <li class="nav-item m-1">
+                    <button id="btn_cancel" type="button" class="btn btn-danger" onclick="cancel()" disabled="disabled">
+                        <span class="material-icons-round">cancel</span>
+                    </button>
+                </li>
+                <li class="nav-item m-1">
+                    <button type="button" class="btn btn-warning" onclick="log('');">
+                        <span class="material-icons-round">cleaning_services</span>
+                    </button>
+                </li>
+                <li class="nav-item m-1">
+                    <select id="font-size" class="form-select bg-dark text-light" onchange="fontSizeChanged()">
+                        <option value="8pt">8pt</option>
+                        <option value="9pt">9pt</option>
+                        <option value="10pt" selected>10pt</option>
+                        <option value="11pt">11pt</option>
+                        <option value="12pt">12pt</option>
+                        <option value="13pt">13pt</option>
+                        <option value="14pt">14pt</option>
+                    </select>
+                </li>
+            </ul>
+        </nav>
+
+        <div id="param" class="d-flex flex-column border border-primary border"></div>
+
+        <div id="editor" class="d-flex flex-column flex-grow-1 mt-1"></div>
+
+        <div id="out" class="d-flex flex-column text-light border border-secondary border mt-1"></div>
+
+        <div id="errout" class="d-flex flex-column text-danger border border-danger border mt-1"></div>
+    </body>
+</html>

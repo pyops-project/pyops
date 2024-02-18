@@ -1,0 +1,254 @@
+<html>
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+
+    	<meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+
+		<link rel="stylesheet" href="/files/css/bootstrap/bootstrap.min.css">
+        <link rel="stylesheet" href="/files/css/material/material-icons.css">
+
+        <script src="/files/js/jquery.min.js"></script>
+        <script src="/files/js/js.cookie.min.js"></script>
+        <script src="/files/js/bootstrap/bootstrap.bundle.min.js"></script>
+
+        <script>
+            'use strict';
+
+            function genActions(s) {
+                return `
+                    <button type="button" onclick="del('${s.id}')" class="btn btn-danger p-0">
+                        <span class="material-icons-round">delete</span>
+                    </button>
+                    <button type="button" onclick="${s.active ? 'deactivate' : 'activate'}('${s.id}')" class="btn btn-${s.active ? 'danger' : 'success'} p-0">
+                        <span class="material-icons-round">${s.active ? 'airplanemode_inactive' : 'airplanemode_active'}</span>
+                    </button>
+                    <button type="button" onclick="run('${s.id}')" class="btn btn-success p-0">
+                        <span class="material-icons-round">play_arrow</span>
+                    </button>
+                    <button type="button" onclick="copyParam('${s.id}')" class="btn btn-danger p-0">
+                        <span class="material-icons-round">copy_all</span>
+                    </button>
+                `
+            }
+
+            function genScheduleItem(s) {
+                return `
+                    <tr>
+                        <th scope="row">${s.id}</th>
+                        <th scope="row">${s.group}</th>
+                        <th scope="row">${s.name}</th>
+                        <th scope="row">${s.drop_done}</th>
+                        <td>${s.schedule}</td>
+                        <td>${genActions(s)}</td>
+                        <td id="param_${s.id}" style="display:none;">${s.param}</td>
+                    </tr>
+                `;
+            }
+
+            function copyParam(id) {
+                const param = $(`#param_${id}`).text();
+                navigator.clipboard.writeText(param);
+            }
+
+            function refreshList() {
+                $("#schedules").empty();
+                fetch("/scriptlet/schedule/list").then(async (r)=>{
+                    console.debug("GET", "/scriptlet/schedule/list", r)
+                    if(r.ok) {
+                        const d = await r.json();
+                        console.debug("schedules", d);
+                        for(const i of d)
+                            $("#schedules").append(genScheduleItem(i));
+                    } else
+                        console.error("GET", "/scriptlet/schedule/list", r.statusText);
+                }).catch((e)=>console.error("GET", "/scriptlet/schedule/list", e.toString()));
+            }
+
+            function clearCreateModal() {
+                $("#createModal-error").text("");
+                $("#createModal-group").val("");
+                $("#createModal-name").val("");
+                $("#createModal-dropDone").prop( "checked", false);
+                $("#createModal-schedule").val("");
+                $("#createModal-param").val("");
+            }
+
+            function onCreate() {
+                console.debug("onCreate");
+
+                const group = $("#createModal-group").val();
+                const name = $("#createModal-name").val();
+                const drop_done = $("#createModal-dropDone").is(':checked');
+                const schedule = $("#createModal-schedule").val();
+                const param = $("#createModal-param").val();
+
+                const data = {
+                    "group": group,
+                    "name": name,
+                    "drop_done": drop_done,
+                    "schedule": schedule,
+                    "param": param
+                }
+
+                console.debug("PUT", "/scriptlet/schedule/item", data);
+
+                fetch("/scriptlet/schedule/item", {
+                    method: "PUT",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify(data)
+                }).then(async (r)=>{
+                    if(r.ok) {
+                        $("#createModal").modal('hide');
+                        clearCreateModal();
+                        refreshList();
+                    } else {
+                        const d = await r.json();
+                        $("#createModal-error").text(d.detail);
+                    }
+                }).catch((e)=>$("#createModal-error").text(e.toString()));
+            }
+
+            function del(id) {
+                console.debug("del(${id})");
+
+                console.debug("DELETE", `/scriptlet/schedule/item?id=${id}`);
+
+                fetch(`/scriptlet/schedule/item?id=${id}`, {
+                    method: "DELETE"
+                }).then(async (r)=>{
+                    if(r.ok)
+                        refreshList();
+                    else
+                        console.error("DELETE", `/scriptlet/schedule/item?id=${id}`, r.statusText);
+                }).catch((e)=>console.error("DELETE", `/scriptlet/schedule/item?id=${id}`, e.toString()));
+            }
+
+            function run(id) {
+                console.debug(`run(${id})`);
+                
+                fetch(`/scriptlet/schedule/run?id=${id}`).then(async (r)=>{
+                    if(r.ok) {
+                        const d = await r.json();
+                        console.debug("run", d.job);
+
+                        alert(`Executed as job '${d.job}'`)
+                    } else
+                        console.error(await r.text());
+                }).catch((e)=>console.error(e.toString()));
+            }
+
+            function activate(id) {
+                console.debug(`run(${id})`);
+                
+                fetch(`/scriptlet/schedule/activate?id=${id}`).then(async (r)=>{
+                    if(r.ok) {
+                        const d = await r.json();
+                        console.debug("activate", d.job);
+
+                        refreshList();
+                    } else
+                        console.error(await r.text());
+                }).catch((e)=>console.error(e.toString()));
+            }
+
+            function deactivate(id) {
+                console.debug(`run(${id})`);
+                
+                fetch(`/scriptlet/schedule/deactivate?id=${id}`).then(async (r)=>{
+                    if(r.ok) {
+                        const d = await r.json();
+                        console.debug("deactivate", d.job);
+
+                        refreshList();
+                    } else
+                        console.error(await r.text());
+                }).catch((e)=>console.error(e.toString()));
+            }
+
+            $(document).ready(() => {
+                refreshList();
+            });
+        </script>
+    </head>
+    <body class="bg-light">
+        <nav class="navbar navbar-expand navbar-dark bg-dark pt-3">
+            <ul class="navbar-nav w-100">
+                <li class="navbar-brand">
+                    <span class="material-icons-round">description</span>
+                    <span>Scriptlet/Scheduler</span>
+                </li>
+                
+                <li class="nav-item m-1">
+                    <button type="button" class="btn btn-success" data-bs-toggle="modal" data-bs-target="#createModal">
+                        <span class="material-icons-round">add</span>
+                    </button>
+                </li>
+
+                <li class="nav-item mx-auto"></li>
+
+                <li class="nav-item m-1">
+                    <button type="button" class="btn btn-success" onclick="refreshList()">
+                        <span class="material-icons-round">refresh</span>
+                    </button>
+                </li>
+            </ul>
+        </nav>
+
+        <table class="table table-secondary">
+            <thead>
+              <tr>
+                <th scope="col">ID</th>
+                <th scope="col">Group</th>
+                <th scope="col">Name</th>
+                <th scope="col">Drops</th>
+                <th scope="col">Schedule</th>
+                <th scope="col">Actions</th>
+                <th style="display:none;"></th>
+              </tr>
+            </thead>
+            <tbody id="schedules">
+            </tbody>
+        </table>
+
+        <!-- DIALOGS -->
+        <div class="modal fade" data-bs-backdrop="static" id="createModal" tabindex="-1" aria-labelledby="createModalLabel" aria-hidden="true">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="createModalLabel">Create Scriptlet</h5>
+                        <!--<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>-->
+                        <p id="createModal-error" class="text-danger"></p>
+                    </div>
+                    <div class="modal-body">
+                        <div class="mb-3">
+                            <label for="createModal-group" class="col-form-label">Group:</label>
+                            <input id="createModal-group" type="text" class="form-control">
+                        </div>
+                        <div class="mb-3">
+                            <label for="createModal-name" class="col-form-label">Name:</label>
+                            <input id="createModal-name" type="text" class="form-control">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-check-label" for="createModal-dropDone">Drop logs/data if successful:</label>
+                            <input id="createModal-dropDone" class="form-check-input" type="checkbox" value="">
+                        </div>
+                        <div class="mb-3">
+                            <label for="createModal-schedule" class="col-form-label">Schedule:</label>
+                            <input id="createModal-schedule" type="text" class="form-control">
+                        </div>
+                        <div class="mb-3">
+                            <label for="createModal-param" class="col-form-label">Param:</label>
+                            <textarea id="createModal-param" cols="40" rows="5" class="form-control"></textarea>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-danger" data-bs-dismiss="modal">Cancel</button>
+                        <button type="button" class="btn btn-primary" onclick="onCreate()" data-bs-target="#createModal">Create</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </body>
+</html>
