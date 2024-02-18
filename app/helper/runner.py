@@ -32,6 +32,23 @@ def query(id: str):
     with Session(engine) as session:
         return session.get(Job, id)
 
+def count(owner: str, name: str, group: str, kind: str, state: str):
+    with Session(engine) as session:
+        stmt = select(Job.id,
+                      Job.owner,
+                      Job.group,
+                      Job.name,
+                      Job.kind,
+                      Job.state).where(Job.state != "remove").order_by(Job.id.desc())
+        jobs = session.execute(stmt)
+
+        count = 0
+        for j in jobs:
+            if j.owner == owner and j.group == group and j.name == name and j.kind == kind and j.state == state:
+                count += 1
+
+        return count
+
 def cancel(id: str):
     with Session(engine) as session:
         job = session.get(Job, id)

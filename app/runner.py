@@ -224,6 +224,7 @@ def postTerm(id: str):
                 session.delete(job)
                 runner.drop(id, job.owner, job.group)
             else:
+                job.end = datetime.now()
                 job.state = "canceled"
             session.commit()
 
@@ -232,24 +233,37 @@ def schedule():
 
     with Session(engine) as session:
         stmt = select(Schedule.id,
-                        Schedule.group,
-                        Schedule.name,
-                        Schedule.active,
-                        Schedule.drop_done,
-                        Schedule.schedule,
-                        Schedule.param,
-                        Schedule.last)
+                      Schedule.group,
+                      Schedule.name,
+                      Schedule.owner,
+                      Schedule.active,
+                      Schedule.drop_done,
+                      Schedule.schedule,
+                      Schedule.param,
+                      Schedule.last)
         schedules = session.execute(stmt)
 
         for s in schedules:
             if s.active:
-                cron = croniter.croniter(s.schedule, now)
-                prev = cron.get_prev(datetime)
-                if not s.last or prev > s.last:
-                    runner.enqueue(s.group, s.name, "TODO", "task", s.drop_done, s.param)
+                if s.schedule:
+                    cron = croniter.croniter(s.schedule, now)
+                    prev = cron.get_prev(datetime)
+                    if not s.last or prev > s.last:
+                        runner.enqueue(s.group, s.name, s.owner, "task", s.drop_done, s.param)
 
+                        schedule = session.get(Schedule, s.id)
+                        schedule.last = prev
+                        session.commit()
+                elif runner.count(s.owner, s.group, s.name, "service", "todo") < 1 and \
+                     runner.count(s.owner, s.group, s.name, "service", "dequeued") < 1 and \
+                     runner.count(s.owner, s.group, s.name, "service", "running") < 1 and \
+                     runner.count(s.owner, s.group, s.name, "service", "failed") < 3 and \
+                     runner.count(s.owner, s.group, s.name, "service", "cancel") < 1 and \
+                     runner.count(s.owner, s.group, s.name, "service", "canceled") < 1 and \
+                     runner.count(s.owner, s.group, s.name, "service", "done") < 1:
+                    runner.enqueue(s.group, s.name, s.owner, "service", s.drop_done, s.param)
                     schedule = session.get(Schedule, s.id)
-                    schedule.last = prev
+                    schedule.last = now
                     session.commit()
 
 def main(data_base):

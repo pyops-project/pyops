@@ -87,8 +87,9 @@ async def item_put(cr: CreateArgument):
             elif scriptlet.type != "task":
                 raise HTTPException(status_code=HTTP_400_BAD_REQUEST, detail="Scriptlet {}::{} not of type task".format(cr.group, cr.name))
 
-            now = datetime.now()
-            croniter.croniter(cr.schedule, now)
+            if cr.schedule:
+                now = datetime.now()
+                croniter.croniter(cr.schedule, now)
 
             schedule = Schedule(
                 group       = cr.group,
