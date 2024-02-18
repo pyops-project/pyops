@@ -10,7 +10,6 @@
     "log": {
         "access": "../log/access.log",
         "info": "../log/info.log",
-        "jobs": "../log/jobs",
         "loglevel": "debug"
     }
 }

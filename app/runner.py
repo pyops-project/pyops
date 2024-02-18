@@ -130,7 +130,7 @@ def loadJob(id: str):
 
             session.commit()
 
-        return job.param, code, debug
+        return job.owner, job.group, job.name, job.param, code, debug
 
 def finishJob(id: str, state: str, detail: str):
     print(f"finishJob(id='{id}', state='{state}', detail='{detail}')")
@@ -155,19 +155,29 @@ def disposeJobs():
 
         session.commit()
 
-def run(id: str, param: str, code: str, libs: list[str], q: Queue, data_base: str, log_base: str):
+def run(id: str, owner: str, group: str, name: str, param: str, code: str, libs: list[str], q: Queue, data_base: str):
+    userspace = os.path.join(data_base, f"{owner}")
+    groupspace = os.path.join(userspace, f"{group}")
+    workspace = os.path.join(groupspace, f"{id}")
+
+    if not os.path.exists(userspace):
+        os.makedirs(userspace)
+
+    if not os.path.exists(groupspace):
+        os.makedirs(groupspace)
+
+    if not os.path.exists(workspace):
+        os.makedirs(workspace)
+
     print(f"{current_process().pid:<10}start({id})")
-    with open(os.path.join(log_base, f"{id}.out.log"), 'w', 1) as sys.stdout:
-        with open(os.path.join(log_base, f"{id}.err.log"), 'w', 1) as sys.stderr:
+    with open(os.path.join(workspace, "stdout.log"), 'w', 1) as sys.stdout:
+        with open(os.path.join(workspace, "stderr.log"), 'w', 1) as sys.stderr:
             try:
-                # TODO !!! python virtual environment
-
                 glob = {
-                    "workspace": os.path.join(data_base, f"{id}")
+                    "userspace": userspace,
+                    "groupspace": groupspace,
+                    "workspace": workspace
                 }
-
-                if not os.path.exists(glob["workspace"]):
-                    os.makedirs(glob["workspace"])
                     
                 exec(param, glob)
                 for l in libs:
@@ -212,7 +222,7 @@ def postTerm(id: str):
         if job != None:
             if job.state == "remove":
                 session.delete(job)
-                runner.drop(id)
+                runner.drop(id, job.owner, job.group)
             else:
                 job.state = "canceled"
             session.commit()
@@ -242,7 +252,7 @@ def schedule():
                     schedule.last = prev
                     session.commit()
 
-def main(data_base, log_base):
+def main(data_base):
     killer = GracefulKiller()
     
     q = Queue()
@@ -282,7 +292,7 @@ def main(data_base, log_base):
 
             if job != None:
                 try:
-                    param, code, debug = loadJob(job)
+                    owner, group, name, param, code, debug = loadJob(job)
 
                     libs = []
 
@@ -291,7 +301,7 @@ def main(data_base, log_base):
                     code = re.sub(r'\!{([a-zA-Z0-9_-]+)::([a-zA-Z0-9_-]+)\}', r'# importing \1::\2', code)
 
                     print(f"Run job {job}")
-                    p = Process(target=run, kwargs={"id": job, "param": param, "code": code, "libs": libs, "q": q, "data_base": data_base, "log_base": log_base})
+                    p = Process(target=run, kwargs={"id": job, "owner": owner, "group": group, "name": name, "param": param, "code": code, "libs": libs, "q": q, "data_base": data_base})
                     p.start()
                     assignJob(job, p.pid)
                     processes[p.pid] = p

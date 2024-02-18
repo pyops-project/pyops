@@ -69,19 +69,33 @@ async def job_get(id: str):
         if job == None:
             raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Job {} not existing".format(id))
 
-        log_base = files.conf_log()["jobs"]
-        stdout_log_path = os.path.join(log_base, "{}.out.log".format(id))
-        stderr_log_path = os.path.join(log_base, "{}.err.log".format(id))
+        data_base = files.conf_data()["jobs"]
+        userspace = os.path.join(data_base, job.owner)
+        groupspace = os.path.join(userspace, job.group)
+        workspace = os.path.join(groupspace, job.id)
+        stdout_log_path = os.path.join(workspace, "stdout.log")
+        stderr_log_path = os.path.join(workspace, "stderr.log")
+
+        stdout = None
+        stderr = None
 
         if os.path.exists(stdout_log_path):
             with open(stdout_log_path, 'r') as fout:
-                job["stdout"] = fout.read()
+                stdout = fout.read()
         
         if os.path.exists(stderr_log_path):
             with open(stderr_log_path, 'r') as fout:
-                job["stderr"] = fout.read()
+                stderr = fout.read()
 
-        return job
+        return {
+            "id": job.id,
+            "owner": job.owner,
+            "group": job.group,
+            "state": job.state,
+            "detail": job.detail,
+            "stdout": stdout,
+            "stderr": stderr
+        }
 
     except HTTPException as ex:
         raise ex
@@ -93,7 +107,7 @@ async def job_del(id: str):
     try:
         job = runner.remove(id)
         if job == None:
-            if runner.drop(id):
+            if runner.drop(id, job.owner, job.group):
                 return {"id": id}
             else:
                 raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Job {} not existing".format(id))
@@ -127,21 +141,14 @@ async def download_get(id: str):
         if job == None:
             raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Job {} not existing".format(id))
 
-        log_base = files.conf_log()["jobs"]
         data_base = files.conf_data()["jobs"]
-        stdout_log_path = os.path.join(log_base, f"{id}.out.log")
-        stderr_log_path = os.path.join(log_base, f"{id}.err.log")
+        userspace = os.path.join(data_base, f"{job.owner}")
+        groupspace = os.path.join(userspace, f"{job.group}")
+        workspace = os.path.join(groupspace, f"{job.id}")
 
         zs = ZipStream(compress_type=ZIP_DEFLATED)
 
-        if os.path.exists(stdout_log_path):
-            zs.add_path(stdout_log_path, "stdout.log")
-        
-        if os.path.exists(stderr_log_path):
-            zs.add_path(stderr_log_path, "stderr.log")
-
-        workspace = os.path.join(data_base, f"{id}")
-        zs.add_path(workspace, "data")
+        zs.add_path(workspace)
 
         return StreamingResponse(zs.finalize(), media_type="application/x-zip-compressed", headers={
             'Content-Disposition': f'attachment; filename="{id}.zip"'

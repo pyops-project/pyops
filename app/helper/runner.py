@@ -1,4 +1,4 @@
-import os, shutil
+import os, shutil, json
 from glob import glob
 from datetime import datetime
 
@@ -30,12 +30,7 @@ def enqueue(group: str, name: str, owner: str, kind: str, drop_done: bool, param
 
 def query(id: str):
     with Session(engine) as session:
-        job = session.get(Job, id)
-
-        if job != None:
-            return {"state": job.state, "detail": job.detail}
-        else:
-            return None
+        return session.get(Job, id)
 
 def cancel(id: str):
     with Session(engine) as session:
@@ -57,43 +52,20 @@ def remove(id: str):
 
         return job
 
-def orphans():
-    #TODO get orphaned data
-    """
-    Job.id,
-    Job.kind,
-    Job.state,
-    Job.detail,
-    Job.param
-    """
+def drop(id: str, owner: str, group: str):
+    data_base = files.conf_data()["jobs"]
+    userspace = os.path.join(data_base, f"{owner}")
+    groupspace = os.path.join(userspace, f"{group}")
+    workspace = os.path.join(groupspace, f"{id}")
 
-    findings = []
+    if os.path.exists(workspace):
+        shutil.rmtree(workspace)
 
-    log_base = files.conf_log()["jobs"]
+        if len(os.listdir(groupspace)) == 0:
+            shutil.rmtree(groupspace)
 
-    for f in glob("{}/*.out.log".format(log_base)):
-        id = os.path.basename(f)[:-8]
-        j = query(id)
-        if not j or j["state"] =="remove":
-            findings.append({
-                "id": id,
-                "kind": "data",
-                "state": "data",
-                "detail": "orphaned data",
-                "param": ""
-            })
-
-    return findings
-
-def drop(id: str):
-    log_base = files.conf_log()["jobs"]
-    if os.path.exists(os.path.join(log_base, "{}.out.log".format(id))):
-        os.remove(os.path.join(log_base, "{}.out.log".format(id)))
-        os.remove(os.path.join(log_base, "{}.err.log".format(id)))
-
-        data_base = files.conf_data()["jobs"]
-        if os.path.exists(os.path.join(data_base, id)):
-            shutil.rmtree(os.path.join(data_base, id))
+        if len(os.listdir(userspace)) == 0:
+            shutil.rmtree(userspace)
 
         return True
     else:

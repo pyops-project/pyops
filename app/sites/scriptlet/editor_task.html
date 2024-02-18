@@ -62,7 +62,7 @@
                         console.debug("pull", d);
 
                         if(["todo", "dequeued", "running", "cancel"].includes(d.state)) {
-                            if(d.stdout !== undefined)
+                            if(d.stdout)
                                 log(d.stdout.trim(), d.stderr ? d.stderr.trim() : d.state);
                             else
                                 log("", d.stderr ? d.stderr.trim() : d.state)

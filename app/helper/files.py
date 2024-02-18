@@ -13,13 +13,6 @@ def load_conf():
     with open(os.path.join("..", "etc", "infraops.json"), "r") as file:
         raw_conf = json.load(file)
 
-def conf_log():
-    return {
-        "jobs": os.path.join(os.path.curdir, raw_conf["log"]["jobs"])
-    } if "log" in raw_conf else {
-        "jobs": os.path.join(os.path.curdir, "../log/jobs")
-    }
-
 def conf_data():
     return {
         "jobs": os.path.join(os.path.curdir, raw_conf["data"]["jobs"])
