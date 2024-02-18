@@ -1,12 +1,14 @@
 # https://docs.vultr.com/how-to-deploy-fastapi-applications-with-gunicorn-and-nginx-on-ubuntu-20-04
 # https://docs.gunicorn.org/en/stable/settings.html#on-starting
 
-import json, os, os.path
+import sys, json, os, os.path
 from multiprocessing import Process
 
 from orm.database import Base, engine
 
 import runner
+
+sys.path.insert(0, os.path.join("..", "pkg"))
 
 with open(os.path.join("..", "etc", "infraops.json"), "r") as file:
     conf = json.load(file)

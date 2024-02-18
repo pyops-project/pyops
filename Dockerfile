@@ -10,7 +10,7 @@ RUN apt update && \
 
 # Python Base Requirements
 RUN DEBIAN_FRONTEND=noninteractive apt -y install \
-        python3-dev python3-full pipenv python3-venv \
+        python3-dev python3-full python3-pip python3-venv \
         gunicorn python3-gunicorn uvicorn python3-uvicorn python3-fastapi python3-bonsai \
         python3-sqlalchemy python3-sqlalchemy-utils python3-croniter && \
     apt clean
@@ -40,7 +40,7 @@ RUN DEBIAN_FRONTEND=noninteractive apt -y install \
         python3-scrapy python3-bs4 && \
     apt clean
 
-RUN mkdir -p /opt/infraops/app && mkdir -p /opt/infraops/data && mkdir -p /opt/infraops/logs && mkdir -p /opt/infraops/etc
+RUN mkdir -p /opt/infraops/app && mkdir -p /opt/infraops/data && mkdir -p /opt/infraops/etc && mkdir -p /opt/infraops/pkg
 
 COPY app /opt/infraops/app
 COPY run.sh /opt/infraops/

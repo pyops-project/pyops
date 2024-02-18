@@ -15,7 +15,7 @@ def load_conf():
 
 def conf_data():
     return {
-        "jobs": os.path.join(os.path.curdir, raw_conf["data"]["jobs"])
+        "jobs": os.path.join(os.path.curdir, raw_conf["data"]["jobs"]) if "jobs" in raw_conf["data"] else os.path.join(os.path.curdir, "../data/jobs")
     } if "data" in raw_conf else {
         "jobs": os.path.join(os.path.curdir, "../data/jobs")
     }
