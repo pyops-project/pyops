@@ -36,6 +36,7 @@ async def list_get():
                           Schedule.active,
                           Schedule.drop_done,
                           Schedule.schedule,
+                          Schedule.last,
                           Schedule.param)
             schedules = session.execute(stmt)
             

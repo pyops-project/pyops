@@ -8,5 +8,5 @@ REGISTRY="registry.ralph.or.at/infraops/infraops"
 cd $DIR
 
 find . -type d -name __pycache__ -exec rm -fr {} \;
-docker build -t $REGISTRY .
+docker build --pull --no-cache -t $REGISTRY .
 docker push $REGISTRY
