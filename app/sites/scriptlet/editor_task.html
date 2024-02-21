@@ -75,7 +75,7 @@
                             if(d.state == "done")
                                 log(d.stdout.trim() ? d.stdout.trim() : d.state, d.stderr ? d.stderr.trim() : "");
                             else
-                                log((d.stdout ? d.stdout : "")+d.state, (d.stdout ? d.stdout : "")+d.stderr+d.detail)
+                                log((d.stdout ? d.stdout : "")+d.state, d.stderr+d.detail)
                             job_id = null;
                         }
                     } else
