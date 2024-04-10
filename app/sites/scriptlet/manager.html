@@ -135,16 +135,18 @@
             function del(group, name) {
                 console.debug("del");
 
-                console.debug("DELETE", `/scriptlet/inventory/item?group=${group}&name=${name}`);
+                if(window.confirm(`are you sure you want to delete ${group}::${name}`)) {
+                    console.debug("DELETE", `/scriptlet/inventory/item?group=${group}&name=${name}`);
 
-                fetch(`/scriptlet/inventory/item?group=${group}&name=${name}`, {
-                    method: "DELETE"
-                }).then(async (r)=>{
-                    if(r.ok)
-                        enqueueRefreshList();
-                    else
-                        console.error("DELETE", `/scriptlet/inventory/item?group=${group}&name=${name}`, r.statusText);
-                }).catch((e)=>console.error("DELETE", `/scriptlet/inventory/item?group=${group}&name=${name}`, e.toString()));
+                    fetch(`/scriptlet/inventory/item?group=${group}&name=${name}`, {
+                        method: "DELETE"
+                    }).then(async (r)=>{
+                        if(r.ok)
+                            enqueueRefreshList();
+                        else
+                            console.error("DELETE", `/scriptlet/inventory/item?group=${group}&name=${name}`, r.statusText);
+                    }).catch((e)=>console.error("DELETE", `/scriptlet/inventory/item?group=${group}&name=${name}`, e.toString()));
+                }
             }
 
             $(document).ready(() => {

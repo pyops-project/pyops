@@ -118,16 +118,18 @@
             function del(id) {
                 console.debug("del(${id})");
 
-                console.debug("DELETE", `/scriptlet/schedule/item?id=${id}`);
+                if(window.confirm(`are you sure you want to delete ${id}`)) {
+                    console.debug("DELETE", `/scriptlet/schedule/item?id=${id}`);
 
-                fetch(`/scriptlet/schedule/item?id=${id}`, {
-                    method: "DELETE"
-                }).then(async (r)=>{
-                    if(r.ok)
-                        enqueueRefreshList();
-                    else
-                        console.error("DELETE", `/scriptlet/schedule/item?id=${id}`, r.statusText);
-                }).catch((e)=>console.error("DELETE", `/scriptlet/schedule/item?id=${id}`, e.toString()));
+                    fetch(`/scriptlet/schedule/item?id=${id}`, {
+                        method: "DELETE"
+                    }).then(async (r)=>{
+                        if(r.ok)
+                            enqueueRefreshList();
+                        else
+                            console.error("DELETE", `/scriptlet/schedule/item?id=${id}`, r.statusText);
+                    }).catch((e)=>console.error("DELETE", `/scriptlet/schedule/item?id=${id}`, e.toString()));
+                }
             }
 
             function run(id) {
