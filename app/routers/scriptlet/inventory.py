@@ -60,8 +60,7 @@ async def item_put(cr: CreateArgument):
 
             session.add(scriptlet)
             session.commit()
-        
-        return {"result": "OK"}
+
     except HTTPException as ex:
         raise ex
     except Exception as ex:
@@ -151,7 +150,7 @@ async def draft_post(sa: SaveArgument):
 
             draft.code = sa.code
             session.commit()
-        
+
     except HTTPException as ex:
         raise ex
     except Exception as ex:

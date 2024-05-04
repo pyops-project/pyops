@@ -9,6 +9,7 @@ from orm.database import Base, engine
 import runner
 
 sys.path.insert(0, os.path.join("..", "pkg"))
+sys.path.insert(0, os.path.join("lib"))
 
 with open(os.path.join("..", "etc", "infraops.json"), "r") as file:
     conf = json.load(file)
@@ -32,7 +33,8 @@ if not os.path.exists(os.path.join(os.path.curdir, conf["data"]["jobs"])):
     os.makedirs(os.path.join(os.path.curdir, conf["data"]["jobs"]))
 
 p = Process(target=runner.main, kwargs={
-    "data_base": os.path.join(os.path.curdir, conf["data"]["jobs"])
+    "data_base": os.path.join(os.path.curdir, conf["data"]["jobs"]),
+    "web_bind": bind
 })
 
 def on_starting(server):

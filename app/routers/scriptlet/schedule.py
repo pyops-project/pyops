@@ -12,7 +12,7 @@ from orm.database import engine
 from orm.scriptlet import Scriptlet
 from orm.schedule import Schedule
 
-from helper import runner
+from lib import runner
 
 router = APIRouter()
 
@@ -104,8 +104,9 @@ async def item_put(cr: CreateArgument):
 
             session.add(schedule)
             session.commit()
-        
-        return {"result": "OK"}
+
+            return {"schedule": schedule.id}
+
     except HTTPException as ex:
         raise ex
     except Exception as ex:
@@ -143,15 +144,13 @@ async def activate_get(id: int):
             schedule.last = now
             session.commit()
 
-            return {"result": "OK"}
-
     except HTTPException as ex:
         raise ex
     except Exception as ex:
         raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
 
 @router.get("/scriptlet/schedule/deactivate", tags=["schedule"])
-async def activate_get(id: int):
+async def deactivate_get(id: int):
     try:
         with Session(engine) as session:
             schedule = session.get(Schedule, id)
@@ -160,9 +159,7 @@ async def activate_get(id: int):
 
             schedule.active = False
             session.commit()
-
-            return {"result": "OK"}
-
+            
     except HTTPException as ex:
         raise ex
     except Exception as ex:

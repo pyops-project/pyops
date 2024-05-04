@@ -1,4 +1,4 @@
-import signal, time, os, sys, re, json
+import signal, time, os, sys, re
 import traceback
 import croniter
 from datetime import datetime
@@ -12,7 +12,7 @@ from orm.scriptlet import Scriptlet, ScriptletDraft, ScriptletRevision
 from orm.job import Job
 from orm.schedule import Schedule
 
-from helper import runner
+from lib import runner, infraops
 
 class GracefulKiller:
     kill_now = False
@@ -130,7 +130,7 @@ def loadJob(id: str):
 
             session.commit()
 
-        return job.owner, job.group, job.name, job.param, code, debug
+        return job.owner, job.group, job.name, job.kind, job.param, code, debug
 
 def finishJob(id: str, state: str, detail: str):
     print(f"finishJob(id='{id}', state='{state}', detail='{detail}')")
@@ -155,7 +155,7 @@ def disposeJobs():
 
         session.commit()
 
-def run(id: str, owner: str, group: str, name: str, param: str, code: str, libs: list[str], q: Queue, data_base: str):
+def run(id: str, owner: str, group: str, name: str, kind: str, param: str, code: str, libs: list[str], q: Queue, data_base: str, web_bind: str):
     userspace = os.path.join(data_base, f"{owner}")
     groupspace = os.path.join(userspace, f"{group}")
     workspace = os.path.join(groupspace, f"{id}")
@@ -173,10 +173,17 @@ def run(id: str, owner: str, group: str, name: str, param: str, code: str, libs:
     with open(os.path.join(workspace, "stdout.log"), 'w', 1) as sys.stdout:
         with open(os.path.join(workspace, "stderr.log"), 'w', 1) as sys.stderr:
             try:
+                if kind == "service" or kind == "debug":
+                    listener = infraops.ServiceListener(os.path.join(data_base, f"{id}.sock"))
+                else:
+                    listener = None
+
                 glob = {
                     "userspace": userspace,
                     "groupspace": groupspace,
-                    "workspace": workspace
+                    "workspace": workspace,
+                    "control": infraops.Control(web_bind),
+                    "listener" : listener
                 }
                     
                 exec(param, glob)
@@ -261,7 +268,7 @@ def schedule():
                     schedule.last = now
                     session.commit()
 
-def main(data_base):
+def main(data_base: str, web_bind: str):
     killer = GracefulKiller()
     
     q = Queue()
@@ -301,7 +308,7 @@ def main(data_base):
 
             if job != None:
                 try:
-                    owner, group, name, param, code, debug = loadJob(job)
+                    owner, group, name, kind, param, code, debug = loadJob(job)
 
                     libs = []
 
@@ -310,7 +317,7 @@ def main(data_base):
                     code = re.sub(r'\!{([a-zA-Z0-9_-]+)::([a-zA-Z0-9_-]+)\}', r'# importing \1::\2', code)
 
                     print(f"Run job {job}")
-                    p = Process(target=run, kwargs={"id": job, "owner": owner, "group": group, "name": name, "param": param, "code": code, "libs": libs, "q": q, "data_base": data_base})
+                    p = Process(target=run, kwargs={"id": job, "owner": owner, "group": group, "name": name, "kind": kind, "param": param, "code": code, "libs": libs, "q": q, "data_base": data_base, "web_bind": web_bind})
                     p.start()
                     assignJob(job, p.pid)
                     processes[p.pid] = p

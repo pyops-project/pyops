@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from orm.database import engine
 from orm.job import Job
 
-from helper import files
+from lib import files
 
 def enqueue(group: str, name: str, owner: str, kind: str, drop_done: bool, param: str):
     with Session(engine) as session:
@@ -40,7 +40,7 @@ def find(owner: str, group: str, name: str, kind: str, states: list[str]):
             Job.kind == kind,
             Job.state.in_(states)
         ).order_by(Job.id.desc())
-        return [j for j in session.execute(stmt)]
+        return [j.id for j in session.execute(stmt)]
 
 def cancel(id: str):
     with Session(engine) as session:
@@ -67,6 +67,10 @@ def drop(id: str, owner: str, group: str):
     userspace = os.path.join(data_base, f"{owner}")
     groupspace = os.path.join(userspace, f"{group}")
     workspace = os.path.join(groupspace, f"{id}")
+    sockfile = os.path.join(data_base, f"{id}.sock")
+
+    if os.path.exists(sockfile):
+        os.remove(sockfile)
 
     if os.path.exists(workspace):
         shutil.rmtree(workspace)

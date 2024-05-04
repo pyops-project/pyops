@@ -10,7 +10,7 @@ RUN apt update && \
 
 # Python Base Requirements for InfraOps
 RUN DEBIAN_FRONTEND=noninteractive apt -y install \
-        python3-dev python3-full python3-pip python3-venv \
+        python3-dev python3-full python3-pip python3-venv python3-zmq python3-msgpack \
         gunicorn python3-gunicorn uvicorn python3-uvicorn python3-fastapi python3-bonsai \
         python3-sqlalchemy python3-sqlalchemy-utils python3-croniter python3-zipstream-ng && \
     apt clean
