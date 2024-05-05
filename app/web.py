@@ -108,12 +108,18 @@ async def controller(group: str, name: str):
                     <span class="material-icons-round">description</span>
                     <span>Controller {GROUP}::{NAME}</span>
                 </li>
+                
+                {MENU}
             </ul>
         </nav>
         {BODY}
     </body>
 </html>
-""".replace(r"{GROUP}", group).replace(r"{NAME}", name).replace(r"{HEAD}", glob["head"]).replace(r"{BODY}", glob["body"]),
+""".replace(r"{GROUP}", group)
+   .replace(r"{NAME}", name)
+   .replace(r"{HEAD}", glob["head"])
+   .replace(r"{MENU}", glob["menu"])
+   .replace(r"{BODY}", glob["body"]),
                 status_code=HTTP_200_OK
             )
 

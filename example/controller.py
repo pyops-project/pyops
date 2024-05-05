@@ -42,6 +42,22 @@ head = """
         </script>
 """
 
+menu = """
+                <li class="nav-item m-1">
+                    <button type="button" class="btn btn-danger" onclick="onSend()">
+                        <span class="material-icons-round">delete_forever</span>
+                    </button>
+                </li>
+
+                <li class="nav-item mx-auto"></li>
+
+                <li class="nav-item m-1">
+                    <button type="button" class="btn btn-danger" onclick="onSend()">
+                        <span class="material-icons-round">refresh</span>
+                    </button>
+                </li>
+"""
+
 body = """
         <select  id="qtype" class="form-select">
             <option value="GET">GET</option>
