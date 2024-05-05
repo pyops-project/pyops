@@ -99,27 +99,27 @@ async def controller(group: str, name: str):
         <script src="/files/js/js.cookie.min.js"></script>
         <script src="/files/js/bootstrap/bootstrap.bundle.min.js"></script>
 
-        {HEAD}
+        {{HEAD}}
     </head>
     <body class="bg-light">
         <nav class="navbar navbar-expand navbar-dark bg-dark pt-3">
             <ul class="navbar-nav w-100">
                 <li class="navbar-brand">
                     <span class="material-icons-round">description</span>
-                    <span>Controller {GROUP}::{NAME}</span>
+                    <span>Controller {{GROUP}}::{{NAME}}</span>
                 </li>
                 
-                {MENU}
+                {{MENU}}
             </ul>
         </nav>
-        {BODY}
+        {{BODY}}
     </body>
 </html>
-""".replace(r"{GROUP}", group)
-   .replace(r"{NAME}", name)
-   .replace(r"{HEAD}", glob["head"])
-   .replace(r"{MENU}", glob["menu"])
-   .replace(r"{BODY}", glob["body"]),
+""".replace(r"{{HEAD}}", glob["head"])
+   .replace(r"{{MENU}}", glob["menu"])
+   .replace(r"{{BODY}}", glob["body"])
+   .replace(r"{{GROUP}}", group)
+   .replace(r"{{NAME}}", name),
                 status_code=HTTP_200_OK
             )
 
