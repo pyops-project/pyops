@@ -331,9 +331,19 @@ def main(data_base: str, web_bind: str):
 
     # join running processes for graceful shutdown
     for p in processes:
-        print(f"Waiting for {p}")
+        print(f"Terminating {p}")
         if processes[p].is_alive:
-            processes[p].join()
+            processes[p].terminate()
+
+    for p in processes:
+        print(f"Waiting 3 seconds for {p} to shut down")
+        if processes[p].is_alive:
+            processes[p].join(timeout=3)
+
+    for p in processes:
+        print(f"Killing for {p}")
+        if processes[p].is_alive:
+            processes[p].kill()
 
     # handle finished or failed jobs
     while not q.empty():

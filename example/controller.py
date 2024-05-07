@@ -1,23 +1,25 @@
 import json
 from lib import infraops
 
+debug=False
+
 def get(params):
-    service = infraops.ServiceClient("tmp", "service", debug=True)
+    service = infraops.ServiceClient("Test", "Service", debug=debug)
     response = service.request(params)
     return "GET: "+json.dumps(response)
     
 def delete(params, data):
-    service = infraops.ServiceClient("tmp", "service", debug=True)
+    service = infraops.ServiceClient("Test", "Service", debug=debug)
     response = service.request("EXIT")
     return "DELETE: "+json.dumps(params)+" | "+json.dumps(response)+" | "+(json.dumps(data) if data else "")
     
 def put(params, data):
-    service = infraops.ServiceClient("tmp", "service", debug=True)
+    service = infraops.ServiceClient("Test", "Service", debug=debug)
     response = service.request(params)
     return "PUT: "+json.dumps(params)+" | "+json.dumps(response)+" | "+(json.dumps(data) if data else "")
     
 def post(params, data):
-    service = infraops.ServiceClient("tmp", "service", debug=True)
+    service = infraops.ServiceClient("Test", "Service", debug=debug)
     response = service.request(params)
     return "POST: "+json.dumps(params)+" | "+json.dumps(response)+" | "+(json.dumps(data) if data else "")
     
@@ -29,7 +31,7 @@ head = """
                 const type = $("#qtype").val();
                 const content = $("#qcontent").val();
 
-                fetch(`/controller/tmp/controller/q?test1=foo&test2=bar`, {
+                fetch(`/controller/Test/Controller/q?test1=foo&test2=bar`, {
                     method: type,
                     headers: {
                         "Content-Type": "application/json"

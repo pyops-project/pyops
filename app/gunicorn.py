@@ -44,5 +44,4 @@ def on_starting(server):
 
 def on_exit(server):
     p.terminate()
-    p.join()
     

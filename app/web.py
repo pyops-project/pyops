@@ -1,3 +1,5 @@
+import asyncio, traceback
+
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import HTMLResponse
 from starlette.status import HTTP_200_OK, HTTP_404_NOT_FOUND, HTTP_405_METHOD_NOT_ALLOWED, HTTP_500_INTERNAL_SERVER_ERROR
@@ -79,7 +81,7 @@ def get_controller(group: str, name: str):
         return code
 
 @app.get("/controller/{group}/{name}")
-async def controller(group: str, name: str):
+def controller(group: str, name: str):
     try:
             glob = {}
             exec(get_controller(group, name), glob)
@@ -102,7 +104,7 @@ async def controller(group: str, name: str):
         {{HEAD}}
     </head>
     <body class="bg-light">
-        <nav class="navbar navbar-expand navbar-dark bg-dark pt-3">
+        <nav class="navbar navbar-expand navbar-dark bg-dark text-light pt-3">
             <ul class="navbar-nav w-100">
                 <li class="navbar-brand">
                     <span class="material-icons-round">description</span>
@@ -129,7 +131,7 @@ async def controller(group: str, name: str):
         raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
     
 @app.get("/controller/{group}/{name}/q")
-async def controller_get(group: str, name: str, request: Request):
+def controller_get(group: str, name: str, request: Request):
     try:
         params = dict(request.query_params)
         
@@ -141,12 +143,12 @@ async def controller_get(group: str, name: str, request: Request):
     except HTTPException as ex:
         raise ex
     except Exception as ex:
-        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
+        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(traceback.format_exc()))
     
 @app.delete("/controller/{group}/{name}/q")
-async def controller_delete(group: str, name: str, request: Request):
+def controller_delete(group: str, name: str, request: Request):
     try:
-        json = await request.json() if await request.body() else None
+        json = asyncio.run(request.json()) if asyncio.run(request.body()) else None
         params = dict(request.query_params)
         
         glob = {}
@@ -157,12 +159,12 @@ async def controller_delete(group: str, name: str, request: Request):
     except HTTPException as ex:
         raise ex
     except Exception as ex:
-        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
+        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(traceback.format_exc()))
     
 @app.put("/controller/{group}/{name}/q")
-async def controller_put(group: str, name: str, request: Request):
+def controller_put(group: str, name: str, request: Request):
     try:
-        json = await request.json() if await request.body() else None
+        json = asyncio.run(request.json()) if asyncio.run(request.body()) else None
         params = dict(request.query_params)
         
         glob = {}
@@ -173,12 +175,12 @@ async def controller_put(group: str, name: str, request: Request):
     except HTTPException as ex:
         raise ex
     except Exception as ex:
-        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
+        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(traceback.format_exc()))
     
 @app.post("/controller/{group}/{name}/q")
-async def controller_post(group: str, name: str, request: Request):
+def controller_post(group: str, name: str, request: Request):
     try:
-        json = await request.json() if await request.body() else None
+        json = asyncio.run(request.json()) if asyncio.run(request.body()) else None
         params = dict(request.query_params)
         
         glob = {}
@@ -189,7 +191,7 @@ async def controller_post(group: str, name: str, request: Request):
     except HTTPException as ex:
         raise ex
     except Exception as ex:
-        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
+        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(traceback.format_exc()))
     
 @app.get("/menu")
 async def menu():

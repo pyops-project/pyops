@@ -1,4 +1,4 @@
-import os, zmq, msgpack, json
+import os, signal, zmq, msgpack, json
 import requests as rq
 from lib import runner, files
 
@@ -107,13 +107,24 @@ class Control:
 
 class ServiceListener:
     def __init__(self, sockfile):
+        self.kill_now = False
+        signal.signal(signal.SIGINT, self.exit_gracefully)
+        signal.signal(signal.SIGTERM, self.exit_gracefully)
+
         self.sockfile = os.path.abspath(sockfile)
         self.context = zmq.Context()
         self.socket = self.context.socket(zmq.REP)
         self.socket.bind(f"ipc://{self.sockfile}")
+        self.poller = zmq.Poller()
+        self.poller.register(self.socket, flags=zmq.POLLIN)
+
+    def exit_gracefully(self, signum, frame):
+        self.kill_now = True
 
     def listen(self):
-        return msgpack.unpackb(self.socket.recv())
+        while not self.poller.poll(timeout=1000) and not self.kill_now:
+            pass
+        return msgpack.unpackb(self.socket.recv()) if not self.kill_now else "TERM"
 
     def response(self, msg):
         b = msgpack.packb(msg)
