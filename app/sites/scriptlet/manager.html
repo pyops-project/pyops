@@ -39,7 +39,7 @@
             function genActions(group, name, type) {
                 if(type == "task")
                     return genTaskActions(group, name);
-                else if(type == "library")
+                else if(["library", "controller"].includes(type))
                     return genLibraryActions(group, name);
             }
 
@@ -120,7 +120,7 @@
                         enqueueRefreshList();
 
                         if(edit) {
-                            if(type == "library")
+                            if(["library", "controller"].includes(type))
                                 onEditLibrary(group, name);
                             else if(type == "task")
                                 onEditTask(group, name);
@@ -135,16 +135,18 @@
             function del(group, name) {
                 console.debug("del");
 
-                console.debug("DELETE", `/scriptlet/inventory/item?group=${group}&name=${name}`);
+                if(window.confirm(`are you sure you want to delete ${group}::${name}`)) {
+                    console.debug("DELETE", `/scriptlet/inventory/item?group=${group}&name=${name}`);
 
-                fetch(`/scriptlet/inventory/item?group=${group}&name=${name}`, {
-                    method: "DELETE"
-                }).then(async (r)=>{
-                    if(r.ok)
-                        enqueueRefreshList();
-                    else
-                        console.error("DELETE", `/scriptlet/inventory/item?group=${group}&name=${name}`, r.statusText);
-                }).catch((e)=>console.error("DELETE", `/scriptlet/inventory/item?group=${group}&name=${name}`, e.toString()));
+                    fetch(`/scriptlet/inventory/item?group=${group}&name=${name}`, {
+                        method: "DELETE"
+                    }).then(async (r)=>{
+                        if(r.ok)
+                            enqueueRefreshList();
+                        else
+                            console.error("DELETE", `/scriptlet/inventory/item?group=${group}&name=${name}`, r.statusText);
+                    }).catch((e)=>console.error("DELETE", `/scriptlet/inventory/item?group=${group}&name=${name}`, e.toString()));
+                }
             }
 
             $(document).ready(() => {
@@ -213,9 +215,9 @@
                             <select  id="createModal-type" class="form-select">
                                 <option value="task" selected>Task</option>
                                 <option value="library">Library</option>
+                                <option value="controller">Controller</option>
                                 <!--
                                 <option value="model">Model</option>
-                                <option value="controller">Controller</option>
                                 <option value="view">View</option>
                                 -->
                             </select>

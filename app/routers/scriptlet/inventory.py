@@ -4,11 +4,12 @@ from fastapi import APIRouter, HTTPException
 from starlette.status import HTTP_404_NOT_FOUND, HTTP_409_CONFLICT, HTTP_500_INTERNAL_SERVER_ERROR
 from pydantic import BaseModel, create_model
 
-from sqlalchemy import select, and_
+from sqlalchemy import select, delete, and_
 from sqlalchemy.orm import Session
 
 from orm.database import engine
 from orm.scriptlet import Scriptlet, ScriptletDraft, ScriptletRevision
+from orm.schedule import Schedule
 
 router = APIRouter()
 
@@ -60,8 +61,7 @@ async def item_put(cr: CreateArgument):
 
             session.add(scriptlet)
             session.commit()
-        
-        return {"result": "OK"}
+
     except HTTPException as ex:
         raise ex
     except Exception as ex:
@@ -115,13 +115,32 @@ async def item_del(group: str, name: str):
     try:
         with Session(engine) as session:
             scriptlet = session.get(Scriptlet, (group, name))
-            draft = session.get(ScriptletDraft, (group, name, "TODO"))
             if scriptlet == None:
                 raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Scriptlet {}::{} not existing".format(group, name))
             
             session.delete(scriptlet)
-            if draft != None:
-                session.delete(draft)
+
+            stmt = delete(ScriptletRevision).where(
+                ScriptletRevision.group == group,
+                ScriptletRevision.name == name,
+                ScriptletRevision.owner == "TODO"
+            )
+            session.execute(stmt)
+
+            stmt = delete(ScriptletDraft).where(
+                ScriptletRevision.group == group,
+                ScriptletRevision.name == name,
+                ScriptletRevision.owner == "TODO"
+            )
+            session.execute(stmt)
+
+            stmt = delete(Schedule).where(
+                Schedule.group == group,
+                Schedule.name == name,
+                Schedule.owner == "TODO"
+            )
+            session.execute(stmt)
+
             session.commit()
 
     except HTTPException as ex:
@@ -151,7 +170,7 @@ async def draft_post(sa: SaveArgument):
 
             draft.code = sa.code
             session.commit()
-        
+
     except HTTPException as ex:
         raise ex
     except Exception as ex:

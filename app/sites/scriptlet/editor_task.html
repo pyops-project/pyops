@@ -27,13 +27,37 @@
 
             var job_id = null;
 
-            function log(o, e) {             
-                out.setValue(o+"\n");
-                errout.setValue(e+"\n");
-                out.moveCursorTo(0,0);
-                errout.moveCursorTo(0,0);
-                out.renderer.scrollToLine(Number.POSITIVE_INFINITY)
-                errout.renderer.scrollToLine(Number.POSITIVE_INFINITY)
+            function log(o, e) {
+                const out_at_bottom = !out.renderer.isScrollableBy(0, 3*out.renderer.lineHeight);
+                const errout_at_bottom = !errout.renderer.isScrollableBy(0, 3*errout.renderer.lineHeight);
+                const out_old_val = out.getValue();
+                const errout_old_val = errout.getValue();
+                const out_old_last_line = out.session.doc.getAllLines().length;
+                const errout_old_last_line = errout.session.doc.getAllLines().length;
+                if(o) {
+                    if(!out_old_val) {
+                        out.setValue(o);
+                        out.moveCursorTo(0,0);
+                    } else {
+                        const rng = new ace.Range(out_old_last_line+1, 0, out_old_last_line+1, 0);
+                        out.session.doc.replace(rng, o.substring(out_old_val.length, o.length));
+                    }
+                }
+                
+                if(e) {
+                    if(!errout_old_val) {
+                        errout.setValue(o);
+                        errout.moveCursorTo(0,0);
+                    } else {
+                        const rng = new ace.Range(errout_old_last_line+1, 0, errout_old_last_line+1, 0);
+                        errout.session.doc.replace(rng, o.substring(errout_old_val.length, o.length));
+                    }
+                }
+
+                if(out_at_bottom)
+                    out.scrollToLine(Number.POSITIVE_INFINITY)
+                if(errout_at_bottom)
+                    errout.scrollToLine(Number.POSITIVE_INFINITY)
                 
                 // hack because of editor render problem on writing out
                 setTimeout(function() { param.resize(); editor.resize(); out.resize(); errout.resize(); }, 500);
@@ -73,14 +97,14 @@
 
                             console.debug("poll", d.state);
                             if(d.state == "done")
-                                log(d.stdout.trim() ? d.stdout.trim() : d.state, d.stderr ? d.stderr.trim() : "");
+                                log(d.stdout ? d.stdout.trim()+"\n" : d.state, d.stderr ? d.stderr.trim()+"\n" : "");
                             else
-                                log((d.stdout ? d.stdout : "")+d.state, (d.stdout ? d.stdout : "")+d.stderr+d.detail)
+                                log((d.stdout ? d.stdout : "")+d.state, d.stderr+d.detail)
                             job_id = null;
                         }
                     } else
                         console.error("poll", r.statusText);
-                }).catch((e)=>console.error(e));
+                }).catch((err)=>console.error(err));
             }
 
             function cancel() {
@@ -93,6 +117,10 @@
 
             function run() {
                 console.debug(`run()`);
+
+                out.setValue(""); errout.setValue("");
+                out.scrollToLine(Number.POSITIVE_INFINITY)
+                errout.scrollToLine(Number.POSITIVE_INFINITY)
 
                 save();
                 

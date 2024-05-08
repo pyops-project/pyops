@@ -12,7 +12,7 @@ from orm.database import engine
 from orm.scriptlet import Scriptlet
 from orm.schedule import Schedule
 
-from helper import runner
+from lib import runner
 
 router = APIRouter()
 
@@ -36,6 +36,7 @@ async def list_get():
                           Schedule.active,
                           Schedule.drop_done,
                           Schedule.schedule,
+                          Schedule.last,
                           Schedule.param)
             schedules = session.execute(stmt)
             
@@ -49,7 +50,7 @@ async def item_get(id: int):
         with Session(engine) as session:
             schedule = session.get(Schedule, id)
             if schedule == None:
-                raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Schedule {}::{} not existing".format(group, name))
+                raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Schedule {} not existing".format(id))
 
             return schedule
 
@@ -65,7 +66,7 @@ async def run_get(id: int):
             schedule = session.get(Schedule, id)
             scriptlet = session.get(Scriptlet, (schedule.group, schedule.name))
             if schedule == None:
-                raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Schedule {}::{} not existing".format(group, name))
+                raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Schedule {} not existing".format(id))
 
             return {"job": runner.enqueue(schedule.group, schedule.name, "TODO", "debug", False, schedule.param)}
 
@@ -83,9 +84,9 @@ async def item_put(cr: CreateArgument):
         with Session(engine) as session:
             scriptlet = session.get(Scriptlet, (cr.group, cr.name))
             if scriptlet == None:
-                raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Scriptlet {}::{} not existing".format(cr.group, cr.name))
+                raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Scriptlet {} not existing".format(cr.group, cr.name))
             elif scriptlet.type != "task":
-                raise HTTPException(status_code=HTTP_400_BAD_REQUEST, detail="Scriptlet {}::{} not of type task".format(cr.group, cr.name))
+                raise HTTPException(status_code=HTTP_400_BAD_REQUEST, detail="Scriptlet {} not of type task".format(cr.group, cr.name))
 
             if cr.schedule:
                 now = datetime.now()
@@ -103,8 +104,9 @@ async def item_put(cr: CreateArgument):
 
             session.add(schedule)
             session.commit()
-        
-        return {"result": "OK"}
+
+            return {"schedule": schedule.id}
+
     except HTTPException as ex:
         raise ex
     except Exception as ex:
@@ -119,7 +121,7 @@ async def item_del(id: int):
         with Session(engine) as session:
             schedule = session.get(Schedule, id)
             if schedule == None:
-                raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Schedule {}::{} not existing".format(group, name))
+                raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Schedule {} not existing".format(id))
             
             session.delete(schedule)
             session.commit()
@@ -135,14 +137,12 @@ async def activate_get(id: int):
         with Session(engine) as session:
             schedule = session.get(Schedule, id)
             if schedule == None:
-                raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Schedule {}::{} not existing".format(group, name))
+                raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Schedule {} not existing".format(id))
 
             now = datetime.now()
             schedule.active = True
             schedule.last = now
             session.commit()
-
-            return {"result": "OK"}
 
     except HTTPException as ex:
         raise ex
@@ -150,18 +150,16 @@ async def activate_get(id: int):
         raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
 
 @router.get("/scriptlet/schedule/deactivate", tags=["schedule"])
-async def activate_get(id: int):
+async def deactivate_get(id: int):
     try:
         with Session(engine) as session:
             schedule = session.get(Schedule, id)
             if schedule == None:
-                raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Schedule {}::{} not existing".format(group, name))
+                raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Schedule {} not existing".format(id))
 
             schedule.active = False
             session.commit()
-
-            return {"result": "OK"}
-
+            
     except HTTPException as ex:
         raise ex
     except Exception as ex:

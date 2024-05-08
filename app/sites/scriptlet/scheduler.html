@@ -39,6 +39,7 @@
                         <th scope="row">${s.name}</th>
                         <th scope="row">${s.drop_done}</th>
                         <td>${s.schedule}</td>
+                        <td>${s.last}</td>
                         <td>${genActions(s)}</td>
                         <td id="param_${s.id}" style="display:none;">${s.param}</td>
                     </tr>
@@ -117,16 +118,18 @@
             function del(id) {
                 console.debug("del(${id})");
 
-                console.debug("DELETE", `/scriptlet/schedule/item?id=${id}`);
+                if(window.confirm(`are you sure you want to delete ${id}`)) {
+                    console.debug("DELETE", `/scriptlet/schedule/item?id=${id}`);
 
-                fetch(`/scriptlet/schedule/item?id=${id}`, {
-                    method: "DELETE"
-                }).then(async (r)=>{
-                    if(r.ok)
-                        enqueueRefreshList();
-                    else
-                        console.error("DELETE", `/scriptlet/schedule/item?id=${id}`, r.statusText);
-                }).catch((e)=>console.error("DELETE", `/scriptlet/schedule/item?id=${id}`, e.toString()));
+                    fetch(`/scriptlet/schedule/item?id=${id}`, {
+                        method: "DELETE"
+                    }).then(async (r)=>{
+                        if(r.ok)
+                            enqueueRefreshList();
+                        else
+                            console.error("DELETE", `/scriptlet/schedule/item?id=${id}`, r.statusText);
+                    }).catch((e)=>console.error("DELETE", `/scriptlet/schedule/item?id=${id}`, e.toString()));
+                }
             }
 
             function run(id) {
@@ -208,6 +211,7 @@
                 <th scope="col">Name</th>
                 <th scope="col">Drops</th>
                 <th scope="col">Schedule</th>
+                <th scope="col">Last</th>
                 <th scope="col">Actions</th>
                 <th style="display:none;"></th>
               </tr>

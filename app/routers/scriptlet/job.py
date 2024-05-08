@@ -12,7 +12,7 @@ from orm.database import engine
 from orm.scriptlet import Scriptlet
 from orm.job import Job
 
-from helper import runner, files
+from lib import runner, files
 
 from zipstream import ZipStream, ZIP_DEFLATED
 
@@ -49,6 +49,9 @@ async def list_get():
 
 @router.put("/scriptlet/job/item", tags=["job"])
 async def job_put(ru: RunArgument):
+    """
+    Creates a new Job
+    """
     try:
         with Session(engine) as session:
             scriptlet = session.get(Scriptlet, (ru.group, ru.name))
@@ -64,6 +67,9 @@ async def job_put(ru: RunArgument):
 
 @router.get("/scriptlet/job/item", tags=["job"])
 async def job_get(id: str):
+    """
+    Gets a new Job
+    """
     try:
         job = runner.query(id)
         if job == None:

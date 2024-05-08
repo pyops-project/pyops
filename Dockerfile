@@ -8,11 +8,11 @@ RUN apt update && \
     DEBIAN_FRONTEND=noninteractive apt -y upgrade && \
     apt clean
 
-# Python Base Requirements
+# Python Base Requirements for InfraOps
 RUN DEBIAN_FRONTEND=noninteractive apt -y install \
-        python3-dev python3-full python3-pip python3-venv \
+        python3-dev python3-full python3-pip python3-venv python3-zmq python3-msgpack \
         gunicorn python3-gunicorn uvicorn python3-uvicorn python3-fastapi python3-bonsai \
-        python3-sqlalchemy python3-sqlalchemy-utils python3-croniter && \
+        python3-sqlalchemy python3-sqlalchemy-utils python3-croniter python3-zipstream-ng && \
     apt clean
 
 # Python Connectivity Modules
@@ -26,13 +26,13 @@ RUN DEBIAN_FRONTEND=noninteractive apt -y install \
 # Python Data Modules
 RUN DEBIAN_FRONTEND=noninteractive apt -y install \
         python3-pattern python3-docx python3-xlsxwriter python3-pypdf2 \
-        python3-zipp python3-zipstream-ng && \
+        python3-zipp && \
     apt clean
 
-# Python Science Modules
+# Python Science and Machine Learning Modules
 RUN DEBIAN_FRONTEND=noninteractive apt -y install \
         python3-pandas python3-numpy python3-scipy python3-matplotlib python3-matplotlib-venn \
-        python3-sklearn python3-sklearn-pandas python3-torch python3-skorch && \
+        python3-sklearn python3-sklearn-pandas python3-torch python3-skorch python3-opencv && \
     apt clean
 
 # Python Web Modules

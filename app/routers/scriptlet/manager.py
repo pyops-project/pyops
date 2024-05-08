@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import HTMLResponse
 from starlette.status import HTTP_200_OK, HTTP_500_INTERNAL_SERVER_ERROR
 
-from helper import sites
+from lib import sites
 
 router = APIRouter()
 
