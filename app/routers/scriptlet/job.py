@@ -55,10 +55,13 @@ async def job_put(ru: RunArgument):
     try:
         with Session(engine) as session:
             scriptlet = session.get(Scriptlet, (ru.group, ru.name))
-            if scriptlet == None:
-                raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Scriptlet {}::{} not existing".format(ru.group, ru.name))
 
-            return {"job": runner.enqueue(ru.group, ru.name, "TODO", "debug" if ru.debug else "task", ru.drop_done, ru.param)}
+        if scriptlet == None:
+            raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Scriptlet {}::{} not existing".format(ru.group, ru.name))
+
+        job = runner.enqueue(ru.group, ru.name, "TODO", "debug" if ru.debug else "task", ru.drop_done, ru.param)
+
+        return {"job": job}
 
     except HTTPException as ex:
         raise ex

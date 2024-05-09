@@ -4,6 +4,10 @@
 import sys, json, os, os.path
 from multiprocessing import Process
 
+#import debugpy
+#debugpy.listen(('localhost', 5678))
+#debugpy.wait_for_client()
+
 from orm.database import Base, engine
 
 import runner

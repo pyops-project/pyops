@@ -38,7 +38,7 @@ def handleOddJobs():
             else:
                 job.state = "failed"
                 job.detail = "incomplete execution detected on startup"
-        session.commit()
+            session.commit()
 
 def getNextToDo():
     with Session(engine) as session:
@@ -150,10 +150,12 @@ def finishJob(id: str, state: str, detail: str):
 
 def disposeJobs():
     with Session(engine) as session:
-        stmt = delete(Job).where(Job.state == "removed")
-        session.execute(stmt)
+        stmt = select(Job).where(Job.state == "removed")
+        if session.scalar(stmt):
+            stmt = delete(Job).where(Job.state == "removed")
+            session.execute(stmt)
 
-        session.commit()
+            session.commit()
 
 def run(id: str, owner: str, group: str, name: str, kind: str, param: str, code: str, libs: list[str], q: Queue, data_base: str, web_bind: str):
     userspace = os.path.join(data_base, f"{owner}")
@@ -325,7 +327,7 @@ def main(data_base: str, web_bind: str):
                     finishJob(job, "failed", traceback.format_exc())
             else:
                 schedule()
-                time.sleep(0.1)
+                time.sleep(0.5)
         except Exception:
             print(traceback.format_exc())
 

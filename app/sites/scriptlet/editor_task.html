@@ -24,6 +24,7 @@
 
             var param = null; var editor = null; var out = null; var errout = null;
             var draftLock = false;
+            var editor_dirty = false;
 
             var job_id = null;
 
@@ -200,6 +201,14 @@
                 }
             }
 
+            function save_draft() {
+                if(editor_dirty) {
+                    save();
+                    editor_dirty = false;
+                }
+                setTimeout(function() { save_draft(); }, 1000);
+            }
+
             function rollback() {
                 fetch(`/scriptlet/inventory/draft?name=${name}&group=${group}`, {
                     method: "DELETE"
@@ -266,9 +275,10 @@
                 });
 
                 editor.on("change", ()=>{
-                    save();
+                    editor_dirty = true
                 });               
 
+                save_draft();
                 refresh();
             });
         </script>
