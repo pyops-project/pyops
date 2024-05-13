@@ -194,7 +194,8 @@ def run(id: str, owner: str, group: str, name: str, kind: str, param: str, code:
                 exec(code, glob)
 
                 q.put({"id": id, "state": "done", "detail": None})
-            except Exception:
+            except:
+                print(traceback.format_exc(), file=sys.stderr)
                 q.put({"id": id, "state": "failed", "detail": traceback.format_exc()})
             
     print(f"{current_process().pid:<10}end({id})")

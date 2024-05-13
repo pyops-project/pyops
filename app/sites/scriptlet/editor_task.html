@@ -47,11 +47,11 @@
                 
                 if(e) {
                     if(!errout_old_val) {
-                        errout.setValue(o);
+                        errout.setValue(e);
                         errout.moveCursorTo(0,0);
                     } else {
                         const rng = new ace.Range(errout_old_last_line+1, 0, errout_old_last_line+1, 0);
-                        errout.session.doc.replace(rng, o.substring(errout_old_val.length, o.length));
+                        errout.session.doc.replace(rng, e.substring(errout_old_val.length, e.length));
                     }
                 }
 
@@ -88,9 +88,9 @@
 
                         if(["todo", "dequeued", "running", "cancel"].includes(d.state)) {
                             if(d.stdout)
-                                log(d.stdout.trim(), d.stderr ? d.stderr.trim() : d.state);
+                                log(d.stdout.trim(), d.stderr ? d.stderr.trim() : "");
                             else
-                                log("", d.stderr ? d.stderr.trim() : d.state)
+                                log("", d.stderr ? d.stderr.trim() : "")
                             setTimeout(function() { poll(); }, 500);
                         } else {
                             $("#btn_cancel").attr("disabled", "disabled");
@@ -100,7 +100,7 @@
                             if(d.state == "done")
                                 log(d.stdout ? d.stdout.trim()+"\n" : d.state, d.stderr ? d.stderr.trim()+"\n" : "");
                             else
-                                log((d.stdout ? d.stdout : "")+d.state, d.stderr+d.detail)
+                                log((d.stdout ? d.stdout+"\n" : "")+d.state, d.stderr ? d.stderr.trim()+"\n" : "");
                             job_id = null;
                         }
                     } else
