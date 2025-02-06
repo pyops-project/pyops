@@ -47,7 +47,6 @@ cd infraops
 ### Docker compose
 - `docker-compose.yml`
 ```
-version: '3.6'
 networks:
   default:
     driver: bridge
@@ -93,6 +92,8 @@ services:
         "jobs": "../data/jobs"
     },
     "log": {
+        "access": "../log/access.log",
+        "info": "../log/info.log",
         "loglevel": "debug"
     }
 }
