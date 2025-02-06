@@ -12,7 +12,7 @@ import routers.scriptlet.monitor
 import routers.scriptlet.scheduler
 import routers.scriptlet.editor
 
-from lib import sites, files
+from lib import sites, files, infraops
 
 from sqlalchemy import select, and_
 from sqlalchemy.orm import Session
@@ -134,11 +134,13 @@ def controller(group: str, name: str):
 def controller_get(group: str, name: str, request: Request):
     try:
         params = dict(request.query_params)
+        params["type"] = "GET"
         
         glob = {}
         exec(get_controller(group, name), glob)
 
-        return glob["get"](params)
+        s = infraops.ServiceClient(glob["group"], glob["service"], debug=glob["debug"])
+        return s.request(params)
 
     except HTTPException as ex:
         raise ex
@@ -150,11 +152,14 @@ def controller_delete(group: str, name: str, request: Request):
     try:
         json = asyncio.run(request.json()) if asyncio.run(request.body()) else None
         params = dict(request.query_params)
+        params["type"] = "DELETE"
+        params["data"] = json
         
         glob = {}
         exec(get_controller(group, name), glob)
 
-        return glob["delete"](params, json)
+        s = infraops.ServiceClient(glob["group"], glob["service"], debug=glob["debug"])
+        return s.request(params)
 
     except HTTPException as ex:
         raise ex
@@ -166,11 +171,14 @@ def controller_put(group: str, name: str, request: Request):
     try:
         json = asyncio.run(request.json()) if asyncio.run(request.body()) else None
         params = dict(request.query_params)
+        params["type"] = "PUT"
+        params["data"] = json
         
         glob = {}
         exec(get_controller(group, name), glob)
 
-        return glob["put"](params, json)
+        s = infraops.ServiceClient(glob["group"], glob["service"], debug=glob["debug"])
+        return s.request(params)
 
     except HTTPException as ex:
         raise ex
@@ -182,11 +190,14 @@ def controller_post(group: str, name: str, request: Request):
     try:
         json = asyncio.run(request.json()) if asyncio.run(request.body()) else None
         params = dict(request.query_params)
+        params["type"] = "POST"
+        params["data"] = json
         
         glob = {}
         exec(get_controller(group, name), glob)
 
-        return glob["post"](params, json)
+        s = infraops.ServiceClient(glob["group"], glob["service"], debug=glob["debug"])
+        return s.request(params)
 
     except HTTPException as ex:
         raise ex

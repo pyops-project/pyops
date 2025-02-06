@@ -64,11 +64,10 @@ async def run_get(id: int):
     try:
         with Session(engine) as session:
             schedule = session.get(Schedule, id)
-            scriptlet = session.get(Scriptlet, (schedule.group, schedule.name))
-            if schedule == None:
-                raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Schedule {} not existing".format(id))
+        if schedule == None:
+            raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Schedule {} not existing".format(id))
 
-            return {"job": runner.enqueue(schedule.group, schedule.name, "TODO", "debug", False, schedule.param)}
+        return {"job": runner.enqueue(schedule.group, schedule.name, "TODO", "debug", False, schedule.param)}
 
     except HTTPException as ex:
         raise ex

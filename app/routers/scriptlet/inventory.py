@@ -128,9 +128,9 @@ async def item_del(group: str, name: str):
             session.execute(stmt)
 
             stmt = delete(ScriptletDraft).where(
-                ScriptletRevision.group == group,
-                ScriptletRevision.name == name,
-                ScriptletRevision.owner == "TODO"
+                ScriptletDraft.group == group,
+                ScriptletDraft.name == name,
+                ScriptletDraft.owner == "TODO"
             )
             session.execute(stmt)
 

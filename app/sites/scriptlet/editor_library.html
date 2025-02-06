@@ -12,7 +12,9 @@
         <script src="/files/js/js.cookie.min.js"></script>
         <script src="/files/js/bootstrap/bootstrap.bundle.min.js"></script>
         <script src="/files/js/ace/ace.js"></script>
+        <script src="/files/js/ace/mode-python.js"></script>
         <script src="/files/js/ace/ext-linking.js"></script>
+        <script src="/files/js/ace/ext-language_tools.js"></script>
 
 
         <script>
@@ -23,7 +25,35 @@
             const name = urlParams.get("name");
 
             var editor = null;
+            var langTools = ace.require('ace/ext/language_tools');
             var draftLock = false;
+            var editor_dirty = false;
+
+            var pylintCompleter = {
+                getCompletions: function(editor, session, pos, prefix, callback) {
+                    const data = {
+                        "code": editor.getValue(),
+                        "line": editor.getCursorPosition().row + 1,
+                        "column": editor.getCursorPosition().column
+                    };
+
+                    fetch("/scriptlet/completion", {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json"
+                        },
+                        body: JSON.stringify(data)
+                    }).then(async (r)=>{
+                        if(r.ok) {
+                            const d = await r.json();
+                            callback(null, d);
+                        } else
+                            console.error(r.statusText);
+                    }).catch((e)=>console.error("completion", e.toString()));
+                }
+            }
+            langTools.setCompleters([]);
+            langTools.addCompleter(pylintCompleter);
 
             var job_id = null;
 
@@ -80,6 +110,14 @@
                 }
             }
 
+            function save_draft() {
+                if(editor_dirty) {
+                    save();
+                    editor_dirty = false;
+                }
+                setTimeout(function() { save_draft(); }, 1000);
+            }
+
             function rollback() {
                 fetch(`/scriptlet/inventory/draft?name=${name}&group=${group}`, {
                     method: "DELETE"
@@ -100,15 +138,20 @@
                     theme: "ace/theme/twilight",
                     showPrintMargin: false,
                     enableLinking: true,
+                    enableBasicAutocompletion: true,
+                    enableLiveAutocompletion: true,
+                    completer: [pylintCompleter],
+                    enableSnippets: true,
                     selectionStyle: "text",
                     fontSize: $("#font-size").val(),
                     useWorker: false
                 });
 
                 editor.on("change", ()=>{
-                    save();
-                });               
+                    editor_dirty = true
+                });
 
+                save_draft();
                 refresh();
             });
         </script>
