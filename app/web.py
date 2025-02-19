@@ -276,12 +276,26 @@ async def menu():
                 ctrls = [r._mapping.name for r in session.execute(stmt)]
 
                 for c in ctrls:
-                    sm = {
-                        "id": f"{g}_{c}",
-                        "name": c,
-                        "path": f"/controller/{g}/{c}",
-                        "default": False
-                    }
+                    try:
+                        glob = {}
+                        exec(get_controller(g, c), glob)
+
+                        sm = {
+                            "id": f"{g}_{c}",
+                            "name": glob["name"] if "name" in glob and glob["name"] else c,
+                            "path": f"/controller/{g}/{c}",
+                            "default": False
+                        }
+                    except:
+                        print(traceback.print_exc())
+                        sm = {
+                            "id": f"{g}_{c}",
+                            "name": f"Failed: {c}",
+                            "path": f"/controller/{g}/{c}",
+                            "default": False,
+                            "error": traceback.print_exc()
+                        }
+
                     m["items"].append(sm)
 
                 content.append(m)
