@@ -40,6 +40,18 @@ async def get():
     except Exception as ex:
         raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
 
+@router.get("/scriptlet/editor_view")
+async def get():
+    try:
+        return HTMLResponse(
+            content=sites.get("scriptlet/editor_view"),
+            status_code=HTTP_200_OK
+        )
+    except HTTPException as ex:
+        raise ex
+    except Exception as ex:
+        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
+
 @router.post("/scriptlet/completion")
 async def pylint(co: CompletionArgument):
     try:
