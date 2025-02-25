@@ -80,6 +80,35 @@ def get_controller(group: str, name: str):
             
         return code
 
+def get_view(group: str, name: str):
+    with Session(engine) as session:
+        scriptlet = session.get(Scriptlet, (group, name))
+        if scriptlet == None:
+            raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Scriptlet {}::{} not existing".format(group, name))
+        elif scriptlet.type != "view":
+            raise HTTPException(status_code=HTTP_405_METHOD_NOT_ALLOWED, detail="Scriptlet {}::{} is no view".format(group, name))
+
+        draft = session.get(ScriptletDraft, (group, name, "TODO"))
+
+        if draft != None:
+            # TODO use draft code only when in debug mode
+            code = draft.code
+        else:
+            stmt = select(ScriptletRevision).where(
+                and_(
+                    ScriptletRevision.group == group,
+                    ScriptletRevision.name == name
+                )
+            ).order_by(ScriptletRevision.revision.desc())
+            revision = session.scalar(stmt)
+            
+            if revision != None:
+                code = revision.code
+            else:
+                raise HTTPException(status_code=HTTP_405_METHOD_NOT_ALLOWED, detail="Scriptlet {}::{} has no valid view code".format(group, name))
+            
+        return code
+
 @app.get("/controller/{group}/{name}")
 def controller(group: str, name: str):
     try:
@@ -117,9 +146,9 @@ def controller(group: str, name: str):
         {{BODY}}
     </body>
 </html>
-""".replace(r"{{HEAD}}", glob["head"])
-   .replace(r"{{MENU}}", glob["menu"])
-   .replace(r"{{BODY}}", glob["body"])
+""".replace(r"{{HEAD}}", get_view(group, glob["head"]))
+   .replace(r"{{MENU}}", get_view(group, glob["menu"]))
+   .replace(r"{{BODY}}", get_view(group, glob["body"]))
    .replace(r"{{GROUP}}", group)
    .replace(r"{{NAME}}", name),
                 status_code=HTTP_200_OK
@@ -247,12 +276,26 @@ async def menu():
                 ctrls = [r._mapping.name for r in session.execute(stmt)]
 
                 for c in ctrls:
-                    sm = {
-                        "id": f"{g}_{c}",
-                        "name": c,
-                        "path": f"/controller/{g}/{c}",
-                        "default": False
-                    }
+                    try:
+                        glob = {}
+                        exec(get_controller(g, c), glob)
+
+                        sm = {
+                            "id": f"{g}_{c}",
+                            "name": glob["name"] if "name" in glob and glob["name"] else c,
+                            "path": f"/controller/{g}/{c}",
+                            "default": False
+                        }
+                    except:
+                        print(traceback.print_exc())
+                        sm = {
+                            "id": f"{g}_{c}",
+                            "name": f"Failed: {c}",
+                            "path": f"/controller/{g}/{c}",
+                            "default": False,
+                            "error": traceback.print_exc()
+                        }
+
                     m["items"].append(sm)
 
                 content.append(m)

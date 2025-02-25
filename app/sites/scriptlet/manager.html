@@ -36,11 +36,24 @@
                 `
             }
 
+            function genViewActions(group, name) {
+                return `
+                    <button type="button" onclick="del('${group}', '${name}')" class="btn btn-danger p-0">
+                        <span class="material-icons-round">delete</span>
+                    </button>
+                    <button type="button" onclick="onEditView('${group}', '${name}', 'library')" class="btn btn-warning p-0">
+                        <span class="material-icons-round">edit</span>
+                    </button>
+                `
+            }
+
             function genActions(group, name, type) {
                 if(type == "task")
                     return genTaskActions(group, name);
                 else if(["library", "controller"].includes(type))
                     return genLibraryActions(group, name);
+                else if(type == "view")
+                    return genViewActions(group, name);
             }
 
             function genScriptletItem(group, name, description, type) {
@@ -92,6 +105,12 @@
                 window.open(`${window.location.origin}/scriptlet/editor_library?group=${group}&name=${name}`,`InfraOps - Scriptlet/Editor ${group}/${name}`,"titlebar=no,toolbar=no,menubar=no,scrollbars=no");
             }
 
+            function onEditView(group, name) {
+                console.debug("onEdit", group, name);
+
+                window.open(`${window.location.origin}/scriptlet/editor_view?group=${group}&name=${name}`,`InfraOps - Scriptlet/Editor ${group}/${name}`,"titlebar=no,toolbar=no,menubar=no,scrollbars=no");
+            }
+
             function onCreate(edit = false) {
                 console.debug("onCreate");
 
@@ -122,6 +141,8 @@
                         if(edit) {
                             if(["library", "controller"].includes(type))
                                 onEditLibrary(group, name);
+                            else if(type == "view")
+                                onEditView(group, name);
                             else if(type == "task")
                                 onEditTask(group, name);
                         }
@@ -216,6 +237,7 @@
                                 <option value="task" selected>Task</option>
                                 <option value="library">Library</option>
                                 <option value="controller">Controller</option>
+                                <option value="view">View</option>
                                 <!--
                                 <option value="model">Model</option>
                                 <option value="view">View</option>
