@@ -2,6 +2,7 @@ import asyncio, traceback
 import os
 import subprocess
 import logging
+import json
 
 from fastapi import FastAPI, Request, HTTPException, Query
 from fastapi.responses import HTMLResponse
@@ -207,12 +208,35 @@ def controller_get(set: str, name: str, request: Request):
         raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(traceback.format_exc()))
     
 @app.delete("/controller/{set}/{name}/q")
-def controller_delete(set: str, name: str, request: Request):
+async def controller_delete(set: str, name: str, request: Request):
     try:
-        json = asyncio.run(request.json()) if asyncio.run(request.body()) else None
+        body = await request.body()
+        content_type = request.headers.get("content-type", "").lower()
         params = dict(request.query_params)
         params["type"] = "DELETE"
-        params["data"] = json
+        if body:
+            if "application/json" in content_type:
+                try:
+                    parsed = json.loads(body.decode('utf-8'))
+                    params["data"] = parsed
+                    params["data_type"] = "json"
+                except json.JSONDecodeError:
+                    params["data"] = body
+                    params["data_type"] = "binary"
+            elif "text/" in content_type:
+                try:
+                    text = body.decode('utf-8')
+                    params["data"] = text
+                    params["data_type"] = "text"
+                except UnicodeDecodeError:
+                    params["data"] = body
+                    params["data_type"] = "binary"
+            else:
+                params["data"] = body
+                params["data_type"] = "binary"
+        else:
+            params["data"] = None
+            params["data_type"] = "none"
         
         glob = {}
         exec(get_controller_code(set, name), glob)
@@ -228,12 +252,35 @@ def controller_delete(set: str, name: str, request: Request):
         raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(traceback.format_exc()))
     
 @app.put("/controller/{set}/{name}/q")
-def controller_put(set: str, name: str, request: Request):
+async def controller_put(set: str, name: str, request: Request):
     try:
-        json = asyncio.run(request.json()) if asyncio.run(request.body()) else None
+        body = await request.body()
+        content_type = request.headers.get("content-type", "").lower()
         params = dict(request.query_params)
         params["type"] = "PUT"
-        params["data"] = json
+        if body:
+            if "application/json" in content_type:
+                try:
+                    parsed = json.loads(body.decode('utf-8'))
+                    params["data"] = parsed
+                    params["data_type"] = "json"
+                except json.JSONDecodeError:
+                    params["data"] = body
+                    params["data_type"] = "binary"
+            elif "text/" in content_type:
+                try:
+                    text = body.decode('utf-8')
+                    params["data"] = text
+                    params["data_type"] = "text"
+                except UnicodeDecodeError:
+                    params["data"] = body
+                    params["data_type"] = "binary"
+            else:
+                params["data"] = body
+                params["data_type"] = "binary"
+        else:
+            params["data"] = None
+            params["data_type"] = "none"
         
         glob = {}
         exec(get_controller_code(set, name), glob)
@@ -249,12 +296,35 @@ def controller_put(set: str, name: str, request: Request):
         raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(traceback.format_exc()))
     
 @app.post("/controller/{set}/{name}/q")
-def controller_post(set: str, name: str, request: Request):
+async def controller_post(set: str, name: str, request: Request):
     try:
-        json = asyncio.run(request.json()) if asyncio.run(request.body()) else None
+        body = await request.body()
+        content_type = request.headers.get("content-type", "").lower()
         params = dict(request.query_params)
         params["type"] = "POST"
-        params["data"] = json
+        if body:
+            if "application/json" in content_type:
+                try:
+                    parsed = json.loads(body.decode('utf-8'))
+                    params["data"] = parsed
+                    params["data_type"] = "json"
+                except json.JSONDecodeError:
+                    params["data"] = body
+                    params["data_type"] = "binary"
+            elif "text/" in content_type:
+                try:
+                    text = body.decode('utf-8')
+                    params["data"] = text
+                    params["data_type"] = "text"
+                except UnicodeDecodeError:
+                    params["data"] = body
+                    params["data_type"] = "binary"
+            else:
+                params["data"] = body
+                params["data_type"] = "binary"
+        else:
+            params["data"] = None
+            params["data_type"] = "none"
         
         glob = {}
         exec(get_controller_code(set, name), glob)

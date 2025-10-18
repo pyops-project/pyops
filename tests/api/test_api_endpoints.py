@@ -3,7 +3,6 @@ from unittest.mock import patch, MagicMock
 from app.web import app
 from app.routers.scriptlet.inventory import CreateArgument, SaveArgument
 
-
 def test_get_inventory_list(mock_client, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
     # Test GET /scriptlet/inventory/list
     response = mock_client.get("/scriptlet/inventory/list", headers={"X-User": "testuser"})
@@ -118,3 +117,115 @@ def test_inventory_invalid_set(mock_client, mock_git_ops, test_temp_dir, patch_t
     with patch("os.path.exists", return_value=False):
         response = mock_client.put("/scriptlet/inventory/item", json=create_data, headers={"X-User": "testuser"})
         assert response.status_code == 400
+
+@pytest.mark.parametrize("method", ["post", "put"])
+def test_controller_body_handling_json(mock_client, mock_controller_glob, method):
+    # Valid JSON with application/json
+    json_data = {"key": "value"}
+    headers = {"X-User": "testuser"}
+    with patch("app.lib.pyops.ServiceClient") as mock_service:
+        mock_instance = MagicMock()
+        mock_service.return_value = mock_instance
+        mock_instance.request.return_value = {"success": True}
+        
+        if method == "post":
+            response = mock_client.post("/controller/testset/testname/q", json=json_data, headers=headers)
+        elif method == "put":
+            response = mock_client.put("/controller/testset/testname/q", json=json_data, headers=headers)
+        
+        assert response.status_code == 200
+        mock_instance.request.assert_called_once()
+        params = mock_instance.request.call_args[0][0]
+        assert params["data"] == json_data
+        assert params["data_type"] == "json"
+        assert params["type"] == method.upper()
+
+@pytest.mark.parametrize("method", ["post", "put"])
+def test_controller_body_handling_invalid_json(mock_client, mock_controller_glob, method):
+    # Invalid JSON with application/json -> fallback to binary
+    body = b"invalid json"
+    headers = {"X-User": "testuser", "content-type": "application/json"}
+    with patch("app.lib.pyops.ServiceClient") as mock_service:
+        mock_instance = MagicMock()
+        mock_service.return_value = mock_instance
+        mock_instance.request.return_value = {"success": True}
+        
+        if method == "post":
+            response = mock_client.post("/controller/testset/testname/q", content=body, headers=headers)
+        elif method == "put":
+            response = mock_client.put("/controller/testset/testname/q", content=body, headers=headers)
+        
+        assert response.status_code == 200
+        mock_instance.request.assert_called_once()
+        params = mock_instance.request.call_args[0][0]
+        assert isinstance(params["data"], bytes)
+        assert params["data"] == body
+        assert params["data_type"] == "binary"
+        assert params["type"] == method.upper()
+
+@pytest.mark.parametrize("method", ["post", "put"])
+def test_controller_body_handling_text(mock_client, mock_controller_glob, method):
+    # Text with text/plain
+    body = b"hello world"
+    headers = {"X-User": "testuser", "content-type": "text/plain"}
+    with patch("app.lib.pyops.ServiceClient") as mock_service:
+        mock_instance = MagicMock()
+        mock_service.return_value = mock_instance
+        mock_instance.request.return_value = {"success": True}
+        
+        if method == "post":
+            response = mock_client.post("/controller/testset/testname/q", content=body, headers=headers)
+        elif method == "put":
+            response = mock_client.put("/controller/testset/testname/q", content=body, headers=headers)
+        
+        assert response.status_code == 200
+        mock_instance.request.assert_called_once()
+        params = mock_instance.request.call_args[0][0]
+        assert params["data"] == "hello world"
+        assert params["data_type"] == "text"
+        assert params["type"] == method.upper()
+
+@pytest.mark.parametrize("method", ["post", "put"])
+def test_controller_body_handling_binary(mock_client, mock_controller_glob, method):
+    # Binary with application/octet-stream
+    body = b'\x00\x01\x02'
+    headers = {"X-User": "testuser", "content-type": "application/octet-stream"}
+    with patch("app.lib.pyops.ServiceClient") as mock_service:
+        mock_instance = MagicMock()
+        mock_service.return_value = mock_instance
+        mock_instance.request.return_value = {"success": True}
+        
+        if method == "post":
+            response = mock_client.post("/controller/testset/testname/q", content=body, headers=headers)
+        elif method == "put":
+            response = mock_client.put("/controller/testset/testname/q", content=body, headers=headers)
+        
+        assert response.status_code == 200
+        mock_instance.request.assert_called_once()
+        params = mock_instance.request.call_args[0][0]
+        assert params["data"] == body
+        assert params["data_type"] == "binary"
+        assert params["type"] == method.upper()
+
+@pytest.mark.parametrize("method", ["post", "put", "delete"])
+def test_controller_body_handling_empty(mock_client, mock_controller_glob, method):
+    # Empty body
+    headers = {"X-User": "testuser"}
+    with patch("app.lib.pyops.ServiceClient") as mock_service:
+        mock_instance = MagicMock()
+        mock_service.return_value = mock_instance
+        mock_instance.request.return_value = {"success": True}
+        
+        if method == "post":
+            response = mock_client.post("/controller/testset/testname/q", headers=headers)
+        elif method == "put":
+            response = mock_client.put("/controller/testset/testname/q", headers=headers)
+        else:  # delete
+            response = mock_client.delete("/controller/testset/testname/q", headers=headers)
+        
+        assert response.status_code == 200
+        mock_instance.request.assert_called_once()
+        params = mock_instance.request.call_args[0][0]
+        assert params["data"] is None
+        assert params["data_type"] == "none"
+        assert params["type"] == method.upper()

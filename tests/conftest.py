@@ -320,3 +320,13 @@ def pytest_configure(config):
     original_showwarning = warnings.showwarning
     warnings.showwarning = custom_showwarning
     warnings.filterwarnings("always", category=ResourceWarning)
+
+@pytest.fixture
+def mock_controller_glob():
+    code = """
+set = "testset"
+service = "testservice"
+debug = False
+"""
+    with patch("app.web.get_controller_code", return_value=code):
+        yield
