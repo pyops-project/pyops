@@ -28,7 +28,8 @@ def mock_conf(tmp_path):
         "data": {
             "db": str(test_db),
             "jobs": str(test_jobs),
-            "git": str(test_git)
+            "git": str(test_git),
+            "pool_size": 2
         },
         "runner": {"git_pull_interval": 60}
     }
@@ -42,28 +43,28 @@ def mock_conf(tmp_path):
 @pytest.fixture(scope="function")
 def mock_db(mock_conf, tmp_path):
     import gc
-    from app.orm.database import Base, get_db_engine, init_db
+    from app.orm.database import Base, get_db_engine, init_db, destroy_db
     from app.orm.job import Job
     from app.orm.schedule import Schedule
     from unittest.mock import patch
 
+    destroy_db()
     db_path = tmp_path / "test.db"
     if db_path.exists():
         db_path.unlink()
-
     init_db()
 
     try:
         yield
     finally:
+        destroy_db()
         gc.collect()
         if db_path.exists():
             db_path.unlink()
 
 """Fixture for FastAPI TestClient with config patches and user override."""
 @pytest.fixture
-def mock_client(mock_conf, tmp_path):
-    from app.orm.database import init_db
+def mock_client(mock_conf, tmp_path, mock_db):
     from app.web import app
 
     def override_get_current_user(request):
@@ -72,7 +73,7 @@ def mock_client(mock_conf, tmp_path):
             return {"id": user, "name": user}
         return None
 
-    init_db()
+    app.dependency_overrides["get_current_user"] = override_get_current_user
 
     with TestClient(app) as client:
         yield client
