@@ -1,8 +1,8 @@
 import json
-from lib import infraops
+from lib import pyops
 
 debug = True
-group = "Test"
+set = "Test"
 service = "Service"
     
 head = """

@@ -1,0 +1,3 @@
+# Execution and Utility Mechanisms
+
+app/lib/ provides utilities: files.py loads JSON config from etc/pyops.json (binds, paths, logs) and serves static assets; git.py manages per-set repos under data/ with locking, pull_if_needed (interval-based), read/write_content, add/commit/push, status; pyops.py defines Control classes (JobControl, ScheduleControl) for HTTP/ZMQ interactions, ServiceListener/Client for IPC (msgpack over ZMQ sockets); lib/runner.py provides DB ops (enqueue/query/cancel mirroring API); runner.py daemon polls DB for todo jobs, spawns subprocesses in venvs (process_install_lines handles !pip/!git lines), tracks PIDs/states, cleans up via signals. Isolation via workspaces in data/jobs/{owner}/{set}/{id}.

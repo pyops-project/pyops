@@ -1,0 +1,10 @@
+<insight_rules>
+    <strict_rule>maintained in context window during whole multicycle conversation</strict_rule>
+    <strict_rule>do not exceed 512 tokens</strict_rule>
+    <strict_rule>pure, give insight into only current project state (no future, no past)</strict_rule>
+    <strict_rule>not changed until user explicitly approves or instructs</strict_rule>
+    <rule>providing context</rule>
+    <rule>named considering requirement identification</rule>
+    <rule>orderless (no numbering eg. 01_, 02_, ...)</rule>
+    <rule>proposed during conversation</rule>
+</insight_rules>

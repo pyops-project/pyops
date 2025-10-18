@@ -102,7 +102,7 @@
 
             function clearCreateModal() {
                 $("#createModal-error").text("");
-                $("#createModal-group").val("");
+                $("#createModal-set").val("");
                 $("#createModal-name").val("");
                 $("#createModal-schedule").val("");
                 $("#createModal-param").val("");
@@ -111,13 +111,13 @@
             function onCreate() {
                 console.debug("onCreate");
 
-                const group = $("#createModal-group").val();
+                const set = $("#createModal-set").val();
                 const name = $("#createModal-name").val();
                 const schedule = $("#createModal-schedule").val();
                 const param = $("#createModal-param").val();
 
                 const data = {
-                    "group": group,
+                    "set": set,
                     "name": name,
                     "schedule": schedule,
                     "param": param
@@ -223,11 +223,14 @@
             function view(id) {
                 console.debug(`view(${id})`);
 
-                window.open(`${window.location.origin}/scriptlet/view_job?id=${id}`,`InfraOps - Scriptlet/View ${id}`,"titlebar=no,toolbar=no,menubar=no,scrollbars=no");
+                window.open(`${window.location.origin}/scriptlet/view_job?id=${id}`,`PyOps - Scriptlet/View ${id}`,"titlebar=no,toolbar=no,menubar=no,scrollbars=no");
             }
 
             $(document).ready(() => {
                 refreshList();
+                setInterval(function() {
+                    refreshList();
+                }, 10000);
             });
         </script>
     </head>

@@ -1,6 +1,12 @@
+# app/lib/pyops.py
 import os, signal, zmq, msgpack, json
 import requests as rq
-from lib import runner, files
+import tempfile
+import atexit
+from . import runner, files
+
+import logging
+logger = logging.getLogger(__name__)
 
 class ControlRequest:
     def __init__(self, web_bind: str):
@@ -38,9 +44,9 @@ class JobControl:
     def list(self):
         return self.rq.get("scriptlet/job/list")
     
-    def create(self, group: str, name: str, drop_done: bool, param: str, debug: bool):
+    def create(self, set: str, name: str, drop_done: bool, param: str, debug: bool):
         return self.rq.put("scriptlet/job/item", json={
-            "group": group,
+            "set": set,
             "name": name,
             "drop_done": drop_done,
             "param": param,
@@ -66,9 +72,9 @@ class ScheduleControl:
     def list(self):
         return self.rq.get("scriptlet/schedule/list")
     
-    def create(self, group: str, name: str, drop_done: bool, schedule: str, param: str):
+    def create(self, set: str, name: str, drop_done: bool, schedule: str, param: str):
         return self.rq.put("scriptlet/schedule/item", json={
-            "group": group,
+            "set": set,
             "name": name,
             "drop_done": drop_done,
             "schedule": schedule,
@@ -93,30 +99,42 @@ class Control:
         self.job = JobControl(self.rq)
         self.schedule = ScheduleControl(self.rq)
 
-    def get(self, group: str, name: str, params = {}):
-        return self.rq.get(f"controller/{group}/{name}/get", params=params)
+    def get(self, set: str, name: str, params = {}):
+        return self.rq.get(f"controller/{set}/{name}/get", params=params)
     
-    def delete(self, group: str, name: str, params = {}):
-        return self.rq.get(f"controller/{group}/{name}/delete", params=params)
+    def delete(self, set: str, name: str, params = {}):
+        return self.rq.get(f"controller/{set}/{name}/delete", params=params)
     
-    def put(self, group: str, name: str, json = {}):
-        return self.rq.get(f"controller/{group}/{name}/put", json=json)
+    def put(self, set: str, name: str, json = {}):
+        return self.rq.get(f"controller/{set}/{name}/put", json=json)
     
-    def post(self, group: str, name: str, json = {}):
-        return self.rq.get(f"controller/{group}/{name}/post", json=json)
+    def post(self, set: str, name: str, json = {}):
+        return self.rq.get(f"controller/{set}/{name}/post", json=json)
 
 class ServiceListener:
-    def __init__(self, sockfile):
+    def __init__(self, job_id: str):
         self.kill_now = False
         signal.signal(signal.SIGINT, self.exit_gracefully)
         signal.signal(signal.SIGTERM, self.exit_gracefully)
 
-        self.sockfile = os.path.abspath(sockfile)
+        temp_dir = tempfile.gettempdir()
+        pyops_dir = os.path.join(temp_dir, "pyops")
+        os.makedirs(pyops_dir, exist_ok=True)
+        self.sockfile = os.path.join(pyops_dir, f"{job_id}.sock")
         self.context = zmq.Context()
         self.socket = self.context.socket(zmq.REP)
         self.socket.bind(f"ipc://{self.sockfile}")
         self.poller = zmq.Poller()
         self.poller.register(self.socket, flags=zmq.POLLIN)
+        atexit.register(self.close)
+
+    def close(self):
+        if hasattr(self, 'socket'):
+            self.socket.close()
+        if hasattr(self, 'context'):
+            self.context.term()
+        if os.path.exists(self.sockfile):
+            os.remove(self.sockfile)
 
     def exit_gracefully(self, signum, frame):
         self.kill_now = True
@@ -124,28 +142,39 @@ class ServiceListener:
     def listen(self):
         while not self.poller.poll(timeout=1000) and not self.kill_now:
             pass
-        return msgpack.unpackb(self.socket.recv()) if not self.kill_now else "TERM"
+        if not self.kill_now:
+            return msgpack.unpackb(self.socket.recv())
+        else:
+            return "TERM"
 
     def response(self, msg):
         b = msgpack.packb(msg)
         self.socket.send(b)
 
 class ServiceClient:
-    def __init__(self, group: str, name: str, debug: bool = False):
-        owner = "TODO"
-        jobs = runner.find(owner, group, name, "debug" if debug else "service", ["running"])
+    def __init__(self, set: str, name: str, debug: bool = False, owner: str = None):
+        self.owner = owner or "anonymous"
+        jobs = runner.find(self.owner, set, name, "debug" if debug else "service", ["running"])
 
         if not jobs:
-            raise Exception(f"No running service: {group} {name}")
+            raise Exception(f"No running service: {set} {name}")
         else:
             self.job = jobs[0]
 
-            data_base = files.conf_data()["jobs"]
-            self.sockfile = os.path.abspath(os.path.join(data_base, f"{self.job}.sock"))
+            temp_dir = tempfile.gettempdir()
+            pyops_dir = os.path.join(temp_dir, "pyops")
+            self.sockfile = os.path.join(pyops_dir, f"{self.job['id']}.sock")
 
             self.context = zmq.Context()
             self.socket = self.context.socket(zmq.REQ)
             self.socket.connect(f"ipc://{self.sockfile}")
+            atexit.register(self.close)
+
+    def close(self):
+        if hasattr(self, 'socket'):
+            self.socket.close()
+        if hasattr(self, 'context'):
+            self.context.term()
 
     def request(self, msg):
         b = msgpack.packb(msg)

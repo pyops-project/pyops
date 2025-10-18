@@ -5,7 +5,14 @@
         "timeout": 300
     },
     "data": {
-        "jobs": "../data/jobs"
+        "jobs": "../data/jobs",
+        "git": "../data/git",
+        "db": "../app.db"
+    },
+    "runner": {
+        "venv": "../data/venv",
+        "pkg": "../data/pkg",
+        "git_pull_interval": 60
     },
     "log": {
         "access": "../log/access.log",

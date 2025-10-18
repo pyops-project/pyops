@@ -1,0 +1,4 @@
+<meta_rules>
+    <strict_rule>architectural decissions require explicit approval</strict_rule>
+    <strict_rule>all rules are pinned to context window during whole multicycle conversation</strict_rule>
+</meta_rules>

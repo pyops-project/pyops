@@ -1,0 +1,3 @@
+<truth_rules>
+    <strict_rule>@/app is truth and will not be changed</strict_rule>
+</truth_rules>

@@ -1,0 +1,3 @@
+API Endpoint Patterns
+
+FastAPI routers in app/routers/scriptlet/ follow async patterns with dependency injection: get_current_user extracts X-User header for auth in inventory.py, job.py, schedule.py; Pydantic BaseModels (e.g., CreateArgument, SaveArgument, RunArgument) validate inputs for PUT/POST; endpoints cluster by resource—inventory.py for scriptlet list/item CRUD/drafts/repo_status, job.py for queue/cancel/download, schedule.py for list/create/activate/deactivate, editor.py for completions/pylint via Jedi integration. manager.py, monitor.py, scheduler.py provide simple GET for UI rendering. No pagination or advanced filtering observed; responses use HTTP status codes (200/404/409).

@@ -1,11 +1,11 @@
 from sqlalchemy import Column, Integer, String, DateTime, Boolean
 
-from orm.database import Base
+from .database import Base
 
 class Job(Base):
     __tablename__ = "job"
     id = Column(String, primary_key=True, nullable=False)
-    group = Column(String, index=True, nullable=False)
+    set = Column(String, index=True, nullable=False)
     name = Column(String, index=True, nullable=False)
     owner = Column(String, index=True, nullable=False)
     kind = Column(String, index=True, nullable=False)

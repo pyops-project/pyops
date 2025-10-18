@@ -1,0 +1,16 @@
+<test_rules>
+    <strict_rule>tests are located at @/tests</strict_rule>
+    <inactive_rule>pure pytest</inactive_rule>
+    <strict_rule>store files in `.cache` directory so threads share them</strict_rule>
+    <strict_rule>imports from `app` cannot be done outside test function's scope</strict_rule>
+    <fixture_rules>
+        <rule>ensure clean up</rule>
+        <rule>do not overlap</rule>
+        <rule>inherit or complement each other</rule>
+        <rule>exclusively located in tests/conftest.py</rule>
+        <rule>are picked by test if required (no autouse)</rule>
+    </fixture_rules>
+    <mock_rules>
+        <rule>picked by test if required (no autouse)</rule>
+    </mock_rules>
+</test_rules>

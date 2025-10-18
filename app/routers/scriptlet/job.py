@@ -1,6 +1,7 @@
 import os.path
+import subprocess
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends, Header, Query
 from fastapi.responses import StreamingResponse
 from starlette.status import HTTP_404_NOT_FOUND, HTTP_500_INTERNAL_SERVER_ERROR
 from pydantic import BaseModel
@@ -8,64 +9,76 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from orm.database import engine
-from orm.scriptlet import Scriptlet
-from orm.job import Job
+from app.orm.database import get_db_engine
+from app.orm.job import Job
 
-from lib import runner, files
+from app.lib import runner, files, git
 
 from zipstream import ZipStream, ZIP_DEFLATED
+
+import logging
+logger = logging.getLogger(__name__)
+
+async def get_current_user(x_user: str = Header(default=None, alias="X-User")):
+    return x_user or "anonymous"
 
 router = APIRouter()
 
 class RunArgument(BaseModel):
-    group: str
+    set: str
     name: str
     drop_done: bool
     param: str
     debug: bool = False
 
 @router.get("/scriptlet/job/list", tags=["job"])
-async def list_get():
+async def list_get(user: str = Depends(get_current_user)):
     """
     Returns a list of available Schedules
     """
     try:
-        with Session(engine) as session:
+        with Session(get_db_engine()) as session:
             stmt = select(Job.id,
                           Job.start,
                           Job.end,
                           Job.kind,
                           Job.state,
                           Job.detail,
-                          Job.param).where(Job.state != "remove").order_by(Job.id.desc())
+                          Job.param,
+                          Job.owner).where(
+                Job.state != "remove",
+                Job.owner == user
+            ).order_by(Job.id.desc())
             db_jobs = session.execute(stmt)
             
             jobs = [dict(r._mapping) for r in db_jobs]
 
             return jobs
     except Exception as ex:
+        logger.exception("Error in list_get: %s", ex)
         raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
 
 @router.put("/scriptlet/job/item", tags=["job"])
-async def job_put(ru: RunArgument):
+async def job_put(ru: RunArgument, user: str = Depends(get_current_user)):
     """
     Creates a new Job
     """
     try:
-        with Session(engine) as session:
-            scriptlet = session.get(Scriptlet, (ru.group, ru.name))
+        repo = git.get_repo_path(ru.set)
+        # Check exists (committed or unstaged via fallback).
+        try:
+            git.read_content(repo, ru.name, "task", committed=True)
+        except FileNotFoundError:
+            raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail=f"Scriptlet {ru.set}::{ru.name} not existing.")
 
-        if scriptlet == None:
-            raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Scriptlet {}::{} not existing".format(ru.group, ru.name))
-
-        job = runner.enqueue(ru.group, ru.name, "TODO", "debug" if ru.debug else "task", ru.drop_done, ru.param)
+        job = runner.enqueue(ru.set, ru.name, user, "debug" if ru.debug else "task", ru.drop_done, ru.param)
 
         return {"job": job}
 
     except HTTPException as ex:
         raise ex
     except Exception as ex:
+        logger.exception("Error in job_put: %s", ex)
         raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
 
 @router.get("/scriptlet/job/item", tags=["job"])
@@ -80,8 +93,8 @@ async def job_get(id: str):
 
         data_base = files.conf_data()["jobs"]
         userspace = os.path.join(data_base, job.owner)
-        groupspace = os.path.join(userspace, job.group)
-        workspace = os.path.join(groupspace, job.id)
+        setspace = os.path.join(userspace, job.set)
+        workspace = os.path.join(setspace, job.id)
         stdout_log_path = os.path.join(workspace, "stdout.log")
         stderr_log_path = os.path.join(workspace, "stderr.log")
 
@@ -99,7 +112,7 @@ async def job_get(id: str):
         return {
             "id": job.id,
             "owner": job.owner,
-            "group": job.group,
+            "set": job.set,
             "state": job.state,
             "detail": job.detail,
             "stdout": stdout,
@@ -109,23 +122,21 @@ async def job_get(id: str):
     except HTTPException as ex:
         raise ex
     except Exception as ex:
+        logger.exception("Error in job_get: %s", ex)
         raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
 
 @router.delete("/scriptlet/job/item", tags=["job"])
 async def job_del(id: str):
     try:
         job = runner.remove(id)
-        if job == None:
-            if runner.drop(id, job.owner, job.group):
-                return {"id": id}
-            else:
-                raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Job {} not existing".format(id))
-
+        if job is None:
+            raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail=f"Job {id} not existing")
         return job
 
     except HTTPException as ex:
         raise ex
     except Exception as ex:
+        logger.exception("Error in job_del: %s", ex)
         raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
 
 @router.get("/scriptlet/job/cancel", tags=["job"])
@@ -141,6 +152,7 @@ async def cancel(id: str):
     except HTTPException as ex:
         raise ex
     except Exception as ex:
+        logger.exception("Error in cancel: %s", ex)
         raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
     
 @router.get("/scriptlet/job/download", tags=["job"])
@@ -152,8 +164,8 @@ async def download_get(id: str):
 
         data_base = files.conf_data()["jobs"]
         userspace = os.path.join(data_base, f"{job.owner}")
-        groupspace = os.path.join(userspace, f"{job.group}")
-        workspace = os.path.join(groupspace, f"{job.id}")
+        setspace = os.path.join(userspace, f"{job.set}")
+        workspace = os.path.join(setspace, f"{job.id}")
 
         zs = ZipStream(compress_type=ZIP_DEFLATED)
 
@@ -166,4 +178,5 @@ async def download_get(id: str):
     except HTTPException as ex:
         raise ex
     except Exception as ex:
+        logger.exception("Error in download_get: %s", ex)
         raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))

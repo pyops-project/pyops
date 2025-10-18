@@ -1,4 +1,6 @@
 import os.path, json
+import logging
+logger = logging.getLogger(__name__)
 
 files_path = os.path.join(os.path.dirname(__file__), "../files")
 
@@ -6,16 +8,63 @@ def get(path: str):
     with open(os.path.join(files_path, path), "rb") as file:
         return file.read()
 
-raw_conf = {}
+class Config:
+    def __init__(self):
+        self._raw_conf = None
 
-def load_conf():
-    global raw_conf
-    with open(os.path.join("..", "etc", "infraops.json"), "r") as file:
-        raw_conf = json.load(file)
+    @classmethod
+    def init(cls, conf_path: str):
+        global config
+        config = cls()
+        with open(conf_path, "r") as file:
+            config._raw_conf = json.load(file)
+        logger.debug("Conf loaded successfully")
+        return config
+
+    def data(self):
+        try:
+            logger.debug("Accessing conf_data, _raw_conf type: %s", type(self._raw_conf))
+            if self._raw_conf is None:
+                raise ValueError("Config not initialized. Call Config.init(conf_path) first.")
+            # Data section with defaults
+            data = {
+                "jobs": os.path.join(os.path.curdir, "../data/jobs"),
+                "git": os.path.join(os.path.curdir, "../data/git"),
+                "db": os.path.join(os.path.curdir, "../app.db"),
+            }
+            if "data" in self._raw_conf:
+                data.update(self._raw_conf["data"])
+            logger.debug("Conf data accessed successfully")
+            return data
+        except Exception as e:
+            logger.error("Conf data access failed: %s", e)
+            raise
+
+    def runner(self):
+        try:
+            logger.debug("Accessing conf_runner, _raw_conf type: %s", type(self._raw_conf))
+            if self._raw_conf is None:
+                raise ValueError("Config not initialized. Call Config.init(conf_path) first.")
+            # Add runner section with defaults
+            runner = {"git_pull_interval": 60}
+            if "runner" in self._raw_conf:
+                runner.update(self._raw_conf["runner"])
+            logger.debug("Conf runner accessed successfully")
+            return runner
+        except Exception as e:
+            logger.error("Conf runner access failed: %s", e)
+            raise
+
+config = None
 
 def conf_data():
-    return {
-        "jobs": os.path.join(os.path.curdir, raw_conf["data"]["jobs"]) if "jobs" in raw_conf["data"] else os.path.join(os.path.curdir, "../data/jobs")
-    } if "data" in raw_conf else {
-        "jobs": os.path.join(os.path.curdir, "../data/jobs")
-    }
+    global config
+    if config is None:
+        raise ValueError("Config not initialized. Call Config.init(conf_path) first.")
+    return config.data()
+
+def conf_runner():
+    global config
+    if config is None:
+        raise ValueError("Config not initialized. Call Config.init(conf_path) first.")
+    return config.runner()

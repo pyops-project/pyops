@@ -21,7 +21,7 @@
             'use strict';
 
             const urlParams = new URLSearchParams(window.location.search);
-            const group = urlParams.get("group");
+            const set = urlParams.get("set");
             const name = urlParams.get("name");
 
             var param = null;
@@ -95,12 +95,18 @@
                 // hack because of editor render problem on writing out
                 setTimeout(function() { param.resize(); editor.resize(); out.resize(); errout.resize(); }, 500);
             }
+            
+            function clearLogs() {
+                out.setValue('');  // Clears stdout textarea
+                errout.setValue('');  // Clears stderr textarea
+                console.debug('Logs cleared');  // Optional: Silent debug log
+            }
 
             function refresh() {
                 console.debug("refresh");
                 
                 draftLock = true;
-                fetch(`/scriptlet/inventory/code?group=${group}&name=${name}`).then(async (r)=>{
+                fetch(`/scriptlet/inventory/code?set=${set}&name=${name}`).then(async (r)=>{
                     if(r.ok) {
                         const d = await r.json();
                         editor.setValue(d.code);
@@ -158,7 +164,7 @@
                 save();
                 
                 const data = {
-                    "group": group,
+                    "set": set,
                     "name": name,
                     "drop_done": false,
                     "param": param.getValue(),
@@ -204,7 +210,7 @@
             function save(draft = true) {
                 if(!draft || !draftLock) {
                     const data = {
-                        "group": group,
+                        "set": set,
                         "name": name,
                         "code": editor.getValue()
                     };
@@ -242,7 +248,7 @@
             }
 
             function rollback() {
-                fetch(`/scriptlet/inventory/draft?name=${name}&group=${group}`, {
+                fetch(`/scriptlet/inventory/draft?name=${name}&set=${set}`, {
                     method: "DELETE"
                 }).then(async (r)=>{
                     if(r.ok) {
@@ -254,7 +260,7 @@
             }
 
             $(document).ready(() =>{
-                $("#scriptlet-id").text(`${group}::${name}`);
+                $("#scriptlet-id").text(`${set}::${name}`);
 
                 param = ace.edit("param", {
                     mode: "ace/mode/python",
@@ -324,7 +330,7 @@
             <ul class="navbar-nav">
                 <li class="navbar-brand m-1">
                     <span class="material-icons-round">description</span>
-                    <span>Scriptlet/Editor</span>
+                    <span>Task Editor</span>
                     <span id="scriptlet-id"></span>
                 </li>
                 <li class="nav-item m-1">
@@ -348,19 +354,16 @@
                     </button>
                 </li>
                 <li class="nav-item m-1">
-                    <button type="button" class="btn btn-warning" onclick="log('');">
+                    <button type="button" class="btn btn-warning" onclick="clearLogs();">
                         <span class="material-icons-round">cleaning_services</span>
                     </button>
                 </li>
                 <li class="nav-item m-1">
                     <select id="font-size" class="form-select bg-dark text-light" onchange="fontSizeChanged()">
                         <option value="8pt">8pt</option>
-                        <option value="9pt">9pt</option>
-                        <option value="10pt" selected>10pt</option>
-                        <option value="11pt">11pt</option>
+                        <option value="9pt" selected>9pt</option>
                         <option value="12pt">12pt</option>
                         <option value="13pt">13pt</option>
-                        <option value="14pt">14pt</option>
                     </select>
                 </li>
             </ul>

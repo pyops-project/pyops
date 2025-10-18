@@ -1,0 +1,20 @@
+# Dynamic UI Rendering Patterns
+
+app/web.py handles core dynamic rendering for controllers/views, integrating static assets and API-driven content.
+
+**Controller/View Execution (app/web.py)**:
+- /controller/{set}/{name}: Loads committed controller code via get_controller_code (git read .py, infer_type=="controller", raise 404/405 if missing/wrong type). exec(code, glob) to access head/menu/body (assumed globals from scriptlet). Loads corresponding views via get_view_content (git read .html, infer_type=="view"). Renders HTML template with replacements: {{HEAD}} (head view), {{MENU}} (menu view), {{BODY}} (body view), {{SET}}/{set}, {{NAME}}/{name}. Includes Bootstrap/Material Icons/jQuery/JS Cookie/Bootstrap JS in <head>.
+- /controller/{set}/{name}/q (GET/DELETE/PUT/POST): Proxies HTTP to ZMQ service: Extracts params/body, sets "type"/"data", exec controller code for glob["set"]/["service"]/["debug"], instantiates pyops.ServiceClient(set, service, debug, user=X-User), calls s.request(params) for IPC.
+- /menu: Dynamically generates JSON menu from git controllers: Fixed "scriptlet" items (manager/scheduler/monitor), scans sets/controllers via git.list_scriptlets(), for each: exec(code, glob) for "name" (fallback name), builds path/id/default. Handles exec errors (e.g., "No committed"/"Exec failed").
+- Static serving: / (root.html), /favicon.ico, /files/{path} (assets like CSS/JS/Ace).
+
+**UI Structure and Interactions (app/sites/scriptlet/*.html)**:
+- All views (manager/scheduler/monitor/editor_*.html) follow Bootstrap 5 layout: <head> with viewport/charset, CSS (bootstrap.min.css, material-icons.css), JS (jQuery, js.cookie, bootstrap.bundle). <body class="bg-light"> with navbar (dark bg, icons via material-icons-round, buttons for add/refresh), content (tables/modals/forms), no external frames observed.
+- jQuery-driven SPAs: $(document).ready() initializes (e.g., refreshList()), setInterval(10s) for auto-refresh. Consistent fetch patterns: .then(async r=>{ if(r.ok) { const d=await r.json(); ... } else console.error(...); }).catch(e=>console.error(...)); Uses console.debug for API calls/responses.
+- **Manager (manager.html)**: Table (#scriptlets) for set/name/type/actions (genActions: type-specific buttons del/edit via onEditTask/Library/View/Md, material icons). Create modal (#createModal): Select set (populateSets fetch /inventory/sets), input name/type (task/library/controller/view), PUT /inventory/item on create (enqueueRefreshList 500ms), optional edit popup. Del: Confirm + DELETE /inventory/item?set&name.
+- **Scheduler (scheduler.html)**: Table for schedules (id/set/name/active/cron/param/actions: run/activate/deactivate/del). Create modal similar (PUT /schedule/item), actions: POST /run?id, GET /activate/deactivate?id, DELETE /item?id.
+- **Monitor (monitor.html)**: Dual tables (#jobs for job list: id/set/name/state/param/actions cancel/del; #scriptlets for schedules). Fetch /job/list (filter states), bulk del-all-done?state=done, download ZIP /job/item?id (blob URL).
+- **Editors (editor_*.html)**: Ace editor integration (not in search, but implied), fetch /inventory/code?set&name for load, poll /job/item?id for run status (btn_run disabled during), cancel /job/cancel?id, PUT /job/item for enqueue (param/code/debug), POST /completion for Jedi. Draft ops: DELETE /inventory/draft?name&set on rollback, lock during save.
+- Patterns: CRUD via inventory/job/schedule endpoints (list/sets/item code/draft), type handling (task/library/controller/view/markdown/README protected), popups for editors (window.open /editor_*?set&name, no titlebar/toolbar), modals for create (static backdrop), error display (#error text), refresh via timeout/enqueue.
+
+Mechanisms: Hybrid static/dynamic (server-rendered controllers + client jQuery fetches), no SPA router (separate HTML per view), API-first (all data/actions via fetch), lightweight (no heavy frameworks), polling-based updates (no WebSockets).
