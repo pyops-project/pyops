@@ -3,7 +3,7 @@ import json
 from sqlalchemy.orm import Session
 
 
-@pytest.mark.parametrize("state", ["todo", "dequeued", "running", "done", "failed", "canceled", "removed"])
+@pytest.mark.parametrize("state", ["todo", "dequeued", "running", "done", "failed", "cancelled", "removed"])
 def test_job_creation_with_states(mock_db, state, test_temp_dir, patch_tempfile, mock_conf):
     from app.orm.database import get_db_engine
     from app.orm.job import Job

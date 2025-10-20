@@ -58,12 +58,23 @@
                 `;
             }
 
+            function renderFailures(failures) {
+                if (failures.length === 0) return '';
+
+                let failureHtml = '<div class="failure-section mt-3 p-2 bg-danger text-white rounded"><h6 class="mb-2"><span class="material-icons-round me-2">error</span>Draft Errors</h6><ul class="list-unstyled small">';
+                failures.forEach(f => {
+                    failureHtml += `<li class="mb-1"><strong>${f.set}::${f.name}:</strong> ${f.error}</li>`;
+                });
+                failureHtml += '</ul></div>';
+                return failureHtml;
+            }
+
             $(document).ready(() => {
                 fetch("/menu").then(async (r)=>{
                     if(r.ok) {
                         const d = await r.json();
                         console.debug("menu", d);
-                        for(const i of d) {
+                        for(const i of d.menu) {
                             $("#menu").append(genMenuItem(i.id, i.name));
 
                             for(const si of i.items) {
@@ -72,6 +83,10 @@
                                     $("#btn_"+si.id).get(0).click()
                             }
                         }
+
+                        // Render failures at bottom of sidebar
+                        const sidebar = $(".p-3.bg-dark.text-light");
+                        sidebar.append(renderFailures(d.failures || []));
 
                         if(goto && $("#btn_"+goto).length > 0)
                             $("#btn_"+goto).get(0).click();

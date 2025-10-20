@@ -298,9 +298,14 @@ def run(job_id: str, owner: str, set: str, name: str, kind: str, param: str, cod
                     "userspace": userspace,
                     "setspace": setspace,
                     "workspace": workspace,
+                    "gitspace": os.path.join(files.project_root, files.conf_data()["git"]),
+                    "pkgspace": os.path.join(files.project_root, files.conf_runner()["pkg"]),
+                    "jobsspace": os.path.join(files.project_root, files.conf_data()["jobs"]),
                     "control": pyops.Control(web_bind),
                     "listener" : listener
                 }
+
+                os.chdir(workspace)
 
                 root = logging.getLogger()
                 root.setLevel(logging.INFO)
@@ -369,8 +374,8 @@ def postTerm(job_id: str):
                 lib_runner.drop(job_id, job.owner, job.set)
             else:
                 job.end = datetime.now()
-                job.state = "canceled"
-                logger.debug(f"postTerm: before commit, session ID {id(session)}, setting {job_id} to 'canceled' from '{old_state}' at {datetime.now()}")
+                job.state = "cancelled"
+                logger.debug(f"postTerm: before commit, session ID {id(session)}, setting {job_id} to 'cancelled' from '{old_state}' at {datetime.now()}")
             session.commit()
             logger.debug(f"postTerm: after commit, session ID {id(session)}, committed for {job_id} at {datetime.now()}")
 
@@ -405,7 +410,7 @@ def schedule():
                     logger.debug(f"schedule: before commit, session ID {id(session)}, last {old_last} to {prev} for {s.id} at {datetime.now()}")
                     session.commit()
                     logger.debug(f"schedule: after commit, session ID {id(session)}, committed last={prev} for {s.id} at {datetime.now()}")
-                elif not lib_runner.find(s.owner, s.set, s.name, "service", ["todo", "dequeued", "running", "cancel", "canceled", "done"]) and \
+                elif not lib_runner.find(s.owner, s.set, s.name, "service", ["todo", "dequeued", "running", "cancel", "done"]) and \
                      len(lib_runner.find(s.owner, s.set, s.name, "service", ["failed"])) < 3:
                     logger.debug(f"schedule: enqueuing service {s.set}::{s.name} at {now}")
                     lib_runner.enqueue(s.set, s.name, s.owner, "service", s.drop_done, s.param)
@@ -442,7 +447,7 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
         disposeJobs()
         logger.debug("main: disposeJobs completed")
 
-        # remove canceled processes from list
+        # remove cancelled processes from list
         processes = cleanProcesses(processes)
         logger.debug(f"main: cleaned processes, {len(processes)} remaining")
 
@@ -536,6 +541,17 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
         logger.debug(f"Killing for {p}")
         if processes[p].is_alive:
             processes[p].kill()
+
+    # Update running jobs on shutdown
+    with Session(get_db_engine()) as session:
+        stmt = select(Job).where(Job.state == "running")
+        running_jobs = session.scalars(stmt).all()
+        for job in running_jobs:
+            job.state = "cancelled"
+            job.detail = "cancelled due to shutdown"
+            job.end = datetime.now()
+            job.pid = None
+        session.commit()
 
     # handle finished or failed jobs
     while not q.empty():

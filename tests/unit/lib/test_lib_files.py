@@ -47,6 +47,7 @@ def test_conf_data_with_override(mock_conf):
     assert "jobs" in result
 
 def test_conf_data_init_on_empty(tmp_path):
+    from app.lib import files
     from app.lib.files import Config
     mock_content = '{"data": {"jobs": "/test/jobs"}}'
     conf_path = tmp_path / "test.json"
@@ -55,17 +56,21 @@ def test_conf_data_init_on_empty(tmp_path):
     Config.init(str(conf_path))
     result = files.conf_data()
     expected = {
-        "db": os.path.join(os.path.curdir, "../app.db"),
+        "db": os.path.join(files.project_root, "data/app.db"),
         "jobs": "/test/jobs",
-        "git": os.path.join(os.path.curdir, "../data/git"),
+        "git": os.path.join(files.project_root, "data/git"),
     }
     assert result == expected
 
-def test_conf_runner_no_init_when_loaded(mock_conf):
+def test_conf_runner_no_init_when_loaded(mock_conf, tmp_path):
     with patch('app.lib.files.Config.init') as mock_init:
         result = files.conf_runner()
         mock_init.assert_not_called()
-        expected = {"git_pull_interval": 60}
+        expected = {
+            "git_pull_interval": 60,
+            "venv": str(tmp_path / "data" / "venv"),
+            "pkg": str(tmp_path / "data" / "pkg")
+        }
         assert result == expected
 
 def test_conf_runner_with_override(mock_conf):

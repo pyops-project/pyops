@@ -103,16 +103,16 @@ class TestPullIfNeeded:
         mock_run.side_effect = lambda cmd, *args, **kwargs: subprocess.CompletedProcess(args=cmd, returncode=0)
         result = git.pull_if_needed(mock_repo)
         assert result is True
-        mock_logging.debug.assert_called_with('No changes reset for test_set')
+        mock_logging.debug.assert_any_call('No changes reset for test_set')
 
-    def test_pull_if_needed_no_remote(self, mock_repo, mock_subprocess, mock_logging):
+    def test_pull_if_needed_no_remote(self, mock_repo, mock_subprocess, mock_files_conf, mock_logging):
         mock_run, mock_check = mock_subprocess
         mock_check.side_effect = [b'']  # remote _check empty
         result = git.pull_if_needed(mock_repo)
         assert result is False
         mock_logging.info.assert_called_with('No remote for test_set; skipping reset')
 
-    def test_pull_if_needed_on_tag(self, mock_repo, mock_subprocess, mock_logging):
+    def test_pull_if_needed_on_tag(self, mock_repo, mock_subprocess, mock_files_conf, mock_logging):
         mock_run, mock_check = mock_subprocess
         # Calls: _check remote, direct tag non-empty, _check describe succeeds
         mock_check.side_effect = [
@@ -125,7 +125,7 @@ class TestPullIfNeeded:
         assert result is False
         mock_logging.info.assert_called_with('On tag in test_set; skipping reset')
 
-    def test_pull_if_needed_dirty_repo(self, mock_repo, mock_subprocess):
+    def test_pull_if_needed_dirty_repo(self, mock_repo, mock_subprocess, mock_files_conf):
         # Note: Code always resets soft, preserves unstaged
         mock_run, mock_check = mock_subprocess
         # Calls: _check remote, direct tag, _check status dirty, _check branch, _check pre, run fetch, _check post, _check log, _check ls-tree (no new)
@@ -144,7 +144,7 @@ class TestPullIfNeeded:
         assert result is True
         # Reset still called despite dirty
 
-    def test_pull_if_needed_retry_success(self, mock_repo, mock_subprocess, mock_logging):
+    def test_pull_if_needed_retry_success(self, mock_repo, mock_subprocess, mock_files_conf, mock_logging):
         mock_run, mock_check = mock_subprocess
         # Calls: _check remote, direct tag, _check status, _check branch, _check pre, run fetch (retry 2 fail, 3 success), _check post, _check log, _check ls-tree
         mock_check.side_effect = [
@@ -174,7 +174,7 @@ class TestPullIfNeeded:
         assert fetch_count[0] == 3
         assert mock_logging.warning.call_count == 2  # 2 retries
 
-    def test_pull_if_needed_final_failure(self, mock_repo, mock_subprocess, mock_logging):
+    def test_pull_if_needed_final_failure(self, mock_repo, mock_subprocess, mock_files_conf, mock_logging):
         mock_run, mock_check = mock_subprocess
         mock_check.side_effect = [
             b'origin\n',  # remote
@@ -196,7 +196,7 @@ class TestPullIfNeeded:
         assert fetch_count[0] == 3
         mock_logging.error.assert_called()
 
-    def test_pull_if_needed_new_file_failure(self, mock_repo, mock_subprocess, mock_logging):
+    def test_pull_if_needed_new_file_failure(self, mock_repo, mock_subprocess, mock_files_conf, mock_logging):
         mock_run, mock_check = mock_subprocess
         # Calls: _check remote, direct tag, _check status, _check branch, _check pre, run fetch, _check post, _check log, _check ls-tree
         mock_check.side_effect = [
@@ -363,17 +363,18 @@ class TestContentOps:
             with pytest.raises(FileNotFoundError):
                 git.read_content(mock_repo, 'missing', 'task', committed=True)
 
-    def test_get_committed_content(self, mock_repo, mock_subprocess):
+    def test_read_content_committed_strict_success(self, mock_repo, mock_subprocess):
         mock_run, mock_check = mock_subprocess
-        mock_check.return_value = b'strict committed'
-        result = git.get_committed_content(mock_repo, 'script', 'task')
-        assert result == 'strict committed'
+        mock_check.return_value = b'committed strict'
+        result = git.read_content(mock_repo, 'script', 'task', committed=True, strict=True)
+        assert result == 'committed strict'
 
-    def test_get_committed_content_missing(self, mock_repo, mock_subprocess):
+    def test_read_content_committed_strict_raise(self, mock_repo, mock_subprocess):
         mock_run, mock_check = mock_subprocess
         mock_check.side_effect = subprocess.CalledProcessError(1, [], output=b'')
-        with pytest.raises(FileNotFoundError):
-            git.get_committed_content(mock_repo, 'missing', 'task')
+        with patch('os.path.exists', return_value=True):
+            with pytest.raises(FileNotFoundError, match="No committed version"):
+                git.read_content(mock_repo, 'script', 'task', committed=True, strict=True)
 
     def test_write_content(self, tmp_path, mock_files_conf):
         repo = str(tmp_path / '.cache/git/test_repo')
@@ -437,6 +438,9 @@ class TestStatusAndRollback:
         mock_run, mock_check = mock_subprocess
         # Calls: _check branch, direct tag empty
         mock_check.side_effect = [b'main\n', b'']
+        repo = str(tmp_path / '.cache/git/test_set')
+        os.makedirs(repo, exist_ok=True)
+        os.makedirs(os.path.join(repo, '.git'), exist_ok=True)
         result = git.get_repo_status('test_set')
         assert result == {'branch': 'main', 'is_tag': False, 'flag': None}
 
@@ -444,12 +448,16 @@ class TestStatusAndRollback:
         mock_run, mock_check = mock_subprocess
         # Calls: _check branch, direct tag non-empty, _check describe succeeds
         mock_check.side_effect = [b'main\n', b'tag123\n', b'tag123\n']
+        repo = str(tmp_path / '.cache/git/test_set')
+        os.makedirs(repo, exist_ok=True)
+        os.makedirs(os.path.join(repo, '.git'), exist_ok=True)
         result = git.get_repo_status('test_set')
         assert result == {'branch': 'main', 'is_tag': True, 'flag': 'TAG'}
 
     def test_rollback_staged(self, tmp_path, mock_subprocess, mock_files_conf):
         repo = str(tmp_path / '.cache/git/set')
         os.makedirs(repo, exist_ok=True)
+        os.makedirs(os.path.join(repo, '.git'), exist_ok=True)
         file_path = os.path.join(repo, 'script.task.py')
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
         with open(file_path, 'w') as f:
@@ -463,15 +471,20 @@ class TestStatusAndRollback:
                 mock_run.assert_called_with(['git', 'checkout', 'HEAD', '--', 'script.task.py'], cwd=ANY, check=True, capture_output=True, text=True)
 
     def test_rollback_committed(self, tmp_path, mock_subprocess, mock_files_conf):
+        repo = str(tmp_path / '.cache/git/set')
+        os.makedirs(repo, exist_ok=True)
+        os.makedirs(os.path.join(repo, '.git'), exist_ok=True)
         with patch('subprocess.run') as mock_run:
             mock_run.return_value.returncode = 0
             git.rollback_committed('set', 'script', 'task')
             mock_run.assert_called_with(['git', 'checkout', 'HEAD', '--', 'script.task.py'], cwd=ANY, check=True, capture_output=True, text=True)
 
-    def test_lock_contention(self, tmp_path, mock_fcntl, mock_files_conf):
-        repo = git.get_repo_path('test_set')
-        mock_fcntl.side_effect = BlockingIOError()
-        with pytest.raises(BlockingIOError):
-            git._acquire_lock(repo)
+    def test_repo_lock_contention(self, tmp_path, mock_files_conf):
+        git_base = files.conf_data()["git"]
+        with patch('app.lib.git.repo_lock') as mock_lock:
+            mock_lock.return_value.__enter__.side_effect = BlockingIOError()
+            with pytest.raises(BlockingIOError):
+                with git.repo_lock(git_base, 'test_set'):
+                    pass
 
 # Additional edge cases can be added as needed

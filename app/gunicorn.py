@@ -5,21 +5,22 @@ import sys, json, os, os.path, shutil
 from multiprocessing import Process
 import subprocess
 
+project_root = os.path.dirname(os.path.dirname(__file__))
+
+sys.path.insert(0, project_root)
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "lib"))
+
+from app.lib.files import Config
+Config.init(os.path.join(project_root, "etc", "pyops.json"))
+
 #import debugpy
 #debugpy.listen(('localhost', 5678))
 #debugpy.wait_for_client()
 
-from orm.database import Base, engine
+from app.orm.database import Base, init_db
+from app import runner
 
-import sys
-import os
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-
-import runner
-
-sys.path.insert(0, os.path.join(os.getcwd(), "lib"))
-
-with open(os.path.join("..", "etc", "pyops.json"), "r") as file:
+with open(os.path.join(project_root, "etc", "pyops.json"), "r") as file:
     conf = json.load(file)
 
 # Configurable Worker Options
@@ -27,9 +28,9 @@ bind = conf["web"]["bind"]
 workers = conf["web"]["worker"]
 timeout = conf["web"]["timeout"]
 if "access" in conf["log"] and conf["log"]["access"]:
-    accesslog = os.path.join(os.path.curdir, conf["log"]["access"])
+    accesslog = os.path.join(project_root, conf["log"]["access"])
 if "info" in conf["log"] and conf["log"]["info"]:
-    errorlog = os.path.join(os.path.curdir, conf["log"]["info"])
+    errorlog = os.path.join(project_root, conf["log"]["info"])
 loglevel = conf["log"]["loglevel"]
 capture_output = True
 
@@ -37,13 +38,13 @@ capture_output = True
 wsgi_app = "app.web:app"
 worker_class = "uvicorn.workers.UvicornWorker"
 
-if not os.path.exists(os.path.join(os.path.curdir, conf["data"]["jobs"])):
-    os.makedirs(os.path.join(os.path.curdir, conf["data"]["jobs"]))
+if not os.path.exists(os.path.join(project_root, conf["data"]["jobs"])):
+    os.makedirs(os.path.join(project_root, conf["data"]["jobs"]))
 
-venv_path = os.path.abspath(os.path.join(os.path.curdir, conf["runner"]["venv"]))
+venv_path = os.path.abspath(os.path.join(project_root, conf["runner"]["venv"]))
 if not os.path.exists(os.path.join(venv_path, "pyvenv.cfg")):
     subprocess.check_call([sys.executable, '-m', 'venv', venv_path])
-pkg_path = os.path.abspath(os.path.join(os.path.curdir, conf["runner"]["pkg"]))
+pkg_path = os.path.abspath(os.path.join(project_root, conf["runner"]["pkg"]))
 
 # Prepare isolated env for runner subprocess (manual venv activation: set VIRTUAL_ENV and prepend bin/ to PATH)
 runner_env = os.environ.copy()
@@ -54,14 +55,16 @@ runner_env['PATH'] = f"{bin_path}:{runner_env.get('PATH', '')}"
 
 p = Process(target=runner.main, kwargs={
     "env": runner_env,
-    "data_base": os.path.join(os.path.curdir, conf["data"]["jobs"]),
+    "data_base": os.path.join(project_root, conf["data"]["jobs"]),
     "web_bind": bind,
     "venv_path": venv_path,
     "pkg_path": pkg_path
 })
 
 def on_starting(server):
-    Base.metadata.create_all(engine)
+    from app.orm.schedule import Schedule
+    from app.orm.job import Job
+    init_db()
     
     p.start()
 

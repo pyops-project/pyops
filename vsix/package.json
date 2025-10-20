@@ -234,7 +234,7 @@
         },
         {
           "command": "pyops.deleteJob",
-          "when": "view == pyops-monitor && viewItem =~ /pyopsJob-(done|failed|canceled)/",
+          "when": "view == pyops-monitor && viewItem =~ /pyopsJob-(done|failed|cancelled)/",
           "group": "navigation"
         },
         {

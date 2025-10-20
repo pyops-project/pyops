@@ -159,11 +159,11 @@ class ServiceClient:
         if not jobs:
             raise Exception(f"No running service: {set} {name}")
         else:
-            self.job = jobs[0]
+            self.job_id = jobs[0]
 
             temp_dir = tempfile.gettempdir()
             pyops_dir = os.path.join(temp_dir, "pyops")
-            self.sockfile = os.path.join(pyops_dir, f"{self.job['id']}.sock")
+            self.sockfile = os.path.join(pyops_dir, f"{self.job_id}.sock")
 
             self.context = zmq.Context()
             self.socket = self.context.socket(zmq.REQ)

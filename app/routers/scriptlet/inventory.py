@@ -55,7 +55,7 @@ async def item_put(cr: CreateArgument, user: str = Depends(get_current_user)):
             raise HTTPException(400, "Markdown only for README.")
         
         if cr.type == "view":
-            initial_content = '<div class="container mt-3">\n  <!-- View content here -->\n</div>'
+            initial_content = '<div class="container">\n  <!-- View content here -->\n</div>'
         else:
             initial_content = "" if cr.type == "markdown" else "pass\n"
         git.write_content(repo, cr.name, cr.type, initial_content)
@@ -160,7 +160,7 @@ async def draft_del(set: str = Query(..., description="Set"), name: str = Query(
         git.rollback_committed(set, name, type_)
 
         # Verify post-checkout
-        committed_content = git.get_committed_content(repo, name, type_)
+        committed_content = git.read_content(repo, name, type_, committed=True, strict=True)
 
         if os.path.exists(file_path):
             with open(file_path, "r", encoding="utf-8") as f:

@@ -149,7 +149,7 @@ class TestDaemon:
             sched_id = sched.id
         mock_find.return_value = ["existing_id"]
         schedule()
-        mock_find.assert_called_once_with("test_owner", "test_set", "test_name", "service", ["todo", "dequeued", "running", "cancel", "canceled", "done"])
+        mock_find.assert_called_once_with("test_owner", "test_set", "test_name", "service", ["todo", "dequeued", "running", "cancel", "done"])
 
     def test_getNextToTerm_cancel(self, mock_db):
         from app.runner import getNextToTerm
@@ -206,6 +206,6 @@ class TestDaemon:
         with Session(get_db_engine()) as test_session:
             result = test_session.execute(select(Job).where(Job.id == "id")).scalar_one_or_none()
             assert result is not None
-            assert result.state == "canceled"
+            assert result.state == "cancelled"
             assert result.end is not None
         mock_drop.assert_not_called()

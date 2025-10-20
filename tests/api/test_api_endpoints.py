@@ -1,5 +1,6 @@
 import pytest
 from unittest.mock import patch, MagicMock
+from fastapi import HTTPException
 from app.web import app
 from app.routers.scriptlet.inventory import CreateArgument, SaveArgument
 
@@ -229,3 +230,61 @@ def test_controller_body_handling_empty(mock_client, mock_controller_glob, metho
         assert params["data"] is None
         assert params["data_type"] == "none"
         assert params["type"] == method.upper()
+
+def test_controller_get_success(mock_client, mock_git_ops):
+    # Test /controller GET success
+    response = mock_client.get("/controller/default/sample", headers={"X-User": "testuser"})
+    assert response.status_code == 200
+    assert "<html>" in response.text
+    assert "Controller default::Test Controller" in response.text  # From mock name
+
+def test_controller_get_exec_fail(mock_client, mock_git_ops):
+    # Test /controller GET with exec failure
+    with patch("builtins.exec", side_effect=SyntaxError("exec error")):
+        response = mock_client.get("/controller/default/sample", headers={"X-User": "testuser"})
+        assert response.status_code == 200
+        assert "Controller Draft Error" in response.text
+        assert "failed to execute" in response.text
+
+def test_menu_success(mock_client, mock_git_ops):
+    # Test /menu success
+    response = mock_client.get("/menu")
+    assert response.status_code == 200
+    data = response.json()
+    assert "menu" in data
+    assert "failures" in data
+    assert isinstance(data["menu"], list)
+    assert isinstance(data["failures"], list)
+    assert len(data["failures"]) == 0
+
+def test_menu_with_failures(mock_client, mock_git_ops):
+    # Test /menu with exec failure
+    def mock_exec(code, glob):
+        raise SyntaxError("exec error")
+    with patch("builtins.exec", side_effect=mock_exec):
+        response = mock_client.get("/menu")
+        assert response.status_code == 200
+        data = response.json()
+        assert "failures" in data
+        assert len(data["failures"]) > 0
+        failure = data["failures"][0]
+        assert "set" in failure
+        assert "name" in failure
+        assert "error" in failure
+        assert "exec error" in failure["error"]
+
+def test_controller_q_exec_fail(mock_client, mock_git_ops):
+    # Test /q with exec failure returns {"error"}
+    with patch("builtins.exec", side_effect=SyntaxError("exec error")):
+        response = mock_client.get("/controller/default/sample/q", headers={"X-User": "testuser"})
+        assert response.status_code == 200
+        data = response.json()
+        assert "error" in data
+        assert "execution failed" in data["error"]
+
+def test_controller_q_http_exception(mock_client, mock_git_ops):
+    # Test /q with HTTPException (e.g., missing file) raises as before
+    with patch("app.web.get_controller_code", side_effect=HTTPException(status_code=404, detail="Not found")):
+        response = mock_client.get("/controller/nonexistent/missing/q", headers={"X-User": "testuser"})
+        assert response.status_code == 404
+        assert "Not found" in response.json()["detail"]

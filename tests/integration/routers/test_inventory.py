@@ -77,7 +77,7 @@ class TestInventoryRouter:
         mock_file.read.return_value = "pass\n"
 
         with patch("os.listdir", return_value=["draft_task.py"]), \
-             patch("app.lib.git.get_committed_content", return_value="pass\n"), \
+             patch("app.lib.git.read_content", return_value="pass\n"), \
              patch("os.path.exists", return_value=True), \
              patch("builtins.open", return_value=mock_file):
             response = mock_client.delete("/scriptlet/inventory/draft?set=test_set&name=draft_task&type=task", headers={"X-User": "testuser"})

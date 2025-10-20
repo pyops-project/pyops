@@ -2,7 +2,9 @@ import os.path, json
 import logging
 logger = logging.getLogger(__name__)
 
-files_path = os.path.join(os.path.dirname(__file__), "../files")
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+
+files_path = os.path.join(project_root, "app/files")
 
 def get(path: str):
     with open(os.path.join(files_path, path), "rb") as file:
@@ -28,9 +30,9 @@ class Config:
                 raise ValueError("Config not initialized. Call Config.init(conf_path) first.")
             # Data section with defaults
             data = {
-                "jobs": os.path.join(os.path.curdir, "../data/jobs"),
-                "git": os.path.join(os.path.curdir, "../data/git"),
-                "db": os.path.join(os.path.curdir, "../app.db"),
+                "jobs": os.path.join(project_root, "data/jobs"),
+                "git": os.path.join(project_root, "data/git"),
+                "db": os.path.join(project_root, "data/app.db"),
             }
             if "data" in self._raw_conf:
                 data.update(self._raw_conf["data"])

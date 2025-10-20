@@ -73,7 +73,7 @@ class JobsTreeDataProvider implements TreeDataProvider<JobTreeItem> {
                         icon = new ThemeIcon('check');
                         break;
                     case 'failed':
-                    case 'canceled':
+                    case 'cancelled':
                         icon = new ThemeIcon('close');
                         break;
                     default:

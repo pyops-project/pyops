@@ -31,7 +31,7 @@ Flow: User creates/edits scriptlet → Enqueue job/schedule → Runner polls/exe
 ### Technical Details
 - **Stack**: Python 3.12 (FastAPI, SQLAlchemy 2.x, ZMQ, msgpack); JS (jQuery, Bootstrap 5, Ace editor with Jedi autocompletion); SQLite (file-based, thread-safe).
 - **Key Mechanisms**:
-  - Job States: todo → dequeued → running → done/failed/canceled/remove (with PID tracking, logs in workspace dirs).
+  - Job States: todo → dequeued → running → done/failed/cancelled/remove (with PID tracking, logs in workspace dirs).
   - Scheduling: Croniter for timed tasks; auto-start services if none running (up to 3 retries on failure).
   - Security/Isolation: Per-job workspaces under `data/jobs/{owner}/{set}/{id}`; venv per-run for deps (pip installs from `!pip module` lines).
   - Error Handling: HTTPExceptions (404/409/500); traceback logging; graceful shutdown via signals.

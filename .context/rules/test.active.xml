@@ -3,6 +3,7 @@
     <inactive_rule>pure pytest</inactive_rule>
     <strict_rule>store files in `.cache` directory so threads share them</strict_rule>
     <strict_rule>imports from `app` cannot be done outside test function's scope</strict_rule>
+    <strict_rule>do not run project and test using browser tool, only request user to do so</strict_rule>
     <fixture_rules>
         <rule>ensure clean up</rule>
         <rule>do not overlap</rule>

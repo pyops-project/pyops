@@ -129,10 +129,10 @@ class TestJobControl:
 
     def test_cancel(self, mock_control_request):
         mock_rq = Mock()
-        mock_rq.get.return_value = {"canceled": True}
+        mock_rq.get.return_value = {"cancelled": True}
         job_control = pyops.JobControl(mock_rq)
         result = job_control.cancel("123")
-        assert result == {"canceled": True}
+        assert result == {"cancelled": True}
         mock_rq.get.assert_called_once_with("scriptlet/job/item", params={"id": "123"})
 
     def test_download(self, mock_control_request):
@@ -355,11 +355,11 @@ class TestServiceClient:
     @patch('zmq.Context')
     @patch('os.path.join')
     def test_init_success(self, mock_join, mock_context, mock_find):
-        mock_job = {"id": "123"}
+        mock_job = "123"
         mock_find.return_value = [mock_job]
         mock_join.return_value = "/tmp/pyops/123.sock"
         client = pyops.ServiceClient("test_set", "test_name", owner="user")
-        assert client.job == mock_job
+        assert client.job_id == mock_job
         mock_context.assert_called_once()
         client.socket.connect.assert_called_once_with("ipc:///tmp/pyops/123.sock")
         mock_find.assert_called_once_with("user", "test_set", "test_name", "service", ["running"])
@@ -369,7 +369,7 @@ class TestServiceClient:
     @patch('msgpack.packb')
     @patch('zmq.Context')
     def test_request_success(self, mock_context, mock_packb, mock_unpackb, mock_find):
-        mock_job = {"id": "123"}
+        mock_job = "123"
         mock_find.return_value = [mock_job]
         client = pyops.ServiceClient("test_set", "test_name")
         test_msg = {"cmd": "test"}
@@ -388,7 +388,7 @@ class TestServiceClient:
     @patch('msgpack.packb')
     @patch('zmq.Context')
     def test_request_recv_error(self, mock_context, mock_packb, mock_find):
-        mock_job = {"id": "123"}
+        mock_job = "123"
         mock_find.return_value = [mock_job]
         client = pyops.ServiceClient("test_set", "test_name")
         mock_packb.return_value = b'test_packed'

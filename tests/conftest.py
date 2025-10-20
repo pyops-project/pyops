@@ -22,6 +22,8 @@ def mock_conf(tmp_path):
     test_db = tmp_path / "test.db"
     test_jobs = tmp_path / "data" / "jobs"
     test_git = tmp_path / "data" / "git"
+    test_venv = tmp_path / "data" / "venv"
+    test_pkg = tmp_path / "data" / "pkg"
     test_jobs.mkdir(parents=True, exist_ok=True)
     test_git.mkdir(parents=True, exist_ok=True)
     mock_raw = {
@@ -31,7 +33,11 @@ def mock_conf(tmp_path):
             "git": str(test_git),
             "pool_size": 2
         },
-        "runner": {"git_pull_interval": 60}
+        "runner": {
+            "git_pull_interval": 60,
+            "venv": str(test_venv),
+            "pkg": str(test_pkg)
+        }
     }
     conf_path = tmp_path / "test_pyops.json"
     with open(conf_path, "w") as f:
@@ -97,6 +103,8 @@ def mock_git_dir(tmp_path):
         (set_dir / "README.md").touch()
         # Dummy for test_set post etc.
         (set_dir / "dummy.py").touch()
+        # Controller for menu failures test
+        (set_dir / "sample.controller.py").touch()
     
     create_mock_set("default")
     create_mock_set("test_set")
@@ -137,10 +145,10 @@ def mock_git_ops(mock_git_dir):
         sets = ["default", "test_set"]
         for set_name in sets:
             set_dir_path = str(mock_data_dir / set_name)
-            files = ["sample_task.py", "sample_view.html", "README.md", "dummy.py"]
+            files = ["sample_task.py", "sample_view.html", "README.md", "dummy.py", "sample.controller.py"]
             for file in files:
                 name = Path(file).stem
-                type_ = "task" if file.endswith(".py") else "view" if file.endswith(".html") else "markdown"
+                type_ = "task" if file.endswith(".py") and "controller" not in file else "controller" if "controller" in file else "view" if file.endswith(".html") else "markdown"
                 scriptlets.append({"set": set_name, "name": name, "type": type_})
         return scriptlets
     
@@ -167,35 +175,49 @@ def mock_git_ops(mock_git_dir):
     def mock_check_name_unique(repo, name):
         return True
     
+    def mock_get_controller_code(repo, name, debug=True):
+        ext = ".py"
+        full_path = mock_git_dir.tmp_path / repo / f"{name}{ext}"
+        if full_path.exists():
+            return full_path.read_text(encoding="utf-8")
+        return "set = 'test'; service = 'test'; debug = False; head = 'head'; menu = 'menu'; body = 'body'; name = 'Test Controller'"
+
+    def mock_get_view_content(repo, name, debug=False):
+        ext = ".html"
+        full_path = mock_git_dir.tmp_path / repo / f"{name}{ext}"
+        if full_path.exists():
+            return full_path.read_text(encoding="utf-8")
+        return "<div>Default View</div>"
+
     def mock_get_file_path(repo, name, type_):
         ext = ".py" if type_ == "task" else ".html" if type_ == "view" else ".md"
         return f"{name}{ext}"
-    
+
     def mock_get_repo_path(set_name):
         return f"data/git/{set_name}"
-    
+
     def mock_get_git_base():
         return str(mock_data_dir)
-    
+
     def mock_delete_file_and_commit(repo, file_path, msg):
         full_path = mock_git_dir.tmp_path / repo / file_path
         if full_path.exists():
             full_path.unlink()
-    
+
     def mock_rollback_committed(set_name, name, type_):
         pass
-    
+
     def mock_perform_git_add_commit_push(repo, file_path, msg):
         pass
-    
+
     def mock_add_commit_push(msg):
         pass
-    
+
     def mock_get_repo_status(set_name):
         return {"branch": "main", "status": "clean"}
-    
+
     from unittest.mock import MagicMock
-    
+
     mock_list_scriptlets_mock = MagicMock(side_effect=mock_list_scriptlets)
     mock_get_git_base_mock = MagicMock(return_value=str(mock_data_dir))
     mock_get_repo_path_mock = MagicMock(side_effect=mock_get_repo_path)
@@ -208,6 +230,8 @@ def mock_git_ops(mock_git_dir):
     mock_delete_file_and_commit_mock = MagicMock(side_effect=mock_delete_file_and_commit)
     mock_rollback_committed_mock = MagicMock(side_effect=mock_rollback_committed)
     mock_get_repo_status_mock = MagicMock(return_value={"branch": "main"})
+    mock_get_controller_code_mock = MagicMock(side_effect=mock_get_controller_code)
+    mock_get_view_content_mock = MagicMock(side_effect=mock_get_view_content)
     mock_subprocess_run = MagicMock(return_value=Mock(returncode=0, stdout="", stderr=""))
     mock_check_output = MagicMock(return_value=b"")
 
@@ -223,21 +247,25 @@ def mock_git_ops(mock_git_dir):
     mock.delete_file_and_commit = mock_delete_file_and_commit_mock
     mock.rollback_committed = mock_rollback_committed_mock
     mock.get_repo_status = mock_get_repo_status_mock
+    mock.get_controller_code = mock_get_controller_code_mock
+    mock.get_view_content = mock_get_view_content_mock
 
     with patch("app.lib.git.list_scriptlets", mock_list_scriptlets_mock), \
-         patch("app.lib.git.get_git_base", mock_get_git_base_mock), \
-         patch("app.lib.git.get_repo_path", mock_get_repo_path_mock), \
-         patch("app.lib.git.write_content", mock_write_content_mock), \
-         patch("app.lib.git.read_content", mock_read_content_mock), \
-         patch("app.lib.git.infer_type_from_filename", mock_infer_type_mock), \
-         patch("app.lib.git.check_name_unique", mock_check_name_unique_mock), \
-         patch("app.lib.git.get_file_path", mock_get_file_path_mock), \
-         patch("app.lib.git.perform_git_add_commit_push", mock_perform_git_add_commit_push_mock), \
-         patch("app.lib.git.delete_file_and_commit", mock_delete_file_and_commit_mock), \
-         patch("app.lib.git.rollback_committed", mock_rollback_committed_mock), \
-         patch("app.lib.git.get_repo_status", mock_get_repo_status_mock), \
-         patch("subprocess.run", mock_subprocess_run), \
-         patch("subprocess.check_output", mock_check_output):
+        patch("app.lib.git.get_git_base", mock_get_git_base_mock), \
+        patch("app.lib.git.get_repo_path", mock_get_repo_path_mock), \
+        patch("app.lib.git.write_content", mock_write_content_mock), \
+        patch("app.lib.git.read_content", mock_read_content_mock), \
+        patch("app.lib.git.infer_type_from_filename", mock_infer_type_mock), \
+        patch("app.lib.git.check_name_unique", mock_check_name_unique_mock), \
+        patch("app.lib.git.get_file_path", mock_get_file_path_mock), \
+        patch("app.lib.git.perform_git_add_commit_push", mock_perform_git_add_commit_push_mock), \
+        patch("app.lib.git.delete_file_and_commit", mock_delete_file_and_commit_mock), \
+        patch("app.lib.git.rollback_committed", mock_rollback_committed_mock), \
+        patch("app.lib.git.get_repo_status", mock_get_repo_status_mock), \
+        patch("app.web.get_controller_code", mock_get_controller_code_mock), \
+        patch("app.web.get_view_content", mock_get_view_content_mock), \
+        patch("subprocess.run", mock_subprocess_run), \
+        patch("subprocess.check_output", mock_check_output):
         yield mock
 
 @pytest.fixture
@@ -327,6 +355,10 @@ def mock_controller_glob():
 set = "testset"
 service = "testservice"
 debug = False
+head = "head"
+menu = "menu"
+body = "body"
+name = "Test Controller"
 """
     with patch("app.web.get_controller_code", return_value=code):
         yield

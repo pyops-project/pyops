@@ -819,7 +819,7 @@ export async function activate(context: vscode.ExtensionContext) {
                             }
                             // Update state
                             jobViewOutputChannel.appendLine(`\n--- State: ${jobData.state} ---`);
-                            if (['done', 'failed', 'canceled', 'remove'].includes(jobData.state)) {
+                            if (['done', 'failed', 'cancelled', 'remove'].includes(jobData.state)) {
                                 const active = activeJobs.get(key);
                                 if (active && active.interval === pollInterval) {
                                     clearInterval(pollInterval);
@@ -850,7 +850,7 @@ export async function activate(context: vscode.ExtensionContext) {
         // Bulk actions
         async function performBulkAction(action: 'cancel' | 'delete', filterStates: string[]) {
             const jobs = await fetchJobs();
-            const jobsToAct = jobs.filter(j => filterStates.includes(j.state) || (action === 'cancel' && !['done', 'failed', 'canceled'].includes(j.state)));
+            const jobsToAct = jobs.filter(j => filterStates.includes(j.state) || (action === 'cancel' && !['done', 'failed', 'cancelled'].includes(j.state)));
             if (jobsToAct.length === 0) {
                 vscode.window.showInformationMessage(`No jobs to ${action} matching criteria.`);
                 return;
@@ -890,11 +890,11 @@ export async function activate(context: vscode.ExtensionContext) {
         }
 
         context.subscriptions.push(vscode.commands.registerCommand('pyops.cancelAllJobs', async () => {
-            await performBulkAction('cancel', []); // Filter excludes done/failed/canceled
+            await performBulkAction('cancel', []); // Filter excludes done/failed/cancelled
         }));
 
         context.subscriptions.push(vscode.commands.registerCommand('pyops.deleteAllDone', async () => {
-            await performBulkAction('delete', ['done', 'canceled']);
+            await performBulkAction('delete', ['done', 'cancelled']);
         }));
 
         context.subscriptions.push(vscode.commands.registerCommand('pyops.deleteAllFailed', async () => {
@@ -1232,7 +1232,7 @@ export async function activate(context: vscode.ExtensionContext) {
                                 jobOutputChannel.show(true);
                                 jobErrOutputChannel.show(true);
                             }
-                            if (['done', 'failed', 'canceled', 'remove'].includes(jobData.state)) {
+                            if (['done', 'failed', 'cancelled', 'remove'].includes(jobData.state)) {
                                 const active = activeJobs.get(key);
                                 if (active && active.interval === pollInterval) {
                                     clearInterval(pollInterval);

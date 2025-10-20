@@ -5,18 +5,18 @@
         "timeout": 300
     },
     "data": {
-        "jobs": "../data/jobs",
-        "git": "../data/git",
-        "db": "../app.db"
+        "jobs": "data/jobs",
+        "git": "data/git",
+        "db": "data/app.db"
     },
     "runner": {
-        "venv": "../data/venv",
-        "pkg": "../data/pkg",
+        "venv": "data/venv",
+        "pkg": "data/pkg",
         "git_pull_interval": 60
     },
     "log": {
-        "access": "../log/access.log",
-        "info": "../log/info.log",
+        "access": "log/access.log",
+        "info": "log/info.log",
         "loglevel": "debug"
     }
 }

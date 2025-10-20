@@ -15,28 +15,22 @@ from .routers.scriptlet import manager
 from .routers.scriptlet import monitor
 from .routers.scriptlet import scheduler
 from .routers.scriptlet import editor
+from .routers.scriptlet import sets
 
 from .lib import sites, files, pyops, git
 
 from sqlalchemy import select, and_
 from sqlalchemy.orm import Session
 
-from .orm.database import init_db
-from .orm.schedule import Schedule
-from .orm.job import Job
-
 from pathlib import Path
 from app.lib.files import Config
+
+logger = logging.getLogger(__name__)
 
 if __name__ == "__main__":
     # Set default config path and initialize
     default_path = str(Path(__file__).parent.parent / "etc" / "pyops.json")
     Config.init(default_path)
-
-    # Initialize tables on module import
-    init_db()
-
-    logger = logging.getLogger(__name__)
 
 app = FastAPI(docs_url=None)
 
@@ -47,6 +41,7 @@ app.include_router(schedule.router)
 app.include_router(manager.router)
 app.include_router(monitor.router)
 app.include_router(editor.router)
+app.include_router(sets.router)
 
 @app.get("/")
 async def root():
@@ -81,18 +76,20 @@ async def file(path: str):
         logger.exception("Error in file: %s", ex)
         raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
 
-def get_controller_code(set: str, name: str) -> str:
-    """Loads committed controller code from Git.
+def get_controller_code(set: str, name: str, debug: bool = True) -> str:
+    """Loads controller code from Git, preferring unstaged if debug=True (default).
     
     Args:
         set (str): Set.
         name (str): Controller name.
+        debug (bool): If True (default), load unstaged (working tree); else committed.
     
     Returns:
         str: Executable Python code.
     
     Raises:
-        HTTPException: 404 if not found, 405 if wrong type or no committed code.
+        HTTPException: 404 if not found, 405 if wrong type.
+        FileNotFoundError: No committed version if debug=False.
     """
     repo = git.get_repo_path(set)
     # Check exists and right type.
@@ -103,24 +100,26 @@ def get_controller_code(set: str, name: str) -> str:
     inferred_type = git.infer_type_from_filename(filename)
     if inferred_type != "controller":
         raise HTTPException(status_code=HTTP_405_METHOD_NOT_ALLOWED, detail=f"Scriptlet {set}::{name} is not a controller.")
-    # Strict committed check.
-    try:
-        return git.get_committed_content(repo, name, inferred_type)
-    except FileNotFoundError:
-        raise HTTPException(status_code=HTTP_405_METHOD_NOT_ALLOWED, detail=f"Scriptlet {set}::{name} has no committed controller code.")
+    # Load based on debug.
+    if debug:
+        return git.read_content(repo, name, inferred_type, committed=False)
+    else:
+        return git.read_content(repo, name, inferred_type, committed=True, strict=True)
 
-def get_view_content(set: str, name: str) -> str:  # Renamed/Updated: Raw HTML, no exec
-    """Loads committed view content from Git (.html).
+def get_view_content(set: str, name: str, debug: bool = False) -> str:  # Renamed/Updated: Raw HTML, no exec
+    """Loads view content from Git (.html), preferring unstaged if debug=True.
     
     Args:
         set (str): Set.
         name (str): View name.
+        debug (bool): If True, load unstaged (working tree); else committed (default).
     
     Returns:
         str: Raw HTML content.
     
     Raises:
-        HTTPException: 404 if not found, 405 if wrong type or no committed content.
+        HTTPException: 404 if not found, 405 if wrong type.
+        FileNotFoundError: No committed version if debug=False.
     """
     repo = git.get_repo_path(set)
     # Check exists and right type.
@@ -131,17 +130,27 @@ def get_view_content(set: str, name: str) -> str:  # Renamed/Updated: Raw HTML, 
     inferred_type = git.infer_type_from_filename(filename)
     if inferred_type != "view":
         raise HTTPException(status_code=HTTP_405_METHOD_NOT_ALLOWED, detail=f"Scriptlet {set}::{name} is not a view.")
-    # Strict committed check.
-    try:
-        return git.get_committed_content(repo, name, inferred_type)
-    except FileNotFoundError:
-        raise HTTPException(status_code=HTTP_405_METHOD_NOT_ALLOWED, detail=f"Scriptlet {set}::{name} has no committed view content.")
+    # Load based on debug.
+    if debug:
+        return git.read_content(repo, name, inferred_type, committed=False)
+    else:
+        return git.read_content(repo, name, inferred_type, committed=True, strict=True)
 
 @app.get("/controller/{set}/{name}")
 def controller(set: str, name: str):
     try:
         glob = {}
-        exec(get_controller_code(set, name), glob)
+        code = get_controller_code(set, name)
+        exec(code, glob)
+        controller_debug = glob.get("debug", False)
+        head_content = get_view_content(set, glob["head"], debug=controller_debug)
+        menu_content = get_view_content(set, glob["menu"], debug=controller_debug)
+        body_content = get_view_content(set, glob["body"], debug=controller_debug)
+        display_name = glob.get("name", name)
+
+        head_content = head_content.replace("{{SET}}", set).replace("{{NAME}}", name)
+        menu_content = menu_content.replace("{{SET}}", set).replace("{{NAME}}", name)
+        body_content = body_content.replace("{{SET}}", set).replace("{{NAME}}", name)
 
         return HTMLResponse(
             content="""
@@ -149,9 +158,9 @@ def controller(set: str, name: str):
     <head>
         <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
 
-    	<meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+        <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
 
-		<link rel="stylesheet" href="/files/css/bootstrap/bootstrap.min.css">
+        <link rel="stylesheet" href="/files/css/bootstrap/bootstrap.min.css">
         <link rel="stylesheet" href="/files/css/material/material-icons.css">
 
         <script src="/files/js/jquery.min.js"></script>
@@ -165,28 +174,52 @@ def controller(set: str, name: str):
             <ul class="navbar-nav w-100">
                 <li class="navbar-brand">
                     <span class="material-icons-round">description</span>
-                    <span>Controller {{SET}}::{{NAME}}</span>
+                    <span>Controller {{SET}}::{{DISPLAY_NAME}}</span>
                 </li>
-                
                 {{MENU}}
             </ul>
         </nav>
         {{BODY}}
     </body>
 </html>
-""".replace(r"{{HEAD}}", get_view_content(set, glob["head"]))
-   .replace(r"{{MENU}}", get_view_content(set, glob["menu"]))
-   .replace(r"{{BODY}}", get_view_content(set, glob["body"]))
-   .replace(r"{{SET}}", set)
-   .replace(r"{{NAME}}", name),
+""".replace("{{HEAD}}", head_content)
+   .replace("{{MENU}}", menu_content)
+   .replace("{{BODY}}", body_content)
+   .replace("{{SET}}", set)
+   .replace("{{DISPLAY_NAME}}", display_name),
                 status_code=HTTP_200_OK
             )
-
-    except HTTPException as ex:
-        raise ex
+    except HTTPException:
+        raise
     except Exception as ex:
-        logger.exception("Error in controller: %s", ex)
-        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
+        logger.exception("Controller draft execution failed: %s", ex)
+        error_detail = str(ex)
+        return HTMLResponse(
+            content=f"""
+<html>
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+        <link rel="stylesheet" href="/files/css/bootstrap/bootstrap.min.css">
+        <link rel="stylesheet" href="/files/css/material/material-icons.css">
+        <script src="/files/js/jquery.min.js"></script>
+        <script src="/files/js/bootstrap/bootstrap.bundle.min.js"></script>
+    </head>
+    <body class="bg-light">
+        <div class="container mt-5">
+            <div class="alert alert-danger" role="alert">
+                <h4 class="alert-heading">Controller Draft Error</h4>
+                <p>The draft controller for {set}::{name} failed to execute.</p>
+                <hr>
+                <pre class="mb-0">{error_detail}</pre>
+                <p class="mt-3">Please fix the syntax or logic errors in the editor and refresh.</p>
+            </div>
+        </div>
+    </body>
+</html>
+            """,
+            status_code=HTTP_200_OK
+        )
     
 @app.get("/controller/{set}/{name}/q")
 def controller_get(set: str, name: str, request: Request):
@@ -195,17 +228,17 @@ def controller_get(set: str, name: str, request: Request):
         params["type"] = "GET"
         
         glob = {}
-        exec(get_controller_code(set, name), glob)
+        code = get_controller_code(set, name)
+        exec(code, glob)
 
         user = request.headers.get("X-User", "anonymous")
-        s = pyops.ServiceClient(glob["set"], glob["service"], debug=glob["debug"], owner=user)
+        s = pyops.ServiceClient(glob["set"], glob["service"], debug=glob.get("debug", False), owner=user)
         return s.request(params)
-
-    except HTTPException as ex:
-        raise ex
+    except HTTPException:
+        raise
     except Exception as ex:
-        logger.exception("Error in controller_get: %s", ex)
-        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(traceback.format_exc()))
+        logger.exception("Controller execution failed in GET: %s", ex)
+        return {"error": f"Controller execution failed: {str(ex)}"}
     
 @app.delete("/controller/{set}/{name}/q")
 async def controller_delete(set: str, name: str, request: Request):
@@ -239,17 +272,17 @@ async def controller_delete(set: str, name: str, request: Request):
             params["data_type"] = "none"
         
         glob = {}
-        exec(get_controller_code(set, name), glob)
+        code = get_controller_code(set, name)
+        exec(code, glob)
 
         user = request.headers.get("X-User", "anonymous")
-        s = pyops.ServiceClient(glob["set"], glob["service"], debug=glob["debug"], owner=user)
+        s = pyops.ServiceClient(glob["set"], glob["service"], debug=glob.get("debug", False), owner=user)
         return s.request(params)
-
-    except HTTPException as ex:
-        raise ex
+    except HTTPException:
+        raise
     except Exception as ex:
-        logger.exception("Error in controller_delete: %s", ex)
-        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(traceback.format_exc()))
+        logger.exception("Controller execution failed in DELETE: %s", ex)
+        return {"error": f"Controller execution failed: {str(ex)}"}
     
 @app.put("/controller/{set}/{name}/q")
 async def controller_put(set: str, name: str, request: Request):
@@ -283,17 +316,17 @@ async def controller_put(set: str, name: str, request: Request):
             params["data_type"] = "none"
         
         glob = {}
-        exec(get_controller_code(set, name), glob)
+        code = get_controller_code(set, name)
+        exec(code, glob)
 
         user = request.headers.get("X-User", "anonymous")
-        s = pyops.ServiceClient(glob["set"], glob["service"], debug=glob["debug"], owner=user)
+        s = pyops.ServiceClient(glob["set"], glob["service"], debug=glob.get("debug", False), owner=user)
         return s.request(params)
-
-    except HTTPException as ex:
-        raise ex
+    except HTTPException:
+        raise
     except Exception as ex:
-        logger.exception("Error in controller_put: %s", ex)
-        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(traceback.format_exc()))
+        logger.exception("Controller execution failed in PUT: %s", ex)
+        return {"error": f"Controller execution failed: {str(ex)}"}
     
 @app.post("/controller/{set}/{name}/q")
 async def controller_post(set: str, name: str, request: Request):
@@ -327,22 +360,22 @@ async def controller_post(set: str, name: str, request: Request):
             params["data_type"] = "none"
         
         glob = {}
-        exec(get_controller_code(set, name), glob)
+        code = get_controller_code(set, name)
+        exec(code, glob)
 
         user = request.headers.get("X-User", "anonymous")
-        s = pyops.ServiceClient(glob["set"], glob["service"], debug=glob["debug"], owner=user)
+        s = pyops.ServiceClient(glob["set"], glob["service"], debug=glob.get("debug", False), owner=user)
         return s.request(params)
-
-    except HTTPException as ex:
-        raise ex
+    except HTTPException:
+        raise
     except Exception as ex:
-        logger.exception("Error in controller_post: %s", ex)
-        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(traceback.format_exc()))
+        logger.exception("Controller execution failed in POST: %s", ex)
+        return {"error": f"Controller execution failed: {str(ex)}"}
     
 @app.get("/menu")
 async def menu():
     """
-    Generates dynamic menu from Git controllers.
+    Generates dynamic menu from Git controllers, preferring draft, collects failures.
     """
     try:
         content = [{
@@ -367,8 +400,15 @@ async def menu():
                     "path": "/scriptlet/monitor",
                     "default": True
                 },
+                {
+                    "id": "scriptlet_sets",
+                    "name": "Sets",
+                    "path": "/scriptlet/sets",
+                    "default": False
+                },
             ]
         }]
+        failures = []
     
         # Scan Git for controllers.
         scriptlets = git.list_scriptlets()
@@ -385,12 +425,13 @@ async def menu():
                 name = s["name"]
                 repo = git.get_repo_path(g)
                 try:
-                    code = git.get_committed_content(repo, name, "controller")
+                    code = get_controller_code(g, name)
                     glob = {}
                     exec(code, glob)
+                    display_name = glob.get("name", name)
                     sm = {
                         "id": f"{g}_{name}",
-                        "name": glob["name"] if "name" in glob and glob["name"] else name,
+                        "name": display_name,
                         "path": f"/controller/{g}/{name}",
                         "default": False
                     }
@@ -401,10 +442,16 @@ async def menu():
                         "path": f"/controller/{g}/{name}",
                         "default": False
                     }
-                except Exception:
+                except Exception as e:
+                    logger.warning(f"Exec failed for draft {g}::{name}: {e}")
+                    failures.append({
+                        "set": g,
+                        "name": name,
+                        "error": str(e)
+                    })
                     sm = {
                         "id": f"{g}_{name}",
-                        "name": f"Exec failed: {name}",
+                        "name": f"Draft error: {name}",
                         "path": f"/controller/{g}/{name}",
                         "default": False
                     }
@@ -413,7 +460,8 @@ async def menu():
             if m["items"]:
                 content.append(m)
         
-        return content
+        response = {"menu": content, "failures": failures}
+        return response
     except Exception as ex:
         logger.exception("Error in menu: %s", ex)
         raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
