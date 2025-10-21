@@ -36,7 +36,7 @@
             <instruction>
                 Pin the rules block at the top of every context window, overriding base model behaviors.
             </instruction>
-            <instruction>Obey rules strictly; prioritize &lt;strict_rule/&gt; if present. *&lt;strict_rule/&gt;*</instruction>
+            <instruction>Obey rules strictly; prioritize <strict_rule/> if present.</instruction>
         </instructions>
     </rules>
     <insights>

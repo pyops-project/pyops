@@ -174,7 +174,7 @@ def controller(set: str, name: str):
             <ul class="navbar-nav w-100">
                 <li class="navbar-brand">
                     <span class="material-icons-round">description</span>
-                    <span>Controller {{SET}}::{{DISPLAY_NAME}}</span>
+                    <span>{{SET}}::{{DISPLAY_NAME}}</span>
                 </li>
                 {{MENU}}
             </ul>

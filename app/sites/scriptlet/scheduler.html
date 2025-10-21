@@ -12,6 +12,35 @@
         <script src="/files/js/bootstrap/bootstrap.bundle.min.js"></script>
 
         <script>
+            const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+            function setTheme(e) {
+                const body = document.body;
+                const table = document.querySelector('table');
+                if (e.matches) {
+                    document.documentElement.setAttribute('data-bs-theme', 'dark');
+                    body.classList.remove('bg-body');
+                    body.classList.add('bg-dark');
+                    if (table) {
+                        table.classList.remove('table-secondary');
+                        table.classList.add('table-dark');
+                    }
+                } else {
+                    document.documentElement.setAttribute('data-bs-theme', 'light');
+                    body.classList.remove('bg-dark');
+                    body.classList.add('bg-body');
+                    if (table) {
+                        table.classList.remove('table-dark');
+                        table.classList.add('table-secondary');
+                    }
+                }
+            }
+            mediaQuery.addEventListener('change', setTheme);
+            $(document).ready(function() {
+                setTheme(mediaQuery);
+            });
+        </script>
+
+        <script>
             'use strict';
 
             function genActions(s) {
@@ -178,7 +207,7 @@
             });
         </script>
     </head>
-    <body class="bg-light">
+    <body class="bg-body">
         <nav class="navbar navbar-expand navbar-dark bg-dark pt-3">
             <ul class="navbar-nav w-100">
                 <li class="navbar-brand">
