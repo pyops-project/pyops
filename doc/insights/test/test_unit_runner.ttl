@@ -1,0 +1,4 @@
+<tests/unit/runner/test_daemon> rdf:type "Test File" .
+<tests/unit/runner/test_daemon> tests "app/runner daemon: GracefulKiller, schedule, finishJob" .
+<tests/unit/runner/test_daemon> requires "mock queue, signal" .
+<tests/unit/runner/test_daemon> covers "<app/runner> dependsOn multiprocessing, app/orm/schedule" .

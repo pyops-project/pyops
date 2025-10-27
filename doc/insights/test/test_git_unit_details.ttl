@@ -1,0 +1,164 @@
+<tests/unit/lib/test_lib_git> rdf:type "Test File" .
+<tests/unit/lib/test_lib_git> tests "app/lib/git functions: pull/repo path/file ops/list/unique/content/read write/commit/delete/status/rollback/lock" .
+<tests/unit/lib/test_lib_git> requires "tmp_cache, mock_repo, mock_subprocess, mock_files_conf, mock_fcntl, mock_logging" .
+<tests/unit/lib/test_lib_git> covers "<app/lib/git> dependsOn subprocess, os, fcntl, logging" .
+
+<TestPullIfNeeded> rdf:type "Test Class" .
+<TestPullIfNeeded> tests "git.pull_if_needed scenarios" .
+
+<test_pull_if_needed_happy_path> rdf:type "Test Case" .
+<test_pull_if_needed_happy_path> tests "Pull with changes: fetch/reset/checkout new files" .
+<test_pull_if_needed_happy_path> mocks "subprocess.run/check_output side_effects for remote/tag/status/branch/pre/post/log/ls-tree" .
+<test_pull_if_needed_happy_path> asserts "result True, logging.info reset/added files, mock calls for fetch/reset/checkout" .
+
+<test_pull_if_needed_no_changes> rdf:type "Test Case" .
+<test_pull_if_needed_no_changes> tests "Pull no changes (pre==post)" .
+<test_pull_if_needed_no_changes> asserts "result True, logging.debug no changes" .
+
+<test_pull_if_needed_no_remote> rdf:type "Test Case" .
+<test_pull_if_needed_no_remote> asserts "result False, logging.info no remote" .
+
+<test_pull_if_needed_on_tag> rdf:type "Test Case" .
+<test_pull_if_needed_on_tag> asserts "result False, logging.info on tag" .
+
+<test_pull_if_needed_dirty_repo> rdf:type "Test Case" .
+<test_pull_if_needed_dirty_repo> tests "Pull with dirty status (soft reset preserves unstaged)" .
+<test_pull_if_needed_dirty_repo> asserts "result True" .
+
+<test_pull_if_needed_retry_success> rdf:type "Test Case" .
+<test_pull_if_needed_retry_success> tests "Fetch retries (2 fail, 3 success)" .
+<test_pull_if_needed_retry_success> asserts "result True, fetch_count==3, 2 warnings" .
+
+<test_pull_if_needed_final_failure> rdf:type "Test Case" .
+<test_pull_if_needed_final_failure> tests "Fetch 3 fails (raises CalledProcessError)" .
+<test_pull_if_needed_final_failure> asserts "raises CalledProcessError, fetch_count==3, logging.error" .
+
+<test_pull_if_needed_new_file_failure> rdf:type "Test Case" .
+<test_pull_if_needed_new_file_failure> tests "Checkout new file fails (warns, continues)" .
+<test_pull_if_needed_new_file_failure> asserts "result True, logging.warning" .
+
+<test_pull_if_needed_no_git_dir> rdf:type "Test Case" .
+<test_pull_if_needed_no_git_dir> asserts "result False" .
+
+<TestRepoPathAndFiles> rdf:type "Test Class" .
+<TestRepoPathAndFiles> tests "get_repo_path new/existing, get_file_path/infer_type/get_name_from_file" .
+
+<test_get_repo_path_new> rdf:type "Test Case" .
+<test_get_repo_path_new> tests "Init new repo with .gitignore/README commits" .
+<test_get_repo_path_new> mocks "os.path.exists False for .git/files" .
+<test_get_repo_path_new> asserts "repo path created, git init/commit calls" .
+
+<test_get_repo_path_existing> rdf:type "Test Case" .
+<test_get_repo_path_existing> tests "Existing repo (no init)" .
+<test_get_repo_path_existing> mocks "os.path.exists True" .
+<test_get_repo_path_existing> asserts "no run calls" .
+
+<test_get_file_path> rdf:type "Test Case" .
+<test_get_file_path> params "type_/name/expected: task/script/script.task.py, view/view/view.html, markdown/README/README.md" .
+<test_get_file_path> asserts "expected in basename" .
+
+<test_get_file_path_invalid_type> rdf:type "Test Case" .
+<test_get_file_path_invalid_type> params "invalid/script" .
+<test_get_file_path_invalid_type> asserts "raises ValueError" .
+
+<test_get_name_from_file> rdf:type "Test Case" .
+<test_get_name_from_file> params "script.task.py/script, view.html/view, README.md/README" .
+<test_get_name_from_file> asserts "== expected" .
+
+<test_infer_type_from_filename> rdf:type "Test Case" .
+<test_infer_type_from_filename> params "*.task.py/task, *.html/view, *.md/markdown" .
+<test_infer_type_from_filename> asserts "== expected" .
+
+<test_infer_type_from_filename_invalid> rdf:type "Test Case" .
+<test_infer_type_from_filename_invalid> params "invalid.py, script.invalid.py" .
+<test_infer_type_from_filename_invalid> asserts "raises ValueError" .
+
+<TestListAndUnique> rdf:type "Test Class" .
+<TestListAndUnique> tests "list_scriptlets, check_name_unique" .
+
+<test_list_scriptlets> rdf:type "Test Case" .
+<test_list_scriptlets> mocks "os.listdir/exists/isdir, get_repo_path" .
+<test_list_scriptlets> asserts "len(result)==3, expected dicts in result (set/name/type)" .
+
+<test_check_name_unique> rdf:type "Test Case" .
+<test_check_name_unique> mocks "os.listdir []/['unique.task.py']" .
+<test_check_name_unique> asserts "True/False" .
+
+<TestContentOps> rdf:type "Test Class" .
+<TestContentOps> tests "read_content unstaged/committed/fallback/not found/strict, write_content" .
+
+<test_read_content_unstaged_false> rdf:type "Test Case" .
+<test_read_content_unstaged_false> mocks "open(read_data=content), exists True" .
+<test_read_content_unstaged_false> asserts "== content, open called" .
+
+<test_read_content_unstaged_true> rdf:type "Test Case" .
+<test_read_content_unstaged_true> mocks "check_output CalledProcessError, open" .
+<test_read_content_unstaged_true> asserts "== content, warning" .
+
+<test_read_content_committed_git_show> rdf:type "Test Case" .
+<test_read_content_committed_git_show> mocks "exists False, check_output b'committed'" .
+<test_read_content_committed_git_show> asserts "== 'committed content'" .
+
+<test_read_content_committed_fallback> rdf:type "Test Case" .
+<test_read_content_committed_fallback> mocks "check_output error, open" .
+<test_read_content_committed_fallback> asserts "== fallback, warning" .
+
+<test_read_content_not_found> rdf:type "Test Case" .
+<test_read_content_not_found> mocks "check_output error, exists False" .
+<test_read_content_not_found> asserts "raises FileNotFoundError" .
+
+<test_read_content_committed_strict_success> rdf:type "Test Case" .
+<test_read_content_committed_strict_success> params "strict=True" .
+<test_read_content_committed_strict_success> mocks "check_output success" .
+<test_read_content_committed_strict_success> asserts "== content" .
+
+<test_read_content_committed_strict_raise> rdf:type "Test Case" .
+<test_read_content_committed_strict_raise> params "strict=True" .
+<test_read_content_committed_strict_raise> mocks "check_output error, exists True" .
+<test_read_content_committed_strict_raise> asserts "raises FileNotFoundError 'No committed version'" .
+
+<test_write_content> rdf:type "Test Case" .
+<test_write_content> asserts "file exists, read==content" .
+
+<TestCommitOps> rdf:type "Test Class" .
+<TestCommitOps> tests "perform_git_add_commit_push/tag, batch_commit, delete_file_and_commit" .
+
+<test_perform_git_add_commit_push> rdf:type "Test Case" .
+<test_perform_git_add_commit_push> mocks "check_output empty tag/remote, pull_if_needed True" .
+<test_perform_git_add_commit_push> asserts "add/commit/push calls" .
+
+<test_perform_git_add_commit_push_on_tag> rdf:type "Test Case" .
+<test_perform_git_add_commit_push_on_tag> mocks "tag non-empty, describe success" .
+<test_perform_git_add_commit_push_on_tag> asserts "raises HTTPException 'Cannot commit on a tag'" .
+
+<test_batch_commit> rdf:type "Test Case" .
+<test_batch_commit> params "rel_files=['file1.py','file2.html']" .
+<test_batch_commit> mocks "tag empty, pull True" .
+<test_batch_commit> asserts "add each, commit/push calls" .
+
+<test_delete_file_and_commit> rdf:type "Test Case" .
+<test_delete_file_and_commit> mocks "pull True" .
+<test_delete_file_and_commit> asserts "rm/commit/push calls" .
+
+<TestStatusAndRollback> rdf:type "Test Class" .
+<TestStatusAndRollback> tests "get_repo_status tag/not, rollback_staged/committed, repo_lock contention" .
+
+<test_get_repo_status_not_tag> rdf:type "Test Case" .
+<test_get_repo_status_not_tag> mocks "branch main, tag empty" .
+<test_get_repo_status_not_tag> asserts "{'branch':'main','is_tag':False,'flag':None}" .
+
+<test_get_repo_status_on_tag> rdf:type "Test Case" .
+<test_get_repo_status_on_tag> mocks "branch main, tag non-empty, describe success" .
+<test_get_repo_status_on_tag> asserts "{'branch':'main','is_tag':True,'flag':'TAG'}" .
+
+<test_rollback_staged> rdf:type "Test Case" .
+<test_rollback_staged> mocks "shutil.copy2, run checkout" .
+<test_rollback_staged> asserts "copy to .bck, checkout HEAD calls" .
+
+<test_rollback_committed> rdf:type "Test Case" .
+<test_rollback_committed> mocks "run checkout" .
+<test_rollback_committed> asserts "checkout HEAD calls" .
+
+<test_repo_lock_contention> rdf:type "Test Case" .
+<test_repo_lock_contention> mocks "repo_lock __enter__ BlockingIOError" .
+<test_repo_lock_contention> asserts "raises BlockingIOError" .

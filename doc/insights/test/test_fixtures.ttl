@@ -1,0 +1,57 @@
+<tests/conftest> rdf:type "Module" .
+<tests/conftest> dependsOn "pytest, unittest.mock, sqlalchemy, fastapi.testclient, multiprocessing, pathlib, croniter, jedi" .
+<tests/conftest> description "Defines fixtures for test isolation, mocking, and setup across unit/integration/API." .
+
+<mock_conf> rdf:type "Fixture" .
+<mock_conf> scope "function" .
+<mock_conf> requires "tmp_path" .
+<mock_conf> description "Creates temp JSON config with DB/jobs/git/venv paths, calls app/lib/files.Config.init." .
+<mock_conf> usedIn "mock_db, mock_client" .
+
+<mock_db> rdf:type "Fixture" .
+<mock_db> scope "function" .
+<mock_db> requires "mock_conf, tmp_path" .
+<mock_db> description "Sets up temp SQLite DB, inits schema via app/orm/database.init_db, destroys on teardown." .
+<mock_db> calls "app/orm/database.init_db, destroy_db" .
+<mock_db> usedIn "API/integration/unit tests requiring DB" .
+
+<mock_client> rdf:type "Fixture" .
+<mock_client> requires "mock_conf, tmp_path, mock_db" .
+<mock_client> description "FastAPI TestClient with get_current_user override for X-User header." .
+<mock_client> usedIn "tests/api/*" .
+
+<mock_git_dir> rdf:type "Fixture" .
+<mock_git_dir> requires "tmp_path" .
+<mock_git_dir> description "Creates mock data/git/{set} with .git, sample files (py/html/md/controller)." .
+<mock_git_dir> patches "os.listdir, os.path.exists" .
+<mock_git_dir> usedIn "mock_git_ops, API/integration tests" .
+
+<mock_git_ops> rdf:type "Fixture" .
+<mock_git_ops> requires "mock_git_dir" .
+<mock_git_ops> description "Mocks app/lib/git functions (list_scriptlets, write/read_content, infer_type, etc.) and subprocess.run/check_output." .
+<mock_git_ops> usedIn "tests/api/*, tests/integration/routers/*, tests/unit/lib/test_lib_git.py" .
+
+<mock_process> rdf:type "Fixture" .
+<mock_process> patches "multiprocessing.Process" .
+<mock_process> description "Mocks process start/join/is_alive for runner tests." .
+<mock_process> usedIn "tests/integration/runner/*, tests/unit/runner/*" .
+
+<mock_croniter> rdf:type "Fixture" .
+<mock_croniter> patches "croniter.croniter" .
+<mock_croniter> description "Mocks cron next/prev for schedule tests." .
+<mock_croniter> usedIn "schedule-related tests" .
+
+<mock_jedi> rdf:type "Fixture" .
+<mock_jedi> patches "jedi.Script.complete" .
+<mock_jedi> description "Mocks Jedi completions for editor tests." .
+<mock_jedi> usedIn "tests/api/test_api_editor.py" .
+
+<test_temp_dir> rdf:type "Fixture" .
+<test_temp_dir> scope "function" .
+<test_temp_dir> requires "tmp_path" .
+<test_temp_dir> description "Creates .cache/tmp for test runtime files." .
+<test_temp_dir> usedIn "All tests via patch_tempfile" .
+
+<pytest_configure> rdf:type "Hook" .
+<pytest_configure> sets "multiprocessing spawn, tracemalloc, ResourceWarning handler" .
+<pytest_configure> description "Configures pytest for parallel safe execution and leak detection." .

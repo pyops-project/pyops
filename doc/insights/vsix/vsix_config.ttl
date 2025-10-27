@@ -1,0 +1,20 @@
+<vsix/config> rdf:type "Directory" .
+<vsix/config> contains "configLoader.ts, auth.ts" .
+<vsix/ConfigLoader> rdf:type "Class" .
+<vsix/ConfigLoader> constructor "requires context: vscode.ExtensionContext, onConfigReload?: () => Promise<void>" .
+<vsix/ConfigLoader.loadYamlConfig> rdf:type "Method" .
+<vsix/ConfigLoader.loadYamlConfig> requires "outputChannel: vscode.OutputChannel" .
+<vsix/ConfigLoader.loadYamlConfig> loads ".pyops.yaml and .pyops.{user}.yaml from workspace root" .
+<vsix/ConfigLoader.loadYamlConfig> merges "global + user-specific YAML" .
+<vsix/ConfigLoader.loadYamlConfig> updates "vscode 'pyops' config: serverUrl, username, timeout" .
+<vsix/ConfigLoader.loadYamlConfig> calls "handleAuth(yamlConfig, context, outputChannel)" .
+<vsix/ConfigLoader.loadYamlConfig> creates "FileSystemWatcher on *.yaml, onDidChange reloads and calls onConfigReload" .
+<vsix/ConfigLoader.dispose> rdf:type "Method" .
+<vsix/ConfigLoader.dispose> disposes "configWatcher" .
+<vsix/handleAuth> rdf:type "Function" .
+<vsix/handleAuth> requires "yamlConfig, context, outputChannel" .
+<vsix/handleAuth> handles "password from yaml or prompt/store in workspaceState" .
+<vsix/getHeaders> rdf:type "Function" .
+<vsix/getHeaders> requires "vscode, context" .
+<vsix/getHeaders> returns "Record with Authorization: Basic base64(username:password) if both set" .
+<vsix/getHeaders> uses "pyops config username, workspaceState pyops.password" .

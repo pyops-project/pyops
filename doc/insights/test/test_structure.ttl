@@ -1,0 +1,19 @@
+<tests> rdf:type "Test Suite" .
+<tests> dependsOn "pytest, app/orm, app/lib, app/routers, app/runner" .
+<tests> description "Pytest-based tests for app/ validation: unit, integration, API." .
+
+<tests/conftest> rdf:type "Module" .
+<tests/conftest> description "Provides fixtures for test isolation and setup." .
+<tests/conftest> associatedWith "app/orm/database" .
+
+<tests/api> rdf:type "Directory" .
+<tests/api> description "API endpoint tests using client mocks." .
+<tests/api> covers "app/routers/scriptlet endpoints" .
+
+<tests/integration> rdf:type "Directory" .
+<tests/integration> description "Integration tests for ORM, routers, runner with real DB/processes." .
+<tests/integration> associatedWith "app/orm, app/routers, app/runner" .
+
+<tests/unit> rdf:type "Directory" .
+<tests/unit> description "Unit tests for isolated lib, ORM, runner components." .
+<tests/unit> associatedWith "app/lib, app/orm, app/runner" .

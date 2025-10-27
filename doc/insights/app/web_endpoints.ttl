@@ -1,0 +1,28 @@
+<app/web> rdf:type "Module" .
+<app/web> dependsOn "fastapi, jinja2" .
+<app/web> description "FastAPI app entry point with static file serving." .
+
+<app/web.root> rdf:type "Endpoint" .
+<app/web.root> path "GET /" .
+<app/web.root> returns "root.html" .
+<app/web.root> description "Serves main application page." .
+
+<app/web.controller> rdf:type "Endpoint" .
+<app/web.controller> path "GET /controller/{set}/{name}" .
+<app/web.controller> requires "set: str, name: str" .
+<app/web.controller> calls "app/lib/pyops.Control.get" .
+<app/web.controller> description "Dynamic controller execution via pyops." .
+
+<app/web.controller_post> rdf:type "Endpoint" .
+<app/web.controller_post> path "POST /controller/{set}/{name}" .
+<app/web.controller_post> requires "set: str, name: str, request body" .
+<app/web.controller_post> calls "app/lib/pyops.Control.post" .
+
+<app/web.get_controller_code> requires "set: str, name: str, debug: bool" .
+<app/web.get_controller_code> returns "str (code)" .
+<app/web.get_controller_code> calls "app/lib/git.read_content" .
+<app/web.get_controller_code> description "Fetches controller script from git." .
+
+<app/gunicorn> rdf:type "Module" .
+<app/gunicorn> hasHooks "on_starting, on_exit" .
+<app/gunicorn> description "Gunicorn server configuration for production." .

@@ -1,0 +1,45 @@
+<app/orm/database> rdf:type "Module" .
+<app/orm/database> description "Provides SQLite database initialization and engine." .
+<app/orm/database.get_db_path> calls "os.path" .
+<app/orm/database.get_db_path> returns "str" .
+<app/orm/database.init_db> requires "schema definitions" .
+<app/orm/database.get_db_engine> returns "SQLAlchemy engine" .
+<app/orm/database.destroy_db> description "Drops database tables." .
+
+<app/orm/job> rdf:type "Model" .
+<app/orm/job> inheritsFrom "Base" .
+<app/orm/job> hasFields "id, state, owner, set, name, kind, param, code, libs" .
+<app/orm/job> associatedWith "app/lib/runner" .
+<app/orm/job> description "Represents job entities for scriptlet execution." .
+
+<app/orm/schedule> rdf:type "Model" .
+<app/orm/schedule> inheritsFrom "Base" .
+<app/orm/schedule> hasFields "id, cron, active, set, name, param" .
+<app/orm/schedule> associatedWith "app/routers/scriptlet/scheduler" .
+<app/orm/schedule> description "Represents scheduled jobs with cron patterns." .
+<app/orm/job> dependsOn "sqlalchemy.Column, app.orm.database.Base" .
+<app/orm/job.id> "Column(String, primary_key=True, nullable=False)" .
+<app/orm/job.set> "Column(String, index=True, nullable=False)" .
+<app/orm/job.name> "Column(String, index=True, nullable=False)" .
+<app/orm/job.owner> "Column(String, index=True, nullable=False)" .
+<app/orm/job.kind> "Column(String, index=True, nullable=False)" .
+<app/orm/job.state> "Column(String, index=True, nullable=False)" .
+<app/orm/job.drop_done> "Column(Boolean, default=False, nullable=False)" .
+<app/orm/job.param> "Column(String)" .
+<app/orm/job.pid> "Column(Integer, index=True)" .
+<app/orm/job.detail> "Column(String)" .
+<app/orm/job.start> "Column(DateTime, index=True)" .
+<app/orm/job.end> "Column(DateTime, index=True)" .
+<app/orm/job> __tablename__ "job" .
+
+<app/orm/schedule> dependsOn "sqlalchemy.Column, app.orm.database.Base" .
+<app/orm/schedule.id> "Column(Integer, primary_key=True, autoincrement=True, nullable=False)" .
+<app/orm/schedule.schedule> "Column(String, index=True, nullable=False)" .
+<app/orm/schedule.set> "Column(String, index=True, nullable=False)" .
+<app/orm/schedule.name> "Column(String, index=True, nullable=False)" .
+<app/orm/schedule.owner> "Column(String, index=True, nullable=False)" .
+<app/orm/schedule.active> "Column(Boolean, index=True, nullable=False)" .
+<app/orm/schedule.drop_done> "Column(Boolean, default=True, nullable=False)" .
+<app/orm/schedule.param> "Column(String)" .
+<app/orm/schedule.last> "Column(DateTime, index=True)" .
+<app/orm/schedule> __tablename__ "schedule" .

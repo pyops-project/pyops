@@ -1,0 +1,23 @@
+<vsix/commands> rdf:type "Group" .
+<vsix/commands> location "inline in extension.ts (subdirs bulk/manager/monitor empty)" .
+<vsix/createScriptlet> rdf:type "Command" .
+<vsix/createScriptlet> requires "QuickPick type (task/library/controller/view/markdown), set from /inventory/list, unique name InputBox" .
+<vsix/createScriptlet> calls "PUT /scriptlet/inventory/item {set, name, type}, verify in list, refresh managerTree, open local .pyops/{set}/{type}/{name}.ext" .
+<vsix/startDebugJob> rdf:type "Command" .
+<vsix/startDebugJob> requires "ScriptletTreeItem type='task'" .
+<vsix/startDebugJob> calls "PUT /scriptlet/job/item {set, name, debug=true}, startPoll key=set-name via jobManager" .
+<vsix/viewJob> rdf:type "Command" .
+<vsix/viewJob> requires "JobTreeItem" .
+<vsix/viewJob> calls "startPoll key=jobId isView=true, append param/stdout/stderr/state to jobViewOutputChannel" .
+<vsix/cancelJob> rdf:type "Command" .
+<vsix/cancelJob> requires "JobTreeItem" .
+<vsix/cancelJob> calls "POST /scriptlet/job/cancel?id=jobId, refresh jobsTree" .
+<vsix/deleteJob> rdf:type "Command" .
+<vsix/deleteJob> requires "JobTreeItem, confirm" .
+<vsix/deleteJob> calls "DELETE /scriptlet/job/item?id=jobId, refresh jobsTree" .
+<vsix/performBulkAction> rdf:type "Function" .
+<vsix/performBulkAction> requires "action: 'cancel'|'delete', filterStates: string[]" .
+<vsix/performBulkAction> fetches "jobs from fetchJobs, filter, confirm, loop cancel/delete, refresh jobsTree" .
+<vsix/diffLocalRemote> rdf:type "Command" .
+<vsix/diffLocalRemote> requires "ScriptletTreeItem" .
+<vsix/diffLocalRemote> fetches "GET /inventory/code?set&name, encode for pyops-remote URI, vscode.diff remote vs local" .

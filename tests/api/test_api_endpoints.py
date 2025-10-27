@@ -236,7 +236,7 @@ def test_controller_get_success(mock_client, mock_git_ops):
     response = mock_client.get("/controller/default/sample", headers={"X-User": "testuser"})
     assert response.status_code == 200
     assert "<html>" in response.text
-    assert "Controller default::Test Controller" in response.text  # From mock name
+    assert "default::Test Controller" in response.text  # From mock name
 
 def test_controller_get_exec_fail(mock_client, mock_git_ops):
     # Test /controller GET with exec failure

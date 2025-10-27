@@ -1,0 +1,7 @@
+<pyops> enables "scriptlet management: create/edit/list via git-integrated API and vsix tree views" .
+<pyops> enables "job execution: isolated venv runs with params/debug, enqueue via commands/API" .
+<pyops> enables "schedule management: cron-based with active toggle, monitor in vsix webview" .
+<pyops> enables "VSCode integration: embedded UI panels, remote content editing, auth via YAML" .
+<pyops> enables "monitoring: job status polling/tree, download workspaces/logs" .
+<pyops> enables "testing: >90% app coverage (pytest unit/integration/API), >80% vsix (Mocha mocks)" .
+<pyops> supports "deployment: gunicorn production, Docker build" .

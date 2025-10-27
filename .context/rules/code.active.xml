@@ -1,5 +1,0 @@
-<code_rules>
-    <strict_rule>app code is located at @/app</strict_rule>
-    <strict_rule>vsix code is located at @/vsix</strict_rule>
-    <strict_rule>no temporary fixes or workarounds</strict_rule>
-</code_rules>

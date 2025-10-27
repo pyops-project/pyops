@@ -1,0 +1,23 @@
+<tests/integration/orm/test_database> rdf:type "Test File" .
+<tests/integration/orm/test_database> tests "app/orm/database lifecycle: init, engine, destroy, path" .
+<tests/integration/orm/test_database> requires "mock_db (temp SQLite)" .
+<tests/integration/orm/test_database> covers "<app/orm/database> dependsOn app/lib/files, sqlalchemy" .
+
+<test_init_db> rdf:type "Test Case" .
+<test_init_db> tests "init_db creates tables from Base.metadata" .
+<test_init_db> asserts "tables exist via query" .
+
+<test_get_db_engine> rdf:type "Test Case" .
+<test_get_db_engine> tests "get_db_engine returns URL-based engine" .
+<test_get_db_engine> asserts "engine.url == expected SQLite URL" .
+
+<test_get_db_path> rdf:type "Test Case" .
+<test_get_db_path> params "relative/abs paths" .
+<test_get_db_path> tests "get_db_path resolves relative to project root" .
+<test_get_db_path> calls "os.path" .
+<test_get_db_path> asserts "path matches expected" .
+
+<test_destroy_db> rdf:type "Test Case" .
+<test_destroy_db> tests "destroy_db drops all tables" .
+<test_destroy_db> asserts "no tables after drop via query" .
+<test_destroy_db> teardown "gc.collect, unlink db file" .

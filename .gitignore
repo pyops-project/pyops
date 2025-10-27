@@ -6,4 +6,4 @@ pyrightconfig.json
 /.venv
 /.coverage
 .cache
-/.context/lib.md
+.context/lib.md

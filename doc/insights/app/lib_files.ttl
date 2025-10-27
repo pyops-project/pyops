@@ -1,0 +1,19 @@
+<app/lib/files> rdf:type "Module" .
+<app/lib/files> dependsOn "os.path, json, logging" .
+<app/lib/files> description "Handles static file serving and JSON config loading." .
+
+<app/lib/files.get> requires "path: str" .
+<app/lib/files.get> returns "bytes (file content)" .
+<app/lib/files.get> description "Reads binary file from app/files/." .
+
+<app/lib/files.Config> rdf:type "Class" .
+<app/lib/files.Config.init> requires "conf_path: str" .
+<app/lib/files.Config.init> description "Loads JSON config from path, sets global config." .
+<app/lib/files.Config.data> returns "dict (data paths: jobs, git, db with defaults)" .
+<app/lib/files.Config.data> description "Returns data section with project_root-based defaults." .
+<app/lib/files.Config.runner> returns "dict (runner config: git_pull_interval default 60)" .
+<app/lib/files.Config.runner> description "Returns runner section with defaults." .
+
+<app/lib/files.conf_data> calls "app/lib/files.Config.data" .
+<app/lib/files.conf_runner> calls "app/lib/files.Config.runner" .
+<app/lib/files> uses "logging.getLogger" .

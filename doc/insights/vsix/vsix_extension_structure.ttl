@@ -1,0 +1,26 @@
+<vsix/extension> rdf:type "Module" .
+<vsix/extension> description "Core orchestration in extension.ts: activate/deactivate, providers registration, commands, status." .
+<vsix/extension> dependsOn "vscode.ExtensionContext" .
+<vsix/extension> dependsOn "config/configLoader" .
+<vsix/extension> dependsOn "providers/remoteContentProvider" .
+<vsix/extension> dependsOn "providers/jobsTreeProvider" .
+<vsix/extension> dependsOn "utils/headers" .
+<vsix/extension> dependsOn "state/jobManager" .
+<vsix/extension> dependsOn "status/statusBar" .
+<vsix/activate> rdf:type "Function" .
+<vsix/activate> requires "context: vscode.ExtensionContext" .
+<vsix/activate> calls "configLoader.loadYamlConfig" .
+<vsix/activate> registers "RemoteContentProvider for pyops-remote scheme" .
+<vsix/activate> registers "ManagerTreeDataProvider for pyops-manager view" .
+<vsix/activate> registers "JobsTreeDataProvider for pyops-monitor view" .
+<vsix/activate> registers "commands: pyops.createScriptlet, pyops.startDebugJob, pyops.viewJob, pyops.cancelAllJobs" .
+<vsix/activate> sets "timers: autoRefreshInterval for manager/monitor refresh" .
+<vsix/activate> calls "statusBarManager.init" .
+<vsix/deactivate> rdf:type "Function" .
+<vsix/deactivate> calls "configLoader.dispose" .
+<vsix/deactivate> calls "jobManager.dispose" .
+<vsix/commands> rdf:type "Group" .
+<vsix/commands> includes "createScriptlet: QuickPick type, InputBox name, PUT /scriptlet/inventory/item" .
+<vsix/commands> includes "startDebugJob: PUT /scriptlet/job/item with debug=true, startPoll via jobManager" .
+<vsix/commands> includes "viewJob: startPoll isView=true, append to jobViewOutputChannel" .
+<vsix/commands> includes "performBulkAction: filter states, cancel/delete multiple jobs" .

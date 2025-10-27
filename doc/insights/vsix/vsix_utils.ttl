@@ -1,0 +1,12 @@
+<vsix/utils> rdf:type "Directory" .
+<vsix/utils> contains "headers.ts, inferExt.ts, getIconForType.ts" .
+<vsix/getHeaders> rdf:type "Function" .
+<vsix/getHeaders> requires "vscode: any, context: any" .
+<vsix/getHeaders> returns "Record<string, string> with Basic Auth if username/password" .
+<vsix/inferExt> rdf:type "Function" .
+<vsix/inferExt> requires "type: string (task/library/controller/view/markdown)" .
+<vsix/inferExt> returns "string: 'py' for task/library/controller, 'html' for view, 'md' for markdown" .
+<vsix/getIconForType> rdf:type "Function" .
+<vsix/getIconForType> requires "vscode, type: string" .
+<vsix/getIconForType> returns "vscode.ThemeIcon: 'file-code' for task/library/controller, 'globe' for view, 'markdown' for markdown" .
+<vsix/utils> dependsOn "Buffer for base64 auth" .

@@ -1,0 +1,10 @@
+<app/routers/scriptlet/job> dependsOn "app/orm/job, app/lib/runner, app/lib/files, app/lib/git" .
+<app/routers/scriptlet/schedule> dependsOn "app/orm/schedule, app/lib/runner, app/lib/git" .
+<app/runner> dependsOn "app/orm/job, app/orm/schedule, app/lib/runner, app/lib/files, app/lib/git, app/lib/pyops" .
+<app/lib/runner> dependsOn "app/orm/job, app/lib/files, app/lib/git" .
+<app/orm/database> dependsOn "app/lib/files" .
+<app/web> dependsOn "app/lib/files" .
+<app/gunicorn> dependsOn "app/lib/files, app/orm/database, app.orm.schedule, app.orm.job, app.runner" .
+<app/routers/scriptlet/sets> dependsOn "app/lib/files, app/lib/sets, app/lib/sites" .
+<app/routers/scriptlet/inventory> dependsOn "app/lib/git" .
+<app/routers/scriptlet/*.py> dependsOn "app/lib/sites" .
