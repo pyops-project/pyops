@@ -153,6 +153,7 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
 
     private _context: vscode.ExtensionContext;
     private _scriptlets: any[] = [];
+    private _syncStatus: Map<string, boolean> = new Map();
 
     constructor(context: vscode.ExtensionContext) {
         this._context = context;
@@ -183,12 +184,14 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
                 const itemTrees: TreeItem[] = setItems.map((item: any) => {
                     const label = `${item.name} (${item.type})`;
                     const ext = inferExt(item.type);
+                    const key = `${set}-${item.name}-${item.type}`;
+                    const isSynced = this._syncStatus.get(key) ?? true;
                     const treeItem = new TreeItem(label, vscode.TreeItemCollapsibleState.None) as ScriptletTreeItem;
                     treeItem.description = ext ? `.${ext}` : '';
                     treeItem.contextValue = `pyopsItem-${item.type}`;
-                    treeItem.id = `${set}-${item.name}-${item.type}`;
-                    treeItem.iconPath = getIconForType(item.type);
-                    treeItem.tooltip = `Set: ${set}, Name: ${item.name}, Type: ${item.type}`;
+                    treeItem.id = key;
+                    treeItem.iconPath = isSynced ? new vscode.ThemeIcon('check') : new vscode.ThemeIcon('warning');
+                    treeItem.tooltip = `Set: ${set}, Name: ${item.name}, Type: ${item.type}, Sync: ${isSynced ? 'Synced' : 'Unsynced'}`;
                     treeItem.set = set;
                     treeItem.scriptletName = item.name;
                     treeItem.scriptletType = item.type;
@@ -246,6 +249,8 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
     private async downloadScriptlets(scriptlets: any[]): Promise<void> {
         if (!vscode.workspace.workspaceFolders || vscode.workspace.workspaceFolders.length === 0) return;
 
+        this._syncStatus.clear();
+
         const pyopsConfig = vscode.workspace.getConfiguration('pyops');
         const serverUrl = pyopsConfig.get('serverUrl') as string || 'http://localhost:8000';
         const username = pyopsConfig.get('username') as string;
@@ -262,23 +267,34 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
         const baseLocalPath = path.join(workspaceRoot, localPyopsDir);
 
         const downloadPromises = scriptlets.map(async (s: any) => {
+            const key = `${s.set}-${s.name}-${s.type}`;
             try {
                 const response = await fetch(`${serverUrl}/scriptlet/inventory/code?set=${s.set}&name=${s.name}`, { headers });
                 if (response.ok) {
-                const responseData = await response.json();
-                const code = (responseData as any).code;
-                const ext = inferExt(s.type);
-                const dirPath = path.join(baseLocalPath, s.set, s.type);
-                if (!fs.existsSync(dirPath)) {
-                    fs.mkdirSync(dirPath, { recursive: true });
-                }
-                const localPath = path.join(dirPath, `${s.name}.${ext}`);
-                if (!fs.existsSync(localPath)) {
-                    fs.writeFileSync(localPath, code);
-                }
+                    const responseData = await response.json();
+                    const remoteCode = (responseData as any).code;
+                    const ext = inferExt(s.type);
+                    const dirPath = path.join(baseLocalPath, s.set, s.type);
+                    if (!fs.existsSync(dirPath)) {
+                        fs.mkdirSync(dirPath, { recursive: true });
+                    }
+                    const localPath = path.join(dirPath, `${s.name}.${ext}`);
+                    let isSynced = true;
+                    if (fs.existsSync(localPath)) {
+                        const localCode = fs.readFileSync(localPath, 'utf8');
+                        isSynced = localCode.trim() === remoteCode.trim();
+                    }
+                    if (!fs.existsSync(localPath)) {
+                        fs.writeFileSync(localPath, remoteCode);
+                    }
+                    this._syncStatus.set(key, isSynced);
+                } else {
+                    this._syncStatus.set(key, false);
+                    console.error(`Failed to fetch ${s.set}::${s.name}: ${response.statusText}`);
                 }
             } catch (error: any) {
-                console.error(`Failed to download ${s.set}::${s.name}:`, error);
+                this._syncStatus.set(key, false);
+                console.error(`Error downloading ${s.set}::${s.name}:`, error);
             }
         });
 
@@ -288,10 +304,10 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
     refresh(): void {
         this.fetchScriptlets().then(async (scriptlets) => {
             this._scriptlets = scriptlets;
-            this._onDidChangeTreeData.fire();
             if (scriptlets.length > 0) {
                 await this.downloadScriptlets(scriptlets);
             }
+            this._onDidChangeTreeData.fire();
         });
     }
 }
@@ -1071,6 +1087,7 @@ export async function activate(context: vscode.ExtensionContext) {
                     }
                     fs.writeFileSync(localPath, code);
                     vscode.window.showInformationMessage(`Reset local ${name}.${ext} from remote`);
+                    managerTreeProvider.refresh();
                 } else {
                     vscode.window.showErrorMessage(`Failed to fetch remote: ${response.statusText}`);
                 }
@@ -1113,6 +1130,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 });
                 if (response.ok) {
                     vscode.window.showInformationMessage(`Wrote local to remote draft for ${name}`);
+                    managerTreeProvider.refresh();
                 } else {
                     vscode.window.showErrorMessage(`Failed to write draft: ${response.statusText}`);
                 }
