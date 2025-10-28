@@ -97,9 +97,11 @@
             }
             
             function clearLogs() {
-                out.setValue('');  // Clears stdout textarea
-                errout.setValue('');  // Clears stderr textarea
-                console.debug('Logs cleared');  // Optional: Silent debug log
+                out.setValue('');
+                errout.setValue('');
+                console.debug('Logs cleared');
+                // hack because of editor render problem on writing out
+                setTimeout(function() { param.resize(); editor.resize(); out.resize(); errout.resize(); }, 500);
             }
 
             function refresh() {

@@ -1,0 +1,9 @@
+<app/editor_ui> rdf:type "UI Pattern" .
+<app/editor_ui> location "app/sites/scriptlet/editor_*.html" .
+<app/editor_ui> uses "Ace editors with flex-grow-1 for main, minLines:0 for outputs" .
+<app/editor_ui> requiresResize "After setValue('') or content append in log()" .
+<clearLogs> calls "out.setValue(''); errout.setValue('')" .
+<clearLogs> callsResize "setTimeout(param.resize(), editor.resize(), out.resize(), errout.resize(), 500)" .
+<run> clearsOutputs "Before job enqueue" .
+<log> appends "stdout/stderr, auto-scrolls to bottom if was at bottom" .
+<log> triggersResize "setTimeout all editors resize 500ms" .

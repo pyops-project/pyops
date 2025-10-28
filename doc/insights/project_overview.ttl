@@ -10,8 +10,6 @@
 
 <pyops> hasComplex "vsix/" .
 <vsix/> rdf:type "VSCodeExtension" .
-<vsix/> dependsOn "vscode API, fetch, YAML (js-yaml)" .
-<vsix/> description "Extension with config (YAML load/auth), providers (tree/webview/remote), state (jobManager polling), commands (bulk/manager/monitor), utils (headers/icons)." .
 <vsix/> consumes "<app/> API via GET/POST /scriptlet with Basic auth" .
 <vsix/> provides "Tree views (jobs/sets), webviews (manager/monitor/scheduler), remote editing." .
 
@@ -26,7 +24,5 @@
 <app/> interactsWith "<tests/> via mocks (orm/job, lib/git/runner, subprocess for git)" .
 <vsix/> interactsWith "<tests/> via stubs (vscode APIs, fetch responses for /job/list)" .
 <app/lib/pyops.ServiceListener> enables "real-time job updates to vsix polling" .
-<app/lib/files.Config> propagatesTo "<app/runner>, <vsix/configLoader> via YAML serverUrl" .
 <pyops> uses "git for scriptlet repos (pull/commit with locks/retries)" .
 <pyops> uses "cron for schedules" .
-<pyops> uses ".pyops.yaml for config (serverUrl/username/password)" .

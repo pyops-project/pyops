@@ -46,7 +46,7 @@
             function genActions(j) {
                 if(["cancel", "dequeued"].includes(j.state))
                     return genTransActions(j);
-                else if(["cancelled", "failed", "done"].includes(j.state))
+                else if(["cancelled", "killed", "failed", "done", "killed"].includes(j.state))
                     return genDoneActions(j);
                 else
                     return genUndoneActions(j);
@@ -195,7 +195,7 @@
                         const d = await r.json();
                         console.debug("jobs", d);
                         for(const i of d)
-                            if(!["cancelled", "failed", "done", "cancel", "dequeued"].includes(i.state))
+                            if(!["cancelled", "killed", "failed", "done", "cancel", "dequeued"].includes(i.state))
                                 cancel(i.id, i == d[d.length - 1]);
                     } else
                         console.error("GET", "/scriptlet/job/list", r.statusText);
