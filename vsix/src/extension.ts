@@ -1,7 +1,6 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import * as yaml from 'js-yaml';
 import * as os from 'os';
 import { StatusBarAlignment, StatusBarItem, window as vscodeWindow, TreeDataProvider, TreeItem, TreeItemCollapsibleState, DiagnosticCollection, commands, Uri, ProgressLocation, QuickPickItem, InputBoxOptions, DiagnosticSeverity, TextDocumentContentProvider, EventEmitter, languages, TextDocument, env, workspace } from 'vscode';
 import { JobsTreeDataProvider, JobTreeItem, Job } from './jobsTreeProvider';
@@ -319,197 +318,22 @@ export async function activate(context: vscode.ExtensionContext) {
     try {
         const extensionUri = context.extensionUri;
 
-        // Load PyOps configuration from YAML
-        let yamlConfig: Record<string, any> = {};
-        if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
-            const workspaceRoot = vscode.workspace.workspaceFolders[0].uri.fsPath;
-            outputChannel.appendLine(`Workspace root: ${workspaceRoot}`);
-            const yamlPath = path.join(workspaceRoot, '.pyops.yaml');
-            const systemUser = os.userInfo().username;
-            const userYamlPath = path.join(workspaceRoot, `.pyops.${systemUser}.yaml`);
-
-            // Load global YAML
-            let globalConfig: Record<string, any> = {};
-            if (fs.existsSync(yamlPath)) {
-                try {
-                    const yamlContent = fs.readFileSync(yamlPath, 'utf8');
-                    outputChannel.appendLine(`Default YAML content length: ${yamlContent.length}`);
-                    const parsed = yaml.load(yamlContent);
-                    outputChannel.appendLine(`Default YAML parsed type: ${typeof parsed}`);
-                    if (parsed && typeof parsed === 'object' && parsed !== null) {
-                        globalConfig = parsed as Record<string, any>;
-                        outputChannel.appendLine(`Loaded global config from ${yamlPath}`);
-                    } else {
-                        outputChannel.appendLine(`Invalid or empty global YAML at ${yamlPath}: parsed = ${JSON.stringify(parsed)}`);
-                    }
-                } catch (error: any) {
-                    outputChannel.appendLine(`Error parsing global YAML: ${error.message}`);
-                }
-            }
-
-            // Load and merge user-specific YAML if exists (user overrides global)
-            let userConfig: Record<string, any> = {};
-            if (fs.existsSync(userYamlPath)) {
-                try {
-                    const userYamlContent = fs.readFileSync(userYamlPath, 'utf8');
-                    outputChannel.appendLine(`User YAML content length: ${userYamlContent.length}`);
-                    const parsed = yaml.load(userYamlContent);
-                    outputChannel.appendLine(`User YAML parsed type: ${typeof parsed}`);
-                    if (parsed && typeof parsed === 'object' && parsed !== null) {
-                        userConfig = parsed as Record<string, any>;
-                        outputChannel.appendLine(`Loaded user-specific config from ${userYamlPath}`);
-                    } else {
-                        outputChannel.appendLine(`Invalid or empty user-specific YAML at ${userYamlPath}: parsed = ${JSON.stringify(parsed)}`);
-                    }
-                } catch (error: any) {
-                    outputChannel.appendLine(`Error parsing user-specific YAML: ${error.message}`);
-                }
-            }
-
-            yamlConfig = { ...globalConfig, ...userConfig };
-            outputChannel.appendLine('Merged global and user configs');
-
-            // Update VSCode configuration with YAML values
-            if (Object.keys(yamlConfig).length > 0) {
-                const pyopsConfig = vscode.workspace.getConfiguration('pyops');
-                if (yamlConfig.serverUrl) {
-                    await pyopsConfig.update('serverUrl', yamlConfig.serverUrl, vscode.ConfigurationTarget.Workspace);
-                    outputChannel.appendLine(`Updated serverUrl: ${yamlConfig.serverUrl}`);
-                }
-                if (yamlConfig.user) {
-                    await pyopsConfig.update('username', yamlConfig.user, vscode.ConfigurationTarget.Workspace);
-                    outputChannel.appendLine(`Updated username from 'user': ${yamlConfig.user}`);
-                }
-                if (yamlConfig.timeout) {
-                    await pyopsConfig.update('timeout', yamlConfig.timeout, vscode.ConfigurationTarget.Workspace);
-                    outputChannel.appendLine(`Updated timeout: ${yamlConfig.timeout}`);
-                }
-                // Handle auth: use global/user auth setting, prompt/store password if http-basic
-                const authType = yamlConfig.auth || 'none';
-                if (authType === 'http-basic') {
-                    let password = context.workspaceState.get('pyops.password') as string | undefined;
-                    // Use 'key' from user config if available and no stored password
-                    if (!password && userConfig.key) {
-                        password = userConfig.key;
-                        await context.workspaceState.update('pyops.password', password);
-                        outputChannel.appendLine('Used key from user YAML as password');
-                    }
-                    if (!password) {
-                        password = await vscode.window.showInputBox({
-                            prompt: 'Enter PyOps auth key or password for Basic Auth (will be stored securely for this workspace)',
-                            password: true
-                        });
-                        if (password) {
-                            await context.workspaceState.update('pyops.password', password);
-                            outputChannel.appendLine('Auth key/password stored in workspace state');
-                        } else {
-                            outputChannel.appendLine('No auth key/password provided; Basic Auth may fail');
-                        }
-                    } else {
-                        outputChannel.appendLine('Auth key/password found in workspace state');
-                    }
-                }
-                outputChannel.appendLine('PyOps configuration loaded from YAML');
-            } else {
-                outputChannel.appendLine('No valid YAML config loaded');
-            }
-
-            // Watch for YAML file changes
-            const yamlPattern = path.join(workspaceRoot, '*.yaml');
-            configWatcher = vscode.workspace.createFileSystemWatcher(yamlPattern);
-            configWatcher.onDidChange(async (uri) => {
-                outputChannel.appendLine(`YAML file changed: ${uri.fsPath}`);
-                // Reload config on change
-                const changedUserPath = path.join(workspaceRoot, `.pyops.${systemUser}.yaml`);
-                const changedDefaultPath = path.join(workspaceRoot, '.pyops.yaml');
-                if (uri.fsPath === changedUserPath || uri.fsPath === changedDefaultPath) {
-                outputChannel.appendLine('Relevant YAML file changed, reloading config...');
-                // Reload global YAML
-                let globalReloadConfig: Record<string, any> = {};
-                if (fs.existsSync(yamlPath)) {
-                    try {
-                        const content = fs.readFileSync(yamlPath, 'utf8');
-                        const parsed = yaml.load(content);
-                        if (parsed && typeof parsed === 'object' && parsed !== null) {
-                            globalReloadConfig = parsed as Record<string, any>;
-                            outputChannel.appendLine(`Reloaded global config from ${yamlPath}`);
-                        } else {
-                            outputChannel.appendLine(`Invalid or empty global YAML at ${yamlPath}: parsed = ${JSON.stringify(parsed)}`);
-                        }
-                    } catch (error: any) {
-                        outputChannel.appendLine(`Error reloading global YAML: ${error.message}`);
-                    }
-                }
-
-                // Reload user-specific YAML if exists (user overrides global)
-                let userReloadConfig: Record<string, any> = {};
-                if (fs.existsSync(changedUserPath)) {
-                    try {
-                        const content = fs.readFileSync(changedUserPath, 'utf8');
-                        const parsed = yaml.load(content);
-                        if (parsed && typeof parsed === 'object' && parsed !== null) {
-                            userReloadConfig = parsed as Record<string, any>;
-                            outputChannel.appendLine(`Reloaded user-specific config from ${changedUserPath}`);
-                        } else {
-                            outputChannel.appendLine(`Invalid or empty user-specific YAML at ${changedUserPath}: parsed = ${JSON.stringify(parsed)}`);
-                        }
-                    } catch (error: any) {
-                        outputChannel.appendLine(`Error reloading user-specific YAML: ${error.message}`);
-                    }
-                }
-
-                const reloadConfig = { ...globalReloadConfig, ...userReloadConfig };
-                outputChannel.appendLine('Merged global and user configs on reload');
-
-                // Update VSCode config if changed
-                if (Object.keys(reloadConfig).length > 0) {
-                    const pyopsConfig = vscode.workspace.getConfiguration('pyops');
-                    if (reloadConfig.serverUrl) {
-                        await pyopsConfig.update('serverUrl', reloadConfig.serverUrl, vscode.ConfigurationTarget.Workspace);
-                        outputChannel.appendLine(`Reloaded serverUrl: ${reloadConfig.serverUrl}`);
-                    }
-                    if (reloadConfig.user) {
-                        await pyopsConfig.update('username', reloadConfig.user, vscode.ConfigurationTarget.Workspace);
-                        outputChannel.appendLine(`Reloaded username from 'user': ${reloadConfig.user}`);
-                    }
-                    if (reloadConfig.timeout) {
-                        await pyopsConfig.update('timeout', reloadConfig.timeout, vscode.ConfigurationTarget.Workspace);
-                        outputChannel.appendLine(`Reloaded timeout: ${reloadConfig.timeout}`);
-                    }
-                    // Handle auth: use merged auth setting, update password if key present and auth http-basic
-                    const authType = reloadConfig.auth || 'none';
-                    if (authType === 'http-basic') {
-                        let password = context.workspaceState.get('pyops.password') as string | undefined;
-                        // Use 'key' from user config if available and no stored password
-                        if (!password && userReloadConfig.key) {
-                            password = userReloadConfig.key;
-                            await context.workspaceState.update('pyops.password', password);
-                            outputChannel.appendLine('Used key from user YAML as password on reload');
-                        }
-                        if (!password) {
-                            password = await vscode.window.showInputBox({
-                                prompt: 'Enter PyOps auth key or password for Basic Auth',
-                                password: true
-                            });
-                            if (password) {
-                                await context.workspaceState.update('pyops.password', password);
-                                outputChannel.appendLine('Auth key/password stored in workspace state on reload');
-                            } else {
-                                outputChannel.appendLine('No auth key/password provided; Basic Auth may fail');
-                            }
-                        } else {
-                            outputChannel.appendLine('Auth key/password found in workspace state');
-                        }
-                    }
-                }
-                // Refresh status
-                await updateConnectionStatus();
-                }
+        const pyopsConfig = vscode.workspace.getConfiguration('pyops');
+        const username = pyopsConfig.get('username') as string;
+        let password = context.workspaceState.get('pyops.password') as string | undefined;
+        if (username && !password) {
+            password = await vscode.window.showInputBox({
+                prompt: 'Enter PyOps password for Basic Auth (will be stored securely for this workspace)',
+                password: true
             });
-            context.subscriptions.push(configWatcher);
-            outputChannel.appendLine('YAML file watcher set up');
-        } else {
-            outputChannel.appendLine('No workspace opened');
+            if (password) {
+                await context.workspaceState.update('pyops.password', password);
+                outputChannel.appendLine('Auth password stored in workspace state');
+            } else {
+                outputChannel.appendLine('No auth password provided; Basic Auth may fail');
+            }
+        } else if (username && password) {
+            outputChannel.appendLine('Auth credentials found in workspace state');
         }
 
         // Register remote content provider for readonly remote diffs
@@ -1434,9 +1258,6 @@ export async function activate(context: vscode.ExtensionContext) {
 }
 
 export function deactivate() {
-    if (configWatcher) {
-        configWatcher.dispose();
-    }
     if (statusBarItem) {
         statusBarItem.dispose();
     }
