@@ -8,7 +8,8 @@
 
 <app/orm/job> rdf:type "Model" .
 <app/orm/job> inheritsFrom "Base" .
-<app/orm/job> hasFields "id, state, owner, set, name, kind, param, code, libs" .
+<app/orm/job> hasFields "id, state, owner, set, name, kind, param, code, libs, pid, detail, start, end, drop_done" .
+<app/orm/job.state> possibleValues "todo, dequeued, running, done, failed, cancel, cancelled, killed, remove, removed" .
 <app/orm/job> associatedWith "app/lib/runner" .
 <app/orm/job> description "Represents job entities for scriptlet execution." .
 

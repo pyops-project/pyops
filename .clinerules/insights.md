@@ -59,5 +59,5 @@ These triples interconnect facts about current project structure, dependencies, 
 
 **Constraints:**
 - Skip for simple tasks without feedback.
-- Pure current state only (no future/past).
+- Pure current state only (no future/past/crashes/progress).
 - No platform structure unless project-relevant.

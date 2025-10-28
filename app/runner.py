@@ -356,12 +356,27 @@ def getNextToTerm():
 
 def term(job, processes):
     logger.debug(f"term({job})")
-    processes[job["pid"]].terminate()
+    p = processes[job["pid"]]
+    p.terminate()
 
-    postTerm(job["id"])
+    # Wait up to 5 seconds for graceful termination
+    timeout = 5.0
+    start_time = time.time()
+    while p.is_alive() and (time.time() - start_time) < timeout:
+        time.sleep(0.1)
+    
+    killed = p.is_alive()
+    if killed:
+        logger.debug(f"Force killing process {job['pid']} after timeout")
+        p.kill()
+        # Wait a bit more for kill to take effect
+        p.join(timeout=1.0)
+        killed = True  # Assume killed after force kill
+    
+    postTerm(job["id"], killed=killed)
 
-def postTerm(job_id: str):
-    logger.debug(f"postTerm({job_id})")
+def postTerm(job_id: str, killed: bool = False):
+    logger.debug(f"postTerm({job_id}, killed={killed})")
 
     with Session(get_db_engine()) as session:
         logger.debug(f"postTerm: session ID {id(session)} at {datetime.now()}")
@@ -374,8 +389,14 @@ def postTerm(job_id: str):
                 lib_runner.drop(job_id, job.owner, job.set)
             else:
                 job.end = datetime.now()
-                job.state = "cancelled"
-                logger.debug(f"postTerm: before commit, session ID {id(session)}, setting {job_id} to 'cancelled' from '{old_state}' at {datetime.now()}")
+                job.pid = None
+                if killed:
+                    job.state = "killed"
+                    job.detail = "force killed after 5s timeout"
+                else:
+                    job.state = "cancelled"
+                    job.detail = "terminated gracefully"
+                logger.debug(f"postTerm: before commit, session ID {id(session)}, setting {job_id} to '{job.state}' from '{old_state}' at {datetime.now()}")
             session.commit()
             logger.debug(f"postTerm: after commit, session ID {id(session)}, committed for {job_id} at {datetime.now()}")
 
@@ -423,6 +444,7 @@ def schedule():
         logger.debug(f"schedule: completed at {datetime.now()}")
 
 def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
+    import time
     os.environ = env
     killer = GracefulKiller()
     
@@ -526,32 +548,48 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
             logger.debug(f"main: exception in main try block iteration {loop_count}: {e}")
             logger.exception("Error in main loop: %s", e)
 
-    # join running processes for graceful shutdown
-    for p in processes:
-        logger.debug(f"Terminating {p}")
-        if processes[p].is_alive:
-            processes[p].terminate()
+    # join running processes for graceful shutdown with timeout/kill logic
+    for pid in list(processes.keys()):
+        p = processes[pid]
+        if p.is_alive:
+            logger.debug(f"Terminating {pid} on shutdown")
+            p.terminate()
 
-    for p in processes:
-        logger.debug(f"Waiting 3 seconds for {p} to shut down")
-        if processes[p].is_alive:
-            processes[p].join(timeout=3)
+            # Wait up to 5 seconds for graceful termination
+            timeout = 5.0
+            start_time = time.time()
+            while p.is_alive() and (time.time() - start_time) < timeout:
+                time.sleep(0.1)
+            
+            killed = p.is_alive()
+            if killed:
+                logger.debug(f"Force killing process {pid} after timeout on shutdown")
+                p.kill()
+                p.join(timeout=1.0)
 
-    for p in processes:
-        logger.debug(f"Killing for {p}")
-        if processes[p].is_alive:
-            processes[p].kill()
+            # Update job state
+            with Session(get_db_engine()) as session:
+                job = session.query(Job).filter_by(pid=pid).first()
+                if job:
+                    job.end = datetime.now()
+                    job.pid = None
+                    if killed:
+                        job.state = "killed"
+                        job.detail = "force killed after 5s timeout on shutdown"
+                    else:
+                        job.state = "cancelled"
+                        job.detail = "terminated gracefully on shutdown"
+                    session.commit()
 
-    # Update running jobs on shutdown
-    with Session(get_db_engine()) as session:
-        stmt = select(Job).where(Job.state == "running")
-        running_jobs = session.scalars(stmt).all()
-        for job in running_jobs:
-            job.state = "cancelled"
-            job.detail = "cancelled due to shutdown"
-            job.end = datetime.now()
-            job.pid = None
-        session.commit()
+    # handle finished or failed jobs
+    while not q.empty():
+        msg = q.get()
+        finishJob(msg["id"], msg["state"], msg["detail"])
+
+    # dispose already remove jobs
+    logger.debug("main: final disposeJobs in shutdown")
+    disposeJobs()
+    logger.debug("main: final disposeJobs completed")
 
     # handle finished or failed jobs
     while not q.empty():

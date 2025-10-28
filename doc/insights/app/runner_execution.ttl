@@ -16,6 +16,15 @@
 <app/runner.finishJob> requires "job_id: str, state: str, detail: str" .
 <app/runner.finishJob> calls "app/orm/job.update" .
 
+<app/runner.term> rdf:type "Function" .
+<app/runner.term> requires "job: dict, processes: dict" .
+<app/runner.term> description "Terminates process with SIGTERM, waits 5s timeout, force kills with SIGKILL if alive, calls postTerm with killed flag." .
+<app/runner.term> calls "multiprocessing.Process.terminate, .is_alive, .kill, .join" .
+
+<app/runner.postTerm> requires "job_id: str, killed: bool" .
+<app/runner.postTerm> description "Sets state to 'cancelled' if graceful, 'killed' if force killed; updates end/detail; deletes if 'remove'." .
+<app/runner.postTerm> calls "app/orm/job.update, app/lib/runner.drop" .
+
 <app/runner.schedule> description "Schedules periodic jobs from cron." .
 <app/runner.schedule> calls "app/orm/schedule.list" .
 
@@ -26,3 +35,6 @@
 <app/lib/runner.query> requires "id: str" .
 <app/lib/runner.query> returns "job status" .
 <app/lib/runner.query> calls "app/orm/job.get" .
+
+<app/runner.main> imports "time" for timeout and polling logic .
+<app/runner.main> ensures "time" available in scope for term and shutdown calls .

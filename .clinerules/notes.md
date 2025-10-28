@@ -46,6 +46,6 @@ Focus on current state facts.
 
 **Constraints:**
 - Skip for simple tasks without feedback.
-- Pure current state only (no future/past).
+- Pure current state only (no future/past/crashes/progress).
 - Orderless descriptive names, .md extension.
 - Max 512 tokens core content; split if needed.

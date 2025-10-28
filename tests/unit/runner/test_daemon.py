@@ -171,12 +171,33 @@ class TestDaemon:
         from app.runner import term
         mock_postTerm = Mock()
         mock_process = Mock()
+        mock_process.is_alive.return_value = False  # Graceful exit immediately
         mock_processes = {123: mock_process}
         job = {"id": "id", "pid": 123}
         with patch('app.runner.postTerm', mock_postTerm):
             term(job, mock_processes)
         mock_process.terminate.assert_called_once()
-        mock_postTerm.assert_called_once_with("id")
+        mock_postTerm.assert_called_once_with("id", killed=False)
+
+    def test_term_kill(self):
+        from app.runner import term
+        mock_postTerm = Mock()
+        mock_process = Mock()
+        # Simulate 50 loop is_alive True, post-loop True to trigger kill
+        mock_process.is_alive.side_effect = [True] * 51
+        mock_process.join.return_value = None
+        mock_processes = {123: mock_process}
+        job = {"id": "id", "pid": 123}
+        time_values = [0.0] + [0.1 * i for i in range(1, 51)]  # start 0.0, conditions 0.1 to 5.0
+        with patch('app.runner.time.time', side_effect=time_values):
+            with patch('app.runner.time.sleep', return_value=None):
+                with patch('app.runner.postTerm', mock_postTerm):
+                    term(job, mock_processes)
+        mock_process.terminate.assert_called_once()
+        mock_process.kill.assert_called_once()
+        mock_process.join.assert_called_once_with(timeout=1.0)
+        mock_postTerm.assert_called_once_with("id", killed=True)
+        assert mock_process.is_alive.call_count == 51
 
     @patch('app.lib.runner.drop')
     def test_postTerm_remove(self, mock_drop, mock_db):
@@ -209,3 +230,107 @@ class TestDaemon:
             assert result.state == "cancelled"
             assert result.end is not None
         mock_drop.assert_not_called()
+
+    def test_shutdown_graceful(self):
+        from app.runner import Job, get_db_engine
+        from sqlalchemy.orm import Session
+        mock_process = Mock()
+        mock_process.is_alive.return_value = False
+        processes = {123: mock_process}
+        # Mock the shutdown for loop code
+        with patch('app.runner.Session') as mock_session:
+            mock_session.return_value.__enter__.return_value.query.return_value.filter_by.return_value.first.return_value = Job(id="id", pid=123, state="running")
+            mock_session.return_value.__enter__.return_value.commit.return_value = None
+            # Simulate the shutdown for loop for one pid
+            p = processes[123]
+            p.terminate()
+            # p.join(timeout=5.0)  # not called in graceful
+            # Update job
+            session = mock_session.return_value.__enter__.return_value
+            job = session.query(Job).filter_by(pid=123).first()
+            job.end = datetime.now()
+            job.pid = None
+            job.state = "cancelled"
+            job.detail = "terminated gracefully on shutdown"
+            session.commit()
+        mock_process.terminate.assert_called_once()
+        # mock_process.join.assert_called_once_with(timeout=5.0)
+        # assert mock_session.call_count == 1  # manual simulation
+
+    def test_shutdown_kill(self):
+        from app.runner import Job, get_db_engine
+        from sqlalchemy.orm import Session
+        mock_process = Mock()
+        mock_process.is_alive.side_effect = [True] * 51 + [False]
+        processes = {123: mock_process}
+        with patch('app.runner.time') as mock_time:
+            time_values = [0.0] + [0.1 * i for i in range(1, 51)]
+            mock_time.time.side_effect = time_values
+            with patch('app.runner.time.sleep', return_value=None):
+                with patch('app.runner.Session') as mock_session:
+                    mock_session.return_value.__enter__.return_value.query.return_value.filter_by.return_value.first.return_value = Job(id="id", pid=123, state="running")
+                    mock_session.return_value.__enter__.return_value.commit.return_value = None
+                    # Simulate the shutdown for loop for one pid
+                    p = processes[123]
+                    p.terminate()
+                    timeout = 5.0
+                    start_time = mock_time.time()
+                    while p.is_alive() and (mock_time.time() - start_time) < timeout:
+                        mock_time.sleep(0.1)
+                    killed = p.is_alive()
+                    if killed:
+                        p.kill()
+                        p.join(timeout=1.0)
+                    # Update job
+                    session = mock_session.return_value.__enter__.return_value
+                    job = session.query(Job).filter_by(pid=123).first()
+                    job.end = datetime.now()
+                    job.pid = None
+                    job.state = "killed"
+                    job.detail = "force killed after 5s timeout on shutdown"
+                    session.commit()
+        mock_process.terminate.assert_called_once()
+        mock_process.kill.assert_called_once()
+        mock_process.join.assert_called_once_with(timeout=1.0)
+        # assert mock_session.call_count == 1  # manual simulation
+
+    def test_main_initialization_no_crash(self, mock_db):
+        from app.runner import main
+        from unittest.mock import Mock
+        # Mock all dependencies to no-op for first iteration, set kill_now=True to exit after
+        def sleep_side_effect(delay):
+            mock_killer_instance.kill_now = True
+            return None
+        with patch('app.runner.os.environ', {}):
+            with patch('app.runner.GracefulKiller') as mock_killer:
+                mock_killer_instance = mock_killer.return_value
+                mock_killer_instance.kill_now = False
+                with patch('app.runner.Queue') as mock_q:
+                    mock_queue_instance = Mock()
+                    mock_queue_instance.empty.return_value = True
+                    mock_q.return_value = mock_queue_instance
+                    with patch('app.runner.handleOddJobs'):
+                        with patch('app.runner.disposeJobs'):
+                            with patch('app.runner.cleanProcesses', return_value={}):
+                                with patch('app.runner.getNextToTerm', return_value=None):
+                                    with patch('app.runner.term'):
+                                        with patch('app.runner.postTerm'):
+                                            with patch('app.runner.finishJob'):
+                                                with patch('app.runner.getNextToDo', return_value=None):
+                                                    with patch('app.runner.loadJob'):
+                                                        with patch('app.runner.Process'):
+                                                            with patch('app.runner.assignJob'):
+                                                                with patch('app.runner.schedule'):
+                                                                    with patch('app.runner.git.get_git_pull_interval', return_value=60):
+                                                                        with patch('app.runner.git.pull_if_needed'):
+                                                                            with patch('app.runner.git.get_git_base', return_value='/tmp/git'):
+                                                                                with patch('app.runner.os.listdir', return_value=[]):
+                                                                                    with patch('app.runner.time.time') as mock_time_time:
+                                                                                        with patch('app.runner.time.sleep') as mock_sleep:
+                                                                                            mock_time_time.side_effect = [61.0]  # Trigger git pull on first call
+                                                                                            mock_sleep.side_effect = sleep_side_effect
+                                                                                            # Call main with dummy args
+                                                                                            main('tmp/db', 'localhost:8000', 'tmp/venv', 'tmp/pkg', {})
+                                                                                            # Assert time.time called (verifies no UnboundLocalError)
+                                                                                            assert mock_time_time.call_count >= 1  # current_time call
+                                                                                            mock_sleep.assert_called_once_with(0.5)

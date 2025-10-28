@@ -1,0 +1,11 @@
+<tests/integration/routers/test_job.py> rdf:type "TestFile" .
+<tests/integration/routers/test_job.py> description "Integration tests for job router endpoints including cancellation with process termination." .
+
+<test_post_job_cancel_with_timeout_kill> rdf:type "TestFunction" .
+<test_post_job_cancel_with_timeout_kill> inFile "tests/integration/routers/test_job.py" .
+<test_post_job_cancel_with_timeout_kill> description "Tests job cancellation: enqueues debug job with long-running loop, calls cancel API, verifies daemon logic sets 'cancel', terminates process; simulates timeout where process alive after 5s, force kills, sets 'killed' state with detail; asserts final state 'killed', PID None, process not alive." .
+<test_post_job_cancel_with_timeout_kill> mocks "app.runner.Process, app.lib.runner.cancel, app.runner.term, app.runner.postTerm" .
+<test_post_job_cancel_with_timeout_kill> requires "mock_client, mock_db, test_temp_dir, patch_tempfile, mock_datetime" .
+<test_post_job_cancel_with_timeout_kill> calls "POST /scriptlet/job/item (enqueue), GET /scriptlet/job/cancel" .
+<test_post_job_cancel_with_timeout_kill> asserts "response 200, job.state == 'killed', job.detail == 'force killed after 5s timeout', job.pid is None" .
+<test_post_job_cancel_with_timeout_kill> coverage "daemon termination logic, timeout handling, state transitions" .

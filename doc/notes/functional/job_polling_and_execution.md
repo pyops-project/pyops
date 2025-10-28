@@ -33,3 +33,9 @@ app/runner.py runs as a background daemon (invoked via app/runner.py main), hand
 lib/runner.py provides supporting DB ops: enqueue (create Job todo/param), query/get, find (filter states), cancel/remove (set state), drop (rmtree workspace/sock + empty parents), loadLib/loadJob (git read + state running/start).
 
 Mechanisms emphasize isolation (workspaces/venvs/PIDs), fixed polling (no priority/queues), single-instance (no sharding), exec-based execution.
+
+## Enhanced Termination
+- **Cancellation Handling**: When job state set to "cancel" via API, daemon polls via getNextToTerm, calls term(): sends SIGTERM to process, polls is_alive every 0.1s for up to 5s timeout. If still alive, sends SIGKILL, waits 1s more.
+- **State Updates**: postTerm sets state to "cancelled" with detail "terminated gracefully" if exited within timeout; "killed" with "force killed after 5s timeout" if force-killed. For "remove", deletes job and drops workspace/sock.
+- **Shutdown Integration**: Applies same timeout/kill logic to all running processes before exiting, updating states accordingly.
+- **Debug/Service Jobs**: ZMQ listener closed via process termination; sock removed in drop if "remove".
