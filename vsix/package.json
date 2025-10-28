@@ -275,6 +275,14 @@
           "type": "number",
           "default": 10,
           "description": "Auto-refresh interval for Manager tree in seconds"
+        },
+        "pyops.excludedSets": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "List of set names to exclude from the Manager tree view"
         }
       }
     }

@@ -1,0 +1,6 @@
+<vsix/excludedSets> rdf:type "ConfigurationProperty" .
+<vsix/excludedSets> description "Array of string set names to exclude from Manager tree view." .
+<vsix/excludedSets> default "[]" .
+<vsix/ManagerTreeDataProvider> filtersSets "using excludedSets config before displaying." .
+<vsix/ManagerTreeDataProvider> getChildren "excludes sets in excludedSets from root level tree items." .
+<vsix/ManagerTreeDataProvider> refresh "filters _scriptlets by excludedSets and updates _syncStatus accordingly." .

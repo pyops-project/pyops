@@ -300,11 +300,16 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
         await Promise.all(downloadPromises);
     }
 
+    private getExcludedSets(): string[] {
+        return vscode.workspace.getConfiguration('pyops').get('excludedSets', []) as string[];
+    }
+
     refresh(): void {
+        const excludedSets = this.getExcludedSets();
         this.fetchScriptlets().then(async (scriptlets) => {
-            this._scriptlets = scriptlets;
-            if (scriptlets.length > 0) {
-                await this.downloadScriptlets(scriptlets);
+            this._scriptlets = scriptlets.filter((s: any) => !excludedSets.includes(s.set));
+            if (this._scriptlets.length > 0) {
+                await this.downloadScriptlets(this._scriptlets);
             }
             this._onDidChangeTreeData.fire();
         });
@@ -419,6 +424,7 @@ export async function activate(context: vscode.ExtensionContext) {
             if (e.affectsConfiguration('pyops')) {
                 outputChannel.appendLine('Config changed, updating status...');
                 await updateConnectionStatus();
+                managerTreeProvider.refresh();
             }
         }));
 
