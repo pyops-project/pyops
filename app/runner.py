@@ -308,10 +308,10 @@ def run(job_id: str, owner: str, set: str, name: str, kind: str, param: str, cod
                 os.chdir(workspace)
 
                 root = logging.getLogger()
-                root.setLevel(logging.INFO)
+                root.setLevel(logging.DEBUG if kind == "debug" else logging.INFO)
 
                 info_handler = logging.StreamHandler(sys.stdout)
-                info_handler.setLevel(logging.INFO)
+                info_handler.setLevel(logging.DEBUG)
                 info_handler.addFilter(lambda r: r.levelno < logging.WARNING)
                 root.addHandler(info_handler)
 
