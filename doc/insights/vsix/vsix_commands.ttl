@@ -21,3 +21,13 @@
 <vsix/diffLocalRemote> rdf:type "Command" .
 <vsix/diffLocalRemote> requires "ScriptletTreeItem" .
 <vsix/diffLocalRemote> fetches "GET /inventory/code?set&name, encode for pyops-remote URI, vscode.diff remote vs local" .
+
+<vsix/writeLocalToRemoteDraft> rdf:type "Command" .
+<vsix/writeLocalToRemoteDraft> requires "ScriptletTreeItem" .
+<vsix/writeLocalToRemoteDraft> calls "POST /scriptlet/inventory/draft {set, name, code=local}" .
+<vsix/writeLocalToRemoteDraft> description "Always writes local to remote draft (unstaged); no checks." .
+
+<vsix/saveRemoteDraft> rdf:type "Command" .
+<vsix/saveRemoteDraft> requires "ScriptletTreeItem, has_unstaged: true via GET /status" .
+<vsix/saveRemoteDraft> calls "GET /status, if true: GET /code then POST /item {set, name, code=draft}" .
+<vsix/saveRemoteDraft> description "Commits remote draft only if unstaged changes exist." .

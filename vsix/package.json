@@ -152,27 +152,27 @@
       "view/title": [
         {
           "command": "pyops.createScriptlet",
-          "when": "view == 'pyops-manager'",
+          "when": "view == 'pyops-manager' && pyops.hasValidConfig",
           "group": "navigation"
         },
         {
           "command": "pyops.refreshManager",
-          "when": "view == 'pyops-manager'",
+          "when": "view == 'pyops-manager' && pyops.hasValidConfig",
           "group": "navigation"
         },
         {
           "command": "pyops.refreshMonitor",
-          "when": "view == pyops-monitor",
+          "when": "view == pyops-monitor && pyops.hasValidConfig",
           "group": "navigation"
         },
         {
           "command": "pyops.cancelAllJobs",
-          "when": "view == pyops-monitor",
+          "when": "view == pyops-monitor && pyops.hasValidConfig",
           "group": "navigation"
         },
         {
           "command": "pyops.deleteAllDone",
-          "when": "view == pyops-monitor",
+          "when": "view == pyops-monitor && pyops.hasValidConfig",
           "group": "navigation"
         },
         {
@@ -184,22 +184,22 @@
       "view/item/context": [
         {
           "command": "pyops.resetLocalFromRemote",
-          "when": "view == 'pyops-manager' && viewItem =~ /^pyopsItem/",
+          "when": "view == 'pyops-manager' && viewItem =~ /^pyopsItem/ && pyops.hasValidConfig",
           "group": "navigation"
         },
         {
           "command": "pyops.writeLocalToRemoteDraft",
-          "when": "view == 'pyops-manager' && viewItem =~ /^pyopsItem/",
+          "when": "view == 'pyops-manager' && viewItem =~ /^pyopsItem/ && pyops.hasValidConfig",
           "group": "navigation"
         },
         {
           "command": "pyops.saveRemoteDraft",
-          "when": "view == 'pyops-manager' && viewItem =~ /^pyopsItem/",
+          "when": "view == 'pyops-manager' && viewItem =~ /^pyopsItem/ && pyops.hasValidConfig",
           "group": "navigation"
         },
         {
           "command": "pyops.startDebugJob",
-          "when": "view == 'pyops-manager' && viewItem == 'pyopsItem-task'",
+          "when": "view == 'pyops-manager' && viewItem == 'pyopsItem-task' && pyops.hasValidConfig",
           "group": "navigation"
         },
         {
@@ -209,37 +209,37 @@
         },
         {
           "command": "pyops.diffLocalRemote",
-          "when": "view == 'pyops-manager' && viewItem =~ /^pyopsItem/",
+          "when": "view == 'pyops-manager' && viewItem =~ /^pyopsItem/ && pyops.hasValidConfig",
           "group": "navigation"
         },
         {
           "command": "pyops.deleteScriptlet",
-          "when": "view == 'pyops-manager' && viewItem =~ /^pyopsItem/",
-          "group": "navigation"
-        },
-        {
-          "command": "pyops.copyJobParam",
-          "when": "view == pyops-monitor && viewItem =~ /pyopsJob-.*/",
-          "group": "navigation"
-        },
-        {
-          "command": "pyops.cancelJob",
-          "when": "view == pyops-monitor && viewItem =~ /pyopsJob-(todo|running|dequeued)/",
-          "group": "navigation"
-        },
-        {
-          "command": "pyops.downloadJob",
-          "when": "view == pyops-monitor && viewItem =~ /pyopsJob-.*/",
-          "group": "navigation"
-        },
-        {
-          "command": "pyops.deleteJob",
-          "when": "view == pyops-monitor && viewItem =~ /pyopsJob-(done|failed|cancelled)/",
+          "when": "view == 'pyops-manager' && viewItem =~ /^pyopsItem/ && pyops.hasValidConfig",
           "group": "navigation"
         },
         {
           "command": "pyops.viewJob",
-          "when": "view == pyops-monitor && viewItem =~ /pyopsJob-.*/",
+          "when": "view == pyops-monitor && viewItem =~ /pyopsJob-.*/ && pyops.hasValidConfig",
+          "group": "navigation"
+        },
+        {
+          "command": "pyops.cancelJob",
+          "when": "view == pyops-monitor && viewItem =~ /pyopsJob-(todo|running|dequeued)/ && pyops.hasValidConfig",
+          "group": "navigation"
+        },
+        {
+          "command": "pyops.downloadJob",
+          "when": "view == pyops-monitor && viewItem =~ /pyopsJob-.*/ && pyops.hasValidConfig",
+          "group": "navigation"
+        },
+        {
+          "command": "pyops.deleteJob",
+          "when": "view == pyops-monitor && viewItem =~ /pyopsJob-(done|failed|cancelled)/ && pyops.hasValidConfig",
+          "group": "navigation"
+        },
+        {
+          "command": "pyops.deleteAllFailed",
+          "when": "view == pyops-monitor && pyops.hasValidConfig",
           "group": "navigation"
         }
       ]
@@ -292,15 +292,16 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "pretest": "npm run compile && npm run lint",
-    "lint": "eslint src --ext ts"
+    "lint": "eslint src --ext ts",
+    "test": "npm run lint"
   },
   "devDependencies": {
     "@types/node": "20.x",
     "@types/vscode": "^1.85.0",
-    "@typescript-eslint/eslint-plugin": "^6.19.1",
-    "@typescript-eslint/parser": "^6.19.1",
-    "eslint": "^8.56.0",
-    "typescript": "^5.3.3"
+    "@typescript-eslint/eslint-plugin": "^8.7.0",
+    "@typescript-eslint/parser": "^8.7.0",
+    "eslint": "^8.57.0",
+    "typescript": "^5.5.4"
   },
   "dependencies": {}
 }

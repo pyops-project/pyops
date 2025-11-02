@@ -1,6 +1,14 @@
 import * as vscode from 'vscode';
 import { TreeDataProvider, TreeItem, TreeItemCollapsibleState, EventEmitter, ThemeIcon } from 'vscode';
 
+function hasValidConfig(context: vscode.ExtensionContext): boolean {
+    const pyopsConfig = vscode.workspace.getConfiguration('pyops');
+    const serverUrl = pyopsConfig.get('serverUrl') as string || '';
+    const username = pyopsConfig.get('username') as string || '';
+    const password = context.workspaceState.get('pyops.password') as string || '';
+    return !!(serverUrl && username && password);
+}
+
 interface Job {
     id: string;
     start: string;
@@ -32,9 +40,18 @@ class JobsTreeDataProvider implements TreeDataProvider<JobTreeItem> {
         return element;
     }
 
-    getChildren(element?: JobTreeItem): JobTreeItem[] {
+    async getChildren(element?: JobTreeItem): Promise<JobTreeItem[]> {
         if (!vscode.workspace.workspaceFolders || vscode.workspace.workspaceFolders.length === 0) {
             return [new TreeItem('No Workspace Open', TreeItemCollapsibleState.None)];
+        }
+
+        const isValidConfig = hasValidConfig(this._context);
+        if (!isValidConfig && !element) {
+            const msgItem = new TreeItem('No PyOps configuration set. Please configure serverUrl, username, and password in settings.', TreeItemCollapsibleState.None);
+            msgItem.contextValue = 'noConfig';
+            msgItem.iconPath = new ThemeIcon('warning');
+            msgItem.tooltip = 'Open settings (Ctrl+,) and set PyOps configuration to connect.';
+            return [msgItem as JobTreeItem];
         }
 
         if (element) {
@@ -45,11 +62,11 @@ class JobsTreeDataProvider implements TreeDataProvider<JobTreeItem> {
             if (this._loading) {
                 const loadingItem = new TreeItem('Loading Jobs...', TreeItemCollapsibleState.None);
                 loadingItem.contextValue = 'loading';
-                return [loadingItem];
+                return [loadingItem as JobTreeItem];
             } else if (this._jobs.length === 0) {
                 const emptyItem = new TreeItem('No Jobs Available', TreeItemCollapsibleState.None);
                 emptyItem.contextValue = 'empty';
-                return [emptyItem];
+                return [emptyItem as JobTreeItem];
             }
 
             const jobItems: JobTreeItem[] = this._jobs.map((job: Job) => {
@@ -110,26 +127,34 @@ class JobsTreeDataProvider implements TreeDataProvider<JobTreeItem> {
         try {
             const response = await fetch(`${serverUrl}/scriptlet/job/list`, { headers });
             if (response.ok) {
-                return await response.json() as Job[];
+                return await response.json() as unknown[] as Job[];
             } else {
                 vscode.window.showErrorMessage(`Failed to fetch jobs: ${response.statusText}`);
                 return [];
             }
-        } catch (error: any) {
-            vscode.window.showErrorMessage(`Error fetching jobs: ${error.message}`);
+        } catch (error: unknown) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            vscode.window.showErrorMessage(`Error fetching jobs: ${errorMessage}`);
             return [];
         }
     }
 
-    refresh(): void {
+    async refresh(): Promise<void> {
+        const isValidConfig = hasValidConfig(this._context);
+        if (!isValidConfig) {
+            this._jobs = [];
+            this._loading = false;
+            this._onDidChangeTreeData.fire();
+            return;
+        }
+
         this._loading = true;
         this._onDidChangeTreeData.fire();
 
-        this.fetchJobs().then((jobs) => {
-            this._jobs = jobs;
-            this._loading = false;
-            this._onDidChangeTreeData.fire();
-        });
+        const jobs = await this.fetchJobs();
+        this._jobs = jobs;
+        this._loading = false;
+        this._onDidChangeTreeData.fire();
     }
 }
 

@@ -34,3 +34,7 @@
 <app/routers/scriptlet/monitor.get_status> path "GET /monitor" .
 <app/routers/scriptlet/monitor.get_status> calls "app/lib/runner.query" .
 <app/routers/scriptlet/monitor.get_status> description "Monitors job statuses." .
+
+<app/routers/scriptlet/inventory.draft_post> rdf:type "Endpoint" .
+<app/routers/scriptlet/inventory.draft_post> path "POST /inventory/draft" .
+<app/routers/scriptlet/inventory.draft_post> requires "set: str, name: str, code: str" .

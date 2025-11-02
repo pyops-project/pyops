@@ -97,6 +97,25 @@ class TestInventoryRouter:
         data = response.json()
         assert data["branch"] == "main"
 
+    def test_get_inventory_status_has_unstaged(self, mock_client, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
+        with patch("app.lib.git.has_unstaged_changes", return_value=True), \
+             patch("os.listdir", return_value=["test.py"]):
+            response = mock_client.get("/scriptlet/inventory/status?set=test_set&name=test")
+            assert response.status_code == 200
+            assert response.json() == {"has_unstaged": True}
+
+    def test_get_inventory_status_no_unstaged(self, mock_client, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
+        with patch("app.lib.git.has_unstaged_changes", return_value=False), \
+             patch("os.listdir", return_value=["test.py"]):
+            response = mock_client.get("/scriptlet/inventory/status?set=test_set&name=test")
+            assert response.status_code == 200
+            assert response.json() == {"has_unstaged": False}
+
+    def test_get_inventory_status_not_found(self, mock_client, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
+        with patch("os.listdir", return_value=[]):
+            response = mock_client.get("/scriptlet/inventory/status?set=test_set&name=missing")
+            assert response.status_code == 404
+
     def test_inventory_unauthorized(self, mock_client, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
         response = mock_client.get("/scriptlet/inventory/list")  # No X-User
         assert response.status_code == 200  # Anonymous allowed

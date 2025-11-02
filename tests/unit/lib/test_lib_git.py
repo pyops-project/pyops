@@ -487,4 +487,51 @@ class TestStatusAndRollback:
                 with git.repo_lock(git_base, 'test_set'):
                     pass
 
+    def test_has_unstaged_changes_clean(self, mock_repo, mock_subprocess, mock_files_conf):
+        mock_run, mock_check = mock_subprocess
+        mock_run.return_value.returncode = 0  # no diff
+        result = git.has_unstaged_changes(mock_repo, 'script', 'task')
+        assert result is False
+
+    def test_has_unstaged_changes_dirty(self, mock_repo, mock_subprocess, mock_files_conf):
+        mock_run, mock_check = mock_subprocess
+        mock_run.return_value.returncode = 1  # diff
+        result = git.has_unstaged_changes(mock_repo, 'script', 'task')
+        assert result is True
+
+    def test_has_unstaged_changes_error(self, mock_repo, mock_subprocess, mock_files_conf, mock_logging):
+        mock_run, mock_check = mock_subprocess
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=128, stdout='', stderr='fatal error'
+        )
+        result = git.has_unstaged_changes(mock_repo, 'script', 'task')
+        assert result is False
+        mock_logging.warning.assert_called_once()
+        assert 'Unexpected git diff result for script.task.py: rc=128, stderr=\'fatal error\'; treating as no changes' in mock_logging.warning.call_args[0][0]
+
+    def test_has_unstaged_changes_new_file(self, mock_repo, mock_subprocess, mock_files_conf):
+        mock_run, mock_check = mock_subprocess
+        mock_run.return_value.returncode = 1  # new file not in HEAD
+        result = git.has_unstaged_changes(mock_repo, 'newfile', 'task')
+        assert result is True
+
+    def test_has_unstaged_changes_unexpected_stderr(self, mock_repo, mock_subprocess, mock_files_conf, mock_logging):
+        mock_run, mock_check = mock_subprocess
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=1, stdout='', stderr='pager error message'
+        )
+        result = git.has_unstaged_changes(mock_repo, 'script', 'task')
+        assert result is False
+        mock_logging.warning.assert_called_once()
+        assert 'Unexpected git diff result' in mock_logging.warning.call_args[0][0]
+
+    def test_has_unstaged_changes_untracked_file(self, mock_repo, mock_subprocess, mock_files_conf, mock_logging):
+        mock_run, mock_check = mock_subprocess
+        mock_check.side_effect = subprocess.CalledProcessError(1, ['git', 'show', 'HEAD:script.task.py'])
+        with patch('os.path.exists') as mock_exists:
+            mock_exists.return_value = True
+            result = git.has_unstaged_changes(mock_repo, 'script', 'task')
+            assert result is True
+        mock_logging.debug.assert_any_call('File script.task.py is not committed, considered as having unstaged changes')
+
 # Additional edge cases can be added as needed

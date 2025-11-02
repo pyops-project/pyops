@@ -225,3 +225,24 @@ async def repo_status(set: str = Query(..., description="Set name")):
     except Exception as ex:
         logger.exception("Error in repo_status: %s", ex)
         raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail=str(ex))
+
+@router.get("/scriptlet/inventory/status", tags=["scriptlet"])
+async def status_get(set: str, name: str):
+    """
+    Checks if the scriptlet has unstaged changes.
+    """
+    try:
+        repo = git.get_repo_path(set)
+        files = [f for f in os.listdir(repo) if f.startswith(f"{name}.") and f.endswith(('.py', '.html', '.md'))]
+        if not files:
+            raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail=f"Scriptlet {set}::{name} not existing")
+        filename = files[0]
+        type_ = git.infer_type_from_filename(filename)
+        has_unstaged = git.has_unstaged_changes(repo, name, type_)
+        logger.debug(f"Status for {set}::{name}: {has_unstaged}")
+        return {"has_unstaged": has_unstaged}
+    except HTTPException as ex:
+        raise ex
+    except Exception as ex:
+        logger.exception("Error in status_get: %s", ex)
+        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail=str(ex))

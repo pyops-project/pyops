@@ -545,3 +545,54 @@ def rollback_committed(set: str, name: str, type_: str) -> None:
     git_base = get_git_base()
     with repo_lock(git_base, set):
         _call(["git", "checkout", "HEAD", "--", rel_path], repo)
+
+
+def has_unstaged_changes(repo: str, name: str, type_: str) -> bool:
+    """Checks if the scriptlet file has unstaged changes vs committed HEAD.
+    
+    Args:
+        repo (str): Repo path.
+        name (str): Name.
+        type_ (str): Type.
+    
+    Returns:
+        bool: True if unstaged changes exist.
+    
+    Raises:
+        subprocess.CalledProcessError: Git failure.
+    """
+    file_path = get_file_path(repo, name, type_)
+    rel_path = os.path.relpath(file_path, repo)
+    git_base = get_git_base()
+    set_name = os.path.basename(repo)
+    with repo_lock(git_base, set_name):
+        # Check if committed (in HEAD)
+        try:
+            _check(["git", "show", f"HEAD:{rel_path}"], repo)
+            # Committed, check for unstaged changes
+            try:
+                result = subprocess.run(
+                    ["git", "diff", "--quiet", "HEAD", "--", rel_path],
+                    cwd=repo,
+                    capture_output=True,
+                    text=True
+                )
+                logger.debug(f"Diff returncode for {rel_path}: {result.returncode}, stderr: '{result.stderr.strip()}'")
+                if result.returncode == 0:
+                    return False
+                elif result.returncode == 1 and not result.stderr.strip():
+                    return True
+                else:
+                    logger.warning(f"Unexpected git diff result for {rel_path}: rc={result.returncode}, stderr='{result.stderr.strip()}'; treating as no changes")
+                    return False
+            except subprocess.CalledProcessError as e:
+                logger.error(f"Git diff failed for {rel_path}: {e}")
+                raise
+        except subprocess.CalledProcessError:
+            # Not committed (untracked or deleted): treat as unstaged changes if file exists
+            if os.path.exists(file_path):
+                logger.debug(f"File {rel_path} is not committed, considered as having unstaged changes")
+                return True
+            else:
+                # File doesn't exist on disk, no changes
+                return False

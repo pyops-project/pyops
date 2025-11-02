@@ -1,8 +1,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import * as os from 'os';
-import { StatusBarAlignment, StatusBarItem, window as vscodeWindow, TreeDataProvider, TreeItem, TreeItemCollapsibleState, DiagnosticCollection, commands, Uri, ProgressLocation, QuickPickItem, InputBoxOptions, DiagnosticSeverity, TextDocumentContentProvider, EventEmitter, languages, TextDocument, env, workspace } from 'vscode';
+import { StatusBarAlignment, StatusBarItem, window as vscodeWindow, TreeDataProvider, TreeItem, commands, Uri, QuickPickItem, InputBoxOptions, TextDocumentContentProvider, languages, TextDocument, env, workspace } from 'vscode';
 import { JobsTreeDataProvider, JobTreeItem, Job } from './jobsTreeProvider';
 
 interface ScriptletTreeItem extends TreeItem {
@@ -24,92 +23,21 @@ class RemoteContentProvider implements TextDocumentContentProvider {
         if (uri.fragment) {
             try {
                 return decodeURIComponent(uri.fragment);
-            } catch (e: any) {
-                return `Error decoding content: ${e.message}`;
+            } catch (e: unknown) {
+                const errorMessage = e instanceof Error ? e.message : String(e);
+                return `Error decoding content: ${errorMessage}`;
             }
         }
         return "No content provided";
     }
 }
 
-class PyOpsWebviewViewProvider implements vscode.WebviewViewProvider {
-    constructor(
-        private readonly _extensionUri: vscode.Uri,
-        private readonly _viewId: string,
-        private readonly _title: string,
-        private readonly _context: vscode.ExtensionContext
-    ) {}
-
-    public async resolveWebviewView(webviewView: vscode.WebviewView) {
-        webviewView.webview.options = {
-            enableScripts: true,
-            localResourceRoots: [this._extensionUri]
-        };
-
-        webviewView.webview.html = await this._getHtmlForWebview(webviewView.webview, this._title);
-    }
-
-    private async _getHtmlForWebview(webview: vscode.Webview, title: string): Promise<string> {
-        const pyopsConfig = vscode.workspace.getConfiguration('pyops');
-        const serverUrl = pyopsConfig.get('serverUrl') as string || 'http://localhost:8000';
-        const username = pyopsConfig.get('username') as string;
-        const password = this._context.workspaceState.get('pyops.password') as string;
-
-        let htmlPath: string;
-        switch (title.toLowerCase()) {
-            case 'manager':
-                htmlPath = '/sites/scriptlet/manager.html';
-                break;
-            case 'scheduler':
-                htmlPath = '/sites/scriptlet/scheduler.html';
-                break;
-            case 'monitor':
-                htmlPath = '/sites/scriptlet/monitor.html';
-                break;
-            default:
-                return '<h1>Unknown View</h1><p>Invalid title.</p>';
-        }
-
-        try {
-            const url = new URL(htmlPath, serverUrl).toString();
-            const headers: any = {};
-            if (username && password) {
-                const auth = Buffer.from(`${username}:${password}`).toString('base64');
-                headers['Authorization'] = `Basic ${auth}`;
-            }
-
-            const response = await fetch(url, { headers });
-            if (response.ok) {
-                let html = await response.text();
-
-                // Rewrite relative paths to absolute server URLs for CSS/JS
-                html = html.replace(/href="\/files/g, `href="${serverUrl}/files`);
-                html = html.replace(/src="\/files/g, `src="${serverUrl}/files`);
-
-                // Enable scripts and CSP for webview
-                webview.options = {
-                    enableScripts: true,
-                    localResourceRoots: [],
-                    enableCommandUris: true
-                };
-
-                return html;
-            } else {
-                return `<h1>${title} View</h1><p>Failed to load from server: ${response.status} ${response.statusText}</p><p>Server: ${serverUrl}</p>`;
-            }
-        } catch (error: any) {
-            console.error(`Error fetching ${title} view:`, error);
-            return `<h1>${title} View</h1><p>Error loading from server: ${error.message}</p><p>Server: ${serverUrl}</p>`;
-        }
-    }
-}
 
 let outputChannel: vscode.OutputChannel;
 let statusBarItem: StatusBarItem;
-let configWatcher: vscode.FileSystemWatcher | undefined;
 let jobOutputChannel: vscode.OutputChannel;
 let jobErrOutputChannel: vscode.OutputChannel;
-let activeJobs = new Map<string, { interval: NodeJS.Timeout; jobId: string; prevStdoutLen: number; prevStderrLen: number; isView?: boolean }>(); // key: jobId for view/debug, value: {interval, jobId, prev lengths, isView}
+const activeJobs = new Map<string, { interval: NodeJS.Timeout; jobId: string; prevStdoutLen: number; prevStderrLen: number; isView?: boolean }>(); // key: jobId for view/debug, value: {interval, jobId, prev lengths, isView}
 
 let jobViewOutputChannel: vscode.OutputChannel;
 let jobsTreeProvider: JobsTreeDataProvider | undefined;
@@ -129,29 +57,22 @@ function inferExt(type: string): string {
     }
 }
 
-function getIconForType(type: string): vscode.ThemeIcon | undefined {
-    switch (type) {
-        case 'task':
-            return new vscode.ThemeIcon('symbol-function');
-        case 'library':
-            return new vscode.ThemeIcon('symbol-module');
-        case 'controller':
-            return new vscode.ThemeIcon('symbol-class');
-        case 'view':
-            return new vscode.ThemeIcon('symbol-enum');
-        case 'markdown':
-            return new vscode.ThemeIcon('markdown');
-        default:
-            return undefined;
-    }
+
+function hasValidConfig(context: vscode.ExtensionContext): boolean {
+    const pyopsConfig = vscode.workspace.getConfiguration('pyops');
+    const serverUrl = pyopsConfig.get('serverUrl') as string || '';
+    const username = pyopsConfig.get('username') as string || '';
+    const password = context.workspaceState.get('pyops.password') as string || '';
+    return !!(serverUrl && username && password);
 }
+
 
 class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
     private _onDidChangeTreeData: vscode.EventEmitter<TreeItem | undefined | null | void> = new vscode.EventEmitter<TreeItem | undefined | null | void>();
     readonly onDidChangeTreeData: vscode.Event<TreeItem | undefined | null | void> = this._onDidChangeTreeData.event;
 
     private _context: vscode.ExtensionContext;
-    private _scriptlets: any[] = [];
+    private _scriptlets: unknown[] = [];
     private _syncStatus: Map<string, boolean> = new Map();
 
     constructor(context: vscode.ExtensionContext) {
@@ -168,6 +89,15 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
             return [new TreeItem('No Workspace Open', vscode.TreeItemCollapsibleState.None)];
         }
 
+        const isValidConfig = hasValidConfig(this._context);
+        if (!isValidConfig && !element) {
+            const msgItem = new TreeItem('No PyOps configuration set. Please configure serverUrl, username, and password in settings.', vscode.TreeItemCollapsibleState.None);
+            msgItem.contextValue = 'noConfig';
+            msgItem.iconPath = new vscode.ThemeIcon('warning');
+            msgItem.tooltip = 'Open settings (Ctrl+,) and set PyOps configuration to connect.';
+            return [msgItem];
+        }
+
         if (element) {
             if (element.contextValue === 'commands') {
                 // Children of commands node
@@ -179,21 +109,22 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
             } else if (element.contextValue?.startsWith('pyopsSet')) {
                 // Children of set: items (2-level: set > name (type))
                 const set = element.label as string;
-                const setItems = this._scriptlets.filter((s: any) => s.set === set);
-                const itemTrees: TreeItem[] = setItems.map((item: any) => {
-                    const label = `${item.name} (${item.type})`;
-                    const ext = inferExt(item.type);
-                    const key = `${set}-${item.name}-${item.type}`;
+                const setItems = this._scriptlets.filter((s: unknown) => (s as { set: string }).set === set);
+                const itemTrees: TreeItem[] = setItems.map((item: unknown) => {
+                    const itemObj = item as { name: string; type: string };
+                    const label = `${itemObj.name} (${itemObj.type})`;
+                    const ext = inferExt(itemObj.type);
+                    const key = `${set}-${itemObj.name}-${itemObj.type}`;
                     const isSynced = this._syncStatus.get(key) ?? true;
                     const treeItem = new TreeItem(label, vscode.TreeItemCollapsibleState.None) as ScriptletTreeItem;
                     treeItem.description = ext ? `.${ext}` : '';
-                    treeItem.contextValue = `pyopsItem-${item.type}`;
+                    treeItem.contextValue = `pyopsItem-${itemObj.type}`;
                     treeItem.id = key;
                     treeItem.iconPath = isSynced ? new vscode.ThemeIcon('check') : new vscode.ThemeIcon('warning');
-                    treeItem.tooltip = `Set: ${set}, Name: ${item.name}, Type: ${item.type}, Sync: ${isSynced ? 'Synced' : 'Unsynced'}`;
+                    treeItem.tooltip = `Set: ${set}, Name: ${itemObj.name}, Type: ${itemObj.type}, Sync: ${isSynced ? 'Synced' : 'Unsynced'}`;
                     treeItem.set = set;
-                    treeItem.scriptletName = item.name;
-                    treeItem.scriptletType = item.type;
+                    treeItem.scriptletName = itemObj.name;
+                    treeItem.scriptletType = itemObj.type;
                     treeItem.command = { command: 'pyops.openLocalFile', title: 'Open Local File', arguments: [treeItem] };
                     return treeItem;
                 });
@@ -203,10 +134,16 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
         } else {
             // Root: sets only (commands via toolbar)
             if (this._scriptlets.length === 0) {
-                return [new TreeItem('Loading...', vscode.TreeItemCollapsibleState.None)];
+                if (isValidConfig) {
+                    await this.fetchScriptlets();
+                    await this.downloadScriptlets(this._scriptlets);
+                }
+                if (this._scriptlets.length === 0) {
+                    return [new TreeItem('No scriptlets available', vscode.TreeItemCollapsibleState.None)];
+                }
             }
 
-            const sets = [...new Set(this._scriptlets.map((s: any) => s.set))].sort();
+            const sets = [...new Set(this._scriptlets.map((s: unknown) => (s as { set: string }).set))].sort();
             const setItems: TreeItem[] = sets.map(g => {
                 const gi = new TreeItem(g, vscode.TreeItemCollapsibleState.Collapsed);
                 gi.contextValue = 'pyopsSet';
@@ -219,7 +156,7 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
         }
     }
 
-    private async fetchScriptlets(): Promise<any[]> {
+    private async fetchScriptlets(): Promise<unknown[]> {
         const pyopsConfig = vscode.workspace.getConfiguration('pyops');
         const serverUrl = pyopsConfig.get('serverUrl') as string || 'http://localhost:8000';
         const username = pyopsConfig.get('username') as string;
@@ -234,18 +171,19 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
         try {
             const response = await fetch(`${serverUrl}/scriptlet/inventory/list`, { headers });
             if (response.ok) {
-                return await response.json() as any[];
+                return await response.json() as unknown[];
             } else {
                 vscode.window.showErrorMessage(`Failed to fetch scriptlets: ${response.statusText}`);
                 return [];
             }
-        } catch (error: any) {
-            vscode.window.showErrorMessage(`Error fetching scriptlets: ${error.message}`);
+        } catch (error: unknown) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            vscode.window.showErrorMessage(`Error fetching scriptlets: ${errorMessage}`);
             return [];
         }
     }
 
-    private async downloadScriptlets(scriptlets: any[]): Promise<void> {
+    private async downloadScriptlets(scriptlets: unknown[]): Promise<void> {
         if (!vscode.workspace.workspaceFolders || vscode.workspace.workspaceFolders.length === 0) return;
 
         this._syncStatus.clear();
@@ -265,19 +203,20 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
         const localPyopsDir = pyopsConfig.get('localPyopsDir', '.pyops') as string;
         const baseLocalPath = path.join(workspaceRoot, localPyopsDir);
 
-        const downloadPromises = scriptlets.map(async (s: any) => {
-            const key = `${s.set}-${s.name}-${s.type}`;
+        const downloadPromises = scriptlets.map(async (s: unknown) => {
+            const sObj = s as { set: string; name: string; type: string };
+            const key = `${sObj.set}-${sObj.name}-${sObj.type}`;
             try {
-                const response = await fetch(`${serverUrl}/scriptlet/inventory/code?set=${s.set}&name=${s.name}`, { headers });
+                const response = await fetch(`${serverUrl}/scriptlet/inventory/code?set=${sObj.set}&name=${sObj.name}`, { headers });
                 if (response.ok) {
                     const responseData = await response.json();
-                    const remoteCode = (responseData as any).code;
-                    const ext = inferExt(s.type);
-                    const dirPath = path.join(baseLocalPath, s.set, s.type);
+                    const remoteCode = (responseData as { code: string }).code;
+                    const ext = inferExt(sObj.type);
+                    const dirPath = path.join(baseLocalPath, sObj.set, sObj.type);
                     if (!fs.existsSync(dirPath)) {
                         fs.mkdirSync(dirPath, { recursive: true });
                     }
-                    const localPath = path.join(dirPath, `${s.name}.${ext}`);
+                    const localPath = path.join(dirPath, `${sObj.name}.${ext}`);
                     let isSynced = true;
                     if (fs.existsSync(localPath)) {
                         const localCode = fs.readFileSync(localPath, 'utf8');
@@ -289,11 +228,12 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
                     this._syncStatus.set(key, isSynced);
                 } else {
                     this._syncStatus.set(key, false);
-                    console.error(`Failed to fetch ${s.set}::${s.name}: ${response.statusText}`);
+                    console.error(`Failed to fetch ${sObj.set}::${sObj.name}: ${response.statusText}`);
                 }
-            } catch (error: any) {
+            } catch (error: unknown) {
                 this._syncStatus.set(key, false);
-                console.error(`Error downloading ${s.set}::${s.name}:`, error);
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                console.error(`Error downloading ${sObj.set}::${sObj.name}:`, errorMessage);
             }
         });
 
@@ -304,15 +244,21 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
         return vscode.workspace.getConfiguration('pyops').get('excludedSets', []) as string[];
     }
 
-    refresh(): void {
-        const excludedSets = this.getExcludedSets();
-        this.fetchScriptlets().then(async (scriptlets) => {
-            this._scriptlets = scriptlets.filter((s: any) => !excludedSets.includes(s.set));
-            if (this._scriptlets.length > 0) {
-                await this.downloadScriptlets(this._scriptlets);
-            }
+    async refresh(): Promise<void> {
+        const isValidConfig = hasValidConfig(this._context);
+        if (!isValidConfig) {
+            this._scriptlets = [];
             this._onDidChangeTreeData.fire();
-        });
+            return;
+        }
+
+        const excludedSets = this.getExcludedSets();
+        const scriptlets = await this.fetchScriptlets();
+        this._scriptlets = scriptlets.filter((s: unknown) => !excludedSets.includes((s as { set: string }).set));
+        if (this._scriptlets.length > 0) {
+            await this.downloadScriptlets(this._scriptlets);
+        }
+        this._onDidChangeTreeData.fire();
     }
 }
 
@@ -321,7 +267,6 @@ export async function activate(context: vscode.ExtensionContext) {
     outputChannel.appendLine('PyOps extension activating...');
 
     try {
-        const extensionUri = context.extensionUri;
 
         const pyopsConfig = vscode.workspace.getConfiguration('pyops');
         const username = pyopsConfig.get('username') as string;
@@ -382,37 +327,41 @@ export async function activate(context: vscode.ExtensionContext) {
             const username = pyopsConfig.get('username') as string;
             const password = context.workspaceState.get('pyops.password') as string;
 
-            if (!serverUrl || !username) {
+            let hasValidConfig = false;
+            if (!serverUrl || !username || !password) {
                 statusBarItem.text = '$(circle-slash) PyOps: No Config';
                 statusBarItem.color = new vscode.ThemeColor('statusBarItem.errorForeground');
-                statusBarItem.show();
+                statusBarItem.tooltip = 'No valid PyOps configuration. Open settings (Ctrl+,) to configure serverUrl, username, and password.';
                 outputChannel.appendLine('Status: No config available');
-                return;
-            }
-
-            try {
-                const url = new URL('/', serverUrl).toString();
-                const headers: any = {};
-                if (username && password) {
+            } else {
+                try {
+                    const url = new URL('/', serverUrl).toString();
+                    const headers: Record<string, string> = {};
                     const auth = Buffer.from(`${username}:${password}`).toString('base64');
                     headers['Authorization'] = `Basic ${auth}`;
-                }
 
-                const response = await fetch(url, { headers });
-                if (response.ok) {
-                    statusBarItem.text = `$(check) PyOps: Connected`;
-                    statusBarItem.color = new vscode.ThemeColor('statusBarItem.foreground');
-                    outputChannel.appendLine(`Status: Connected to ${serverUrl}`);
-                } else {
-                    statusBarItem.text = `$(circle-slash) PyOps: Failed (${response.status})`;
+                    const response = await fetch(url, { headers });
+                    if (response.ok) {
+                        statusBarItem.text = `$(check) PyOps: Connected`;
+                        statusBarItem.color = new vscode.ThemeColor('statusBarItem.foreground');
+                        statusBarItem.tooltip = 'PyOps connected successfully.';
+                        hasValidConfig = true;
+                        outputChannel.appendLine(`Status: Connected to ${serverUrl}`);
+                    } else {
+                        statusBarItem.text = `$(circle-slash) PyOps: Failed (${response.status})`;
+                        statusBarItem.color = new vscode.ThemeColor('statusBarItem.errorForeground');
+                        statusBarItem.tooltip = `Connection failed (${response.status}). Check server, credentials, and network.`;
+                        outputChannel.appendLine(`Status: Failed to connect to ${serverUrl} (${response.status})`);
+                    }
+                } catch (error: unknown) {
+                    const errorMessage = error instanceof Error ? error.message : String(error);
+                    statusBarItem.text = `$(circle-slash) PyOps: Error (${errorMessage})`;
                     statusBarItem.color = new vscode.ThemeColor('statusBarItem.errorForeground');
-                    outputChannel.appendLine(`Status: Failed to connect to ${serverUrl} (${response.status})`);
+                    statusBarItem.tooltip = `Error connecting to server: ${errorMessage}. Check configuration and network.`;
+                    outputChannel.appendLine(`Status: Error connecting to server: ${errorMessage}`);
                 }
-            } catch (error: any) {
-                statusBarItem.text = `$(circle-slash) PyOps: Error (${error.message})`;
-                statusBarItem.color = new vscode.ThemeColor('statusBarItem.errorForeground');
-                outputChannel.appendLine(`Status: Error connecting to server: ${error.message}`);
             }
+            await vscode.commands.executeCommand('setContext', 'pyops.hasValidConfig', hasValidConfig);
             statusBarItem.show();
         }
 
@@ -424,7 +373,33 @@ export async function activate(context: vscode.ExtensionContext) {
             if (e.affectsConfiguration('pyops')) {
                 outputChannel.appendLine('Config changed, updating status...');
                 await updateConnectionStatus();
-                managerTreeProvider.refresh();
+                if (managerTreeProvider) managerTreeProvider.refresh();
+                if (jobsTreeProvider) jobsTreeProvider.refresh();
+                // Recreate timers if config validity changed
+                const isValidConfig = hasValidConfig(context);
+                if (isValidConfig) {
+                    if (!managerRefreshTimer) {
+                        const autoRefreshInterval = vscode.workspace.getConfiguration('pyops').get('autoRefreshInterval', 10) * 1000;
+                        managerRefreshTimer = setInterval(() => {
+                            if (managerTreeProvider) managerTreeProvider.refresh();
+                        }, autoRefreshInterval);
+                    }
+                    if (!monitorRefreshTimer) {
+                        const autoRefreshInterval = vscode.workspace.getConfiguration('pyops').get('autoRefreshInterval', 10) * 1000;
+                        monitorRefreshTimer = setInterval(() => {
+                            if (jobsTreeProvider) jobsTreeProvider.refresh();
+                        }, autoRefreshInterval);
+                    }
+                } else {
+                    if (managerRefreshTimer) {
+                        clearInterval(managerRefreshTimer);
+                        managerRefreshTimer = undefined;
+                    }
+                    if (monitorRefreshTimer) {
+                        clearInterval(monitorRefreshTimer);
+                        monitorRefreshTimer = undefined;
+                    }
+                }
             }
         }));
 
@@ -439,25 +414,30 @@ export async function activate(context: vscode.ExtensionContext) {
     const managerTreeProvider = new ManagerTreeDataProvider(context);
     context.subscriptions.push(vscode.window.registerTreeDataProvider('pyops-manager', managerTreeProvider));
 
-    // Auto-refresh timer for manager
+    let managerRefreshTimer: NodeJS.Timeout | undefined;
+    let monitorRefreshTimer: NodeJS.Timeout | undefined;
+
+    // Initial timer setup
+    const isValidConfigInitial = hasValidConfig(context);
     const autoRefreshInterval = vscode.workspace.getConfiguration('pyops').get('autoRefreshInterval', 10) * 1000;
-    const managerRefreshTimer = setInterval(() => {
-        managerTreeProvider.refresh();
-    }, autoRefreshInterval);
-    context.subscriptions.push({ dispose: () => clearInterval(managerRefreshTimer) });
+    if (isValidConfigInitial) {
+        managerRefreshTimer = setInterval(() => {
+            if (managerTreeProvider) managerTreeProvider.refresh();
+        }, autoRefreshInterval);
+        monitorRefreshTimer = setInterval(() => {
+            if (jobsTreeProvider) jobsTreeProvider.refresh();
+        }, autoRefreshInterval);
+    }
+    context.subscriptions.push({
+        dispose: () => {
+            if (managerRefreshTimer) clearInterval(managerRefreshTimer);
+            if (monitorRefreshTimer) clearInterval(monitorRefreshTimer);
+        }
+    });
 
     // Register native tree view for monitor (repurposing existing ID)
     jobsTreeProvider = new JobsTreeDataProvider(context);
     context.subscriptions.push(vscode.window.registerTreeDataProvider('pyops-monitor', jobsTreeProvider));
-
-    // Auto-refresh timer for monitor
-    const monitorRefreshInterval = autoRefreshInterval;
-    const monitorRefreshTimer = setInterval(() => {
-        if (jobsTreeProvider) {
-            jobsTreeProvider.refresh();
-        }
-    }, monitorRefreshInterval);
-    context.subscriptions.push({ dispose: () => clearInterval(monitorRefreshTimer) });
 
         // Register commands
         context.subscriptions.push(vscode.commands.registerCommand('pyops.refreshManager', async () => {
@@ -501,8 +481,9 @@ export async function activate(context: vscode.ExtensionContext) {
                     vscode.window.showErrorMessage(`Failed to fetch jobs: ${response.statusText}`);
                     return [];
                 }
-            } catch (error: any) {
-                vscode.window.showErrorMessage(`Error fetching jobs: ${error.message}`);
+            } catch (error: unknown) {
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                vscode.window.showErrorMessage(`Error fetching jobs: ${errorMessage}`);
                 return [];
             }
         }
@@ -538,8 +519,9 @@ export async function activate(context: vscode.ExtensionContext) {
                 } else {
                     vscode.window.showErrorMessage(`Failed to cancel job: ${response.statusText}`);
                 }
-            } catch (error: any) {
-                vscode.window.showErrorMessage(`Error canceling job: ${error.message}`);
+            } catch (error: unknown) {
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                vscode.window.showErrorMessage(`Error canceling job: ${errorMessage}`);
             }
         }));
 
@@ -569,8 +551,9 @@ export async function activate(context: vscode.ExtensionContext) {
                 } else {
                     vscode.window.showErrorMessage(`Failed to download job: ${response.statusText}`);
                 }
-            } catch (error: any) {
-                vscode.window.showErrorMessage(`Error downloading job: ${error.message}`);
+            } catch (error: unknown) {
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                vscode.window.showErrorMessage(`Error downloading job: ${errorMessage}`);
             }
         }));
 
@@ -605,8 +588,9 @@ export async function activate(context: vscode.ExtensionContext) {
                     const err = await response.text();
                     vscode.window.showErrorMessage(`Failed to delete job: ${err}`);
                 }
-            } catch (error: any) {
-                vscode.window.showErrorMessage(`Error deleting job: ${error.message}`);
+            } catch (error: unknown) {
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                vscode.window.showErrorMessage(`Error deleting job: ${errorMessage}`);
             }
         }));
 
@@ -637,35 +621,36 @@ export async function activate(context: vscode.ExtensionContext) {
                 try {
                     const jobResponse = await fetch(`${serverUrl}/scriptlet/job/item?id=${id}`, { headers });
                     if (jobResponse.ok) {
-                        const jobData = await jobResponse.json() as any;
+                        const jobData = await jobResponse.json() as unknown;
+                        const jobObj = jobData as { param?: string; stdout?: string; stderr?: string; state: string };
                         const active = activeJobs.get(key);
                         if (active) {
                             // Append param if available
-                            if (jobData.param && jobViewOutputChannel) {
+                            if (jobObj.param && jobViewOutputChannel) {
                                 jobViewOutputChannel.appendLine(`\n--- Parameters ---`);
-                                jobViewOutputChannel.appendLine(jobData.param);
+                                jobViewOutputChannel.appendLine(jobObj.param);
                             }
                             // Append stdout
-                            if (jobData.stdout) {
-                                const newOut = jobData.stdout.slice(active.prevStdoutLen);
+                            if (jobObj.stdout) {
+                                const newOut = jobObj.stdout.slice(active.prevStdoutLen);
                                 if (newOut.length > 0 && jobViewOutputChannel) {
                                     jobViewOutputChannel.appendLine(`[STDOUT]`);
                                     jobViewOutputChannel.append(newOut);
                                 }
-                                active.prevStdoutLen = jobData.stdout.length;
+                                active.prevStdoutLen = jobObj.stdout.length;
                             }
                             // Append stderr
-                            if (jobData.stderr) {
-                                const newErr = jobData.stderr.slice(active.prevStderrLen);
+                            if (jobObj.stderr) {
+                                const newErr = jobObj.stderr.slice(active.prevStderrLen);
                                 if (newErr.length > 0 && jobViewOutputChannel) {
                                     jobViewOutputChannel.appendLine(`[STDERR]`);
                                     jobViewOutputChannel.append(newErr);
                                 }
-                                active.prevStderrLen = jobData.stderr.length;
+                                active.prevStderrLen = jobObj.stderr.length;
                             }
                             // Update state
-                            jobViewOutputChannel.appendLine(`\n--- State: ${jobData.state} ---`);
-                            if (['done', 'failed', 'cancelled', 'remove'].includes(jobData.state)) {
+                            jobViewOutputChannel.appendLine(`\n--- State: ${jobObj.state} ---`);
+                            if (['done', 'failed', 'cancelled', 'remove'].includes(jobObj.state)) {
                                 const active = activeJobs.get(key);
                                 if (active && active.interval === pollInterval) {
                                     clearInterval(pollInterval);
@@ -683,8 +668,9 @@ export async function activate(context: vscode.ExtensionContext) {
                             jobViewOutputChannel.appendLine('\n--- Job no longer exists ---');
                         }
                     }
-                } catch (error: any) {
-                    jobViewOutputChannel.appendLine(`Error polling job: ${error.message}`);
+                } catch (error: unknown) {
+                    const errorMessage = error instanceof Error ? error.message : String(error);
+                    jobViewOutputChannel.appendLine(`Error polling job: ${errorMessage}`);
                 }
             }, 1000);
 
@@ -724,7 +710,7 @@ export async function activate(context: vscode.ExtensionContext) {
                     } else {
                         errorCount++;
                     }
-                } catch (error: any) {
+                } catch {
                     errorCount++;
                 }
             }
@@ -758,7 +744,7 @@ export async function activate(context: vscode.ExtensionContext) {
             const typePick = await vscode.window.showQuickPick(types, { placeHolder: 'Select scriptlet type' });
             if (!typePick) return;
 
-            const type = typePick.label.toLowerCase();
+            const typeLower = typePick.label.toLowerCase();
 
             const pyopsConfig = vscode.workspace.getConfiguration('pyops');
             const serverUrl = pyopsConfig.get('serverUrl') as string || 'http://localhost:8000';
@@ -773,13 +759,13 @@ export async function activate(context: vscode.ExtensionContext) {
 
             // Fetch existing sets
             outputChannel.appendLine(`[Create Scriptlet] Fetching existing sets...`);
-            let scriptlets: any[] = [];
+            let scriptlets: unknown[] = [];
             try {
                 const response = await fetch(`${serverUrl}/scriptlet/inventory/list`, { headers });
                 outputChannel.appendLine(`[Create Scriptlet] Sets list fetch status: ${response.status} ${response.statusText}`);
                 if (response.ok) {
-                    scriptlets = await response.json() as any[];
-                    const existingSets = [...new Set(scriptlets.map((s: any) => s.set))].sort();
+                    scriptlets = await response.json() as unknown[];
+                    const existingSets = [...new Set(scriptlets.map((s: unknown) => (s as { set: string }).set))].sort();
                     outputChannel.appendLine(`[Create Scriptlet] Found sets: ${JSON.stringify(existingSets)}`);
                     if (existingSets.length === 0) {
                         vscode.window.showErrorMessage('No existing sets found. Cannot create scriptlet without a set.');
@@ -795,8 +781,8 @@ export async function activate(context: vscode.ExtensionContext) {
                     outputChannel.appendLine(`[Create Scriptlet] Selected set: ${set}`);
 
                     // Fetch scriptlets for selected set to check names
-                    const setScriptlets = scriptlets.filter((s: any) => s.set === set);
-                    const existingNames = new Set(setScriptlets.map((s: any) => s.name));
+                    const setScriptlets = scriptlets.filter((s: unknown) => (s as { set: string }).set === set);
+                    const existingNames = new Set(setScriptlets.map((s: unknown) => (s as { name: string }).name));
                     outputChannel.appendLine(`[Create Scriptlet] Existing names in set '${set}': ${JSON.stringify(Array.from(existingNames))}`);
 
                     // Loop for unique name
@@ -819,14 +805,14 @@ export async function activate(context: vscode.ExtensionContext) {
                     }
                     outputChannel.appendLine(`[Create Scriptlet] Selected unique name: ${name}`);
 
-                    if (type === 'markdown' && name !== 'README') {
+                    if (typeLower === 'markdown' && name !== 'README') {
                         vscode.window.showErrorMessage('Markdown only allowed for README');
                         return;
                     }
 
-                    const createHeaders: any = { 'Content-Type': 'application/json', ...headers };
-                    const data = { set, name, type };
-                    outputChannel.appendLine(`[Create Scriptlet] Attempting to create ${type} '${set}::${name}' with data: ${JSON.stringify(data)}`);
+                    const createHeaders: Record<string, string> = { 'Content-Type': 'application/json', ...headers };
+                    const data = { set, name, type: typeLower };
+                    outputChannel.appendLine(`[Create Scriptlet] Attempting to create ${typeLower} '${set}::${name}' with data: ${JSON.stringify(data)}`);
                     try {
                         const response = await fetch(`${serverUrl}/scriptlet/inventory/item`, {
                             method: 'PUT',
@@ -840,17 +826,17 @@ export async function activate(context: vscode.ExtensionContext) {
                             // Verify creation
                             const verifyResponse = await fetch(`${serverUrl}/scriptlet/inventory/list`, { headers });
                             if (verifyResponse.ok) {
-                                const updatedScriptlets = await verifyResponse.json() as any[];
-                                const created = updatedScriptlets.some((s: any) => s.set === set && s.name === name && s.type === type);
+                                const updatedScriptlets = await verifyResponse.json() as unknown[];
+                                const created = updatedScriptlets.some((s: unknown) => (s as { set: string; name: string; type: string }).set === set && (s as { set: string; name: string; type: string }).name === name && (s as { set: string; name: string; type: string }).type === typeLower);
                                 if (created) {
                                     managerTreeProvider.refresh();
-                                    vscode.window.showInformationMessage(`Created ${type} ${set}::${name}`);
+                                    vscode.window.showInformationMessage(`Created ${typeLower} ${set}::${name}`);
                                     outputChannel.appendLine(`[Create Scriptlet] Verified creation successful.`);
                                     // Open local editor
                                     const workspaceRoot = vscode.workspace.workspaceFolders![0].uri.fsPath;
                                     const localPyopsDir = pyopsConfig.get('localPyopsDir', '.pyops') as string;
-                                    const ext = inferExt(type);
-                                    const localPath = path.join(workspaceRoot, localPyopsDir, set, type, `${name}.${ext}`);
+                                    const ext = inferExt(typeLower);
+                                    const localPath = path.join(workspaceRoot, localPyopsDir, set, typeLower, `${name}.${ext}`);
                                     const localUri = Uri.file(localPath);
                                     await vscode.workspace.openTextDocument(localUri).then(doc => vscode.window.showTextDocument(doc));
                                 } else {
@@ -861,7 +847,7 @@ export async function activate(context: vscode.ExtensionContext) {
                             } else {
                                 outputChannel.appendLine(`[Create Scriptlet] Could not verify creation: ${verifyResponse.statusText}`);
                                 managerTreeProvider.refresh();
-                                vscode.window.showInformationMessage(`Created ${type} ${set}::${name} (verification failed)`);
+                                vscode.window.showInformationMessage(`Created ${typeLower} ${set}::${name} (verification failed)`);
                             }
                         } else {
                             const err = await response.text();
@@ -869,8 +855,9 @@ export async function activate(context: vscode.ExtensionContext) {
                             vscode.window.showErrorMessage(errorMsg);
                             outputChannel.appendLine(`[Create Scriptlet] Creation failed: ${errorMsg}`);
                         }
-                    } catch (error: any) {
-                        const errorMsg = `Error creating scriptlet: ${error.message}`;
+                    } catch (error: unknown) {
+                        const errorMessage = error instanceof Error ? error.message : String(error);
+                        const errorMsg = `Error creating scriptlet: ${errorMessage}`;
                         vscode.window.showErrorMessage(errorMsg);
                         outputChannel.appendLine(`[Create Scriptlet] Creation error: ${errorMsg}`);
                     }
@@ -879,8 +866,9 @@ export async function activate(context: vscode.ExtensionContext) {
                     vscode.window.showErrorMessage(errorMsg);
                     outputChannel.appendLine(`[Create Scriptlet] Sets fetch failed: ${errorMsg}`);
                 }
-            } catch (error: any) {
-                const errorMsg = `Error fetching sets: ${error.message}`;
+            } catch (error: unknown) {
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                const errorMsg = `Error fetching sets: ${errorMessage}`;
                 vscode.window.showErrorMessage(errorMsg);
                 outputChannel.appendLine(`[Create Scriptlet] Sets fetch error: ${errorMsg}`);
             }
@@ -896,7 +884,7 @@ export async function activate(context: vscode.ExtensionContext) {
             const username = pyopsConfig.get('username') as string;
             const password = context.workspaceState.get('pyops.password') as string;
 
-            const headers: any = {};
+            const headers: Record<string, string> = {};
             if (username && password) {
                 const auth = Buffer.from(`${username}:${password}`).toString('base64');
                 headers['Authorization'] = `Basic ${auth}`;
@@ -906,7 +894,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 const response = await fetch(`${serverUrl}/scriptlet/inventory/code?set=${set}&name=${name}`, { headers });
                 if (response.ok) {
                     const responseData = await response.json();
-                    const code = (responseData as any).code;
+                    const code = (responseData as { code: string }).code;
                     const workspaceRoot = vscode.workspace.workspaceFolders![0].uri.fsPath;
                     const localPyopsDir = pyopsConfig.get('localPyopsDir', '.pyops') as string;
                     const ext = inferExt(type);
@@ -921,12 +909,18 @@ export async function activate(context: vscode.ExtensionContext) {
                 } else {
                     vscode.window.showErrorMessage(`Failed to fetch remote: ${response.statusText}`);
                 }
-            } catch (error: any) {
-                vscode.window.showErrorMessage(`Error resetting local: ${error.message}`);
+            } catch (error: unknown) {
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                vscode.window.showErrorMessage(`Error resetting local: ${errorMessage}`);
             }
         }));
 
         context.subscriptions.push(vscode.commands.registerCommand('pyops.writeLocalToRemoteDraft', async (treeItem?: ScriptletTreeItem) => {
+            const isValidConfig = hasValidConfig(context);
+            if (!isValidConfig) {
+                vscode.window.showWarningMessage('No valid PyOps configuration set. Please configure in settings.');
+                return;
+            }
             if (!treeItem || !treeItem.set || !treeItem.scriptletName || !treeItem.scriptletType) return;
             const set = treeItem.set!;
             const name = treeItem.scriptletName!;
@@ -945,7 +939,7 @@ export async function activate(context: vscode.ExtensionContext) {
             const username = pyopsConfig.get('username') as string;
             const password = context.workspaceState.get('pyops.password') as string;
 
-            const headers: any = { 'Content-Type': 'application/json' };
+            const headers: Record<string, string> = { 'Content-Type': 'application/json' };
             if (username && password) {
                 const auth = Buffer.from(`${username}:${password}`).toString('base64');
                 headers['Authorization'] = `Basic ${auth}`;
@@ -959,47 +953,67 @@ export async function activate(context: vscode.ExtensionContext) {
                     body: JSON.stringify(data)
                 });
                 if (response.ok) {
-                    vscode.window.showInformationMessage(`Wrote local to remote draft for ${name}`);
+                    vscode.window.showInformationMessage(`Wrote local changes to remote draft for ${name}`);
                     managerTreeProvider.refresh();
                 } else {
                     vscode.window.showErrorMessage(`Failed to write draft: ${response.statusText}`);
                 }
-            } catch (error: any) {
-                vscode.window.showErrorMessage(`Error writing draft: ${error.message}`);
+            } catch (error: unknown) {
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                vscode.window.showErrorMessage(`Error writing draft: ${errorMessage}`);
             }
         }));
 
         context.subscriptions.push(vscode.commands.registerCommand('pyops.saveRemoteDraft', async (treeItem?: ScriptletTreeItem) => {
+            const isValidConfig = hasValidConfig(context);
+            if (!isValidConfig) {
+                vscode.window.showWarningMessage('No valid PyOps configuration set. Please configure in settings.');
+                return;
+            }
             if (!treeItem || !treeItem.set || !treeItem.scriptletName || !treeItem.scriptletType) return;
             const set = treeItem.set!;
             const name = treeItem.scriptletName!;
-            const type = treeItem.scriptletType!;
             const pyopsConfig = vscode.workspace.getConfiguration('pyops');
             const serverUrl = pyopsConfig.get('serverUrl') as string || 'http://localhost:8000';
             const username = pyopsConfig.get('username') as string;
             const password = context.workspaceState.get('pyops.password') as string;
 
-            const headers: any = { 'Content-Type': 'application/json' };
+            const authHeaders: Record<string, string> = {};
             if (username && password) {
                 const auth = Buffer.from(`${username}:${password}`).toString('base64');
-                headers['Authorization'] = `Basic ${auth}`;
+                authHeaders['Authorization'] = `Basic ${auth}`;
             }
 
-            // Fetch current draft
-            const fetchHeaders = { ...headers };
-            delete fetchHeaders['Content-Type'];
+            // Check for unstaged changes (draft existence)
+            const statusHeaders = { ...authHeaders };
             try {
-                const codeResponse = await fetch(`${serverUrl}/scriptlet/inventory/code?set=${set}&name=${name}`, { headers: fetchHeaders });
+                const statusResponse = await fetch(`${serverUrl}/scriptlet/inventory/status?set=${set}&name=${name}`, { headers: statusHeaders });
+                if (!statusResponse.ok) {
+                    vscode.window.showErrorMessage('Failed to check draft status');
+                    return;
+                }
+                const statusData = await statusResponse.json();
+                const hasUnstaged = (statusData as { has_unstaged: boolean }).has_unstaged;
+
+                if (!hasUnstaged) {
+                    vscode.window.showInformationMessage(`No remote draft to save for ${name}; no unstaged changes.`);
+                    return;
+                }
+
+                // Fetch draft code and save (commit)
+                const codeResponse = await fetch(`${serverUrl}/scriptlet/inventory/code?set=${set}&name=${name}`, { headers: statusHeaders });
                 if (!codeResponse.ok) {
                     vscode.window.showErrorMessage('No remote draft to save');
                     return;
                 }
                 const codeResponseData = await codeResponse.json();
-                const code = (codeResponseData as any).code;
-                const data = { set, name, code };
+                const draftCode = (codeResponseData as { code: string }).code;
+
+                const saveHeaders: Record<string, string> = { 'Content-Type': 'application/json', ...authHeaders };
+                const data = { set, name, code: draftCode };
                 const saveResponse = await fetch(`${serverUrl}/scriptlet/inventory/item`, {
                     method: 'POST',
-                    headers,
+                    headers: saveHeaders,
                     body: JSON.stringify(data)
                 });
                 if (saveResponse.ok) {
@@ -1008,8 +1022,9 @@ export async function activate(context: vscode.ExtensionContext) {
                 } else {
                     vscode.window.showErrorMessage(`Failed to save: ${saveResponse.statusText}`);
                 }
-            } catch (error: any) {
-                vscode.window.showErrorMessage(`Error saving draft: ${error.message}`);
+            } catch (error: unknown) {
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                vscode.window.showErrorMessage(`Error saving draft: ${errorMessage}`);
             }
         }));
 
@@ -1019,6 +1034,11 @@ export async function activate(context: vscode.ExtensionContext) {
         context.subscriptions.push(jobOutputChannel, jobErrOutputChannel);
 
         context.subscriptions.push(vscode.commands.registerCommand('pyops.startDebugJob', async (treeItem?: ScriptletTreeItem) => {
+            const isValidConfig = hasValidConfig(context);
+            if (!isValidConfig) {
+                vscode.window.showWarningMessage('No valid PyOps configuration set. Please configure in settings.');
+                return;
+            }
             if (!treeItem || !treeItem.set || !treeItem.scriptletName || treeItem.scriptletType !== 'task') return;
             const set = treeItem.set!;
             const name = treeItem.scriptletName!;
@@ -1033,7 +1053,7 @@ export async function activate(context: vscode.ExtensionContext) {
             const username = pyopsConfig.get('username') as string;
             const password = context.workspaceState.get('pyops.password') as string;
 
-            const headers: any = { 'Content-Type': 'application/json' };
+            const headers: Record<string, string> = { 'Content-Type': 'application/json' };
             if (username && password) {
                 const auth = Buffer.from(`${username}:${password}`).toString('base64');
                 headers['Authorization'] = `Basic ${auth}`;
@@ -1048,7 +1068,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 });
                 if (response.ok) {
                     const responseData = await response.json();
-                    const jobId = (responseData as any).job;
+                    const jobId = (responseData as { job: string }).job;
                     jobOutputChannel.clear();
                     jobErrOutputChannel.clear();
                     jobOutputChannel.show(true);
@@ -1060,27 +1080,28 @@ export async function activate(context: vscode.ExtensionContext) {
                         }
                         const jobResponse = await fetch(`${serverUrl}/scriptlet/job/item?id=${jobId}`, { headers: getHeaders });
                         if (jobResponse.ok) {
-                            const jobData = await jobResponse.json() as any;
+                            const jobData = await jobResponse.json() as unknown;
+                            const jobObj = jobData as { stdout?: string; stderr?: string; state: string };
                             const active = activeJobs.get(key);
                             if (active) {
-                                if (jobData.stdout) {
-                                    const newOut = jobData.stdout.slice(active.prevStdoutLen);
+                                if (jobObj.stdout) {
+                                    const newOut = jobObj.stdout.slice(active.prevStdoutLen);
                                     if (newOut.length > 0) {
                                         jobOutputChannel.append(newOut);
                                     }
-                                    active.prevStdoutLen = jobData.stdout.length;
+                                    active.prevStdoutLen = jobObj.stdout.length;
                                 }
-                                if (jobData.stderr) {
-                                    const newErr = jobData.stderr.slice(active.prevStderrLen);
+                                if (jobObj.stderr) {
+                                    const newErr = jobObj.stderr.slice(active.prevStderrLen);
                                     if (newErr.length > 0) {
                                         jobErrOutputChannel.append(newErr);
                                     }
-                                    active.prevStderrLen = jobData.stderr.length;
+                                    active.prevStderrLen = jobObj.stderr.length;
                                 }
                                 jobOutputChannel.show(true);
                                 jobErrOutputChannel.show(true);
                             }
-                            if (['done', 'failed', 'cancelled', 'remove'].includes(jobData.state)) {
+                            if (['done', 'failed', 'cancelled', 'remove'].includes(jobObj.state)) {
                                 const active = activeJobs.get(key);
                                 if (active && active.interval === pollInterval) {
                                     clearInterval(pollInterval);
@@ -1101,12 +1122,18 @@ export async function activate(context: vscode.ExtensionContext) {
                 } else {
                     vscode.window.showErrorMessage(`Failed to start debug: ${response.statusText}`);
                 }
-            } catch (error: any) {
-                vscode.window.showErrorMessage(`Error starting debug: ${error.message}`);
+            } catch (error: unknown) {
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                vscode.window.showErrorMessage(`Error starting debug: ${errorMessage}`);
             }
         }));
 
         context.subscriptions.push(vscode.commands.registerCommand('pyops.stopDebugJob', async (treeItem?: ScriptletTreeItem) => {
+            const isValidConfig = hasValidConfig(context);
+            if (!isValidConfig) {
+                vscode.window.showWarningMessage('No valid PyOps configuration set. Please configure in settings.');
+                return;
+            }
             if (!treeItem || !treeItem.set || !treeItem.scriptletName) return;
             const set = treeItem.set!;
             const name = treeItem.scriptletName!;
@@ -1139,12 +1166,18 @@ export async function activate(context: vscode.ExtensionContext) {
                 } else {
                     vscode.window.showErrorMessage(`Failed to stop debug: ${cancelResponse.statusText}`);
                 }
-            } catch (error: any) {
-                vscode.window.showErrorMessage(`Error stopping debug: ${error.message}`);
+            } catch (error: unknown) {
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                vscode.window.showErrorMessage(`Error stopping debug: ${errorMessage}`);
             }
         }));
 
         context.subscriptions.push(vscode.commands.registerCommand('pyops.diffLocalRemote', async (treeItem?: ScriptletTreeItem) => {
+            const isValidConfig = hasValidConfig(context);
+            if (!isValidConfig) {
+                vscode.window.showWarningMessage('No valid PyOps configuration set. Please configure in settings.');
+                return;
+            }
             if (!treeItem || !treeItem.set || !treeItem.scriptletName || !treeItem.scriptletType) return;
             const set = treeItem.set!;
             const name = treeItem.scriptletName!;
@@ -1154,7 +1187,7 @@ export async function activate(context: vscode.ExtensionContext) {
             const username = pyopsConfig.get('username') as string;
             const password = context.workspaceState.get('pyops.password') as string;
 
-            const headers: any = {};
+            const headers: Record<string, string> = {};
             if (username && password) {
                 const auth = Buffer.from(`${username}:${password}`).toString('base64');
                 headers['Authorization'] = `Basic ${auth}`;
@@ -1164,7 +1197,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 const response = await fetch(`${serverUrl}/scriptlet/inventory/code?set=${set}&name=${name}`, { headers });
                 if (response.ok) {
                 const responseData = await response.json();
-                const code = (responseData as any).code;
+                const code = (responseData as { code: string }).code;
                 const workspaceRoot = vscode.workspace.workspaceFolders![0].uri.fsPath;
                 const localPyopsDir = pyopsConfig.get('localPyopsDir', '.pyops') as string;
                 const ext = inferExt(type);
@@ -1180,12 +1213,18 @@ export async function activate(context: vscode.ExtensionContext) {
                 } else {
                     vscode.window.showErrorMessage(`Failed to fetch remote for diff: ${response.statusText}`);
                 }
-            } catch (error: any) {
-                vscode.window.showErrorMessage(`Error in diff: ${error.message}`);
+            } catch (error: unknown) {
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                vscode.window.showErrorMessage(`Error in diff: ${errorMessage}`);
             }
         }));
 
         context.subscriptions.push(vscode.commands.registerCommand('pyops.deleteScriptlet', async (treeItem?: ScriptletTreeItem) => {
+            const isValidConfig = hasValidConfig(context);
+            if (!isValidConfig) {
+                vscode.window.showWarningMessage('No valid PyOps configuration set. Please configure in settings.');
+                return;
+            }
             if (!treeItem || !treeItem.set || !treeItem.scriptletName || !treeItem.scriptletType) return;
             const set = treeItem.set!;
             const name = treeItem.scriptletName!;
@@ -1202,7 +1241,7 @@ export async function activate(context: vscode.ExtensionContext) {
             const username = pyopsConfig.get('username') as string;
             const password = context.workspaceState.get('pyops.password') as string;
 
-            const headers: any = {};
+            const headers: Record<string, string> = {};
             if (username && password) {
                 const auth = Buffer.from(`${username}:${password}`).toString('base64');
                 headers['Authorization'] = `Basic ${auth}`;
@@ -1229,8 +1268,9 @@ export async function activate(context: vscode.ExtensionContext) {
                     const err = await response.text();
                     vscode.window.showErrorMessage(`Failed to delete: ${err}`);
                 }
-            } catch (error: any) {
-                vscode.window.showErrorMessage(`Error deleting scriptlet: ${error.message}`);
+            } catch (error: unknown) {
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                vscode.window.showErrorMessage(`Error deleting scriptlet: ${errorMessage}`);
             }
         }));
 
@@ -1254,11 +1294,15 @@ export async function activate(context: vscode.ExtensionContext) {
 
         outputChannel.appendLine('PyOps extension activated successfully');
         console.log('PyOps extension is now active');
-    } catch (error: any) {
-        outputChannel.appendLine(`Activation failed: ${error.message}`);
-        outputChannel.appendLine(`Stack: ${error.stack}`);
+    } catch (error: unknown) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        const errorStack = error instanceof Error ? error.stack : undefined;
+        outputChannel.appendLine(`Activation failed: ${errorMessage}`);
+        if (errorStack) {
+            outputChannel.appendLine(`Stack: ${errorStack}`);
+        }
         outputChannel.show(true);
-        console.error('PyOps activation error:', error);
+        console.error('PyOps activation error:', errorMessage);
         throw error; // Re-throw to show in VSCode
     }
 }
