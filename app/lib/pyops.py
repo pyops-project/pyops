@@ -112,8 +112,9 @@ class Control:
         return self.rq.get(f"controller/{set}/{name}/post", json=json)
 
 class ServiceListener:
-    def __init__(self, job_id: str):
+    def __init__(self, job_id: str, current_user: str = "anonymous"):
         self.kill_now = False
+        self.current_user = current_user
         signal.signal(signal.SIGINT, self.exit_gracefully)
         signal.signal(signal.SIGTERM, self.exit_gracefully)
 

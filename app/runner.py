@@ -290,7 +290,7 @@ def run(job_id: str, owner: str, set: str, name: str, kind: str, param: str, cod
                 code = ''.join(new_code_lines)
 
                 if kind == "service" or kind == "debug":
-                    listener = pyops.ServiceListener(job_id)  # Updated: Pass job_id for sock construction
+                    listener = pyops.ServiceListener(job_id, current_user=owner)
                 else:
                     listener = None
 
