@@ -342,6 +342,62 @@ class TestServiceListener:
         listener.exit_gracefully(None, None)
         assert listener.kill_now is True
 
+    @patch('os.remove')
+    @patch('atexit.register')
+    @patch('tempfile.gettempdir')
+    @patch('zmq.Poller')
+    @patch('zmq.Context')
+    def test_poll_no_input(self, mock_context, mock_poller, mock_gettempdir, mock_atexit, mock_remove):
+        mock_atexit.side_effect = lambda *args: None
+        mock_remove.return_value = None
+        mock_gettempdir.return_value = '/tmp'
+        mock_socket = Mock()
+        mock_context.return_value.socket.return_value = mock_socket
+        listener = pyops.ServiceListener("test_job")
+        mock_poller.return_value.poll.return_value = []  # No events
+        result = listener.poll()
+        assert result is None
+        mock_poller.return_value.poll.assert_called_once_with(timeout=0)
+        mock_socket.recv.assert_not_called()
+
+    @patch('os.remove')
+    @patch('atexit.register')
+    @patch('tempfile.gettempdir')
+    @patch('zmq.Poller')
+    @patch('zmq.Context')
+    @patch('msgpack.unpackb')
+    def test_poll_with_input(self, mock_unpackb, mock_context, mock_poller, mock_gettempdir, mock_atexit, mock_remove):
+        mock_atexit.side_effect = lambda *args: None
+        mock_remove.return_value = None
+        mock_gettempdir.return_value = '/tmp'
+        mock_socket = Mock()
+        mock_context.return_value.socket.return_value = mock_socket
+        listener = pyops.ServiceListener("test_job")
+        mock_poller.return_value.poll.return_value = [(mock_socket, zmq.POLLIN)]
+        test_msg = {"cmd": "test"}
+        mock_socket.recv.return_value = msgpack.packb(test_msg)
+        mock_unpackb.return_value = test_msg
+        result = listener.poll()
+        assert result == test_msg
+        mock_poller.return_value.poll.assert_called_once_with(timeout=0)
+        mock_unpackb.assert_called_once_with(mock_socket.recv.return_value)
+
+    @patch('os.remove')
+    @patch('atexit.register')
+    @patch('tempfile.gettempdir')
+    @patch('zmq.Poller')
+    @patch('zmq.Context')
+    def test_poll_kill_now(self, mock_context, mock_poller, mock_gettempdir, mock_atexit, mock_remove):
+        mock_atexit.side_effect = lambda *args: None
+        mock_remove.return_value = None
+        mock_gettempdir.return_value = '/tmp'
+        listener = pyops.ServiceListener("test_job")
+        listener.kill_now = True
+        result = listener.poll()
+        assert result == "TERM"
+        mock_poller.return_value.poll.assert_not_called()
+        listener.socket.recv.assert_not_called()
+
 class TestServiceClient:
     @patch('app.lib.runner.find')
     @patch('zmq.Context')

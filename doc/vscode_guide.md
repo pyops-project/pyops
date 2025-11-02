@@ -88,7 +88,7 @@ Execution environment provides a set of globals
 - `userspace`: user directory path containings set subdirectories
 - `setspace`: set directory containing job subdirectories
 - `workspace`: the jobs workspace directory (default current working path)
-- `listener`: listener a task could use to service a controller, `listener.listen()` blocks.
+- `listener`: For services (inbound requests via ZMQ IPC). Use `listener.listen()` for blocking polls (waits up to 1s per call until message or TERM). For non-blocking, use `listener.poll()`: Returns message if available, "TERM" if signaled, or None immediately (call in loops to handle sequentially).
 
 ## Scriptlet Types
 
@@ -150,8 +150,10 @@ Request: `listener.listen()` returns dict:
 - "TERM": Shutdown.
 
 Template (`task/{name}.py`):
+
+#### Blocking Example (listen() - Simple Loops)
 ```
-# Service: Persistent, handles requests
+# Service: Persistent, handles requests (blocking listener)
 !flask  # Install Flask for internal use
 !git@gitlab.com/team/utils.git  # Clone utils
 
@@ -167,9 +169,9 @@ import utils.api  # From cloned repo
 # Setup (runs once)
 logger.info("Service started")
 
-# Main loop: Poll for requests
+# Main loop: Blocking poll for requests (original/default)
 while True:
-    msg = listener.listen()  # Dict: {"type": "GET", "cmd": "value", ...} or {"type": "POST", "data": {...}, "data_type": "json"}
+    msg = listener.listen()  # Blocks up to 1s until message or TERM
     if msg == "TERM":
         break  # Graceful shutdown
 
@@ -201,6 +203,66 @@ while True:
         result = {"status": "error", "message": "Unsupported type"}
 
     listener.response(result)  # Send dict back
+
+logger.info("Service stopped")
+```
+
+#### Non-Blocking Example (poll() - Responsive Loops)
+```
+# Service: Persistent, handles requests (non-blocking poll)
+!flask  # Install Flask for internal use
+!git@gitlab.com/team/utils.git  # Clone utils
+
+import time
+from flask import jsonify  # Available after install
+import utils.api  # From cloned repo
+
+# Access control/listener/workspace
+# control: e.g., control.job.list()
+# listener: for inbound requests
+# workspace: job output dir
+
+# Setup (runs once)
+logger.info("Service started")
+
+# Main loop: Non-blocking poll for requests (alternative for interleaving work)
+while True:
+    msg = listener.poll()  # Returns immediately: msg, "TERM", or None
+    if msg == "TERM":
+        break
+    elif msg is not None:
+        request_type = msg.get("type")
+        cmd = msg.get("cmd")  # Query param
+        other_param = msg.get("other")
+
+        if request_type == "GET":
+            if cmd == "fetch":
+                result_value = utils.api.fetch_external(other_param)
+                result = {"status": "ok", "value": result_value}
+            else:
+                result = {"status": "error", "message": "Unknown cmd"}
+        elif request_type in ["POST", "PUT"]:
+            data = msg.get("data", {})  # Body data; direct payload from controllers
+            if isinstance(data, str) and msg.get("data_type") == "json":
+                try:
+                    import json
+                    data = json.loads(data)
+                except:
+                    pass
+            data_type = msg.get("data_type")
+            if data_type == "json":
+                result_value = utils.api.process_json(data)
+            else:
+                result_value = "Processed: " + str(data)
+            result = {"status": "ok", "value": result_value}
+        else:
+            result = {"status": "error", "message": "Unsupported type"}
+
+        listener.response(result)  # Send dict back
+    else:
+        # No message; perform other non-blocking work (e.g., periodic checks)
+        # time.sleep(0.1)  # Optional small delay to reduce CPU
+        pass
 
 logger.info("Service stopped")
 ```

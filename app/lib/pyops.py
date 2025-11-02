@@ -139,6 +139,14 @@ class ServiceListener:
     def exit_gracefully(self, signum, frame):
         self.kill_now = True
 
+    def poll(self):
+        if self.kill_now:
+            return "TERM"
+        events = self.poller.poll(timeout=0)
+        if events:
+            return msgpack.unpackb(self.socket.recv())
+        return None
+
     def listen(self):
         while not self.poller.poll(timeout=1000) and not self.kill_now:
             pass

@@ -22,10 +22,17 @@
 
 <app/lib/pyops.ServiceListener> rdf:type "Class" .
 <app/lib/pyops.ServiceListener> requires "job_id: str" .
-<app/lib/pyops.ServiceListener> hasMethods "listen, response" .
+<app/lib/pyops.ServiceListener> hasMethods "listen, response, poll" .
 <app/lib/pyops.ServiceListener> description "Listens for job execution responses via ZMQ." .
 
 <app/lib/pyops.ServiceClient> rdf:type "Class" .
 <app/lib/pyops.ServiceClient> requires "set: str, name: str, debug: bool, owner: str" .
 <app/lib/pyops.ServiceClient> hasMethods "request, close" .
 <app/lib/pyops.ServiceClient> description "Sends requests to scriptlet services." .
+
+<app/lib/pyops.ServiceListener.poll> rdf:type "Method" .
+<app/lib/pyops.ServiceListener.poll> requires "none" .
+<app/lib/pyops.ServiceListener.poll> returns "unpacked msg if POLLIN; 'TERM' if kill_now; None if no input" .
+<app/lib/pyops.ServiceListener.poll> uses "zmq.Poller.poll(timeout=0) for single non-blocking check" .
+<app/lib/pyops.ServiceListener.poll> description "Non-blocking equivalent to listen(); returns immediately for integration into main loops without blocking" .
+<app/lib/pyops.ServiceListener.poll> compatibleWith "existing listen() for blocking scenarios; use in loops for polling" .
