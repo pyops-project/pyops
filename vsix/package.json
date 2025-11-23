@@ -4,14 +4,18 @@
   "description": "VSCodium extension for integrating with PyOps server",
   "version": "0.0.1",
   "publisher": "pyops-team",
-  "license": "GNU AGPL v3",
+  "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "git@git.ralph.or.at:pyops/pyops.git"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
   "categories": [
     "Other"
   ],
-    "activationEvents": [
+  "activationEvents": [
     "onView:pyops-manager",
     "onView:pyops-monitor"
   ],

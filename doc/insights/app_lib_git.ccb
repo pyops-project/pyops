@@ -1,0 +1,30 @@
+Git-Operations:
+`app/lib/git.py` manages scriptlet code in Git sets
+; uses repo_lock() for serialized access
+; pulls repos via pull_if_needed().
+
+Set-Scriptlet-Mgmt:
+get_repo_path(set) returns `data/git/{set}/`
+; list_scriptlets() lists {name}.{type}.py/html from sets
+; infer_type_from_filename(fn) derives task/service/etc.
+read_content(repo, name, type, committed/debug) reads file
+; write_content() writes & stages.
+
+Commit-Push:
+perform_git_add_commit_push(repo, file, msg) adds commits pushes
+; batch_commit(repo, msg, files) for multiples
+; delete_file_and_commit() removes & commits.
+get_repo_status(set) returns git status
+; has_unstaged_changes() checks drafts.
+
+Rollback:
+rollback_staged/committed(set, name, type) resets changes.
+
+Global-Attributes:
+Sets are Git repos in `data/git/{set}/`.
+Scriptlets: {name}.task.py {name}.service.py etc.
+check_name_unique() prevents duplicates in set.
+pull_if_needed() syncs at interval; skips dirty/tag soft reset clean.
+batch_commit() adds multiple/all commits pushes.
+rollback_staged backs .bck & checkout HEAD.
+Unique lock per set prevents concurrent git.

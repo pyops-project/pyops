@@ -1,0 +1,24 @@
+Tests-Structure:
+`tests/` uses pytest
+; conftest.py provides fixtures mock_conf mock_db mock_client mock_git_dir mock_git_ops etc.
+; coverage >90% via pytest --cov-fail-under=90.
+
+Test-Types:
+unit/lib/ tests lib_files lib_git lib_pyops lib_runner_utils lib_sets lib_sites.
+unit/orm/ tests job schedule.
+integration/ tests git orm routers runner execution.
+api/ tests api_editor api_endpoints api_job api_schedule api_sets.
+
+Fixtures-Mocks:
+mock_db creates temp SQLite.
+mock_git_dir creates mock sets/scriptlets.
+mock_git_ops overrides list_scriptlets read/write etc.
+mock_process mocks subprocess.
+mock_croniter mock_jedi mock_datetime.
+Overrides for controller_code/view_content file_path etc.
+
+Global-Attributes:
+Tests store runtime in `.cache/`.
+No autouse fixtures; isolated.
+conftest.py custom_showwarning & pytest_configure.
+Integration tests prefix routers/ lib/ runner/.

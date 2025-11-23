@@ -1,0 +1,33 @@
+Runner-Daemon:
+`app/runner.py` implements background job executor
+; uses GracefulKiller for signal handling
+; main() loops schedule() & handleOddJobs().
+Polls DB via getNextToDo() for todo jobs
+; assigns PID via assignJob().
+
+Job-Execution:
+loadJob(job_id) fetches from DB
+; run() processes param & libs & code in subprocess
+; handles venv activation & directives via process_imports() & process_install_lines().
+finishJob(job_id, state, detail) updates DB.
+
+Directive-Processing:
+process_imports(text, set, debug, libs) handles `!pip` `!git` `!{set::lib}`
+; installs pip -q & clones git to pkg/ & prepends sys.path & exec libs.
+process_install_lines(lines, venv, pkg, id) executes installs.
+
+Termination:
+getNextToTerm() finds to-kill jobs
+; term() kills processes
+; postTerm() updates DB.
+cleanProcesses() reaps zombies.
+
+Scheduling:
+schedule() enqueues from cron Schedules via croniter.
+
+Global-Attributes:
+Runner spawns isolated processes per job.
+Workspaces in `data/jobs/{owner}/{set}/{id}/`.
+States: todo dequeued running done failed cancelled remove.
+Supports debug mode & drop_done cleanup.
+GracefulKiller handles SIGTERM/SIGINT.

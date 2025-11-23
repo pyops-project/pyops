@@ -1,0 +1,7 @@
+node_modules/
+*.log
+.gitignore
+build*.sh
+.eslintrc.json
+tsconfig.json
+package-lock.json

@@ -3,9 +3,11 @@ image: debian:trixie-slim
 variables:
   PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
   PYTHON_VERSION: "3.12"
+  NPM_CACHE_DIR: "$CI_PROJECT_DIR/.cache/npm"
 
 stages:
   - test
+  - build
 
 test:
   stage: test
@@ -25,6 +27,28 @@ test:
     when: on_success
     paths:
       - venv.tar.gz
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"'
+      when: always
+    - when: manual
+
+build:
+  stage: build
+  needs: [test]
+  cache:
+    paths:
+      - vsix/node_modules/
+  before_script:
+    - apt-get update
+    - apt-get install -y nodejs npm
+    - npm config set cache $NPM_CACHE_DIR
+  script:
+    - vsix/build.sh
+  artifacts:
+    when: on_success
+    paths:
+      - vsix/*.vsix
+    expire_in: 1 week
   rules:
     - if: '$CI_COMMIT_BRANCH == "main" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"'
       when: always

@@ -1,0 +1,28 @@
+Insights - Definition:
+Insights are "Condensations of technically relevant Insights into Project as a set of CCB"
+; don't exceed 4096 Tokens
+; are interconnected Facts
+; capture Project Complexes & Project Interactions.
+
+Loading-Protocol:
+Model analyzes Task for Domains (e.g., testing, tools, configuration, orm, routers, services)
+; always lists CCB Files in `doc/insights/`
+; always reads all relevant CCB Files using `read_file`
+; always parses all relevant CCB Files
+; always loads parsed Insights into Context.
+Loading-Protocol ensures Proactive Context
+; ensures loading in PLAN MODE before `plan_mode_respond`.
+
+Generation-Protocol:
+Model generates New Insights at Task End
+; uses Domain-Specific Search Term
+; persists via write_to_file to doc/insights/<term>.ccb
+; requests User Approval before Finalizing
+; ensures correct CCB generation.
+
+Global-Overview-Insight:
+`global_overview.ccb` contains Insights of Project Structure
+; is always read
+; is always parsed
+; is always loaded into Context
+; is providing Understanding for further Insight Loading.

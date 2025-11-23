@@ -1,8 +1,0 @@
-<tests/unit/orm/test_unit_job> rdf:type "Test File" .
-<tests/unit/orm/test_unit_job> tests "app/orm/job model: create, update, query fields (id, state, param)" .
-<tests/unit/orm/test_unit_job> requires "in-memory DB, SQLAlchemy" .
-<tests/unit/orm/test_unit_job> covers "<app/orm/job> hasFields id, state, owner, set, name, kind, param" .
-
-<tests/unit/orm/test_unit_schedule> rdf:type "Test File" .
-<tests/unit/orm/test_unit_schedule> tests "app/orm/schedule model: create, active toggle, cron" .
-<tests/unit/orm/test_unit_schedule> covers "<app/orm/schedule> hasFields id, cron, active, set, name, param" .

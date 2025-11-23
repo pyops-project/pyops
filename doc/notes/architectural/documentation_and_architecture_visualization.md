@@ -1,3 +1,0 @@
-# Documentation and Architecture Visualization
-
-doc/overview.md provides textual overview matching existing insights (monorepo structure, layered architecture: presentation/API/business/persistence/execution, stack: Python 3.12/FastAPI/SQLAlchemy/ZMQ/msgpack/JS jQuery/Bootstrap/Ace/Jedi/SQLite, mechanisms: job states, croniter scheduling, venv isolation, error handling, config in etc/pyops.json, features: editor/job/scheduling/monitoring/dynamic UI/extensibility). Highlights flow: create/edit scriptlet → enqueue/schedule → runner poll/execute → monitor. doc/architecture.drawio (source) and architecture.png (render) likely visualize layers/ZMQ flow/runner daemon, but contents not readable as binary; referenced paths use @/ for root-relative.

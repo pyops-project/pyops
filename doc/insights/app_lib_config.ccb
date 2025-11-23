@@ -1,0 +1,35 @@
+Config-Management:
+`app/lib/files.py` defines Config class; init(conf_path) loads `etc/pyops.json`; data() returns web data log sections; runner() returns runner-specific.
+
+JSON-Web:
+"web" contains {"bind": "0.0.0.0:80", "worker": 4, "timeout": 300}.
+
+JSON-Data:
+"data" contains {"jobs": "../data/jobs", "git": "../data/git"}.
+
+JSON-Log:
+"log" contains {"access": "../log/access.log", "info": "../log/info.log", "loglevel": "debug"}.
+
+JSON-Optional:
+Optional paths default to stdout & app/../data/jobs.
+
+Access-ConfData:
+conf_data() provides loaded config.
+
+Access-ConfRunner:
+conf_runner() provides runner-specific config.
+
+Access-Get:
+get(path) serves static files.
+
+Global-Reload:
+Config supports dynamic reload on change.
+
+Global-Defaults:
+Defaults include web bind "0.0.0.0:80" & jobs "data/jobs" & no SSL.
+
+Global-Auth:
+App has no auth; proxy recommended.
+
+Global-Logs:
+Log levels include debug & info & etc.

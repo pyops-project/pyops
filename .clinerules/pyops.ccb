@@ -1,0 +1,24 @@
+PyOps Project:
+App Code is located at `app/` 
+; doesn't contain temporary fixes & workarounds.
+VSIX Code is located at `vsix/` 
+; doesn't contain temporary fixes & workarounds.
+App Tests are located at `tests/`
+; have common fixtures in conftest.py & coverage >90%
+; use `pytest --cov-report=term-missing --cov-fail-under=90`
+; store Runtime Files in `.cache/`
+; only import from `app` in Scope of Test Method.
+App Test Fixtures never are `autouse`
+; ensure Test Isolation & Cleanup
+; do not Overlap
+; inherit Each Other
+; complement Each Other.
+VSIX Tests are located at `vsix/tests/`
+; have coverage >90%
+; use `npm run test --prefix vsix/`.
+User decides Architecture.
+Verbose Tests cause Context Pollution.
+Model aviods Context Pollution.
+; requests User to provide Verbose Output
+; does not use Browser Tool for Testing & Debugging
+; is responsible for Project-Rule Alignment.

@@ -1,0 +1,20 @@
+Sets-Management:
+`app/lib/sets.py` handles Git repositories
+; list_sets(git_dir) lists available sets.
+
+Clone-Set:
+clone_set(git_dir, name, url, username, password, git_name, git_email) clones remote to `data/git/{name}/`
+; adds .gitignore & README if needed.
+
+Remove-Set:
+remove_set(git_dir, name) deletes dir.
+
+Switch-Branch:
+switch_branch(git_dir, name, branch) checks out local branch.
+
+Global-Attributes:
+Sets group scriptlets in Git repos.
+Managed via /scriptlet/sets UI or API.
+VSIX supports clone/switch/remove via trees.
+Locking via git.py prevents conflicts.
+Auto-sync via pull_if_needed().

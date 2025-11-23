@@ -1,0 +1,26 @@
+VSIX-Extension:
+`vsix/` is VSCodium extension for PyOps
+; `src/extension.ts` activates context & registers providers
+; `src/jobsTreeProvider.ts` provides JobsTreeDataProvider.
+
+Tree-Providers:
+ManagerTreeDataProvider fetches scriptlets via API
+; downloads to local .pyops/{set}/
+; supports create/upload/save/diff/reset/delete/debug.
+JobsTreeDataProvider lists jobs by state
+; bulk cancel/delete & refresh.
+
+Content-Provider:
+RemoteContentProvider serves remote files
+; onDidChange events.
+
+Config:
+`.pyops.yaml` sets serverUrl localPyopsDir autoRefreshInterval
+; `.pyops.current.{user}.yaml` for auth.
+
+Global-Attributes:
+Trees: pyops-manager (sets/scriptlets), pyops-monitor (jobs).
+Actions: enqueue debug download view.
+Checks hasValidConfig() for .pyops.yaml.
+Status bar shows connection.
+Integrates Cline for code gen.

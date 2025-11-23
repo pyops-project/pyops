@@ -499,3 +499,89 @@ logger = logging.getLogger(__name__)
 - Logs automatically route to Pyops' stdout.log/stderr.log files for monitoring.
 
 For hands-on implementation or further examples, use VSIX/Cline directly.
+
+## Insights
+
+VSIX-Extension:
+VSIX is TypeScript extension for VSCodium & VSCode
+; activates on startup & registers providers
+; provides pyops-manager tree for sets/scriptlets & pyops-monitor for jobs
+; integrates Cline for AI code generation into local mirrors.
+
+Config-Auth:
+.pyops.yaml configures serverUrl & localPyopsDir & autoRefreshInterval
+; .pyops.current.user.yaml sets auth scheme & user & key
+; status bar shows connection validity
+; X-User header determines owner (default anonymous).
+
+Trees-Actions:
+ManagerTreeDataProvider lists sets > scriptlets by type (task/service/library/controller/view)
+; supports right-click create/upload/save/diff/reset/delete/debug/enqueue
+; downloads to .pyops/{set}/{type}/{name}.{ext} for editing.
+JobsTreeDataProvider shows jobs by state (todo/running/done/failed)
+; enables bulk cancel/download/view/remove & refresh.
+
+Sets-Management:
+Sets are Git repos grouping scriptlets
+; clone_set via VSIX webview or /scriptlet/sets API with URL/branch
+; switch_branch checks out local branch & pull_if_needed syncs
+; remove_set deletes dir with confirmation
+; locking prevents concurrent Git ops.
+
+Scriptlets-Types:
+Scriptlets are Python files executed isolated
+; tasks run one-off with output to workspace
+; services loop with listener for persistent requests
+; libraries provide reusable functions imported via directives
+; exec order: param > directives (libraries) > main.
+
+Directives-Deps:
+Directives start with ! after indent & process pre-exec
+; !module installs pip (e.g., !requests==2.31.0)
+; !git@url [branch] clones/pulls repo to sys.path
+; !{::lib_name} loads/execs local library
+; # !module comments out post-process.
+
+Execution-Globals:
+glob provides control (Pyops.Control for API: job.list/enqueue, schedule.create)
+; listener (ServiceListener for ZMQ IPC: listen blocks 1s, poll non-blocking, response dict)
+; workspace is job dir for files/output
+; userspace/setspace are parent dirs
+; logging via import logging & basicConfig(level=INFO).
+
+Services-Handling:
+Services enqueue as kind=service & auto-restart <3 failures
+; listener.listen() blocks for msg or TERM
+; msg has type (GET/POST), cmd/query params, data (dict/str/bytes) & data_type (json/text/binary/none)
+; handle POST data: json.loads if str & json type
+; listener.response({"status": "ok/error", "value/message": ...})
+; non-blocking: while loop with poll() & time.sleep(0.1) for other work.
+
+Controllers-Views:
+Controllers are .py stubs defining set/service/debug/head/menu/body/name
+; render GET /controller/{set}/{name} with base HTML + views (Bootstrap/jQuery/Material Icons)
+; forward methods to service via /q?cmd=... or POST data
+; views are .html fragments: head for <style>/<script> (apiCall util), menu for nav, body for content/modals
+; use {{SET}}/{{NAME}} in URLs/AJAX
+; resources at /files/: Bootstrap 5 CSS/JS, jQuery, Ace Editor (core/modes/ext-*, dynamic loadAceMode).
+
+Routers-API:
+FastAPI routers at /scriptlet/: editor (CRUD code, Jedi completion), inventory (list scriptlets)
+; job (enqueue/cancel/remove/list), monitor (jobs/schedules by state), schedule (CRUD cron)
+; sets (clone/switch/remove), manager (bulk ops UI)
+; scheduler activates cron triggers via runner.
+
+Runner-Jobs:
+runner.py daemon polls DB for todo jobs every 5s
+; dequeues & executes in data/jobs/{owner}/{set}/{id}/ with venv isolation
+; states: todo > dequeued > running (PID) > done/failed/cancelled > remove (drop_done)
+; processes directives, logs to stdout.log (INFO+)/stderr.log (ERROR+), ZMQ for services.
+
+Best-Practices:
+Use Cline for one-shot code gen with full context/prompts & iterate refinements
+; configure logging early with levels & exception for tracebacks
+; validate/sanitize inputs in services, return error dicts
+; self-contained deps via directives, efficient loops (poll 1s max)
+; views: Bootstrap classes for light/dark theme, JS in head, dynamic Ace modes
+; debug via VSIX start debug or enqueue debug (draft files, no cleanup)
+; monitor via pyops-monitor tree or /scriptlet/monitor.

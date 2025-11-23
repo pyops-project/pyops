@@ -1,3 +1,0 @@
-# Scriptlet Example Patterns
-
-example/controller.py demonstrates a controller scriptlet type: Defines HTML head/menu/body for UI (jQuery fetch to /controller/{set}/{name}/q with params, handling GET/DELETE/PUT/POST, displaying results in textarea); uses lib.pyops for ZMQ service interaction. example/service.py shows a service scriptlet: Infinite loop with listener.listen() for ZMQ messages, processes "cmd" (e.g., "exit" responds "BYE", else "unknown message" with JSON dump), catches exceptions for "broken message" with traceback. Both use json for serialization; controller focuses on HTTP/UI, service on persistent ZMQ listening. No !pip/!git lines observed; debug=True in controller.

@@ -1,0 +1,30 @@
+FastAPI-App:
+`app/web.py` creates FastAPI application
+; mounts routers from `app/routers/`
+; serves static files from `app/files/`
+; handles dynamic rendering.
+
+Root-Routes:
+root() serves root.html
+; favicon() serves favicon.ico
+; file(path) serves static /files/{path} like ace.js bootstrap.css.
+
+Controller-Routes:
+controller(set, name) renders UI via get_controller_code & get_view_content
+; loads controller.py globals (set service debug head menu body name)
+; injects {{SET}} {{NAME}} in views.
+controller_get/set() handles GET /controller/{set}/{name}
+; post/put/delete forward to service via ZMQ.
+menu() lists controllers from DB.
+
+View-Rendering:
+get_controller_code(set, name, debug) reads controller.py
+; get_view_content(set, name, debug) reads html views (head menu body).
+Dynamic UI uses Bootstrap & Ace & jQuery from /files/
+; controllers route requests to /q?cmd= or POST data.
+
+Global-Attributes:
+FastAPI uses async routes.
+Controllers enable /controller/{set}/{name}/q for API proxy to services.
+Views support light/dark theme via Bootstrap data-bs-theme.
+Ace Editor loaded dynamically for modes like python json html.

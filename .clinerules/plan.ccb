@@ -1,0 +1,2 @@
+Plan:
+Current Plan is always persisted to `.context/current.md` & before using `replace_in_file` or `write_to_file`.

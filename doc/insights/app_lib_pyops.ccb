@@ -1,0 +1,33 @@
+ZMQ-Control:
+`app/lib/pyops.py` provides "IPC via ZMQ" for scriptlets
+; ControlRequest handles "HTTP proxy" to FastAPI.
+
+JobControl:
+JobControl.list() queries jobs
+; create/get/delete/cancel/download.
+
+ScheduleControl:
+ScheduleControl.list/create/get/delete/activate/deactivate.
+
+Service-Listener:
+ServiceListener(job_id, owner) polls ZMQ
+; listen() blocks 1s for msg or TERM
+; poll() non-blocking
+; response(msg) sends dict back.
+
+Service-Client:
+ServiceClient(set, name, debug, owner) proxies to listener
+; request(msg) sends & receives.
+
+Control-Class:
+Control(web_bind) wraps job/schedule controls
+; get/post/put/delete(set, name, params/json) proxies to /controller/{set}/{name}/q.
+
+Global-Attributes:
+Control available in scriptlet glob for API calls like `control.job.list()`.
+Listener in services for inbound from controllers/UI.
+Msg format: {"type": "GET/POST", "cmd": query, "data": body, "data_type": "json/text/binary/none"}.
+TERM signals shutdown.
+Uses msgpack for serialization.
+ServiceListener.poll uses zmq.Poller non-blocking timeout=0.
+JobControl.create(set: str, name: str, drop_done: bool, param: str, debug: bool) returns job_id.

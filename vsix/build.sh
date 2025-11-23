@@ -15,6 +15,6 @@ echo "Compiling TypeScript..."
 npm run compile
 
 echo "Packaging extension..."
-npx @vscode/vsce package
+npx --yes @vscode/vsce package
 
 echo "Build complete. Find pyops-*.vsix in $SCRIPT_DIR"

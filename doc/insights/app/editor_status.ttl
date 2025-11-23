@@ -1,7 +1,0 @@
-<app/editor_status> rdf:type "UI Pattern" .
-<app/editor_status> location "app/sites/scriptlet/editor_*.html, manager.html" .
-<app/editor_status> uses "GET /inventory/status for has_unstaged bool" .
-<app/editor_status> enables "save/revert buttons if unstaged" .
-<app/editor_status> calls "git.has_unstaged_changes via git diff --quiet HEAD -- file" .
-<manager/save_revision> onclick "saveRevision(set, name): fetch code, POST /inventory/item to commit draft" .
-<manager/save_revision> shown "in actions if has_unstaged" .
