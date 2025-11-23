@@ -302,7 +302,8 @@ def run(job_id: str, owner: str, set: str, name: str, kind: str, param: str, cod
                     "pkgspace": os.path.join(files.project_root, files.conf_runner()["pkg"]),
                     "jobsspace": os.path.join(files.project_root, files.conf_data()["jobs"]),
                     "control": pyops.Control(web_bind),
-                    "listener" : listener
+                    "listener": listener,
+                    "__name__": "__main__"
                 }
 
                 os.chdir(workspace)
