@@ -200,7 +200,7 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
         }
 
         const workspaceRoot = vscode.workspace.workspaceFolders[0].uri.fsPath;
-        const localPyopsDir = pyopsConfig.get('localPyopsDir', '.pyops') as string;
+        const localPyopsDir = pyopsConfig.get('localPyopsDir', 'pyops') as string;
         const baseLocalPath = path.join(workspaceRoot, localPyopsDir);
 
         const downloadPromises = scriptlets.map(async (s: unknown) => {
@@ -834,7 +834,7 @@ export async function activate(context: vscode.ExtensionContext) {
                                     outputChannel.appendLine(`[Create Scriptlet] Verified creation successful.`);
                                     // Open local editor
                                     const workspaceRoot = vscode.workspace.workspaceFolders![0].uri.fsPath;
-                                    const localPyopsDir = pyopsConfig.get('localPyopsDir', '.pyops') as string;
+                                    const localPyopsDir = pyopsConfig.get('localPyopsDir', 'pyops') as string;
                                     const ext = inferExt(typeLower);
                                     const localPath = path.join(workspaceRoot, localPyopsDir, set, typeLower, `${name}.${ext}`);
                                     const localUri = Uri.file(localPath);
@@ -896,7 +896,7 @@ export async function activate(context: vscode.ExtensionContext) {
                     const responseData = await response.json();
                     const code = (responseData as { code: string }).code;
                     const workspaceRoot = vscode.workspace.workspaceFolders![0].uri.fsPath;
-                    const localPyopsDir = pyopsConfig.get('localPyopsDir', '.pyops') as string;
+                    const localPyopsDir = pyopsConfig.get('localPyopsDir', 'pyops') as string;
                     const ext = inferExt(type);
                     const localPath = path.join(workspaceRoot, localPyopsDir, set, type, `${name}.${ext}`);
                     const dirPath = path.dirname(localPath);
@@ -927,7 +927,7 @@ export async function activate(context: vscode.ExtensionContext) {
             const type = treeItem.scriptletType!;
             const pyopsConfig = vscode.workspace.getConfiguration('pyops');
             const workspaceRoot = vscode.workspace.workspaceFolders![0].uri.fsPath;
-            const localPyopsDir = pyopsConfig.get('localPyopsDir', '.pyops') as string;
+            const localPyopsDir = pyopsConfig.get('localPyopsDir', 'pyops') as string;
             const ext = inferExt(type);
             const localPath = path.join(workspaceRoot, localPyopsDir, set, type, `${name}.${ext}`);
             if (!fs.existsSync(localPath)) {
@@ -1199,7 +1199,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 const responseData = await response.json();
                 const code = (responseData as { code: string }).code;
                 const workspaceRoot = vscode.workspace.workspaceFolders![0].uri.fsPath;
-                const localPyopsDir = pyopsConfig.get('localPyopsDir', '.pyops') as string;
+                const localPyopsDir = pyopsConfig.get('localPyopsDir', 'pyops') as string;
                 const ext = inferExt(type);
                 const localPath = path.join(workspaceRoot, localPyopsDir, set, type, `${name}.${ext}`);
                 if (!fs.existsSync(localPath)) {
@@ -1255,7 +1255,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 if (response.ok) {
                     // Delete local file
                     const workspaceRoot = vscode.workspace.workspaceFolders![0].uri.fsPath;
-                    const localPyopsDir = pyopsConfig.get('localPyopsDir', '.pyops') as string;
+                    const localPyopsDir = pyopsConfig.get('localPyopsDir', 'pyops') as string;
                     const ext = inferExt(type);
                     const localPath = path.join(workspaceRoot, localPyopsDir, set, type, `${name}.${ext}`);
                     if (fs.existsSync(localPath)) {
@@ -1281,7 +1281,7 @@ export async function activate(context: vscode.ExtensionContext) {
             const type = treeItem.scriptletType!;
             const pyopsConfig = vscode.workspace.getConfiguration('pyops');
             const workspaceRoot = vscode.workspace.workspaceFolders![0].uri.fsPath;
-            const localPyopsDir = pyopsConfig.get('localPyopsDir', '.pyops') as string;
+            const localPyopsDir = pyopsConfig.get('localPyopsDir', 'pyops') as string;
             const ext = inferExt(type);
             const localPath = path.join(workspaceRoot, localPyopsDir, set, type, `${name}.${ext}`);
             if (!fs.existsSync(localPath)) {

@@ -272,7 +272,7 @@
         },
         "pyops.localPyopsDir": {
           "type": "string",
-          "default": ".pyops",
+          "default": "pyops",
           "description": "Local directory for PyOps scriptlets relative to workspace"
         },
         "pyops.autoRefreshInterval": {
