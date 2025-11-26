@@ -320,13 +320,35 @@ def run(job_id: str, owner: str, set: str, name: str, kind: str, param: str, cod
                 warn_handler.setLevel(logging.WARNING)
                 root.addHandler(warn_handler)
                     
-                if param:
-                    exec(param, glob)
-                for l in libs:
-                    exec(l, glob)
-                exec(code, glob)
+                if kind == "task" and kind != "debug":
+                    max_retries = 3
+                    for attempt in range(max_retries + 1):
+                        try:
+                            if param:
+                                exec(param, glob)
+                            for l in libs:
+                                exec(l, glob)
+                            exec(code, glob)
+                            q.put({"id": job_id, "state": "done", "detail": None})
+                            break
+                        except Exception:
+                            if attempt < max_retries:
+                                logger.warning(f"Job {job_id} attempt {attempt + 1}/{max_retries + 1} failed, retrying in 60s")
+                                time.sleep(60)
+                            else:
+                                error_msg = f"Failed after {max_retries} retries\n{traceback.format_exc()}"
+                                stderr_file.write(error_msg)
+                                stderr_file.flush()
+                                q.put({"id": job_id, "state": "failed", "detail": error_msg})
+                                break
+                else:
+                    if param:
+                        exec(param, glob)
+                    for l in libs:
+                        exec(l, glob)
+                    exec(code, glob)
 
-                q.put({"id": job_id, "state": "done", "detail": None})
+                    q.put({"id": job_id, "state": "done", "detail": None})
     except Exception:
         error_msg = f"Error executing job {job_id}\n{traceback.format_exc()}"
         stderr_file.write(error_msg)

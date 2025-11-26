@@ -42,6 +42,41 @@ class TestExecution:
         q.put.assert_called_once_with({"id": "id", "state": "done", "detail": None})
 
     @patch('app.runner.pyops.ServiceListener')
+    @patch('time.sleep')
+    def test_run_task_retry_success_on_third(self, mock_sleep, mock_listener, tmp_path, mock_conf):
+        from app.runner import run
+        q = Mock()
+        mock_listener.return_value = None
+        data_base = str(tmp_path / "data")
+        mock_sleep.return_value = None  # No real delay
+
+        # Mock exec to fail first 2 attempts, succeed on 3rd
+        exec_mock = Mock()
+        with patch('builtins.exec', side_effect=[Exception("fail1"), Exception("fail2"), None]):
+            run("id", "owner", "set", "name", "task", "", "print('success')", [], q, data_base, "bind", "/venv", "/pkg")
+
+        assert mock_sleep.call_count == 2  # Sleeps after first two fails
+        q.put.assert_called_once_with({"id": "id", "state": "done", "detail": None})
+
+    @patch('app.runner.pyops.ServiceListener')
+    @patch('time.sleep')
+    def test_run_task_retry_fail_all(self, mock_sleep, mock_listener, tmp_path, mock_conf):
+        from app.runner import run
+        q = Mock()
+        mock_listener.return_value = None
+        data_base = str(tmp_path / "data")
+        mock_sleep.return_value = None
+
+        # Mock exec to always fail
+        with patch('builtins.exec', side_effect=Exception("fail")):
+            run("id", "owner", "set", "name", "task", "", "raise Exception", [], q, data_base, "bind", "/venv", "/pkg")
+
+        assert mock_sleep.call_count == 3  # Sleeps after each of 3 fails
+        call_args = q.put.call_args[0][0]
+        assert call_args["state"] == "failed"
+        assert "Failed after 3 retries" in call_args["detail"]
+
+    @patch('app.runner.pyops.ServiceListener')
     def test_run_service_with_listener(self, mock_listener, tmp_path, mock_conf):
         from app.runner import run
         q = Mock()
@@ -55,15 +90,50 @@ class TestExecution:
         q.put.assert_called_once_with({"id": "id", "state": "done", "detail": None})
 
     @patch('app.runner.pyops.ServiceListener')
-    def test_run_failed_exception(self, mock_listener, tmp_path):
+    @patch('time.sleep')
+    def test_run_service_no_retry(self, mock_sleep, mock_listener, tmp_path):
+        from app.runner import run
+        q = Mock()
+        mock_listener.return_value = Mock()
+        data_base = str(tmp_path / "data")
+        mock_sleep.return_value = None
+
+        with patch('builtins.exec', side_effect=Exception("service fail")):
+            run("id", "owner", "set", "name", "service", "", "raise Exception", [], q, data_base, "bind", "/venv", "/pkg")
+
+        assert mock_sleep.call_count == 0  # No retries for service
+        q.put.assert_called_once_with({"id": "id", "state": "failed", "detail": ANY})
+
+    @patch('app.runner.pyops.ServiceListener')
+    @patch('time.sleep')
+    def test_run_debug_no_retry(self, mock_sleep, mock_listener, tmp_path):
+        from app.runner import run
+        q = Mock()
+        mock_listener.return_value = Mock()
+        data_base = str(tmp_path / "data")
+        mock_sleep.return_value = None
+
+        with patch('builtins.exec', side_effect=Exception("debug fail")):
+            run("id", "owner", "set", "name", "debug", "", "raise Exception", [], q, data_base, "bind", "/venv", "/pkg")
+
+        assert mock_sleep.call_count == 0  # No retries for debug
+        q.put.assert_called_once_with({"id": "id", "state": "failed", "detail": ANY})
+
+    @patch('app.runner.pyops.ServiceListener')
+    @patch('time.sleep')
+    def test_run_failed_exception(self, mock_sleep, mock_listener, tmp_path):
         from app.runner import run
         q = Mock()
         mock_listener.return_value = None
         data_base = str(tmp_path / "data")
+        mock_sleep.return_value = None
 
         run("id", "owner", "set", "name", "task", "", "raise Exception('exec error')", [], q, data_base, "bind", "/venv", "/pkg")
 
-        q.put.assert_called_once_with({"id": "id", "state": "failed", "detail": ANY})
+        assert mock_sleep.call_count == 3
+        call_args = q.put.call_args[0][0]
+        assert call_args["state"] == "failed"
+        assert "Failed after 3 retries" in call_args["detail"]
 
     @patch('app.runner.loadLib')  # loadLib is in app.runner
     def test_process_imports_success(self, mock_loadLib, mock_conf):
@@ -327,23 +397,27 @@ logging.error('ERROR message')
         mock_queue.put.assert_called_once_with({"id": job_id, "state": "done", "detail": None})
 
     @patch('app.runner.pyops.ServiceListener')
-    def test_run_fail_logging(self, mock_listener, tmp_path, sample_fail_code, mock_queue):
+    @patch('time.sleep')
+    def test_run_fail_logging(self, mock_sleep, mock_listener, tmp_path, sample_fail_code, mock_queue):
         from app.runner import run
         mock_listener.return_value = None
         data_base = str(tmp_path / "data")
         owner = "owner"
         set_name = "set"
         job_id = "id"
+        mock_sleep.return_value = None
 
         run(job_id, owner, set_name, "name", "task", "", sample_fail_code, [], mock_queue, data_base, "bind", "/venv", "/pkg")
 
         stdout_content, stderr_content = self.get_log_contents(data_base, owner, set_name, job_id)
 
         assert stdout_content == ""
-        assert "Error executing job id" in stderr_content
+        assert "Failed after 3 retries" in stderr_content
         assert "ValueError: test error" in stderr_content
         detail = mock_queue.put.call_args[0][0]["detail"]
+        assert "Failed after 3 retries" in detail
         assert "ValueError" in str(detail)
+        assert mock_sleep.call_count == 3
         mock_queue.put.assert_called_once_with({"id": job_id, "state": "failed", "detail": ANY})
 
     @patch('app.runner.pyops.ServiceListener')
