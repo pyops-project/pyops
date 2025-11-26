@@ -6,12 +6,13 @@ from starlette.status import HTTP_204_NO_CONTENT, HTTP_404_NOT_FOUND, HTTP_409_C
 from pydantic import BaseModel, create_model
 
 from app.lib import git
+from app.lib.auth import sanitize_owner
 
 import logging
 logger = logging.getLogger(__name__)
 
 async def get_current_user(x_user: str = Header(default=None, alias="X-User")):
-    return x_user or "anonymous"
+    return sanitize_owner(x_user)
 
 router = APIRouter()
 

@@ -13,6 +13,7 @@ from app.orm.database import get_db_engine
 from app.orm.job import Job
 
 from app.lib import runner, files, git
+from app.lib.auth import sanitize_owner
 
 from zipstream import ZipStream, ZIP_DEFLATED
 
@@ -20,7 +21,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 async def get_current_user(x_user: str = Header(default=None, alias="X-User")):
-    return x_user or "anonymous"
+    return sanitize_owner(x_user)
 
 router = APIRouter()
 

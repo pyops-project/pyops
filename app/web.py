@@ -18,6 +18,7 @@ from .routers.scriptlet import editor
 from .routers.scriptlet import sets
 
 from .lib import sites, files, pyops, git
+from .lib.auth import sanitize_owner
 
 from sqlalchemy import select, and_
 from sqlalchemy.orm import Session
@@ -231,7 +232,7 @@ def controller_get(set: str, name: str, request: Request):
         code = get_controller_code(set, name)
         exec(code, glob)
 
-        user = request.headers.get("X-User", "anonymous")
+        user = sanitize_owner(request.headers.get("X-User"))
         s = pyops.ServiceClient(glob["set"], glob["service"], debug=glob.get("debug", False), owner=user)
         return s.request(params)
     except HTTPException:
@@ -275,7 +276,7 @@ async def controller_delete(set: str, name: str, request: Request):
         code = get_controller_code(set, name)
         exec(code, glob)
 
-        user = request.headers.get("X-User", "anonymous")
+        user = sanitize_owner(request.headers.get("X-User"))
         s = pyops.ServiceClient(glob["set"], glob["service"], debug=glob.get("debug", False), owner=user)
         return s.request(params)
     except HTTPException:
@@ -319,7 +320,7 @@ async def controller_put(set: str, name: str, request: Request):
         code = get_controller_code(set, name)
         exec(code, glob)
 
-        user = request.headers.get("X-User", "anonymous")
+        user = sanitize_owner(request.headers.get("X-User"))
         s = pyops.ServiceClient(glob["set"], glob["service"], debug=glob.get("debug", False), owner=user)
         return s.request(params)
     except HTTPException:
@@ -363,7 +364,7 @@ async def controller_post(set: str, name: str, request: Request):
         code = get_controller_code(set, name)
         exec(code, glob)
 
-        user = request.headers.get("X-User", "anonymous")
+        user = sanitize_owner(request.headers.get("X-User"))
         s = pyops.ServiceClient(glob["set"], glob["service"], debug=glob.get("debug", False), owner=user)
         return s.request(params)
     except HTTPException:
