@@ -296,41 +296,32 @@ class TestDaemon:
 
     def test_main_initialization_no_crash(self, mock_db):
         from app.runner import main
-        from unittest.mock import Mock
+        from unittest.mock import Mock, patch, DEFAULT
         # Mock all dependencies to no-op for first iteration, set kill_now=True to exit after
         def sleep_side_effect(delay):
             mock_killer_instance.kill_now = True
             return None
-        with patch('app.runner.os.environ', {}):
-            with patch('app.runner.GracefulKiller') as mock_killer:
-                mock_killer_instance = mock_killer.return_value
-                mock_killer_instance.kill_now = False
-                with patch('app.runner.Queue') as mock_q:
-                    mock_queue_instance = Mock()
-                    mock_queue_instance.empty.return_value = True
-                    mock_q.return_value = mock_queue_instance
-                    with patch('app.runner.handleOddJobs'):
-                        with patch('app.runner.disposeJobs'):
-                            with patch('app.runner.cleanProcesses', return_value={}):
-                                with patch('app.runner.getNextToTerm', return_value=None):
-                                    with patch('app.runner.term'):
-                                        with patch('app.runner.postTerm'):
-                                            with patch('app.runner.finishJob'):
-                                                with patch('app.runner.getNextToDo', return_value=None):
-                                                    with patch('app.runner.loadJob'):
-                                                        with patch('app.runner.Process'):
-                                                            with patch('app.runner.assignJob'):
-                                                                with patch('app.runner.schedule'):
-                                                                    with patch('app.runner.git.get_git_pull_interval', return_value=60):
-                                                                        with patch('app.runner.git.pull_if_needed'):
-                                                                            with patch('app.runner.git.get_git_base', return_value='/tmp/git'):
-                                                                                with patch('app.runner.os.listdir', return_value=[]):
-                                                                                    with patch('app.runner.time.time') as mock_time_time:
-                                                                                        with patch('app.runner.time.sleep') as mock_sleep:
-                                                                                            mock_time_time.side_effect = [61.0]  # Trigger git pull on first call
-                                                                                            mock_sleep.side_effect = sleep_side_effect
-                                                                                            # Call main with dummy args
-                                                                                            main('tmp/db', 'localhost:8000', 'tmp/venv', 'tmp/pkg', {})
-                                                                                            # Assert time.time called (verifies no UnboundLocalError)
-                                                                                            assert mock_time_time.call_count >= 1  # current_time call
-                                                                                            mock_sleep.assert_called_once_with(0.5)
+        with patch.dict('os.environ', {}):
+            with patch.multiple('app.runner.time', sleep=DEFAULT, time=DEFAULT) as time_mocks:
+                with patch.multiple('app.runner.os', listdir=DEFAULT) as os_mocks:
+                    with patch.multiple('app.runner.git', get_git_base=DEFAULT, pull_if_needed=DEFAULT, get_git_pull_interval=DEFAULT) as git_mocks:
+                        with patch.multiple('app.runner', schedule=DEFAULT, assignJob=DEFAULT, Process=DEFAULT, loadJob=DEFAULT, getNextToDo=DEFAULT, finishJob=DEFAULT, postTerm=DEFAULT, term=DEFAULT, getNextToTerm=DEFAULT, cleanProcesses=DEFAULT, disposeJobs=DEFAULT, handleOddJobs=DEFAULT, Queue=DEFAULT, GracefulKiller=DEFAULT) as runner_mocks:
+                            mock_killer_instance = runner_mocks['GracefulKiller'].return_value
+                            mock_killer_instance.kill_now = False
+                            mock_queue_instance = Mock()
+                            mock_queue_instance.empty.return_value = True
+                            runner_mocks['Queue'].return_value = mock_queue_instance
+                            runner_mocks['cleanProcesses'].return_value = {}
+                            runner_mocks['getNextToTerm'].return_value = None
+                            runner_mocks['getNextToDo'].return_value = None
+                            git_mocks['get_git_pull_interval'].return_value = 60
+                            git_mocks['get_git_base'].return_value = '/tmp/git'
+                            git_mocks['pull_if_needed'].return_value = None
+                            os_mocks['listdir'].return_value = []
+                            time_mocks['time'].side_effect = [61.0]  # Trigger git pull on first call
+                            time_mocks['sleep'].side_effect = sleep_side_effect
+                            # Call main with dummy args
+                            main('tmp/db', 'localhost:8000', 'tmp/venv', 'tmp/pkg', {})
+                            # Assert time.time called (verifies no UnboundLocalError)
+                            assert time_mocks['time'].call_count >= 1  # current_time call
+                            time_mocks['sleep'].assert_called_once_with(0.5)

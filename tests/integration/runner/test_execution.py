@@ -140,10 +140,10 @@ class TestExecution:
         from app.runner import process_imports
         mock_loadLib.return_value = "loaded lib"
         libs = []
-        result = process_imports("!{::lib}\nrest", "current_set", False, libs)
+        result = process_imports("#!{::lib}\nrest", "current_set", False, libs)
         assert "# importing current_set::lib" in result
         assert len(libs) == 1
-        assert libs[0] == "loaded lib"
+        assert libs[0]["code"] == "loaded lib"
         mock_loadLib.assert_called_once_with("current_set", "lib", False)
 
     @patch('app.runner.loadLib')
@@ -151,8 +151,8 @@ class TestExecution:
         from app.runner import process_imports
         mock_loadLib.side_effect = Exception("load fail")
         libs = []
-        result = process_imports("!{::lib}\nrest", "current_set", False, libs)
-        assert "!{::lib}" in result  # Kept original
+        result = process_imports("#!{::lib}\nrest", "current_set", False, libs)
+        assert "#!{::lib}" in result  # Kept original
         assert len(libs) == 0
         mock_loadLib.assert_called_once_with("current_set", "lib", False)
 
@@ -496,3 +496,80 @@ print("jobsspace: " + globals()['jobsspace'])
             assert expected_pkgspace in stdout_content
             assert expected_jobsspace in stdout_content
             q.get()  # Consume the done message
+
+    @patch('app.runner.pyops.ServiceListener')
+    @patch('time.sleep')
+    def test_run_error_in_param(self, mock_sleep, mock_listener, tmp_path, mock_conf):
+        from app.runner import run
+        from multiprocessing import Queue
+        mock_listener.return_value = None
+        mock_sleep.return_value = None
+        data_base = str(tmp_path / "data")
+        set_ = "myset"
+        name = "myname"
+        param = "raise ValueError('param err')"
+        q = Queue()
+        run("id", "owner", set_, name, "task", param, "pass", [], q, data_base, "bind", "/venv", "/pkg")
+        msg = q.get()
+        assert msg["state"] == "failed"
+        assert "param err" in msg["detail"]
+        assert f"{set_}::param.py" in msg["detail"]
+        assert mock_sleep.call_count == 3
+
+    @patch('app.runner.pyops.ServiceListener')
+    @patch('time.sleep')
+    def test_run_error_in_code(self, mock_sleep, mock_listener, tmp_path, mock_conf):
+        from app.runner import run
+        from multiprocessing import Queue
+        mock_listener.return_value = None
+        mock_sleep.return_value = None
+        data_base = str(tmp_path / "data")
+        set_ = "myset"
+        name = "myname"
+        code = "raise ValueError('code err')"
+        q = Queue()
+        run("id", "owner", set_, name, "task", "", code, [], q, data_base, "bind", "/venv", "/pkg")
+        msg = q.get()
+        assert msg["state"] == "failed"
+        assert "code err" in msg["detail"]
+        assert f"{set_}::{name}.py" in msg["detail"]
+        assert mock_sleep.call_count == 3
+
+    @patch('app.runner.pyops.ServiceListener')
+    @patch('time.sleep')
+    def test_run_error_in_lib(self, mock_sleep, mock_listener, tmp_path, mock_conf):
+        from app.runner import run
+        from multiprocessing import Queue
+        mock_listener.return_value = None
+        mock_sleep.return_value = None
+        data_base = str(tmp_path / "data")
+        set_ = "myset"
+        name = "myname"
+        lib_code = "raise ValueError('lib err')"
+        lib_filename = f"{set_}::mylib.py"
+        libs = [{"code": lib_code, "filename": lib_filename}]
+        q = Queue()
+        run("id", "owner", set_, name, "task", "", "pass", libs, q, data_base, "bind", "/venv", "/pkg")
+        msg = q.get()
+        assert msg["state"] == "failed"
+        assert "lib err" in msg["detail"]
+        assert lib_filename in msg["detail"]
+        assert mock_sleep.call_count == 3
+
+    @patch('app.runner.pyops.ServiceListener')
+    def test_run_error_in_lib_service(self, mock_listener, tmp_path, mock_conf):
+        from app.runner import run
+        from multiprocessing import Queue
+        mock_listener.return_value = Mock()
+        data_base = str(tmp_path / "data")
+        set_ = "myset"
+        name = "myname"
+        lib_code = "raise ValueError('lib err service')"
+        lib_filename = f"{set_}::mylib.py"
+        libs = [{"code": lib_code, "filename": lib_filename}]
+        q = Queue()
+        run("id", "owner", set_, name, "service", "", "pass", libs, q, data_base, "bind", "/venv", "/pkg")
+        msg = q.get()
+        assert msg["state"] == "failed"
+        assert "lib err service" in msg["detail"]
+        assert lib_filename in msg["detail"]

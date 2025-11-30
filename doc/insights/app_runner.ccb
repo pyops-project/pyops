@@ -8,11 +8,12 @@ Polls DB via getNextToDo() for todo jobs
 Job-Execution:
 loadJob(job_id) fetches from DB
 ; run() processes param & libs & code in subprocess
-; handles venv activation & directives via process_imports() & process_install_lines().
+; handles venv activation & directives via process_imports() & process_install_lines()
+; uses compile() with custom filenames (e.g., "{set}::{name}.py") for accurate stacktraces in errors from param, code, and libs.
 finishJob(job_id, state, detail) updates DB.
 
 Directive-Processing:
-process_imports(text, set, debug, libs) handles `!pip` `!git` `!{set::lib}`
+process_imports(text, set, debug, libs) handles `!pip` `!git` `#!{set::lib}`
 ; installs pip -q & clones git to pkg/ & prepends sys.path & exec libs.
 process_install_lines(lines, venv, pkg, id) executes installs.
 

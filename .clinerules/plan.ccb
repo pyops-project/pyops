@@ -1,2 +1,4 @@
 Plan:
-Current Plan is always persisted to `.context/current.md` & before using `replace_in_file` or `write_to_file`.
+Current Plan contains all instructions, context details, conversation history summaries, and relevant project/code extracts required to continue in a new conversation
+; is always persisted to `.context/current.md` & before using `replace_in_file` or `write_to_file`.
+Model is not allowed to read anything from `.context` except `current.md`.

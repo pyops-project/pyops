@@ -18,7 +18,7 @@ test:
     - python3 -m venv .venv
     - source .venv/bin/activate
     - pip install --upgrade pip
-    - pip install fastapi uvicorn sqlalchemy pyzmq msgpack croniter jedi requests zipstream-ng gunicorn pytest httpx pytest-cov
+    - pip install fastapi uvicorn sqlalchemy pyzmq msgpack croniter jedi requests zipstream-ng gunicorn pytest httpx pytest-cov debugpy
   script:
     - source .venv/bin/activate
     - ./test.sh

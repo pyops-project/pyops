@@ -151,21 +151,21 @@ def disposeJobs():
             session.commit()
             logger.debug("disposeJobs: committed deletions")
 
-def process_imports(text: str, current_set: str, debug: bool, libs: list[str]) -> str:
+def process_imports(text: str, current_set: str, debug: bool, libs: list[dict[str, str]]) -> str:
     r"""
-    Processes lines starting with !{set::name} or !{::name} (empty set uses current_set).
-    - Strictly at line start (^!\{...}), no indentation allowed.
-    - Loads library code, appends to libs if successful.
+    Processes lines starting with #!{set::name} or #!{::name} (empty set uses current_set).
+    - Strictly at line start (^#\!\{...}), no indentation allowed.
+    - Loads library code, appends to libs if successful as {"code": str, "filename": str}.
     - Replaces with '# importing set::name' + rest of line.
     - On failure (load error, invalid format), keeps original line and logs warning.
-    - No recursion: assumes libs are pure (no further !{} directives).
+    - No recursion: assumes libs are pure (no further #!{} directives).
     - Preserves line endings and rest of line content.
     
     Args:
         text (str): Input text (param or code) to process.
         current_set (str): Job set for empty ::name resolution.
         debug (bool): Use unstaged code for libs.
-        libs (list[str]): Mutable list to append loaded lib codes.
+        libs (list[dict[str, str]]): Mutable list to append {"code": lib_code, "filename": f"{set}::{name}.py"}.
     
     Returns:
         str: Updated text with replacements.
@@ -173,7 +173,7 @@ def process_imports(text: str, current_set: str, debug: bool, libs: list[str]) -
     lines = text.splitlines(keepends=True)
     new_lines = []
     for line in lines:
-        match = re.match(r'^!\{([a-zA-Z0-9_-]*?)(::([a-zA-Z0-9_-]+))?\}', line)
+        match = re.match(r'^#\!\{([a-zA-Z0-9_-]*?)(::([a-zA-Z0-9_-]+))?\}', line)
         if match and match.group(2):  # Has :: separator
             g = match.group(1)
             n = match.group(3)
@@ -181,7 +181,7 @@ def process_imports(text: str, current_set: str, debug: bool, libs: list[str]) -
                 effective_g = current_set if not g else g
                 try:
                     lib_code = loadLib(effective_g, n, debug)
-                    libs.append(lib_code)
+                    libs.append({"code": lib_code, "filename": f"{effective_g}::{n}.py"})
                     replacement = f'# importing {effective_g}::{n}'
                     new_line = replacement + line[match.end():]
                 except Exception as e:
@@ -245,7 +245,7 @@ def process_install_lines(lines, venv_path, pkg_path, id):
             new_lines.append(line)
     return new_lines
 
-def run(job_id: str, owner: str, set: str, name: str, kind: str, param: str, code: str, libs: list[str], q: Queue, data_base: str, web_bind: str, venv_path: str, pkg_path: str):
+def run(job_id: str, owner: str, set: str, name: str, kind: str, param: str, code: str, libs: list[dict[str, str]], q: Queue, data_base: str, web_bind: str, venv_path: str, pkg_path: str):
     """Executes job in isolated workspace; activates venv, processes installs w/ env prop."""
     userspace = os.path.join(data_base, f"{owner}")
     setspace = os.path.join(userspace, f"{set}")
@@ -279,15 +279,29 @@ def run(job_id: str, owner: str, set: str, name: str, kind: str, param: str, cod
                 param = ''.join(new_param_lines)
 
                 new_libs = []
-                for l in libs:
-                    l_lines = l.splitlines(keepends=True)
+                for lib in libs:
+                    l_code = lib["code"]
+                    l_lines = l_code.splitlines(keepends=True)
                     new_l_lines = process_install_lines(l_lines, venv_path, pkg_path, job_id)
-                    new_libs.append(''.join(new_l_lines))
+                    new_lib = {"code": ''.join(new_l_lines), "filename": lib["filename"]}
+                    new_libs.append(new_lib)
                 libs = new_libs
 
                 code_lines = code.splitlines(keepends=True)
                 new_code_lines = process_install_lines(code_lines, venv_path, pkg_path, job_id)
                 code = ''.join(new_code_lines)
+
+                # Compile code objects with custom filenames for accurate tracebacks
+                if param:
+                    param_filename = f"{set}::param.py"
+                    compiled_param = compile(param, param_filename, 'exec')
+                else:
+                    compiled_param = None
+
+                code_filename = f"{set}::{name}.py"
+                compiled_code = compile(code, code_filename, 'exec')
+
+                compiled_libs = [compile(lib["code"], lib["filename"], 'exec') for lib in libs]
 
                 if kind == "service" or kind == "debug":
                     listener = pyops.ServiceListener(job_id, current_user=owner)
@@ -324,11 +338,11 @@ def run(job_id: str, owner: str, set: str, name: str, kind: str, param: str, cod
                     max_retries = 3
                     for attempt in range(max_retries + 1):
                         try:
-                            if param:
-                                exec(param, glob)
-                            for l in libs:
-                                exec(l, glob)
-                            exec(code, glob)
+                            if compiled_param is not None:
+                                exec(compiled_param, glob)
+                            for cl in compiled_libs:
+                                exec(cl, glob)
+                            exec(compiled_code, glob)
                             q.put({"id": job_id, "state": "done", "detail": None})
                             break
                         except Exception:
@@ -342,18 +356,18 @@ def run(job_id: str, owner: str, set: str, name: str, kind: str, param: str, cod
                                 q.put({"id": job_id, "state": "failed", "detail": error_msg})
                                 break
                 else:
-                    if param:
-                        exec(param, glob)
-                    for l in libs:
-                        exec(l, glob)
-                    exec(code, glob)
+                    if compiled_param is not None:
+                        exec(compiled_param, glob)
+                    for cl in compiled_libs:
+                        exec(cl, glob)
+                    exec(compiled_code, glob)
 
                     q.put({"id": job_id, "state": "done", "detail": None})
     except Exception:
         error_msg = f"Error executing job {job_id}\n{traceback.format_exc()}"
         stderr_file.write(error_msg)
         stderr_file.flush()
-        q.put({"id": job_id, "state": "failed", "detail": traceback.format_exc()})
+        q.put({"id": job_id, "state": "failed", "detail": error_msg})
     finally:
         stdout_file.close()
         stderr_file.close()
@@ -535,7 +549,7 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
                     code = process_imports(code, set, debug, libs)
 
                     logger.debug(f"Run job {job_id}")
-                    p = Process(target=run, kwargs={"job_id": job_id, "owner": owner, "set": set, "name": name, "kind": kind, "param": param, "code": code, "libs": libs, "q": q, "data_base": data_base, "web_bind": web_bind, "venv_path": venv_path, "pkg_path": pkg_path})
+                    p = Process(target=run, name=f"{set}::{name}", kwargs={"job_id": job_id, "owner": owner, "set": set, "name": name, "kind": kind, "param": param, "code": code, "libs": libs, "q": q, "data_base": data_base, "web_bind": web_bind, "venv_path": venv_path, "pkg_path": pkg_path})
                     p.start()
                     assignJob(job_id, p.pid)
                     processes[p.pid] = p
