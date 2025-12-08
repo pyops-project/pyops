@@ -57,6 +57,18 @@ class Config:
             logger.error("Conf runner access failed: %s", e)
             raise
 
+    def users(self):
+        try:
+            logger.debug("Accessing conf_users, _raw_conf type: %s", type(self._raw_conf))
+            if self._raw_conf is None:
+                raise ValueError("Config not initialized. Call Config.init(conf_path) first.")
+            users = self._raw_conf.get("users", {})
+            logger.debug("Conf users accessed successfully")
+            return users
+        except Exception as e:
+            logger.error("Conf users access failed: %s", e)
+            raise
+
 config = None
 
 def conf_data():
@@ -70,3 +82,9 @@ def conf_runner():
     if config is None:
         raise ValueError("Config not initialized. Call Config.init(conf_path) first.")
     return config.runner()
+
+def conf_users():
+    global config
+    if config is None:
+        raise ValueError("Config not initialized. Call Config.init(conf_path) first.")
+    return config.users()

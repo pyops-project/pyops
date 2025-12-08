@@ -5,6 +5,8 @@ Scriptlet-Routers:
 
 Job-Routers:
 job.py manages job lifecycle enqueue query cancel remove
+; enqueues jobs with kind ("task", "draft", "debug")
+; for debug kind, accepts overrides dict[str, str] with keys 'set::name' for overriding scriptlets
 ; manager.py UI for jobs bulk ops.
 
 Monitor-Scheduler:

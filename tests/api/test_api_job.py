@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 @pytest.fixture
 def mock_enqueue(mock_db):
     with patch('app.lib.runner.enqueue') as mock:
-        def enqueue_side_effect(set_, name, owner, kind, drop_done, param):
+        def enqueue_side_effect(set_, name, owner, kind, drop_done, param, overrides=None):
             # Mock DB insert and return ID
             from app.orm.job import Job
             job = Job(
@@ -19,7 +19,8 @@ def mock_enqueue(mock_db):
                 kind=kind,
                 state="todo",
                 drop_done=drop_done,
-                param=param
+                param=param,
+                overrides=overrides
             )
             job_id = job.id = f"{owner}_{set_}_{name}_{int(datetime.now().timestamp())}"
             with Session(get_db_engine()) as session:
@@ -31,10 +32,10 @@ def mock_enqueue(mock_db):
         yield mock
 
 
-@pytest.mark.parametrize("debug", [True, False])
-def test_put_job_item_enqueue(mock_client, mock_db, mock_git_ops, mock_enqueue, debug, test_temp_dir, patch_tempfile, mock_datetime):
+@pytest.mark.parametrize("kind", ["task", "draft"])
+def test_put_job_item_enqueue(mock_client, mock_db, mock_git_ops, mock_enqueue, kind, test_temp_dir, patch_tempfile, mock_datetime):
     # Test PUT /scriptlet/job/item to enqueue
-    unique_name = f"testtask_{'debug' if debug else 'task'}"
+    unique_name = f"testtask_{kind}"
     with patch("subprocess.check_output", return_value=b"pass\n"):  # Mock git show
         response = mock_client.put(
             "/scriptlet/job/item",
@@ -43,7 +44,7 @@ def test_put_job_item_enqueue(mock_client, mock_db, mock_git_ops, mock_enqueue, 
                 "name": unique_name,
                 "drop_done": False,
                 "param": '{"key": "value"}',
-                "debug": debug
+                "kind": kind
             },
             headers={"X-User": "testuser"}
         )
@@ -53,6 +54,51 @@ def test_put_job_item_enqueue(mock_client, mock_db, mock_git_ops, mock_enqueue, 
         job_id = data["job"]
         assert isinstance(job_id, str)
         assert mock_enqueue.called
+
+@pytest.mark.parametrize("kind", ["debug"])
+def test_put_job_item_enqueue_debug(mock_client, mock_db, mock_git_ops, mock_enqueue, kind, test_temp_dir, patch_tempfile, mock_datetime):
+    # Test PUT /scriptlet/job/item to enqueue debug with overrides
+    unique_name = f"testtask_{kind}"
+    with patch("subprocess.check_output", return_value=b"pass\n"):  # Mock git show
+        response = mock_client.put(
+            "/scriptlet/job/item",
+            json={
+                "set": "testset",
+                "name": unique_name,
+                "drop_done": False,
+                "param": '{"key": "value"}',
+                "kind": kind,
+                "overrides": {"testset::override": "def override(): pass"}
+            },
+            headers={"X-User": "testuser"}
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert "job" in data
+        job_id = data["job"]
+        assert isinstance(job_id, str)
+        assert mock_enqueue.called
+        # Verify overrides_json passed
+        args, kwargs = mock_enqueue.call_args
+        assert kwargs['overrides'] == '{"testset::override": "def override(): pass"}'
+
+def test_put_job_item_enqueue_debug_invalid_overrides(mock_client, mock_db, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
+    # Test PUT /scriptlet/job/item debug with invalid override key
+    with patch("subprocess.check_output", return_value=b"pass\n"):
+        response = mock_client.put(
+            "/scriptlet/job/item",
+            json={
+                "set": "testset",
+                "name": "invalid",
+                "drop_done": False,
+                "param": "{}",
+                "kind": "debug",
+                "overrides": {"invalid_key": "code"}
+            },
+            headers={"X-User": "testuser"}
+        )
+        assert response.status_code == 400
+        assert "Invalid override key" in response.json()["detail"]
 
 def test_put_job_item_enqueue_invalid_param(mock_client, mock_db, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
     # Invalid param (non-JSON)
@@ -64,7 +110,7 @@ def test_put_job_item_enqueue_invalid_param(mock_client, mock_db, mock_git_ops, 
                 "name": "invalid",
                 "drop_done": False,
                 "param": "not_json",  # Invalid JSON
-                "debug": False
+                "kind": "task"
             },
             headers={"X-User": "testuser"}
         )
@@ -84,7 +130,7 @@ def test_get_job_list(mock_client, mock_db, mock_git_ops, mock_enqueue, state, t
                 "name": unique_name,
                 "drop_done": False,
                 "param": "{}",
-                "debug": False
+                "kind": "task"
             },
             headers={"X-User": "testuser"}
         )
@@ -102,7 +148,7 @@ def test_get_job_list_filter_states(mock_client, mock_db, mock_git_ops, mock_enq
     # Test filtering by multiple states (comma-separated)
     unique_name = "filtertask_filter"
     with patch("subprocess.check_output", return_value=b"pass\n"):
-        mock_client.put("/scriptlet/job/item", json={"set": "filterset", "name": unique_name, "drop_done": False, "param": "{}", "debug": False}, headers={"X-User": "testuser"})
+        mock_client.put("/scriptlet/job/item", json={"set": "filterset", "name": unique_name, "drop_done": False, "param": "{}", "kind": "task"}, headers={"X-User": "testuser"})
     
     response = mock_client.get("/scriptlet/job/list?state=todo,done", headers={"X-User": "testuser"})
     assert response.status_code == 200
@@ -121,7 +167,7 @@ def test_get_job_item(mock_client, mock_db, mock_git_ops, mock_enqueue, test_tem
                 "name": unique_name,
                 "drop_done": False,
                 "param": "{}",
-                "debug": False
+                "kind": "task"
             },
             headers={"X-User": "testuser"}
         )
@@ -149,7 +195,7 @@ def test_post_job_cancel(mock_client, mock_db, mock_git_ops, mock_enqueue, test_
                 "name": unique_name,
                 "drop_done": False,
                 "param": "{}",
-                "debug": False
+                "kind": "task"
             },
             headers={"X-User": "testuser"}
         )
@@ -181,7 +227,7 @@ def test_get_job_download(mock_client, mock_db, mock_git_ops, mock_enqueue, test
                 "name": unique_name,
                 "drop_done": False,
                 "param": "{}",
-                "debug": False
+                "kind": "task"
             },
             headers={"X-User": "testuser"}
         )
@@ -206,7 +252,7 @@ def test_delete_job_item(mock_client, mock_db, mock_git_ops, mock_enqueue, test_
                 "name": unique_name,
                 "drop_done": False,
                 "param": "{}",
-                "debug": False
+                "kind": "task"
             },
             headers={"X-User": "testuser"}
         )

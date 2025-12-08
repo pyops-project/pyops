@@ -37,7 +37,7 @@ class TestExecution:
         mock_listener.return_value = None  # For non-service
         data_base = str(tmp_path / "data")
 
-        run("id", "owner", "set", "name", "task", "print('param executed')", "print('code executed')", [], q, data_base, "bind", "/venv", "/pkg")
+        run("id", "owner", "set", "name", "task", "print('param executed')", "print('code executed')", [], q, data_base, "bind", "/venv", "/pkg", overrides=None)
 
         q.put.assert_called_once_with({"id": "id", "state": "done", "detail": None})
 
@@ -53,7 +53,7 @@ class TestExecution:
         # Mock exec to fail first 2 attempts, succeed on 3rd
         exec_mock = Mock()
         with patch('builtins.exec', side_effect=[Exception("fail1"), Exception("fail2"), None]):
-            run("id", "owner", "set", "name", "task", "", "print('success')", [], q, data_base, "bind", "/venv", "/pkg")
+            run("id", "owner", "set", "name", "task", "", "print('success')", [], q, data_base, "bind", "/venv", "/pkg", overrides=None)
 
         assert mock_sleep.call_count == 2  # Sleeps after first two fails
         q.put.assert_called_once_with({"id": "id", "state": "done", "detail": None})
@@ -69,7 +69,7 @@ class TestExecution:
 
         # Mock exec to always fail
         with patch('builtins.exec', side_effect=Exception("fail")):
-            run("id", "owner", "set", "name", "task", "", "raise Exception", [], q, data_base, "bind", "/venv", "/pkg")
+            run("id", "owner", "set", "name", "task", "", "raise Exception", [], q, data_base, "bind", "/venv", "/pkg", overrides=None)
 
         assert mock_sleep.call_count == 3  # Sleeps after each of 3 fails
         call_args = q.put.call_args[0][0]
@@ -104,9 +104,11 @@ class TestExecution:
         assert mock_sleep.call_count == 0  # No retries for service
         q.put.assert_called_once_with({"id": "id", "state": "failed", "detail": ANY})
 
+    @patch('subprocess.run')
     @patch('app.runner.pyops.ServiceListener')
     @patch('time.sleep')
-    def test_run_debug_no_retry(self, mock_sleep, mock_listener, tmp_path):
+    def test_run_debug_no_retry(self, mock_run, mock_sleep, mock_listener, tmp_path):
+        mock_run.return_value = Mock(returncode=0, stdout="pip==24.2\n")
         from app.runner import run
         q = Mock()
         mock_listener.return_value = Mock()
@@ -340,7 +342,7 @@ logging.error('ERROR message')
         return stdout_content, stderr_content
 
     @patch('app.runner.pyops.ServiceListener')
-    def test_run_task_logging_success(self, mock_listener, tmp_path, sample_logging_code, mock_queue):
+    def test_run_task_logging_success(self, mock_listener, tmp_path, sample_logging_code, mock_queue, mock_conf):
         from app.runner import run
         mock_listener.return_value = None
         data_base = str(tmp_path / "data")
@@ -359,7 +361,7 @@ logging.error('ERROR message')
         mock_queue.put.assert_called_once_with({"id": job_id, "state": "done", "detail": None})
 
     @patch('app.runner.pyops.ServiceListener')
-    def test_run_service_logging(self, mock_listener, tmp_path, sample_logging_code, mock_queue):
+    def test_run_service_logging(self, mock_listener, tmp_path, sample_logging_code, mock_queue, mock_conf):
         from app.runner import run
         mock_listener.return_value = Mock()  # For service
         data_base = str(tmp_path / "data")
@@ -377,16 +379,58 @@ logging.error('ERROR message')
         assert "ERROR message" in stderr_content
         mock_queue.put.assert_called_once_with({"id": job_id, "state": "done", "detail": None})
 
+    @patch('builtins.compile')
     @patch('app.runner.pyops.ServiceListener')
-    def test_run_debug_logging(self, mock_listener, tmp_path, sample_logging_code, mock_queue):
+    @patch('debugpy.listen')
+    @patch('debugpy.wait_for_client')
+    @patch('subprocess.run')
+    def test_run_debug_inject(self, mock_run, mock_wait, mock_listen, mock_listener, mock_compile, tmp_path, mock_queue):
+        mock_run.side_effect = [Mock(returncode=0, stdout=""), Mock(returncode=0)]
         from app.runner import run
         mock_listener.return_value = Mock()  # For debug
+        mock_listen.return_value = None
+        mock_wait.return_value = None  # Don't block
+        mock_compile.return_value = Mock()  # Mock code object
+        data_base = str(tmp_path / "data")
+        owner = "owner"
+        set_name = "set"
+        job_id = "id"
+        code = "print('test')"
+
+        run(job_id, owner, set_name, "name", "debug", "", code, [], mock_queue, data_base, "bind", "/venv", "/pkg", port=5678)
+
+        # Check compile called for debug bridge lib, debugpy_install lib, and code
+        assert mock_compile.call_count >= 3
+        # Find bridge lib compile
+        bridge_calls = [call for call in mock_compile.call_args_list if "set::debug_bridge.py" in call[0][1]]
+        assert len(bridge_calls) == 1
+        bridge_code = bridge_calls[0][0][0]
+        assert "import debugpy" in bridge_code
+        assert "debugpy.listen(('127.0.0.1', 5678))" in bridge_code
+        assert "debugpy.wait_for_client()" in bridge_code
+        # Find code compile
+        code_calls = [call for call in mock_compile.call_args_list if "set::name.py" in call[0][1]]
+        assert len(code_calls) == 1
+        code_compiled = code_calls[0][0][0]
+        assert "print('test')" in code_compiled
+
+    @patch.dict('sys.modules', {'debugpy': Mock()})
+    @patch('app.runner.pyops.ServiceListener')
+    @patch('debugpy.listen')
+    @patch('debugpy.wait_for_client')
+    @patch('subprocess.run')
+    def test_run_debug_logging(self, mock_run, mock_wait, mock_listen, mock_listener, tmp_path, sample_logging_code, mock_queue, mock_conf):
+        mock_run.side_effect = [Mock(returncode=0, stdout=""), Mock(returncode=0)]
+        from app.runner import run
+        mock_listener.return_value = Mock()  # For debug
+        mock_listen.return_value = None
+        mock_wait.return_value = None  # Don't block
         data_base = str(tmp_path / "data")
         owner = "owner"
         set_name = "set"
         job_id = "id"
 
-        run(job_id, owner, set_name, "name", "debug", "", sample_logging_code, [], mock_queue, data_base, "bind", "/venv", "/pkg")
+        run(job_id, owner, set_name, "name", "debug", "", sample_logging_code, [], mock_queue, data_base, "bind", "/venv", "/pkg", port=5678)
 
         stdout_content, stderr_content = self.get_log_contents(data_base, owner, set_name, job_id)
 
@@ -398,7 +442,7 @@ logging.error('ERROR message')
 
     @patch('app.runner.pyops.ServiceListener')
     @patch('time.sleep')
-    def test_run_fail_logging(self, mock_sleep, mock_listener, tmp_path, sample_fail_code, mock_queue):
+    def test_run_fail_logging(self, mock_sleep, mock_listener, tmp_path, sample_fail_code, mock_queue, mock_conf):
         from app.runner import run
         mock_listener.return_value = None
         data_base = str(tmp_path / "data")
@@ -421,7 +465,7 @@ logging.error('ERROR message')
         mock_queue.put.assert_called_once_with({"id": job_id, "state": "failed", "detail": ANY})
 
     @patch('app.runner.pyops.ServiceListener')
-    def test_run_empty_output(self, mock_listener, tmp_path, sample_empty_code, mock_queue):
+    def test_run_empty_output(self, mock_listener, tmp_path, sample_empty_code, mock_queue, mock_conf):
         from app.runner import run
         mock_listener.return_value = None
         data_base = str(tmp_path / "data")

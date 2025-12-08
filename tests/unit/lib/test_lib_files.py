@@ -107,3 +107,18 @@ def test_conf_data_idempotent(mock_conf):
         mock_init.assert_not_called()
         result = files.conf_data()
         assert "jobs" in result
+
+def test_conf_users():
+    from app.lib import files
+    with patch('app.lib.files.config') as mock_config:
+        mock_config.users.return_value = {"test": "users"}
+        result = files.conf_users()
+        assert result == {"test": "users"}
+        mock_config.users.assert_called_once()
+
+def test_conf_users_error():
+    from app.lib import files
+    with patch('app.lib.files.config') as mock_config:
+        mock_config.users.side_effect = Exception("config error")
+        with pytest.raises(Exception, match="config error"):
+            files.conf_users()

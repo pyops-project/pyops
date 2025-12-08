@@ -1,0 +1,47 @@
+Debug-Kind-Implementation:
+Runner treats debug kind as draft job with overrides and debugpy bridge
+; loads unstaged code like draft
+; injects debugpy.listen/wait_for_client as first lib (libs.insert(0, ...))
+; requires user debug_port in pyops.json/users/{owner}/debug_port
+; fails job if missing or invalid port (1025-65535)
+; allows second debug job by killing existing one for user
+; executes in-process with exec, pauses until debugger attaches.
+
+Config-Extension:
+files.py added conf_users() for pyops.json "users" {}
+; pyops.json added "users": {"anonymous": {"debug_port": 5678}} example.
+
+Enqueue-Logic:
+enqueue() in lib/runner.py handles debug kind specially
+; if kind=="debug", queries existing debug job for owner in running/dequeued states
+; kills existing job if found: sends SIGTERM to pid, sets state="cancelled", pid=None, detail="Cancelled by new debug job start", end=datetime.now()
+; logs action
+; then creates new debug job as todo.
+
+Validation-Logic:
+validate_debug_prerequisites(job_id, owner) checks port only
+; called in main() after loadJob for kind=="debug"
+; fails job to "failed" state with detail if invalid port or existing debug running (single-instance enforced).
+
+Execution-Logic:
+run() injects debugpy code as first lib for debug kind
+; compiles debug_bridge.py with debugpy.listen(('127.0.0.1', port)) and wait_for_client()
+; keeps listener/glob/logging like draft/service
+; exec param/libs/code with debugpy bridge first.
+
+Auto-Install-Debugpy:
+Runner injects !debugpy as first lib for debug kind before process_install_lines
+; ensures debugpy available like user !pip directives
+; processed by same install logic (venv/bin/pip install -q debugpy if not installed).
+
+Tests-Added:
+test_api_job.py has debug enqueue tests
+; integration tests in tests/integration/runner/ for full debug execution
+; test_run_debug_inject asserts debugpy in bridge lib and code compile
+; unit tests for validate_debug_prerequisites with port checks
+; unit tests for enqueue with existing debug kill.
+
+Global-Attributes:
+Debug kind enables VSCode debugger attach to localhost:{port}.
+Allows second debug job by killing previous one at enqueue time to handle disconnections.
+Overrides allow custom code injection for debugging.

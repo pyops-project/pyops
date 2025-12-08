@@ -1,10 +1,13 @@
 import os.path
 import subprocess
+import json
+import re
 
 from fastapi import APIRouter, HTTPException, Depends, Header, Query
 from fastapi.responses import StreamingResponse
 from starlette.status import HTTP_404_NOT_FOUND, HTTP_500_INTERNAL_SERVER_ERROR
 from pydantic import BaseModel
+from typing import Literal
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -30,7 +33,8 @@ class RunArgument(BaseModel):
     name: str
     drop_done: bool
     param: str
-    debug: bool = False
+    kind: Literal["task", "draft", "debug"] = "task"
+    overrides: dict[str, str] | None = None
 
 @router.get("/scriptlet/job/list", tags=["job"])
 async def list_get(user: str = Depends(get_current_user)):
@@ -72,7 +76,16 @@ async def job_put(ru: RunArgument, user: str = Depends(get_current_user)):
         except FileNotFoundError:
             raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail=f"Scriptlet {ru.set}::{ru.name} not existing.")
 
-        job = runner.enqueue(ru.set, ru.name, user, "debug" if ru.debug else "task", ru.drop_done, ru.param)
+        # Validate overrides for debug kind
+        overrides_json = None
+        if ru.kind == "debug" and ru.overrides is not None:
+            for key in ru.overrides:
+                if not re.match(r"^[a-zA-Z0-9_-]+::[a-zA-Z0-9_-]+$", key):
+                    raise HTTPException(status_code=400, detail=f"Invalid override key '{key}': must be 'set::name' format.")
+            overrides_json = json.dumps(ru.overrides)
+
+        # "debug" kind skeleton for future VSIX integration (e.g., special execution mode)
+        job = runner.enqueue(ru.set, ru.name, user, ru.kind, ru.drop_done, ru.param, overrides=overrides_json)
 
         return {"job": job}
 

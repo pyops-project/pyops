@@ -2,5 +2,6 @@ Version Control:
 Project is managed using Git.
 Model executes Git Read Operations
 ; never executes Git Write Operations.
-Staged Changes are gathered by executing `git --no-pager diff --cached`
+; never stages changes.
+Staged changes are gathered by executing `git --no-pager diff --cached`
 ; are providing important context information.

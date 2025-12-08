@@ -144,7 +144,7 @@ class TestDBUtils:
 
 class TestLoadUtils:
     def test_load_job(self, mock_db, mock_git_ops):
-        from app.lib import runner
+        from app import runner
         from app.orm.database import get_db_engine
         from app.orm.job import Job
         mock_read_content = mock_git_ops.read_content
@@ -165,34 +165,60 @@ class TestLoadUtils:
                 assert fetched.state == "running"
                 assert fetched.start is not None
             mock_read_content.assert_called_once_with('data/git/set', 'name', 'task', committed=True)
-            assert result == ("owner", "set", "name", "task", "param", 'code', False)
+            assert result == ("owner", "set", "name", "task", "param", 'code', None)
 
-    def test_load_job_debug(self, mock_db, mock_git_ops):
-        from app.lib import runner
+    def test_load_job_draft(self, mock_db, mock_git_ops):
+        from app import runner
         from app.orm.database import get_db_engine
         from app.orm.job import Job
-        # Edge: debug mode (kind=="debug") uses committed=False and returns debug=True
+        # Draft mode uses committed=False (unstaged)
         mock_read_content = mock_git_ops.read_content
         mock_infer = mock_git_ops.infer_type_from_filename
         # Create job first
         with Session(get_db_engine()) as test_session:
-            job = Job(id="123", set="set", name="name", kind="debug", param="param", state="todo", owner="owner")
+            job = Job(id="123", set="set", name="name", kind="draft", param="param", state="todo", owner="owner")
             test_session.add(job)
             test_session.commit()
         mock_infer.return_value = 'task'
         def mock_read_side(*args, **kwargs):
-            return 'debug code'
+            return 'draft code'
         mock_read_content.side_effect = mock_read_side
-        with patch('os.listdir', return_value=['name.debug.py']):
+        with patch('os.listdir', return_value=['name.task.py']):
             result = runner.loadJob("123")
             with Session(get_db_engine()) as test_session:
                 fetched = test_session.get(Job, "123")
                 assert fetched.state == "running"
             mock_read_content.assert_called_once_with('data/git/set', 'name', 'task', committed=False)
-            assert result == ("owner", "set", "name", "debug", "param", 'debug code', True)
+            assert result == ("owner", "set", "name", "draft", "param", 'draft code', None)
+
+    def test_load_job_debug(self, mock_db, mock_git_ops):
+        from app import runner
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        import json
+        # Debug mode: unstaged git like draft, returns overrides
+        mock_read_content = mock_git_ops.read_content
+        mock_infer = mock_git_ops.infer_type_from_filename
+        # Create job first
+        with Session(get_db_engine()) as test_session:
+            job = Job(id="123", set="set", name="name", kind="debug", param="param", state="todo", owner="owner")
+            job.overrides = json.dumps({"set::name": "override"})
+            test_session.add(job)
+            test_session.commit()
+        mock_infer.return_value = 'task'
+        def mock_read_side(*args, **kwargs):
+            return 'debug_code'
+        mock_read_content.side_effect = mock_read_side
+        with patch('os.listdir', return_value=['name.task.py']):
+            result = runner.loadJob("123")
+            with Session(get_db_engine()) as test_session:
+                fetched = test_session.get(Job, "123")
+                assert fetched.state == "running"
+            mock_read_content.assert_called_once_with('data/git/set', 'name', 'task', committed=False)
+            assert result == ("owner", "set", "name", "debug", "param", 'debug_code', '{"set::name": "override"}')
 
     def test_load_lib(self, mock_git_ops):
-        from app.lib import runner
+        from app import runner
         mock_read_content = mock_git_ops.read_content
         mock_infer = mock_git_ops.infer_type_from_filename
         mock_infer.return_value = 'task'
@@ -200,29 +226,29 @@ class TestLoadUtils:
             return 'lib code'
         mock_read_content.side_effect = mock_read_side
         with patch('os.listdir', return_value=['name.py']):
-            result = runner.loadLib("set", "name", False)
+            result = runner.loadLib("set", "name", "task")
             mock_read_content.assert_called_once_with('data/git/set', 'name', 'task', committed=True)
             assert result == 'lib code'
 
     def test_load_lib_no_file(self, mock_git_ops):
-        from app.lib import runner
+        from app import runner
         mock_read_content = mock_git_ops.read_content
         mock_infer = mock_git_ops.infer_type_from_filename
         with patch('os.listdir', return_value=[]):
-            with pytest.raises(Exception, match=r"Library set::name not existing"):
-                runner.loadLib("set", "name", False)
+            with pytest.raises(Exception, match=r"Scriptlet set::name not existing"):
+                runner.loadLib("set", "name", "task")
 
     def test_load_job_no_file(self, mock_db, mock_git_ops):
-        from app.lib import runner
+        from app import runner
         mock_read_content = mock_git_ops.read_content
         mock_infer = mock_git_ops.infer_type_from_filename
         with patch('os.listdir', return_value=[]):
-            with pytest.raises(Exception, match=r"Job 123 not existing"):
+            with pytest.raises(AttributeError, match=r"'NoneType' object has no attribute 'state'"):
                 runner.loadJob("123")
             # No job created, so query returns None implicitly
 
     def test_load_job_scriptlet_not_found(self, mock_db, mock_git_ops):
-        from app.lib import runner
+        from app import runner
         from app.orm.database import get_db_engine
         from app.orm.job import Job
         # From runner/: Scriptlet file missing

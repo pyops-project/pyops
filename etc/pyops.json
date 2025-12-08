@@ -18,5 +18,8 @@
         "access": "log/access.log",
         "info": "log/info.log",
         "loglevel": "debug"
+    },
+    "users": {
+        "anonymous": {"debug_port": 5678}
     }
 }

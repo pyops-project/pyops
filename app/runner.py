@@ -2,6 +2,7 @@ import signal, time, os, sys, re
 import traceback
 import croniter
 import subprocess
+import json
 from datetime import datetime
 from multiprocessing import Process, current_process, Queue
 
@@ -20,6 +21,25 @@ from app.lib import pyops
 import logging
 from contextlib import redirect_stdout, redirect_stderr
 logger = logging.getLogger(__name__)
+
+def validate_debug_prerequisites(job_id: str, owner: str) -> int:
+    from app.lib import files
+    users = files.conf_users()
+    user_conf = users.get(owner, {})
+    port = user_conf.get("debug_port")
+    if not port or not isinstance(port, int) or port < 1025 or port > 65535:
+        finishJob(job_id, "failed", f"Invalid or missing debug_port for user {owner} in pyops.json/users")
+        raise Exception(f"Debug prerequisites not met for {job_id}")
+    # Check single instance
+    with Session(get_db_engine()) as session:
+        stmt = select(Job.id).where(
+            and_(Job.owner == owner, Job.kind == "debug", Job.state.in_(["dequeued", "running"]))
+        ).limit(1)
+        existing = session.scalar(stmt)
+        if existing:
+            finishJob(job_id, "failed", f"Another debug job is running for user {owner}")
+            raise Exception(f"Debug single-instance violated for {job_id}")
+    return port
 
 class GracefulKiller:
     kill_now = False
@@ -78,27 +98,26 @@ def assignJob(job_id: str, pid: int):
         session.commit()
         logger.debug(f"assignJob: after commit, session ID {id(session)}, committed pid for {job_id} at {datetime.now()}")
 
-def loadLib(set: str, name: str, debug: bool):
-    """Loads library code from Git (unstaged if debug, else committed)."""
-    logger.debug(f"loadLib(set={set}, name={name}, debug={debug})")
+def loadLib(set: str, name: str, kind: str):
+    """Loads library code from Git (unstaged if kind=="draft", else committed)."""
+    logger.debug(f"loadLib(set={set}, name={name}, kind={kind})")
     repo = git.get_repo_path(set)
     files_list = [f for f in os.listdir(repo) if f.startswith(f"{name}.") and f.endswith('.py')]
     if not files_list:
         raise Exception(f"Scriptlet {set}::{name} not existing")
     filename = files_list[0]
     type_ = git.infer_type_from_filename(filename)
-    committed = not debug
+    committed = kind != "draft"
     return git.read_content(repo, name, type_, committed=committed)
 
 def loadJob(job_id: str):
-    """Loads job code from Git (unstaged if debug, else committed)."""
+    """Loads job code from Git (unstaged if kind=="draft" or "debug", else committed)."""
     logger.debug(f"loadJob(job_id={job_id})")
 
     with Session(get_db_engine()) as session:
         logger.debug(f"loadJob: session ID {id(session)} at {datetime.now()}")
         job = session.get(Job, job_id)
         old_state = job.state
-        debug = job.kind == "debug"
         repo = git.get_repo_path(job.set)
         logger.debug(f"loadJob: checking repo '{repo}' for files starting with '{job.name}.' ending '.py'")
         files_list = [f for f in os.listdir(repo) if f.startswith(f"{job.name}.") and f.endswith('.py')]
@@ -107,7 +126,7 @@ def loadJob(job_id: str):
             raise Exception(f"Scriptlet {job.set}::{job.name} not existing")
         filename = files_list[0]
         type_ = git.infer_type_from_filename(filename)
-        committed = not debug
+        committed = job.kind not in ("draft", "debug")
         code = git.read_content(repo, job.name, type_, committed=committed)
 
         logger.debug(f"loadJob: before commit, session ID {id(session)}, job.state '{old_state}' to 'running' for {job_id} at {datetime.now()}")
@@ -117,7 +136,7 @@ def loadJob(job_id: str):
         session.commit()
         logger.debug(f"loadJob: after commit, session ID {id(session)}, committed 'running' for {job_id} at {datetime.now()}")
 
-        return job.owner, job.set, job.name, job.kind, job.param, code, debug
+        return job.owner, job.set, job.name, job.kind, job.param, code, job.overrides
 
 def finishJob(job_id: str, state: str, detail: str):
     logger.debug(f"finishJob(job_id='{job_id}', state='{state}', detail='{detail}')")
@@ -151,7 +170,7 @@ def disposeJobs():
             session.commit()
             logger.debug("disposeJobs: committed deletions")
 
-def process_imports(text: str, current_set: str, debug: bool, libs: list[dict[str, str]]) -> str:
+def process_imports(text: str, current_set: str, kind: str, libs: list[dict[str, str]]) -> str:
     r"""
     Processes lines starting with #!{set::name} or #!{::name} (empty set uses current_set).
     - Strictly at line start (^#\!\{...}), no indentation allowed.
@@ -160,13 +179,13 @@ def process_imports(text: str, current_set: str, debug: bool, libs: list[dict[st
     - On failure (load error, invalid format), keeps original line and logs warning.
     - No recursion: assumes libs are pure (no further #!{} directives).
     - Preserves line endings and rest of line content.
-    
+
     Args:
         text (str): Input text (param or code) to process.
         current_set (str): Job set for empty ::name resolution.
-        debug (bool): Use unstaged code for libs.
+        kind (str): Job kind, determines unstaged if "draft".
         libs (list[dict[str, str]]): Mutable list to append {"code": lib_code, "filename": f"{set}::{name}.py"}.
-    
+
     Returns:
         str: Updated text with replacements.
     """
@@ -180,7 +199,7 @@ def process_imports(text: str, current_set: str, debug: bool, libs: list[dict[st
             if g or n:  # Valid non-empty
                 effective_g = current_set if not g else g
                 try:
-                    lib_code = loadLib(effective_g, n, debug)
+                    lib_code = loadLib(effective_g, n, kind)
                     libs.append({"code": lib_code, "filename": f"{effective_g}::{n}.py"})
                     replacement = f'# importing {effective_g}::{n}'
                     new_line = replacement + line[match.end():]
@@ -245,7 +264,7 @@ def process_install_lines(lines, venv_path, pkg_path, id):
             new_lines.append(line)
     return new_lines
 
-def run(job_id: str, owner: str, set: str, name: str, kind: str, param: str, code: str, libs: list[dict[str, str]], q: Queue, data_base: str, web_bind: str, venv_path: str, pkg_path: str):
+def run(job_id: str, owner: str, set: str, name: str, kind: str, param: str, code: str, libs: list[dict[str, str]], q: Queue, data_base: str, web_bind: str, venv_path: str, pkg_path: str, overrides: str | None = None, port: int | None = None):
     """Executes job in isolated workspace; activates venv, processes installs w/ env prop."""
     userspace = os.path.join(data_base, f"{owner}")
     setspace = os.path.join(userspace, f"{set}")
@@ -273,6 +292,14 @@ def run(job_id: str, owner: str, set: str, name: str, kind: str, param: str, cod
     try:
         with redirect_stdout(stdout_file):
             with redirect_stderr(stderr_file):
+                # Inject debugpy install for debug kind (auto-handled like !pip in scriptlets)
+                if kind == "debug":
+                    debug_install_lib = {
+                        "code": "!debugpy\n",
+                        "filename": f"{set}::debugpy_install.py"
+                    }
+                    libs.insert(0, debug_install_lib)
+
                 # Process installs w/ env prop.
                 param_lines = param.splitlines(keepends=True) if param else []
                 new_param_lines = process_install_lines(param_lines, venv_path, pkg_path, job_id)
@@ -290,6 +317,26 @@ def run(job_id: str, owner: str, set: str, name: str, kind: str, param: str, cod
                 code_lines = code.splitlines(keepends=True)
                 new_code_lines = process_install_lines(code_lines, venv_path, pkg_path, job_id)
                 code = ''.join(new_code_lines)
+
+                # Apply overrides for debug kind
+                if overrides:
+                    override_dict = json.loads(overrides)
+                    if f"{set}::{name}.py" in override_dict:
+                        code = override_dict[f"{set}::{name}.py"]
+                    for lib in libs:
+                        if lib["filename"] in override_dict:
+                            lib["code"] = override_dict[lib["filename"]]
+
+                # Inject debugpy bridge as first lib for debug kind
+                if kind == "debug":
+                    debug_lib = {
+                        "code": f"""import debugpy
+debugpy.listen(('127.0.0.1', {port}))
+debugpy.wait_for_client()
+""",
+                        "filename": f"{set}::debug_bridge.py"
+                    }
+                    libs.insert(0, debug_lib)
 
                 # Compile code objects with custom filenames for accurate tracebacks
                 if param:
@@ -369,9 +416,9 @@ def run(job_id: str, owner: str, set: str, name: str, kind: str, param: str, cod
         stderr_file.flush()
         q.put({"id": job_id, "state": "failed", "detail": error_msg})
     finally:
+        logger.debug(f"{current_process().pid:<10}end({job_id})")
         stdout_file.close()
         stderr_file.close()
-        logger.debug(f"{current_process().pid:<10}end({job_id})")
 
 def cleanProcesses(processes: dict[int, Process]):
     cleaned_processes: dict[int, Process] = {}
@@ -540,16 +587,23 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
             if job_id != None:
                 try:
                     logger.debug(f"main: loading job {job_id}")
-                    owner, set, name, kind, param, code, debug = loadJob(job_id)
+                    owner, set, name, kind, param, code, overrides = loadJob(job_id)
+
+                    port = None
+                    if kind == "debug":
+                        try:
+                            port = validate_debug_prerequisites(job_id, owner)
+                        except Exception:
+                            continue
 
                     libs = []
 
                     if param:
-                        param = process_imports(param, set, debug, libs)
-                    code = process_imports(code, set, debug, libs)
+                        param = process_imports(param, set, kind, libs)
+                    code = process_imports(code, set, kind, libs)
 
                     logger.debug(f"Run job {job_id}")
-                    p = Process(target=run, name=f"{set}::{name}", kwargs={"job_id": job_id, "owner": owner, "set": set, "name": name, "kind": kind, "param": param, "code": code, "libs": libs, "q": q, "data_base": data_base, "web_bind": web_bind, "venv_path": venv_path, "pkg_path": pkg_path})
+                    p = Process(target=run, name=f"{set}::{name}", kwargs={"job_id": job_id, "owner": owner, "set": set, "name": name, "kind": kind, "param": param, "code": code, "libs": libs, "overrides": overrides, "q": q, "data_base": data_base, "web_bind": web_bind, "venv_path": venv_path, "pkg_path": pkg_path, "port": port})
                     p.start()
                     assignJob(job_id, p.pid)
                     processes[p.pid] = p

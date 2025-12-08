@@ -14,5 +14,6 @@ class Job(Base):
     param = Column(String)
     pid = Column(Integer, index=True)
     detail = Column(String)
+    overrides = Column(String, default=None)
     start = Column(DateTime, index=True)
     end = Column(DateTime, index=True)

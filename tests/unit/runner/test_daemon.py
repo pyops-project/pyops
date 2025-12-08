@@ -294,6 +294,79 @@ class TestDaemon:
         mock_process.join.assert_called_once_with(timeout=1.0)
         # assert mock_session.call_count == 1  # manual simulation
 
+    @patch('app.lib.files.conf_users')
+    @patch('sqlalchemy.orm.Session')
+    def test_validate_debug_prerequisites_valid(self, mock_session, mock_conf_users, mock_db):
+        from app.runner import validate_debug_prerequisites
+        mock_conf_users.return_value = {"owner": {"debug_port": 5678}}
+        mock_session.return_value.__enter__.return_value.scalar.return_value = None
+        port = validate_debug_prerequisites("job_id", "owner")
+        assert port == 5678
+        mock_conf_users.assert_called_once()
+
+    @patch('app.lib.files.conf_users')
+    @patch('app.runner.finishJob')
+    def test_validate_debug_prerequisites_no_port(self, mock_finish, mock_conf_users):
+        from app.runner import validate_debug_prerequisites
+        mock_conf_users.return_value = {"owner": {}}
+        with pytest.raises(Exception, match="Debug prerequisites not met"):
+            validate_debug_prerequisites("job_id", "owner")
+        mock_finish.assert_called_once_with("job_id", "failed", "Invalid or missing debug_port for user owner in pyops.json/users")
+
+    @patch('app.lib.files.conf_users')
+    @patch('app.runner.finishJob')
+    def test_validate_debug_prerequisites_invalid_port(self, mock_finish, mock_conf_users):
+        from app.runner import validate_debug_prerequisites
+        mock_conf_users.return_value = {"owner": {"debug_port": 1000}}
+        with pytest.raises(Exception, match="Debug prerequisites not met"):
+            validate_debug_prerequisites("job_id", "owner")
+        mock_finish.assert_called_once_with("job_id", "failed", "Invalid or missing debug_port for user owner in pyops.json/users")
+
+    @patch('app.lib.files.conf_users')
+    @patch('app.runner.finishJob')
+    def test_validate_debug_prerequisites_second_debug(self, mock_finish, mock_conf_users, mock_db):
+        from app.runner import validate_debug_prerequisites
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        from sqlalchemy.orm import Session
+        mock_conf_users.return_value = {"owner": {"debug_port": 5678}}
+        # Add existing debug running
+        with Session(get_db_engine()) as session:
+            job = Job(id="existing", set="set", name="name", owner="owner", kind="debug", state="running")
+            session.add(job)
+            session.commit()
+        with pytest.raises(Exception, match="Debug single-instance violated"):
+            validate_debug_prerequisites("job_id", "owner")
+        mock_finish.assert_called_once_with("job_id", "failed", "Another debug job is running for user owner")
+
+    @patch('os.kill')
+    @patch('app.lib.runner.logger')
+    def test_enqueue_debug_kill_existing(self, mock_logger, mock_kill, mock_db):
+        from app.lib.runner import enqueue
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        from sqlalchemy.orm import Session
+        # Add existing debug running with pid
+        with Session(get_db_engine()) as session:
+            job = Job(id="existing", set="set", name="name", owner="owner", kind="debug", state="running", pid=123)
+            session.add(job)
+            session.commit()
+        job_id = enqueue("set", "name", "owner", "debug", False, "{}")
+        assert isinstance(job_id, str)
+        # Check existing killed
+        mock_kill.assert_called_once_with(123, 15)  # SIGTERM
+        with Session(get_db_engine()) as session:
+            existing = session.get(Job, "existing")
+            assert existing.state == "cancelled"
+            assert existing.pid is None
+            assert existing.detail == "Cancelled by new debug job start for owner"
+            assert existing.end is not None
+            # New job created
+            new_job = session.query(Job).filter(Job.id == job_id).first()
+            assert new_job.state == "todo"
+            assert new_job.kind == "debug"
+        mock_logger.info.assert_called_once_with(f"Killed existing debug job existing for new debug enqueue by owner")
+
     def test_main_initialization_no_crash(self, mock_db):
         from app.runner import main
         from unittest.mock import Mock, patch, DEFAULT

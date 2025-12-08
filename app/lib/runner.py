@@ -1,4 +1,4 @@
-import os, shutil
+import os, shutil, signal
 from datetime import datetime
 import tempfile
 
@@ -14,21 +14,39 @@ from app.lib import git
 import logging
 logger = logging.getLogger(__name__)
 
-def enqueue(set: str, name: str, owner: str, kind: str, drop_done: bool, param: str):
+def enqueue(set: str, name: str, owner: str, kind: str, drop_done: bool, param: str, overrides: str | None = None):
     """Enqueues a new job into the database.
-    
+
     Args:
         set (str): Scriptlet set.
         name (str): Scriptlet name.
         owner (str): Job owner (fixed to 'anonymous').
-        kind (str): Job kind ('task', 'service', 'debug').
+        kind (str): Job kind ('task', 'service', 'draft', 'debug').
         drop_done (bool): Auto-drop on success.
         param (str): Job parameters/code snippet.
-    
+        overrides (str | None): JSON string of overrides dict for debug kind.
+
     Returns:
         str: Generated job ID.
     """
     with Session(get_db_engine()) as session:
+        if kind == "debug":
+            # Kill existing debug job for user to allow new one
+            stmt = select(Job).where(and_(Job.owner == owner, Job.kind == "debug", Job.state.in_(["dequeued", "running"]))).limit(1)
+            existing = session.scalar(stmt)
+            if existing:
+                if existing.pid:
+                    try:
+                        os.kill(existing.pid, signal.SIGTERM)
+                    except OSError:
+                        pass  # Process already dead
+                existing.state = "cancelled"
+                existing.pid = None
+                existing.detail = f"Cancelled by new debug job start for {owner}"
+                existing.end = datetime.now()
+                session.commit()
+                logger.info(f"Killed existing debug job {existing.id} for new debug enqueue by {owner}")
+
         job = Job(
             id = "{}_{}_{}_{}".format(owner, set, name, datetime.now().strftime("%Y%m%dT%H%M%S%f")),
             set = set,
@@ -37,7 +55,8 @@ def enqueue(set: str, name: str, owner: str, kind: str, drop_done: bool, param: 
             drop_done = drop_done,
             kind = kind,
             state = "todo",
-            param = param
+            param = param,
+            overrides = overrides
         )
 
         session.add(job)
@@ -157,39 +176,39 @@ def drop(id: str, owner: str, set: str):
         logger.exception("Error dropping job %s: %s", id, e)
         return False
 
-def loadLib(set: str, name: str, debug: bool):
-    """Loads library code from Git (unstaged if debug, else committed).
-    
+def loadLib(set: str, name: str, kind: str):
+    """Loads library code from Git (unstaged if kind=="draft", else committed).
+
     Args:
         set (str): Set.
         name (str): Name.
-        debug (bool): Use unstaged if True.
-    
+        kind (str): Job kind, determines unstaged if "draft".
+
     Returns:
         str: Code content.
-    
+
     Raises:
         Exception: If library not found.
     """
-    print(f"loadLib(set={set}, name={name}, debug={debug})")
+    print(f"loadLib(set={set}, name={name}, kind={kind})")
     repo = git.get_repo_path(set)
     files_list = [f for f in os.listdir(repo) if f.startswith(name) and f.endswith('.py')]
     if not files_list:
         raise Exception(f"Library {set}::{name} not existing")
     filename = files_list[0]
     type_ = git.infer_type_from_filename(filename)
-    committed = not debug
+    committed = kind != "draft"
     return git.read_content(repo, name, type_, committed=committed)
 
 def loadJob(id: str):
-    """Loads job details and code from Git/DB (unstaged if debug, else committed).
-    
+    """Loads job details and code from Git/DB (unstaged if kind=="draft", else committed).
+
     Args:
         id (str): Job ID.
-    
+
     Returns:
-        tuple: (owner, set, name, kind, param, code, debug).
-    
+        tuple: (owner, set, name, kind, param, code).
+
     Raises:
         Exception: If scriptlet not found or no code.
     """
@@ -199,18 +218,17 @@ def loadJob(id: str):
         job = session.get(Job, id)
         if job is None:
             raise Exception(f"Job {id} not existing")
-        debug = job.kind == "debug"
         repo = git.get_repo_path(job.set)
         files_list = [f for f in os.listdir(repo) if f.startswith(job.name) and f.endswith('.py')]
         if not files_list:
             raise Exception(f"Scriptlet {job.set}::{job.name} not existing")
         filename = files_list[0]
         type_ = git.infer_type_from_filename(filename)
-        committed = not debug
+        committed = job.kind not in ("draft", "debug")
         code = git.read_content(repo, job.name, type_, committed=committed)
 
         job.state = "running"
         job.start = datetime.now()
         session.commit()
 
-        return job.owner, job.set, job.name, job.kind, job.param, code, debug
+        return job.owner, job.set, job.name, job.kind, job.param, code
