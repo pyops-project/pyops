@@ -30,6 +30,7 @@ class JobsTreeDataProvider implements TreeDataProvider<JobTreeItem> {
     private _context: vscode.ExtensionContext;
     private _jobs: Job[] = [];
     private _loading: boolean = false;
+    private _lastJobsErrorShown: number = 0;
 
     constructor(context: vscode.ExtensionContext) {
         this._context = context;
@@ -127,14 +128,23 @@ class JobsTreeDataProvider implements TreeDataProvider<JobTreeItem> {
         try {
             const response = await fetch(`${serverUrl}/scriptlet/job/list`, { headers });
             if (response.ok) {
+                this._lastJobsErrorShown = 0;
                 return await response.json() as unknown[] as Job[];
             } else {
-                vscode.window.showErrorMessage(`Failed to fetch jobs: ${response.statusText}`);
+                const now = Date.now();
+                if (now - this._lastJobsErrorShown > 30000) {
+                    vscode.window.showErrorMessage(`Failed to fetch jobs: ${response.statusText}`);
+                    this._lastJobsErrorShown = now;
+                }
                 return [];
             }
         } catch (error: unknown) {
             const errorMessage = error instanceof Error ? error.message : String(error);
-            vscode.window.showErrorMessage(`Error fetching jobs: ${errorMessage}`);
+            const now = Date.now();
+            if (now - this._lastJobsErrorShown > 30000) {
+                vscode.window.showErrorMessage(`Error fetching jobs: ${errorMessage}`);
+                this._lastJobsErrorShown = now;
+            }
             return [];
         }
     }
