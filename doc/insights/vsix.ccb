@@ -6,6 +6,18 @@ VSIX-Extension:
 ; `src/utils.ts` contains shared functions like inferExt hasValidConfig
 ; `src/commands/CreateScriptletCommand.ts` handles create scriptlet command logic.
 
+VSIX-Tests:
+Unit tests in `tests/` use Jest with mocked vscode APIs & API client
+; integration tests in `tests/integration/` use @vscode/test-electron for real VS Code environment with simple assert-based testing
+; integration tests run against separately started localhost PyOps development server without authentication
+; PyOps server must be started externally before running integration tests (not managed by test framework)
+; run unit tests with `npm run test` or `npm run test:coverage`
+; run integration tests with `npm run test:integration` (requires running local development PyOps server on localhost:8000)
+; integration tests excluded from CI/CD since VS Code not available
+; infrastructure set up with simple console-based test runner that works in VS Code extension host
+; tests verify extension activation, configuration (server URL only), views, and command registration
+; no authentication testing in integration tests (development server runs without auth).
+
 Auth-Service:
 `src/services/AuthService.ts` handles auth setup for Basic Auth
 ; prompts for password if username configured but no password stored
