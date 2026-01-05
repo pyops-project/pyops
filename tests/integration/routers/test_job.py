@@ -1,6 +1,8 @@
 import pytest
 import json
+import os
 import uuid
+from app.lib import git
 from sqlalchemy.orm import Session
 from fastapi.testclient import TestClient
 from app.web import app
@@ -294,6 +296,30 @@ class TestJobRouter:
             assert response.status_code == 404
             assert "not existing" in response.json()["detail"]
 
+    def test_put_job_item_debug_scriptlet_not_existing_with_override(self, mock_client, mock_db, test_temp_dir, patch_tempfile, mock_datetime):
+        """Regression: debug enqueue succeeds if override provided despite no remote scriptlet."""
+        with patch("app.lib.git.read_content", side_effect=FileNotFoundError):
+            response = mock_client.put(
+                "/scriptlet/job/item",
+                json={
+                    "set": "default",
+                    "name": "missingtask",
+                    "drop_done": False,
+                    "param": "{}",
+                    "kind": "debug",
+                    "overrides": {"default::missingtask": "# overridden code"}
+                },
+                headers={"X-User": "testuser"}
+            )
+            assert response.status_code == 200
+            job_id = response.json()["job"]
+            # Verify job created in DB
+            with Session(get_db_engine()) as session:
+                job = session.query(Job).filter(Job.id == job_id).first()
+                assert job is not None
+                assert job.kind == "debug"
+                assert job.state == "todo"
+
     def test_put_job_item_exception(self, mock_client, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
         with patch("app.lib.git.get_repo_path", side_effect=Exception("repo error")):
             run_data = {
@@ -393,3 +419,48 @@ class TestJobRouter:
             response = mock_client.get("/scriptlet/job/list", headers={"X-User": "testuser"})
             assert response.status_code == 500
             assert "db error" in response.json()["detail"]
+
+    def test_loadjob_debug_override_missing_file_success(self, mock_client, mock_db, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
+        """Regression: runner.loadJob succeeds for debug enqueue with override despite no remote scriptlet file."""
+        with patch("app.lib.git.read_content") as mock_read_content, \
+             patch("os.listdir") as mock_listdir:
+            mock_read_content.side_effect = FileNotFoundError("missing")
+
+            def listdir_side_effect(path):
+                repo_path = git.get_repo_path("default")
+                if repo_path == path:
+                    return []
+                try:
+                    return os.listdir(path)
+                except OSError:
+                    return []
+
+            mock_listdir.side_effect = listdir_side_effect
+
+            response = mock_client.put(
+                "/scriptlet/job/item",
+                json={
+                    "set": "default",
+                    "name": "missingtask",
+                    "drop_done": False,
+                    "param": "{}",
+                    "kind": "debug",
+                    "overrides": {"default::missingtask": "# overridden code"}
+                },
+                headers={"X-User": "testuser"}
+            )
+            assert response.status_code == 200
+            job_id = response.json()["job"]
+
+            # Dequeue job for loadJob precondition
+            with Session(get_db_engine()) as session:
+                job = session.query(Job).filter(Job.id == job_id).first()
+                assert job is not None
+                job.state = "dequeued"
+                session.commit()
+
+            from app.runner import loadJob
+            owner, set_, name, kind, param, code, overrides_str = loadJob(job_id)
+            assert kind == "debug"
+            assert code == "# overridden code"
+            assert overrides_str is not None

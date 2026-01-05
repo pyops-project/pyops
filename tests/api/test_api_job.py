@@ -334,3 +334,45 @@ def test_debug_job_cancellation_sequencing(mock_client, mock_db, mock_git_ops, e
         assert new_job is not None
         assert new_job.state == "todo"
         assert new_job.kind == "debug"
+
+
+def test_put_job_item_debug_missing_with_override(mock_client, mock_db, mock_git_ops, mock_enqueue, test_temp_dir, patch_tempfile, mock_datetime):
+    """Test debug enqueue succeeds despite missing remote scriptlet if overridden."""
+    with patch("app.lib.git.read_content") as mock_read_content:
+        mock_read_content.side_effect = FileNotFoundError("missing")
+        response = mock_client.put(
+            "/scriptlet/job/item",
+            json={
+                "set": "testset",
+                "name": "overridetask",
+                "drop_done": False,
+                "param": "{}",
+                "kind": "debug",
+                "overrides": {"testset::overridetask": "print('debug code')"}
+            },
+            headers={"X-User": "testuser"}
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert "job" in data
+        assert mock_enqueue.called
+
+
+def test_put_job_item_debug_missing_without_override(mock_client, mock_db, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
+    """Test debug enqueue fails if scriptlet missing remotely and not overridden."""
+    with patch("app.lib.git.read_content") as mock_read_content:
+        mock_read_content.side_effect = FileNotFoundError("missing")
+        response = mock_client.put(
+            "/scriptlet/job/item",
+            json={
+                "set": "testset",
+                "name": "missingtask",
+                "drop_done": False,
+                "param": "{}",
+                "kind": "debug",
+                "overrides": {"testset::other": "code"}  # missing testset::missingtask
+            },
+            headers={"X-User": "testuser"}
+        )
+        assert response.status_code == 404
+        assert "Scriptlet testset::missingtask not existing." in response.json()["detail"]

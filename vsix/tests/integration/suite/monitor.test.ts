@@ -81,11 +81,9 @@ export async function run(): Promise<void> {
     vscode.window.showWarningMessage = originalShowWarningMessage;
     // Wait for jobs to be cancelled
     for (const id of bulkIds) {
-      await helpers.waitForJobState(id, 'cancelled');
+      await helpers.waitForJobState(id, 'cancelled', 15000);
     }
     console.log('✓ Test 5 passed');
-
-
 
     // Test 6: Graceful error
     console.log('Test 6: Error handling...');

@@ -144,6 +144,55 @@ export async function run(): Promise<void> {
     await helpers.deleteTestScriptlet('test', attachScriptletName);
     await helpers.cleanupJobs(true);
 
+    // Test 8: startDebugJob on local-only task (regression for backend skip-check)
+    console.log('Test 8: startDebugJob on local-only task...');
+    const localName = `local-debug-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const localTestPath = path.join(tempDir!, 'test', 'task', `${localName}.py`);
+    fs.mkdirSync(path.dirname(localTestPath), { recursive: true });
+    fs.writeFileSync(localTestPath, 'print("Local debug test")');
+    await vscode.commands.executeCommand('pyops.refreshManager');
+    await helpers.pollTree(managerProvider, ['test']);
+    const expectedLocalLabel = `${localName} (task)`;
+    let localTestItem: any = null;
+    const localPollTimeout = 5000;
+    const localPollInterval = 200;
+    const localPollStart = Date.now();
+    while (Date.now() - localPollStart < localPollTimeout) {
+      const managerChildren = await managerProvider.getChildren();
+      const testSetItem = managerChildren.find((item: any) => item.label === 'test');
+      if (testSetItem) {
+        const setChildren = await managerProvider.getChildren(testSetItem);
+        localTestItem = setChildren.find((item: any) => item.label === expectedLocalLabel);
+        if (localTestItem && (localTestItem.iconPath as vscode.ThemeIcon).id === 'diff-added') {
+          break;
+        }
+      }
+      await new Promise(resolve => setTimeout(resolve, localPollInterval));
+    }
+    assert.ok(localTestItem, `Local-only scriptlet for debug test timed out`);
+    const baselineJobsDebug = await jobsProvider.getChildren();
+    await vscode.commands.executeCommand('pyops.startDebugJob', localTestItem);
+    let debugJobItem: any = null;
+    const debugPollTimeout = 10000;
+    const debugPollInterval = 500;
+    const debugPollStart = Date.now();
+    while (Date.now() - debugPollStart < debugPollTimeout) {
+      await vscode.commands.executeCommand('pyops.refreshMonitor');
+      const currentJobs = await jobsProvider.getChildren();
+      debugJobItem = currentJobs.find((item: any) => !baselineJobsDebug.some((oldItem: any) => oldItem.id === item.id) && 
+        (item.description?.includes('debug') || item.label?.includes('debug') || item.contextValue?.includes('debug')));
+      if (debugJobItem) break;
+      await new Promise((resolve) => setTimeout(resolve, debugPollInterval));
+    }
+    assert.ok(debugJobItem, 'Debug job from local-only task should enqueue');
+
+    await helpers.waitForJobState(debugJobItem.id!, 'running', 15000);
+
+    console.log('✓ Test 8 passed');
+
+    // Cleanup local-only
+    fs.unlinkSync(localTestPath);
+
     console.log('All Debug Tests passed!');
   } finally {
     // Restore config

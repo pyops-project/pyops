@@ -595,3 +595,14 @@ ManagerTreeProvider.getChildren root: pyopsSet folders; leaf: pyopsItem-{type}(-
 
 VSIX-LocalDebug:
 Local-only task scriptlets support pyops.startDebugJob & pyops.stopDebugJob context menus via package.json when /^pyopsItem-task(-local)?$/; sync commands resetLocalFromRemote/saveRemoteDraft/diffLocalRemote restricted excluding -local; writeLocalToRemoteDraft & deleteScriptlet available via /^pyopsItem-(task|service|library|controller|view|markdown)(-local)?$/; writeLocalToRemoteDraft auto-creates remote via PUT /inventory/item if 404 then POST /draft & handles network errors on check/create with specific try-catch showErrorMessages; integration test9 tests write on local-only -> auto-create + draft success.
+
+Debug-Job-Enqueue-SkipCheck:
+`app/routers/scriptlet/job.py` PUT /scriptlet/job/item skips `git.read_content` existence check for `kind=="debug"` if `overrides[f"{ru.set}::{ru.name}"]` exists
+; enables VSIX local-only debug jobs without requiring remote scriptlet file.
+
+Runner-LoadJob-SkipCheck:
+`app/runner.py` loadJob skips `os.listdir/files_list` existence check for `kind=="debug"` if `job.overrides` valid JSON & `f"{job.set}::{job.name}" in parsed dict
+; sets `code = override_dict[main_key]`
+; fallback git.read_content if no main override or invalid JSON (logs warning)
+; `committed=False` for debug fallback
+; enables full local-only debug lifecycle (enqueue->dequeue->load->run).

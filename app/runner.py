@@ -247,24 +247,28 @@ def loadJob(job_id: str):
             raise Exception(f"Job {job_id} state changed to {job.state}")
         old_state = job.state
         repo = git.get_repo_path(job.set)
-        logger.debug(f"loadJob: checking repo '{repo}' for files starting with '{job.name}.' ending '.py'")
-        files_list = [f for f in os.listdir(repo) if f.startswith(f"{job.name}.") and f.endswith('.py')]
-        logger.debug(f"loadJob: files_list in '{repo}': {files_list}")
-        if not files_list:
-            raise Exception(f"Scriptlet {job.set}::{job.name} not existing")
-        filename = files_list[0]
-        type_ = git.infer_type_from_filename(filename)
-        committed = job.kind not in ("draft", "debug")
+        main_key = f"{job.set}::{job.name}"
+        override_code = None
+        override_dict = None
         if job.overrides:
-            override_dict = json.loads(job.overrides)
-            main_key = f"{job.set}::{job.name}"
-            if main_key in override_dict:
-                code = override_dict[main_key]
-            else:
-                code = git.read_content(repo, job.name, type_, committed=committed)
+            try:
+                override_dict = json.loads(job.overrides)
+                if main_key in override_dict:
+                    override_code = override_dict[main_key]
+            except json.JSONDecodeError:
+                logger.warning(f"loadJob({job_id}): Invalid overrides JSON")
+        committed = job.kind not in ("draft", "debug")
+        if override_code is not None:
+            code = override_code
         else:
+            logger.debug(f"loadJob: checking repo '{repo}' for files starting with '{job.name}.' ending '.py'")
+            files_list = [f for f in os.listdir(repo) if f.startswith(f"{job.name}.") and f.endswith('.py')]
+            logger.debug(f"loadJob: files_list in '{repo}': {files_list}")
+            if not files_list:
+                raise Exception(f"Scriptlet {job.set}::{job.name} not existing")
+            filename = files_list[0]
+            type_ = git.infer_type_from_filename(filename)
             code = git.read_content(repo, job.name, type_, committed=committed)
-
         logger.debug(f"loadJob: before commit, session ID {id(session)}, job.state '{old_state}' to 'loading' for {job_id} at {datetime.now()}")
         job.state = "loading"
         job.start = datetime.now()

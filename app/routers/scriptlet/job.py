@@ -70,11 +70,13 @@ async def job_put(ru: RunArgument, user: str = Depends(get_current_user)):
     """
     try:
         repo = git.get_repo_path(ru.set)
-        # Check exists (committed or unstaged via fallback).
-        try:
-            git.read_content(repo, ru.name, "task", committed=True)
-        except FileNotFoundError:
-            raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail=f"Scriptlet {ru.set}::{ru.name} not existing.")
+        # Check exists (committed or unstaged via fallback), skip for debug with override.
+        scriptlet_key = f"{ru.set}::{ru.name}"
+        if not (ru.kind == "debug" and ru.overrides is not None and scriptlet_key in ru.overrides):
+            try:
+                git.read_content(repo, ru.name, "task", committed=True)
+            except FileNotFoundError:
+                raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail=f"Scriptlet {scriptlet_key} not existing.")
 
         # Validate overrides for debug kind
         overrides_json = None
