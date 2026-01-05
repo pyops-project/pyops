@@ -16,10 +16,11 @@ App Test Fixtures never are `autouse`
 ; complement Each Other.
 VSIX Tests are located at `vsix/tests/`
 ; have coverage >90%
-; use `npm run test --prefix vsix/`.
+; use `npm run test --prefix vsix/` & `npm run test:integration --prefix vsix/`.
 User decides Architecture.
 Verbose Tests cause Context Pollution.
 Model aviods Context Pollution.
 ; requests User to provide Verbose Output
 ; does not use Browser Tool for Testing & Debugging
 ; is responsible for Project-Rule Alignment.
+VSIX Workflow assumes a running authenticationless PyOps instance on localhost:8000.
