@@ -33,7 +33,7 @@ class RunArgument(BaseModel):
     name: str
     drop_done: bool
     param: str
-    kind: Literal["task", "draft", "debug"] = "task"
+    kind: Literal["task", "debug"] = "task"
     overrides: dict[str, str] | None = None
 
 @router.get("/scriptlet/job/list", tags=["job"])
@@ -70,9 +70,10 @@ async def job_put(ru: RunArgument, user: str = Depends(get_current_user)):
     """
     try:
         repo = git.get_repo_path(ru.set)
-        # Check exists (committed or unstaged via fallback), skip for debug with override.
+        # Check exists (committed), skip for debug (uses unstaged or overrides).
         scriptlet_key = f"{ru.set}::{ru.name}"
-        if not (ru.kind == "debug" and ru.overrides is not None and scriptlet_key in ru.overrides):
+        overrides_present = ru.overrides is not None and scriptlet_key in ru.overrides
+        if ru.kind != "debug" or not overrides_present:
             try:
                 git.read_content(repo, ru.name, "task", committed=True)
             except FileNotFoundError:

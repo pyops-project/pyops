@@ -428,6 +428,26 @@ describe('JobService', () => {
       expect(mockJobsTreeProvider.refresh).toHaveBeenCalled();
     });
 
+    it('deleteAllFailed deletes killed jobs', async () => {
+      const mockVscode = require('vscode');
+
+      jest.spyOn(service as any, 'fetchJobs').mockResolvedValue([
+        { id: 'jobKilled', state: 'killed' },
+      ]);
+      mockVscode.window.showWarningMessage.mockResolvedValue('Yes');
+      (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValue({
+        ok: true,
+      } as Response);
+
+      await service.deleteAllFailed();
+
+      expect(global.fetch).toHaveBeenCalledWith('http://localhost:8000/scriptlet/job/item?id=jobKilled', {
+        method: 'DELETE',
+        headers: { 'Authorization': 'Basic test' },
+      });
+      expect(mockJobsTreeProvider.refresh).toHaveBeenCalled();
+    });
+
     it('bulk actions handle no jobs matching criteria', async () => {
       const mockVscode = require('vscode');
 

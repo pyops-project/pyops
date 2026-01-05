@@ -190,6 +190,8 @@ export async function run(): Promise<void> {
 
     console.log('✓ Test 8 passed');
 
+    await helpers.cleanupJobs(true);
+
     // Cleanup local-only
     fs.unlinkSync(localTestPath);
 

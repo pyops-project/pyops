@@ -49,7 +49,7 @@ export class DebugService {
             headers['Authorization'] = `Basic ${auth}`;
         }
 
-        const data = { set, name, drop_done: false, param: '', kind: 'debug', overrides };
+        const data = { set, name, drop_done: false, param: '#>AWAIT_DEBUG', kind: 'debug', overrides };
         this.outputChannel.appendLine(`[DEBUG enqueueDebugJob] Request to ${serverUrl}/scriptlet/job/item with data keys: ${Object.keys(data)}`);
         this.outputChannel.appendLine(`[DEBUG enqueueDebugJob] Overrides: ${JSON.stringify(overrides)}`);
         try {

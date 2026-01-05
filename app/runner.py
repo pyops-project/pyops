@@ -220,7 +220,7 @@ def assignJob(job_id: str, pid: int):
         logger.debug(f"assignJob: after commit, session ID {id(session)}, committed pid for {job_id} at {datetime.now()}")
 
 def loadLib(set: str, name: str, kind: str):
-    """Loads library code from Git (unstaged if kind=="draft", else committed)."""
+    """Loads library code from Git (unstaged if kind=="debug", else committed)."""
     logger.debug(f"loadLib(set={set}, name={name}, kind={kind})")
     repo = git.get_repo_path(set)
     files_list = [f for f in os.listdir(repo) if f.startswith(f"{name}.") and f.endswith('.py')]
@@ -228,7 +228,7 @@ def loadLib(set: str, name: str, kind: str):
         raise Exception(f"Scriptlet {set}::{name} not existing")
     filename = files_list[0]
     type_ = git.infer_type_from_filename(filename)
-    committed = kind != "draft"
+    committed = kind != "debug"
     code = git.read_content(repo, name, type_, committed=committed)
     return code
 
@@ -257,7 +257,7 @@ def loadJob(job_id: str):
                     override_code = override_dict[main_key]
             except json.JSONDecodeError:
                 logger.warning(f"loadJob({job_id}): Invalid overrides JSON")
-        committed = job.kind not in ("draft", "debug")
+        committed = job.kind != "debug"
         if override_code is not None:
             code = override_code
         else:
@@ -535,13 +535,16 @@ def run_debug_job(job_id: str, owner: str, set: str, name: str, param: str, code
                 terminate_debugpy_adapter(owner)
 
                 # Inject debugpy for debug kind
-                debug_lib = {
-                    "code": f"""#!debugpy
+                await_debug = '#>AWAIT_DEBUG' in param
+                debug_code = f"""#!debugpy
 import debugpy
 debugpy.log_to('.debug/adapter')
-debugpy.listen(('0.0.0.0', {port}))
-debugpy.wait_for_client()
-""",
+debugpy.listen(('0.0.0.0', {port}))"""
+                if await_debug:
+                    debug_code += """
+debugpy.wait_for_client()"""
+                debug_lib = {
+                    "code": debug_code,
                     "filename": "system::debugpy"
                 }
                 libs.insert(0, debug_lib)
@@ -616,6 +619,8 @@ debugpy.wait_for_client()
         stderr_file.flush()
         q.put({"id": job_id, "state": "failed", "detail": error_msg})
     finally:
+        stdout_file.flush()
+        stderr_file.flush()
         stdout_file.close()
         stderr_file.close()
         root = logging.getLogger()
@@ -668,6 +673,8 @@ def run_task_job(job_id: str, owner: str, set: str, name: str, param: str, code:
         stderr_file.flush()
         q.put({"id": job_id, "state": "failed", "detail": error_msg})
     finally:
+        stdout_file.flush()
+        stderr_file.flush()
         stdout_file.close()
         stderr_file.close()
         root = logging.getLogger()
@@ -721,6 +728,8 @@ def run_service_job(job_id: str, owner: str, set: str, name: str, param: str, co
         stderr_file.flush()
         q.put({"id": job_id, "state": "failed", "detail": error_msg})
     finally:
+        stdout_file.flush()
+        stderr_file.flush()
         stdout_file.close()
         stderr_file.close()
         root = logging.getLogger()

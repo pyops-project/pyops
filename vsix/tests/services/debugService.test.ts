@@ -164,7 +164,7 @@ describe('DebugService', () => {
             set: 'testset',
             name: 'testscript',
             drop_done: false,
-            param: '',
+            param: '#>AWAIT_DEBUG',
             kind: 'debug',
             overrides: {},
           }),

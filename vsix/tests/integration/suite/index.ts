@@ -11,11 +11,11 @@ export async function run(): Promise<void> {
 
   await core.run();
   await helpers.run();
+  await command_integration.run();
   await manager.run();
   await monitor.run();
   await content.run();
   await debug.run();
-  await command_integration.run();
 
   console.log('All integration tests passed!');
 }

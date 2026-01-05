@@ -38,11 +38,10 @@ export class DebugOutputMonitor {
                     if (newErr.length > 0) {
                         this.outputChannel.appendLine('[STDERR]');
                         this.outputChannel.append(newErr);
+                        this.outputChannel.show(true);
                     }
                     active.prevStderrLen = jobObj.stderr.length;
                 }
-                this.outputChannel.show(true);
-
                 if (['done', 'failed', 'cancelled', 'remove'].includes(jobObj.state)) {
                     this.activeJobs.delete(key);
                     return false;

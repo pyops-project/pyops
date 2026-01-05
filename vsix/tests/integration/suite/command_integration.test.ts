@@ -150,8 +150,9 @@ export async function run(): Promise<void> {
     // Test 10: Bulk operations (create multiple jobs first)
     console.log('Test 10: Bulk operations...');
     const bulkJobIds: string[] = [];
+    const sleepParam = 'import time; time.sleep(10); print("bulk cancel test")';
     for (let i = 0; i < 3; i++) {
-      const bulkJobId = await helpers.createTestJob('test', testScriptletName!);
+      const bulkJobId = await helpers.createTestJob('test', testScriptletName!, sleepParam);
       bulkJobIds.push(bulkJobId);
       await helpers.waitForJobState(bulkJobId, 'todo');
     }
@@ -169,7 +170,7 @@ export async function run(): Promise<void> {
     vscode.window.showWarningMessage = originalShowWarningBulkCancel;
     // Verify all jobs are cancelled
     for (const id of bulkJobIds) {
-      await helpers.waitForJobState(id, 'cancelled');
+      await helpers.waitForJobState(id, 'cancelled', 15000);
     }
     console.log('✓ Test 10 passed');
 

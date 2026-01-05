@@ -97,6 +97,7 @@ class JobsTreeDataProvider implements TreeDataProvider<JobTreeItem> {
                         break;
                     case 'failed':
                     case 'cancelled':
+                    case 'killed':
                         icon = new ThemeIcon('close');
                         break;
                     default:

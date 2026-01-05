@@ -147,7 +147,7 @@
       },
       {
         "command": "pyops.deleteAllFailed",
-        "title": "Delete All Failed",
+        "title": "Delete All Failed/Killed",
         "category": "PyOps",
         "icon": "$(trash)"
       }
@@ -240,7 +240,7 @@
         },
         {
           "command": "pyops.deleteJob",
-          "when": "view == pyops-monitor && viewItem =~ /pyopsJob-(done|failed|cancelled)/ && pyops.hasValidConfig",
+          "when": "view == pyops-monitor && viewItem =~ /pyopsJob-(done|failed|cancelled|killed)/ && pyops.hasValidConfig",
           "group": "navigation"
         },
         {

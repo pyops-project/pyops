@@ -26,7 +26,7 @@ def enqueue(set: str, name: str, owner: str, kind: str, drop_done: bool, param: 
         set (str): Scriptlet set.
         name (str): Scriptlet name.
         owner (str): Job owner (fixed to 'anonymous').
-        kind (str): Job kind ('task', 'service', 'draft', 'debug').
+        kind (str): Job kind ('task', 'service', 'debug').
         drop_done (bool): Auto-drop on success.
         param (str): Job parameters/code snippet.
         overrides (str | None): JSON string of overrides dict for debug kind.
@@ -176,12 +176,12 @@ def drop(id: str, owner: str, set: str):
         return False
 
 def loadLib(set: str, name: str, kind: str):
-    """Loads library code from Git (unstaged if kind=="draft", else committed).
+    """Loads library code from Git (unstaged if kind=="debug", else committed).
 
     Args:
         set (str): Set.
         name (str): Name.
-        kind (str): Job kind, determines unstaged if "draft".
+        kind (str): Job kind, determines unstaged if "debug".
 
     Returns:
         str: Code content.
@@ -196,11 +196,11 @@ def loadLib(set: str, name: str, kind: str):
         raise Exception(f"Library {set}::{name} not existing")
     filename = files_list[0]
     type_ = git.infer_type_from_filename(filename)
-    committed = kind != "draft"
+    committed = kind != "debug" # if debug job prefer unstaged changes
     return git.read_content(repo, name, type_, committed=committed)
 
 def loadJob(id: str):
-    """Loads job details and code from Git/DB (unstaged if kind=="draft", else committed).
+    """Loads job details and code from Git/DB (unstaged if kind=="debug", else committed).
 
     Args:
         id (str): Job ID.
@@ -223,7 +223,7 @@ def loadJob(id: str):
             raise Exception(f"Scriptlet {job.set}::{job.name} not existing")
         filename = files_list[0]
         type_ = git.infer_type_from_filename(filename)
-        committed = job.kind not in ("draft", "debug")
+        committed = kind != "debug" # if debug job prefer unstaged changes
         code = git.read_content(repo, job.name, type_, committed=committed)
 
         job.state = "running"

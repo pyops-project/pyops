@@ -261,7 +261,7 @@ Scriptlet-Routers:
 
 Job-Routers:
 job.py manages job lifecycle enqueue query cancel remove
-; enqueues jobs with kind ("task", "draft", "debug")
+; enqueues jobs with kind ("task", "service", "debug")
 ; for debug kind, accepts overrides dict[str, str] with keys 'set::name' for overriding scriptlets
 ; delete /item allows todo cancelled killed failed done states via runner.remove setting state=remove
 ; manager.py UI for jobs bulk ops.
@@ -294,15 +294,15 @@ Job-Execution:
 loadJob(job_id) fetches from DB; returns ..., code
 ; run() processes param & libs & code in subprocess
 ; handles venv activation & directives via process_imports() & process_install_lines()
-; uses unstaged code if kind=="draft"
-; debug: empty code skeleton, no repo retrieval, no libs loaded
-; uses compile() with custom filenames (e.g., "{set}::{name}.py") for accurate stacktraces in errors from param, code, and libs.
+; for debug without overrides, uses unstaged code (preview)
+; for debug with overrides (VSIX), uses override code
+; uses compile() with custom filenames for accurate stacktraces.
 finishJob(job_id, state, detail) updates DB.
 
 Directive-Processing:
 process_imports(text, set, kind, libs) handles `!pip` `!git` `#!{set::lib}`
 ; installs pip -q & clones git to pkg/ & prepends sys.path & exec libs
-; uses unstaged code if kind=="draft" for libs.
+; uses committed code for libs.
 process_install_lines(lines, venv, pkg, id) executes installs.
 
 Termination:
@@ -318,17 +318,16 @@ Global-Attributes:
 Runner spawns isolated processes per job.
 Workspaces in `data/jobs/{owner}/{set}/{id}/`.
 States: todo dequeued running done failed cancelled remove.
-Supports draft/debug mode & drop_done cleanup.
+Supports debug mode & drop_done cleanup.
 GracefulKiller handles SIGTERM/SIGINT.
 
 Debug-Kind-Implementation:
-Runner treats debug kind as draft job with overrides and debugpy bridge
-; loads unstaged code like draft
-; injects debugpy.listen/wait_for_client as first lib (libs.insert(0, ...))
-; requires user debug_port in pyops.json/users/{owner}/debug_port
-; fails job if missing or invalid port (1025-65535)
-; allows second debug job by killing existing one for user
-; executes in-process with exec, pauses until debugger attaches.
+Runner treats debug kind specially for web preview/VSIX.
+; web preview: no overrides, unstaged main code, committed libs.
+; VSIX: overrides for local code.
+; injects debugpy.listen(('0.0.0.0', port)) always, +wait_for_client() if '#>AWAIT_DEBUG' in param.
+; requires user debug_port.
+; kills previous debug job for owner.
 
 Config-Extension:
 files.py added conf_users() for pyops.json "users" {}
@@ -336,10 +335,9 @@ files.py added conf_users() for pyops.json "users" {}
 
 Enqueue-Logic:
 enqueue() in lib/runner.py handles debug kind specially
-; if kind=="debug", queries existing debug job for owner in running/dequeued states
-; kills existing job if found: sends SIGTERM to pid, sets state="cancelled", pid=None, detail="Cancelled by new debug job start", end=datetime.now()
-; logs action
-; then creates new debug job as todo.
+; queries existing debug job for owner in running/dequeued states
+; kills existing if found.
+; creates new todo.
 
 Validation-Logic:
 validate_debug_prerequisites(job_id, owner) checks port only
@@ -606,3 +604,11 @@ Runner-LoadJob-SkipCheck:
 ; fallback git.read_content if no main override or invalid JSON (logs warning)
 ; `committed=False` for debug fallback
 ; enables full local-only debug lifecycle (enqueue->dequeue->load->run).
+
+Debug-Await-Directive:
+Runner.run_debug_job checks '#>AWAIT_DEBUG' in job.param
+; injects debugpy bridge with listen(('0.0.0.0', port)) always
+; appends wait_for_client() if directive present.
+VSIX.DebugService.enqueuDebugJob sets param='#>AWAIT_DEBUG'.
+; enables waiting for VSIX debugger attach; non-VSIX enqueues non-blocking by default.
+Tests: tests/integration/runner/test_execution.py test_run_debug_inject (with directive); vsix/tests/services/debugService.test.ts.

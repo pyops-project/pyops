@@ -167,21 +167,21 @@ class TestLoadUtils:
             mock_read_content.assert_called_once_with('data/git/set', 'name', 'task', committed=True)
             assert result == ("owner", "set", "name", "task", "param", 'code', None)
 
-    def test_load_job_draft(self, mock_db, mock_git_ops):
+    def test_load_job_debug_unstaged(self, mock_db, mock_git_ops):
         from app import runner
         from app.orm.database import get_db_engine
         from app.orm.job import Job
-        # Draft mode uses committed=False (unstaged)
+        # Debug mode without override uses committed=False (unstaged)
         mock_read_content = mock_git_ops.read_content
         mock_infer = mock_git_ops.infer_type_from_filename
         # Create job first
         with Session(get_db_engine()) as test_session:
-            job = Job(id="123", set="set", name="name", kind="draft", param="param", state="dequeued", owner="owner")
+            job = Job(id="123", set="set", name="name", kind="debug", param="param", state="dequeued", owner="owner")
             test_session.add(job)
             test_session.commit()
         mock_infer.return_value = 'task'
         def mock_read_side(*args, **kwargs):
-            return 'draft code'
+            return 'debug unstaged code'
         mock_read_content.side_effect = mock_read_side
         with patch('os.listdir', return_value=['name.task.py']):
             result = runner.loadJob("123")
@@ -189,7 +189,7 @@ class TestLoadUtils:
                 fetched = test_session.get(Job, "123")
                 assert fetched.state == "loading"  # State set to loading by loadJob
             mock_read_content.assert_called_once_with('data/git/set', 'name', 'task', committed=False)
-            assert result == ("owner", "set", "name", "draft", "param", 'draft code', None)
+            assert result == ("owner", "set", "name", "debug", "param", 'debug unstaged code', None)
 
     def test_load_job_debug(self, mock_db, mock_git_ops):
         from app import runner
@@ -478,7 +478,7 @@ class TestKillProcTree:
         result = runner.drop("123", "owner", "set")
         assert result is False
 
-    def test_load_lib_draft(self, mock_git_ops):
+    def test_load_lib_debug(self, mock_git_ops):
         from app import runner
         mock_read_content = mock_git_ops.read_content
         mock_infer = mock_git_ops.infer_type_from_filename
@@ -487,7 +487,7 @@ class TestKillProcTree:
             return 'lib code'
         mock_read_content.side_effect = mock_read_side
         with patch('os.listdir', return_value=['name.py']):
-            result = runner.loadLib("set", "name", "draft")
+            result = runner.loadLib("set", "name", "debug")
             mock_read_content.assert_called_once_with('data/git/set', 'name', 'task', committed=False)
             assert result == 'lib code'
 

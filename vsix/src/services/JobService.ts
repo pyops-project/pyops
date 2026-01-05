@@ -250,7 +250,7 @@ export class JobService {
     }
 
     async deleteAllFailed(): Promise<void> {
-        await this.performBulkAction('delete', ['failed']);
+        await this.performBulkAction('delete', ['failed', 'killed']);
     }
 
     public dispose(): void {

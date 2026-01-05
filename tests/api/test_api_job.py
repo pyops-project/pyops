@@ -32,7 +32,7 @@ def mock_enqueue(mock_db):
         yield mock
 
 
-@pytest.mark.parametrize("kind", ["task", "draft"])
+@pytest.mark.parametrize("kind", ["task"])
 def test_put_job_item_enqueue(mock_client, mock_db, mock_git_ops, mock_enqueue, kind, test_temp_dir, patch_tempfile, mock_datetime):
     # Test PUT /scriptlet/job/item to enqueue
     unique_name = f"testtask_{kind}"

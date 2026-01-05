@@ -412,7 +412,7 @@ logging.error('ERROR message')
         job_id = "id"
         code = "print('test')"
 
-        run(job_id, owner, set_name, "name", "debug", "", code, [], mock_queue, data_base, "bind", "/venv", "/pkg", port=5678)
+        run(job_id, owner, set_name, "name", "debug", "#>AWAIT_DEBUG", code, [], mock_queue, data_base, "bind", "/venv", "/pkg", port=5678)
 
         # Check compile called for debug bridge lib, debugpy_install lib, and code
         assert mock_compile.call_count >= 3
@@ -429,6 +429,36 @@ logging.error('ERROR message')
         code_compiled = code_calls[0][0][0]
         assert "print('test')" in code_compiled
         # Verify terminate_debugpy_adapter was called for debug job
+        mock_terminate.assert_called_once_with("owner")
+
+    @pytest.mark.parametrize("param, expect_wait", [
+        ("#>AWAIT_DEBUG", True),
+        ("", False),
+    ])
+    @patch('subprocess.run')
+    @patch('app.runner.pyops.ServiceListener')
+    @patch('app.runner.terminate_debugpy_adapter')
+    @patch('builtins.compile')
+    def test_run_debug_await_directive(self, mock_compile, mock_terminate, mock_listener, mock_run, param, expect_wait, tmp_path, mock_queue):
+        mock_compile.return_value = compile("pass", "dummy", "exec")
+        mock_run.side_effect = [Mock(returncode=0, stdout=""), Mock(returncode=0)]
+        mock_listener.return_value = Mock()
+        from app.runner import run
+        data_base = str(tmp_path / "data")
+        owner = "owner"
+        set_name = "set"
+        job_id = "id"
+        code = "print('test')"
+        run(job_id, owner, set_name, "name", "debug", param, code, [], mock_queue, data_base, "bind", "/venv", "/pkg", port=5678)
+        # Find debugpy bridge compile call
+        bridge_calls = [call for call in mock_compile.call_args_list if ".debug/src/system/library/debugpy.py" in call[0][1]]
+        assert len(bridge_calls) == 1
+        bridge_code = bridge_calls[0][0][0]
+        assert "debugpy.listen((" in bridge_code
+        if expect_wait:
+            assert "debugpy.wait_for_client()" in bridge_code
+        else:
+            assert "debugpy.wait_for_client()" not in bridge_code
         mock_terminate.assert_called_once_with("owner")
 
     @patch.dict('sys.modules', {'debugpy': Mock()})

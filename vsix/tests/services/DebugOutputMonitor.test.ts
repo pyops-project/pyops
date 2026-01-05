@@ -64,7 +64,7 @@ describe('DebugOutputMonitor', () => {
   });
 
   describe('startMonitoring polling', () => {
-    it('appends incremental stdout and shows channel', async () => {
+    it('appends incremental stdout', async () => {
       const firstJobData = { stdout: 'hello', stderr: '', state: 'running' };
       const firstResponse = { ok: true, json: jest.fn().mockResolvedValue(firstJobData) } as any;
       mockFetch.mockResolvedValueOnce(firstResponse);
@@ -74,7 +74,6 @@ describe('DebugOutputMonitor', () => {
       // First poll happens immediately in startMonitoring, so check initial state
       expect(mockOutputChannel.appendLine).toHaveBeenCalledWith('[STDOUT]');
       expect(mockOutputChannel.append).toHaveBeenCalledWith('hello');
-      expect(mockOutputChannel.show).toHaveBeenCalledWith(true);
 
       const secondJobData = { stdout: 'hello world', stderr: '', state: 'running' };
       const secondResponse = { ok: true, json: jest.fn().mockResolvedValue(secondJobData) } as any;
