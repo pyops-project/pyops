@@ -730,8 +730,8 @@ print("jobsspace: " + globals()['jobsspace'])
     @patch('debugpy.listen')
     @patch('app.runner.pyops.ServiceListener')
     @patch('app.lib.files.conf_users')
-    def test_run_debug_overrides_add_new_libs(self, mock_conf_users, mock_listener, mock_listen, mock_wait, mock_run, tmp_path, mock_conf):
-        """Regression test: Ensure new libraries from overrides are added to libs and written to workspace."""
+    def test_debug_overrides_ignore_unreferenced(self, mock_conf_users, mock_listener, mock_listen, mock_wait, mock_run, tmp_path, mock_conf):
+        """Post-fix regression: Unreferenced overrides ignored (no exec/file)."""
         from app.runner import run
         from multiprocessing import Queue
 
@@ -746,30 +746,24 @@ print("jobsspace: " + globals()['jobsspace'])
         set_name = "set"
         job_id = "id"
 
-        # Override contains a new lib not in original libs
         overrides = {
             "set::name": "print('overridden code')",
-            "set::newlib": "print('new lib code')"
+            "set::newlib": "print('unused new lib')"  # Unreferenced
         }
         overrides_json = json.dumps(overrides)
 
         q = Queue()
-        run(job_id, owner, set_name, "name", "debug", "", "print('original code')", [], q, data_base, "bind", "/venv", "/pkg", overrides=overrides_json, port=5678)
+        run(job_id, owner, set_name, "name", "debug", "", "print('task')", [], q, data_base, "bind", "/venv", "/pkg", overrides=overrides_json, port=5678)
 
         msg = q.get()
         assert msg["state"] == "done"
 
-        # Check that the new lib file was created
         workspace = os.path.join(data_base, owner, set_name, job_id)
         debug_src_dir = os.path.join(workspace, ".debug", "src")
         new_lib_file = os.path.join(debug_src_dir, set_name, "library", "newlib.py")
-        assert os.path.exists(new_lib_file)
-        with open(new_lib_file, 'r') as f:
-            assert "print('new lib code')" in f.read()
+        assert not os.path.exists(new_lib_file)  # Ignored!
 
-        # Check that the main code was overridden
         code_file = os.path.join(debug_src_dir, set_name, "task", "name.py")
-        assert os.path.exists(code_file)
         with open(code_file, 'r') as f:
             assert "print('overridden code')" in f.read()
 
@@ -1069,3 +1063,105 @@ class TestMainLoopDebugIntegration:
         mock_assign_job.assert_called_once_with("task_job_id", 12345)
         # Verify no finishJob calls
         mock_finish_job.assert_not_called()
+
+
+class TestDebugOverridesResolution(TestLoggingCapture):
+    """New regression tests for override resolution (post-fix)."""
+
+    @patch('subprocess.run')
+    @patch('debugpy.wait_for_client')
+    @patch('debugpy.listen')
+    @patch('app.runner.pyops.ServiceListener')
+    @patch('app.lib.files.conf_users')
+    @patch('app.runner.loadLib', side_effect=Exception("git not found"))
+    def test_debug_directive_new_override(self, mock_loadLib, mock_conf_users, mock_listener, mock_listen, mock_wait, mock_run, tmp_path, mock_conf):
+        """Directive references new override lib (no git)."""
+        from app.runner import run, process_imports
+        from multiprocessing import Queue
+
+        mock_run.return_value = Mock(returncode=0, stdout="")
+        mock_conf_users.return_value = {"owner": {"debug_port": 5678}}
+
+        data_base = str(tmp_path / "data")
+        owner = "owner"
+        set_name = "test"
+        job_id = "id"
+        code = "#!{test::newlib}\nprint('task')"
+
+        overrides = {"test::newlib": "print('overridden newlib')"}
+        overrides_json = json.dumps(overrides)
+        override_dict = json.loads(overrides_json)
+
+        libs = []
+        code = process_imports(code, set_name, "debug", libs, override_dict)
+
+        q = Queue()
+        run(job_id, owner, set_name, "task", "debug", "", code, libs, q, data_base, "bind", "/venv", "/pkg", overrides=overrides_json, port=5678)
+
+        msg = q.get()
+        assert msg["state"] == "done"
+
+        # Check stdout has newlib
+        stdout_path = os.path.join(data_base, owner, set_name, job_id, "stdout.log")
+        with open(stdout_path, 'r') as f:
+            stdout = f.read()
+            assert "overridden newlib" in stdout
+            assert "task" in stdout
+
+        # Check file created
+        workspace = os.path.join(data_base, owner, set_name, job_id)
+        debug_src_dir = os.path.join(workspace, ".debug", "src")
+        new_lib_file = os.path.join(debug_src_dir, set_name, "library", "newlib.py")
+        assert os.path.exists(new_lib_file)
+        with open(new_lib_file, 'r') as f:
+            assert "print('overridden newlib')" in f.read()
+
+    @patch('subprocess.run')
+    @patch('debugpy.wait_for_client')
+    @patch('debugpy.listen')
+    @patch('app.runner.pyops.ServiceListener')
+    @patch('app.lib.files.conf_users')
+    def test_debug_recursive_directive(self, mock_conf_users, mock_listener, mock_listen, mock_wait, mock_run, tmp_path, mock_conf):
+        """Lib directive resolves sub-lib."""
+        from app.runner import run, process_imports
+        from multiprocessing import Queue
+
+        mock_run.return_value = Mock(returncode=0, stdout="")
+        mock_conf_users.return_value = {"owner": {"debug_port": 5678}}
+
+        data_base = str(tmp_path / "data")
+        owner = "owner"
+        set_name = "test"
+        job_id = "id"
+        code = "#!{test::libA}\nprint('task')"
+
+        overrides = {
+            "test::libA": "#!{test::libB}\nprint('libA')",
+            "test::libB": "print('libB')"
+        }
+        overrides_json = json.dumps(overrides)
+        override_dict = json.loads(overrides_json)
+
+        libs = []
+        code = process_imports(code, set_name, "debug", libs, override_dict)
+
+        q = Queue()
+        run(job_id, owner, set_name, "task", "debug", "", code, libs, q, data_base, "bind", "/venv", "/pkg", overrides=overrides_json, port=5678)
+
+        msg = q.get()
+        assert msg["state"] == "done"
+
+        stdout_path = os.path.join(data_base, owner, set_name, job_id, "stdout.log")
+        with open(stdout_path, 'r') as f:
+            stdout = f.read()
+            assert "libB" in stdout
+            assert "libA" in stdout
+            assert "task" in stdout
+
+        # Check files
+        workspace = os.path.join(data_base, owner, set_name, job_id)
+        debug_src_dir = os.path.join(workspace, ".debug", "src")
+        libA_file = os.path.join(debug_src_dir, set_name, "library", "libA.py")
+        libB_file = os.path.join(debug_src_dir, set_name, "library", "libB.py")
+        assert os.path.exists(libA_file)
+        assert os.path.exists(libB_file)

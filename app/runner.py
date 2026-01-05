@@ -312,39 +312,36 @@ def disposeJobs():
             session.commit()
             logger.debug("disposeJobs: committed deletions")
 
-def process_imports(text: str, current_set: str, kind: str, libs: list[dict[str, str]], overrides_dict: dict[str, str] = None) -> str:
+def process_imports(text: str, current_set: str, kind: str, libs: list[dict[str, str]], overrides_dict: dict[str, str] = None, seen_libs: set[str] = None, depth: int = 0) -> str:
     r"""
-    Processes directives starting with #{set::name} or #{::name} (empty set uses current_set).
-    - Strictly at line start (^#\!\{...}), no indentation allowed.
-    - Loads library code, appends to libs if successful as {"code": str, "filename": str}.
-    - On failure (load error, invalid format), logs warning.
-    - No recursion: assumes libs are pure (no further #!{} directives).
-
-    Args:
-        text (str): Input text (param or code) to process.
-        current_set (str): Job set for empty ::name resolution.
-        kind (str): Job kind, determines unstaged if "draft".
-        libs (list[dict[str, str]]): Mutable list to append {"code": lib_code, "filename": f"{set}::{name}.py"}.
-
-    Returns:
-        str: Original text unchanged.
+    Recursively processes directives ^#!\{[set::]name\} in text/libs.
+    Loads/overrides/appends to libs before exec (topo order).
+    Depth/cycle safe.
     """
+    if depth > 10:
+        logger.warning("Directive depth limit exceeded")
+        return text
+    if seen_libs is None:
+        seen_libs = set()
     for line in text.splitlines():
-        match = re.match(r'^#\!\{([a-zA-Z0-9_-]*?)(::([a-zA-Z0-9_-]+))?\}', line)
-        if match and match.group(2):  # Has :: separator
-            g = match.group(1)
+        match = re.match(r'^#!\{([a-zA-Z0-9_-]*?)(::([a-zA-Z0-9_-]+))?\}', line)
+        if match and match.group(2):
+            g = match.group(1) or current_set
             n = match.group(3)
-            if g or n:  # Valid non-empty
-                effective_g = current_set if not g else g
-                lib_key = f"{effective_g}::{n}"
+            if not n: continue
+            lib_key = f"{g}::{n}"
+            if lib_key in seen_libs: continue
+            seen_libs.add(lib_key)
+            try:
                 if overrides_dict and lib_key in overrides_dict:
-                    libs.append({"code": overrides_dict[lib_key], "filename": lib_key})
+                    lib_code = overrides_dict[lib_key]
                 else:
-                    try:
-                        lib_code = loadLib(effective_g, n, kind)
-                        libs.append({"code": lib_code, "filename": lib_key})
-                    except Exception as e:
-                        logger.warning(f"Failed to load lib {lib_key} in job processing: {e}")
+                    lib_code = loadLib(g, n, kind)
+                # Recurse sub-deps
+                lib_code = process_imports(lib_code, g, kind, libs, overrides_dict, seen_libs, depth + 1)
+                libs.append({"code": lib_code, "filename": lib_key})
+            except Exception as e:
+                logger.warning(f"Failed lib {lib_key}: {e}")
     return text
 
 def process_install_lines(lines, venv_path, pkg_path, id):
@@ -553,11 +550,6 @@ debugpy.wait_for_client()
                     for lib in libs:
                         if lib["filename"] in override_dict:
                             lib["code"] = override_dict[lib["filename"]]
-                    # Add any new libs from overrides
-                    existing_filenames = {lib["filename"] for lib in libs}
-                    for key, value in override_dict.items():
-                        if key != f"{set}::{name}" and key not in existing_filenames:
-                            libs.append({"code": value, "filename": key})
 
                 # Process installs w/ env prop.
                 param, code, libs = process_code_installs(param, code, libs, venv_path, pkg_path, job_id)
