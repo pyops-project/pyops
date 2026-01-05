@@ -12,8 +12,7 @@ const flushPromises = () => new Promise(resolve => process.nextTick(resolve));
 
 describe('DebugOutputMonitor', () => {
   let mockApiClient: jest.Mocked<ApiClient>;
-  let mockJobOutputChannel: any;
-  let mockJobErrOutputChannel: any;
+  let mockOutputChannel: any;
   let monitor: DebugOutputMonitor;
   let mockFetch: jest.MockedFunction<typeof global.fetch>;
 
@@ -33,19 +32,13 @@ describe('DebugOutputMonitor', () => {
     mockFetch = global.fetch as jest.MockedFunction<typeof global.fetch>;
     mockFetch.mockResolvedValue({ ok: true, json: jest.fn().mockResolvedValue({ state: 'running' }) } as any);
 
-    mockJobOutputChannel = {
+    mockOutputChannel = {
       append: jest.fn(),
       appendLine: jest.fn(),
       show: jest.fn(),
     };
 
-    mockJobErrOutputChannel = {
-      append: jest.fn(),
-      appendLine: jest.fn(),
-      show: jest.fn(),
-    };
-
-    monitor = new DebugOutputMonitor(mockApiClient, mockJobOutputChannel, mockJobErrOutputChannel);
+    monitor = new DebugOutputMonitor(mockApiClient, mockOutputChannel);
   });
 
   afterEach(() => {
@@ -71,7 +64,7 @@ describe('DebugOutputMonitor', () => {
   });
 
   describe('startMonitoring polling', () => {
-    it('appends incremental stdout and shows channels', async () => {
+    it('appends incremental stdout and shows channel', async () => {
       const firstJobData = { stdout: 'hello', stderr: '', state: 'running' };
       const firstResponse = { ok: true, json: jest.fn().mockResolvedValue(firstJobData) } as any;
       mockFetch.mockResolvedValueOnce(firstResponse);
@@ -79,9 +72,9 @@ describe('DebugOutputMonitor', () => {
       await monitor.startMonitoring('key1', 'job1');
 
       // First poll happens immediately in startMonitoring, so check initial state
-      expect(mockJobOutputChannel.append).toHaveBeenCalledWith('hello');
-      expect(mockJobOutputChannel.show).toHaveBeenCalledWith(true);
-      expect(mockJobErrOutputChannel.show).toHaveBeenCalledWith(true);
+      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith('[STDOUT]');
+      expect(mockOutputChannel.append).toHaveBeenCalledWith('hello');
+      expect(mockOutputChannel.show).toHaveBeenCalledWith(true);
 
       const secondJobData = { stdout: 'hello world', stderr: '', state: 'running' };
       const secondResponse = { ok: true, json: jest.fn().mockResolvedValue(secondJobData) } as any;
@@ -89,7 +82,7 @@ describe('DebugOutputMonitor', () => {
 
       await new Promise(resolve => setTimeout(resolve, 1100));
 
-      expect(mockJobOutputChannel.append).toHaveBeenLastCalledWith(' world');
+      expect(mockOutputChannel.append).toHaveBeenLastCalledWith(' world');
 
       await monitor.stopMonitoring('key1');
     });
@@ -102,7 +95,8 @@ describe('DebugOutputMonitor', () => {
       await monitor.startMonitoring('key1', 'job1');
 
       // First poll happens immediately
-      expect(mockJobErrOutputChannel.append).toHaveBeenCalledWith('error line 1');
+      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith('[STDERR]');
+      expect(mockOutputChannel.append).toHaveBeenCalledWith('error line 1');
 
       const secondJobData = { stdout: '', stderr: 'error line 1\\nerror line 2', state: 'running' };
       const secondResponse = { ok: true, json: jest.fn().mockResolvedValue(secondJobData) } as any;
@@ -110,7 +104,7 @@ describe('DebugOutputMonitor', () => {
 
       await new Promise(resolve => setTimeout(resolve, 1100));
 
-      expect(mockJobErrOutputChannel.append).toHaveBeenLastCalledWith('\\nerror line 2');
+      expect(mockOutputChannel.append).toHaveBeenLastCalledWith('\\nerror line 2');
 
       await monitor.stopMonitoring('key1');
     });
@@ -123,13 +117,13 @@ describe('DebugOutputMonitor', () => {
       await monitor.startMonitoring('key1', 'job1');
 
       // First poll happens immediately
-      expect(mockJobOutputChannel.append).toHaveBeenCalledTimes(1);
+      expect(mockOutputChannel.append).toHaveBeenCalledTimes(1);
 
       mockFetch.mockResolvedValueOnce(response); // same length
 
       await new Promise(resolve => setTimeout(resolve, 1100));
 
-      expect(mockJobOutputChannel.append).toHaveBeenCalledTimes(1);
+      expect(mockOutputChannel.append).toHaveBeenCalledTimes(1);
 
       await monitor.stopMonitoring('key1');
     });
@@ -141,8 +135,7 @@ describe('DebugOutputMonitor', () => {
       await monitor.startMonitoring('key1', 'job1');
 
       // First poll happens immediately
-      expect(mockJobOutputChannel.append).not.toHaveBeenCalled();
-      expect(mockJobErrOutputChannel.append).not.toHaveBeenCalled();
+      expect(mockOutputChannel.append).not.toHaveBeenCalled();
 
       await monitor.stopMonitoring('key1');
     });
@@ -254,7 +247,7 @@ describe('DebugOutputMonitor', () => {
       expect(global.fetch).toHaveBeenCalledWith('http://localhost:8000/scriptlet/job/cancel?id=job1', {
         headers: { 'Authorization': 'Basic test' },
       });
-      expect(mockJobOutputChannel.appendLine).toHaveBeenCalledWith('\n--- Job stopped ---\n');
+      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith('\n--- Job stopped ---\n');
       expect(mockVscode.window.showInformationMessage).toHaveBeenCalledWith('Stopped debug job job1');
       expect(monitor.isMonitoring('key1')).toBe(false);
     });

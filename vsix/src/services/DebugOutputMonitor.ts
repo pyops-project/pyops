@@ -4,7 +4,7 @@ import { ApiClient } from '../apiClient';
 export class DebugOutputMonitor {
     private activeJobs = new Map<string, { timeout: NodeJS.Timeout | null; jobId: string; prevStdoutLen: number; prevStderrLen: number }>();
 
-    constructor(private apiClient: ApiClient, private jobOutputChannel: vscode.OutputChannel, private jobErrOutputChannel: vscode.OutputChannel) {}
+    constructor(private apiClient: ApiClient, private outputChannel: vscode.OutputChannel) {}
 
     /**
      * Performs one polling cycle for the given key.
@@ -28,19 +28,20 @@ export class DebugOutputMonitor {
                 if (jobObj.stdout) {
                     const newOut = jobObj.stdout.slice(active.prevStdoutLen);
                     if (newOut.length > 0) {
-                        this.jobOutputChannel.append(newOut);
+                        this.outputChannel.appendLine('[STDOUT]');
+                        this.outputChannel.append(newOut);
                     }
                     active.prevStdoutLen = jobObj.stdout.length;
                 }
                 if (jobObj.stderr) {
                     const newErr = jobObj.stderr.slice(active.prevStderrLen);
                     if (newErr.length > 0) {
-                        this.jobErrOutputChannel.append(newErr);
+                        this.outputChannel.appendLine('[STDERR]');
+                        this.outputChannel.append(newErr);
                     }
                     active.prevStderrLen = jobObj.stderr.length;
                 }
-                this.jobOutputChannel.show(true);
-                this.jobErrOutputChannel.show(true);
+                this.outputChannel.show(true);
 
                 if (['done', 'failed', 'cancelled', 'remove'].includes(jobObj.state)) {
                     this.activeJobs.delete(key);
@@ -103,7 +104,7 @@ export class DebugOutputMonitor {
             if (cancelResponse.ok) {
                 if (active.timeout) clearTimeout(active.timeout);
                 this.activeJobs.delete(key);
-                this.jobOutputChannel.appendLine('\n--- Job stopped ---\n');
+                this.outputChannel.appendLine('\n--- Job stopped ---\n');
                 vscode.window.showInformationMessage(`Stopped debug job ${jobId}`);
             } else {
                 vscode.window.showErrorMessage(`Failed to stop debug: ${cancelResponse.statusText}`);

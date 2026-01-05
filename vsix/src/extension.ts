@@ -22,7 +22,6 @@ let outputChannel: vscode.OutputChannel;
 
 let statusBarItem: StatusBarItem;
 let jobOutputChannel: vscode.OutputChannel;
-let jobErrOutputChannel: vscode.OutputChannel;
 let jobService!: JobService;
 let debugOutputMonitor: DebugOutputMonitor;
 
@@ -164,11 +163,10 @@ export async function activate(context: vscode.ExtensionContext) {
 
 
         // Job output channels
-        jobOutputChannel = vscodeWindow.createOutputChannel('PyOps Job Out');
-        jobErrOutputChannel = vscodeWindow.createOutputChannel('PyOps Job Err');
-        context.subscriptions.push(jobOutputChannel, jobErrOutputChannel);
+        jobOutputChannel = vscodeWindow.createOutputChannel('PyOps Job Output');
+        context.subscriptions.push(jobOutputChannel);
 
-        debugOutputMonitor = new DebugOutputMonitor(apiClient, jobOutputChannel, jobErrOutputChannel);
+        debugOutputMonitor = new DebugOutputMonitor(apiClient, jobOutputChannel);
 
         // Assign to global for testing
         (global as any).debugOutputMonitor = debugOutputMonitor;
@@ -240,7 +238,6 @@ export async function activate(context: vscode.ExtensionContext) {
             if (result.jobId) {
                 try {
                     jobOutputChannel.clear();
-                    jobErrOutputChannel.clear();
                     jobOutputChannel.show(true);
                     await debugOutputMonitor.startMonitoring(key, result.jobId);
 
@@ -346,9 +343,6 @@ export function deactivate() {
     }
     if (jobOutputChannel) {
         jobOutputChannel.dispose();
-    }
-    if (jobErrOutputChannel) {
-        jobErrOutputChannel.dispose();
     }
     jobService.dispose();
     debugOutputMonitor.dispose();

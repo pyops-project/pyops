@@ -105,8 +105,7 @@ describe('Extension', () => {
 
     (require('vscode').window.createOutputChannel as jest.Mock).mockImplementation((name: string) => {
       if (name === 'PyOps') return mockOutputChannel;
-      if (name === 'PyOps Job Out') return mockJobOutputChannel;
-      if (name === 'PyOps Job Err') return mockJobErrOutputChannel;
+      if (name === 'PyOps Job Output') return mockJobOutputChannel;
       return mockOutputChannel;
     });
     (require('vscode').window.createStatusBarItem as jest.Mock).mockImplementation(() => mockStatusBarItem);
@@ -171,7 +170,7 @@ describe('Extension', () => {
       expect(require('vscode').window.registerTreeDataProvider).toHaveBeenCalledWith('pyops-monitor', expect.any(Object));
       expect(require('vscode').debug.registerDebugConfigurationProvider).toHaveBeenCalledWith('python', expect.any(Object));
       expect(require('vscode').commands.registerCommand).toHaveBeenCalledTimes(20); // Count from source
-      expect(mockContext.subscriptions).toHaveLength(32); // Exact count
+      expect(mockContext.subscriptions).toHaveLength(31); // Exact count
       expect(require('vscode').window.createOutputChannel).toHaveBeenCalledWith('PyOps');
     });
 
@@ -196,7 +195,6 @@ describe('Extension', () => {
       expect(mockStatusBarItem.dispose).toHaveBeenCalled();
       expect(mockOutputChannel.dispose).toHaveBeenCalled();
       expect(mockJobOutputChannel.dispose).toHaveBeenCalled();
-      expect(mockJobErrOutputChannel.dispose).toHaveBeenCalled();
       // Note: jobService and debugOutputMonitor are set as global variables during activate
       // and their dispose methods are called directly
     });
@@ -346,8 +344,7 @@ describe('Extension', () => {
       // @ts-ignore
       jest.spyOn(vscode.window, 'createOutputChannel').mockImplementation((name: string) => {
         if (name === 'PyOps') return mockOutputChannel;
-        if (name === 'PyOps Job Out') return mockJobOutputChannel;
-        if (name === 'PyOps Job Err') return mockJobErrOutputChannel;
+        if (name === 'PyOps Job Output') return mockJobOutputChannel;
         return mockOutputChannel;
       });
       // @ts-ignore
