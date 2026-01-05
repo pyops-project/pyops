@@ -19,4 +19,14 @@ export class ApiClient {
         const pyopsConfig = vscode.workspace.getConfiguration('pyops');
         return pyopsConfig.get('serverUrl') as string || defaultUrl;
     }
+
+    hasValidConfig(): boolean {
+        return ApiClient.hasValidConfigStatic();
+    }
+
+    static hasValidConfigStatic(): boolean {
+        const pyopsConfig = vscode.workspace.getConfiguration('pyops');
+        const serverUrl = pyopsConfig.get('serverUrl') as string || '';
+        return !!serverUrl;
+    }
 }

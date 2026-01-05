@@ -25,10 +25,10 @@ jest.mock('../src/services/AuthService', () => ({
 
 jest.mock('../src/services/DebugService', () => {
   const mockDebugService = jest.fn().mockImplementation(() => ({
-    enqueueDebugJob: jest.fn().mockResolvedValue({ jobId: '123' }),
+    enqueueDebugJob: jest.fn().mockResolvedValue({ jobId: '123', port: 5678 }),
   }));
   // @ts-ignore
-  mockDebugService.buildOverrides = jest.fn().mockReturnValue({});
+  mockDebugService.buildOverrides = jest.fn().mockReturnValue({ overrides: { 'testset::testname': 'print("test")' }, pathMappings: [] });
   return { DebugService: mockDebugService };
 });
 
@@ -141,14 +141,17 @@ describe('Extension', () => {
     // Mock providers/services constructors
     (require('../src/providers/RemoteContentProvider').RemoteContentProvider as jest.Mock).mockImplementation(() => ({}));
     (require('../src/providers/RemoteContentProvider').registerRemoteLanguageModeSetter as jest.Mock).mockReturnValue({});
-    (require('../src/apiClient').ApiClient as jest.Mock).mockImplementation(() => ({}));
+    (require('../src/apiClient').ApiClient as jest.Mock).mockImplementation(() => ({
+      getHeaders: jest.fn().mockResolvedValue({ 'Authorization': 'Basic dGVzdHVzZXI6dGVzdHBhc3M=' }),
+      getServerUrl: jest.fn().mockReturnValue('http://localhost:8000'),
+    }));
 
 
 
 
 
     (require('../src/commands/CreateScriptletCommand').CreateScriptletCommand.execute as jest.Mock).mockResolvedValue(undefined);
-    (require('../src/utils').hasValidConfig as jest.Mock).mockReturnValue(true);
+    (require('../src/apiClient').ApiClient.hasValidConfigStatic as jest.Mock).mockReturnValue(true);
 
     mockJobTreeItem = { jobId: '123', status: 'running' };
     mockScriptletTreeItem = { set: 'testset', scriptletName: 'testname', scriptletType: 'task' };
@@ -167,7 +170,6 @@ describe('Extension', () => {
       expect(require('vscode').window.registerTreeDataProvider).toHaveBeenCalledWith('pyops-manager', expect.any(Object));
       expect(require('vscode').window.registerTreeDataProvider).toHaveBeenCalledWith('pyops-monitor', expect.any(Object));
       expect(require('vscode').debug.registerDebugConfigurationProvider).toHaveBeenCalledWith('python', expect.any(Object));
-      expect(require('vscode').debug.onDidTerminateDebugSession).toHaveBeenCalled();
       expect(require('vscode').commands.registerCommand).toHaveBeenCalledTimes(20); // Count from source
       expect(mockContext.subscriptions).toHaveLength(32); // Exact count
       expect(require('vscode').window.createOutputChannel).toHaveBeenCalledWith('PyOps');
@@ -233,7 +235,7 @@ describe('Extension', () => {
       (require('../src/services/RefreshTimerManager').RefreshTimerManager as jest.Mock).mock.instances = [];
       await activate(mockContext);
 
-      (require('../src/utils').hasValidConfig as jest.Mock).mockReturnValue(false);
+      (require('../src/apiClient').ApiClient.hasValidConfigStatic as jest.Mock).mockReturnValue(false);
       const mockEvent = { affectsConfiguration: jest.fn().mockReturnValue(true) };
       const configChangeHandler = (require('vscode').workspace.onDidChangeConfiguration as jest.Mock).mock.calls[0][0];
 
@@ -297,82 +299,7 @@ describe('Extension', () => {
     });
   });
 
-  describe('debug session termination handler', () => {
-    it('should cancel job when debug session terminates with jobId', async () => {
-      // Mock password retrieval
-      mockContext.workspaceState.get.mockReturnValue('testpass');
 
-      await activate(mockContext);
-
-      const mockSession = { configuration: { jobId: 'test-job-123' } };
-      const terminateHandler = (require('vscode').debug.onDidTerminateDebugSession as jest.Mock).mock.calls[0][0];
-
-      await terminateHandler(mockSession);
-
-      expect(global.fetch).toHaveBeenCalledWith('http://localhost:8000/scriptlet/job/cancel?id=test-job-123', {
-        headers: { 'Authorization': 'Basic dGVzdHVzZXI6dGVzdHBhc3M=' }
-      });
-      expect(require('vscode').window.showInformationMessage).toHaveBeenCalledWith('Canceled debug job test-job-123');
-    });
-
-    it('should handle job cancellation failure', async () => {
-      // Mock no auth
-      mockContext.workspaceState.get.mockReturnValue(undefined);
-      (require('vscode').workspace.getConfiguration as jest.Mock).mockReturnValue({
-        get: jest.fn((key: string) => {
-          if (key === 'serverUrl') return 'http://localhost:8000';
-          if (key === 'username') return undefined;
-          return '';
-        }),
-      });
-
-      await activate(mockContext);
-
-      global.fetch = jest.fn().mockRejectedValue(new Error('Network error'));
-      const mockSession = { configuration: { jobId: 'test-job-123' } };
-      const terminateHandler = (require('vscode').debug.onDidTerminateDebugSession as jest.Mock).mock.calls[0][0];
-
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
-
-      await terminateHandler(mockSession);
-
-      expect(consoleSpy).toHaveBeenCalledWith('Error canceling job: Network error');
-      consoleSpy.mockRestore();
-    });
-
-    it('should not cancel job when session has no jobId', async () => {
-      await activate(mockContext);
-
-      const mockSession = { configuration: {} };
-      const terminateHandler = (require('vscode').debug.onDidTerminateDebugSession as jest.Mock).mock.calls[0][0];
-
-      await terminateHandler(mockSession);
-
-      expect(global.fetch).not.toHaveBeenCalled();
-    });
-
-    it('should not cancel job when session has no configuration', async () => {
-      await activate(mockContext);
-
-      const mockSession = {};
-      const terminateHandler = (require('vscode').debug.onDidTerminateDebugSession as jest.Mock).mock.calls[0][0];
-
-      await terminateHandler(mockSession);
-
-      expect(global.fetch).not.toHaveBeenCalled();
-    });
-
-    it('should not cancel job when session config exists but has no jobId', async () => {
-      await activate(mockContext);
-
-      const mockSession = { configuration: { otherProp: 'value' } };
-      const terminateHandler = (require('vscode').debug.onDidTerminateDebugSession as jest.Mock).mock.calls[0][0];
-
-      await terminateHandler(mockSession);
-
-      expect(global.fetch).not.toHaveBeenCalled();
-    });
-  });
 
   describe('command handlers', () => {
     let commandHandlers: Map<string, Function>;
@@ -439,12 +366,13 @@ describe('Extension', () => {
         configurable: true
       });
 
-      global.fetch = jest.fn().mockResolvedValue({ ok: true });
+      global.fetch = jest.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({ state: 'running' }) });
 
       jest.spyOn(vscode.workspace, 'registerTextDocumentContentProvider').mockReturnValue({});
       jest.spyOn(vscode.languages, 'setTextDocumentLanguage').mockReturnValue({});
       jest.spyOn(vscode.debug, 'registerDebugConfigurationProvider').mockReturnValue({});
       jest.spyOn(vscode.debug, 'onDidTerminateDebugSession').mockReturnValue({});
+      jest.spyOn(vscode.debug, 'startDebugging').mockResolvedValue(undefined);
       jest.spyOn(vscode.window, 'registerTreeDataProvider').mockReturnValue({});
       jest.spyOn(vscode.window, 'showErrorMessage').mockResolvedValue(undefined);
       jest.spyOn(vscode.window, 'showWarningMessage').mockResolvedValue(undefined);
@@ -453,8 +381,11 @@ describe('Extension', () => {
       (require('../src/services/AuthService').AuthService.setupAuth as jest.Mock).mockResolvedValue(undefined);
       (require('../src/providers/RemoteContentProvider').RemoteContentProvider as jest.Mock).mockImplementation(() => ({}));
       (require('../src/providers/RemoteContentProvider').registerRemoteLanguageModeSetter as jest.Mock).mockReturnValue({});
-      (require('../src/apiClient').ApiClient as jest.Mock).mockImplementation(() => ({}));
-      (require('../src/utils').hasValidConfig as jest.Mock).mockReturnValue(true);
+      (require('../src/apiClient').ApiClient as jest.Mock).mockImplementation(() => ({
+        getHeaders: jest.fn().mockResolvedValue({ 'Authorization': 'Basic dGVzdHVzZXI6dGVzdHBhc3M=' }),
+        getServerUrl: jest.fn().mockReturnValue('http://localhost:8000'),
+      }));
+      (require('../src/apiClient').ApiClient.hasValidConfigStatic as jest.Mock).mockReturnValue(true);
 
       // Reset instances
       const JobServiceModule = require('../src/services/JobService');
@@ -508,8 +439,9 @@ describe('Extension', () => {
     });
 
     beforeEach(() => {
-      jest.clearAllMocks();
-      debugOutputMonitorInstance.isMonitoring.mockReturnValue(false);
+        jest.clearAllMocks();
+        debugOutputMonitorInstance.isMonitoring.mockReturnValue(false);
+        global.fetch = jest.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({ state: 'running' }) });
     });
 
     afterAll(() => {
@@ -606,13 +538,14 @@ describe('Extension', () => {
       const handler = commandHandlers.get('pyops.startDebugJob');
       await handler!(mockScriptletTreeItem);
       expect(DebugServiceModule.DebugService.buildOverrides).toHaveBeenCalledWith('testset', '/test/workspace');
-      expect(debugServiceInstance.enqueueDebugJob).toHaveBeenCalledWith('testset', 'testname', {});
+      expect(debugServiceInstance.enqueueDebugJob).toHaveBeenCalledWith('testset', 'testname', expect.any(Object));
       expect(require('vscode').window.showInformationMessage).toHaveBeenCalledWith('Started debug job 123 for testname with local overrides');
       expect(debugOutputMonitorInstance.startMonitoring).toHaveBeenCalledWith('testset-testname', '123');
+      expect(require('vscode').debug.startDebugging).toHaveBeenCalled();
     });
 
     it('should not start debug job if invalid config', async () => {
-      (require('../src/utils').hasValidConfig as jest.Mock).mockReturnValue(false);
+      (require('../src/apiClient').ApiClient.hasValidConfigStatic as jest.Mock).mockReturnValue(false);
       const handler = commandHandlers.get('pyops.startDebugJob');
       await handler!(mockScriptletTreeItem);
       expect(require('vscode').window.showWarningMessage).toHaveBeenCalledWith('No valid PyOps configuration set. Please configure in settings.');
@@ -651,9 +584,9 @@ describe('Extension', () => {
       expect(vscode.workspace.workspaceFolders).toHaveLength(1);
       expect(vscode.workspace.workspaceFolders![0].uri.fsPath).toBe('/test/workspace');
 
-      const utils = require('../src/utils');
+      const apiClient = require('../src/apiClient');
 
-      expect(utils.hasValidConfig).toBeDefined();
+      expect(apiClient.ApiClient.hasValidConfigStatic).toBeDefined();
 
       expect(DebugServiceModule.DebugService).toBeDefined();
       expect(DebugServiceModule.DebugService.buildOverrides).toBeDefined();
@@ -663,9 +596,9 @@ describe('Extension', () => {
       const handler = commandHandlers.get('pyops.startDebugJob');
 
       await handler!(mockScriptletTreeItem);
-      expect(utils.hasValidConfig).toHaveBeenCalled();
+      expect(apiClient.ApiClient.hasValidConfigStatic).toHaveBeenCalled();
       expect(debugOutputMonitorInstance.isMonitoring).toHaveBeenCalledWith('testset-testname');
-      expect(debugServiceInstance.enqueueDebugJob).toHaveBeenCalledWith('testset', 'testname', {});
+      expect(debugServiceInstance.enqueueDebugJob).toHaveBeenCalledWith('testset', 'testname', expect.any(Object));
       expect(require('vscode').window.showErrorMessage).toHaveBeenCalledWith('Failed to start debug');
 
       expect(debugOutputMonitorInstance.startMonitoring).not.toHaveBeenCalled();
@@ -675,7 +608,7 @@ describe('Extension', () => {
 
 
     it('should show warning for stopDebugJob invalid config', async () => {
-      (require('../src/utils').hasValidConfig as jest.Mock).mockReturnValue(false);
+      (require('../src/apiClient').ApiClient.hasValidConfigStatic as jest.Mock).mockReturnValue(false);
       const handler = commandHandlers.get('pyops.stopDebugJob');
       await handler!(mockScriptletTreeItem);
       expect(require('vscode').window.showWarningMessage).toHaveBeenCalledWith('No valid PyOps configuration set. Please configure in settings.');

@@ -304,8 +304,7 @@
     "lint": "eslint src --ext ts",
     "test": "jest",
     "test:coverage": "jest --coverage",
-    "pretest:integration": "npm run compile && tsc -p tests/integration/",
-    "test:integration": "npm run pretest:integration && node tests/integration/runTests.js"
+    "test:integration": "npm run compile && tsc -p tests/integration/ && node tests/integration/runTests.js"
   },
   "devDependencies": {
     "@types/jest": "^29.5.12",

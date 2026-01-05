@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { ManagerTreeDataProvider } from '../managerTreeProvider';
 import { JobsTreeDataProvider } from '../jobsTreeProvider';
-import { hasValidConfig } from '../utils';
+import { ApiClient } from '../apiClient';
 
 export class RefreshTimerManager {
     private managerTimer?: NodeJS.Timeout;
@@ -13,7 +13,7 @@ export class RefreshTimerManager {
     ) {}
 
     ensureRunning(): void {
-        if (!hasValidConfig()) return;
+        if (!ApiClient.hasValidConfigStatic()) return;
 
         const autoRefreshInterval = vscode.workspace.getConfiguration('pyops').get('autoRefreshInterval', 10) * 1000;
 

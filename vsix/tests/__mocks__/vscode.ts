@@ -70,6 +70,7 @@ export const Uri = {
 export const debug = {
   registerDebugConfigurationProvider: jest.fn(),
   onDidTerminateDebugSession: jest.fn(),
+  startDebugging: jest.fn(),
 };
 
 export const languages = {

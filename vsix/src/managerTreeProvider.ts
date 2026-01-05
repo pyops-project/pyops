@@ -2,7 +2,8 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import { TreeDataProvider, TreeItem, EventEmitter } from 'vscode';
-import { inferExt, hasValidConfig } from './utils';
+import { inferExt } from './utils';
+import { ApiClient } from './apiClient';
 
 interface ScriptletTreeItem extends TreeItem {
     set?: string;
@@ -16,14 +17,24 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
 
     private _context: vscode.ExtensionContext;
     private _outputChannel: vscode.OutputChannel;
+    private _apiClient: ApiClient;
     private _scriptlets: unknown[] = [];
     private _syncStatus: Map<string, boolean> = new Map();
     private _lastScriptletErrorShown: number = 0;
 
-    constructor(context: vscode.ExtensionContext, outputChannel: vscode.OutputChannel) {
+    constructor(context: vscode.ExtensionContext, outputChannel: vscode.OutputChannel, apiClient: ApiClient) {
         this._context = context;
         this._outputChannel = outputChannel;
+        this._apiClient = apiClient;
         this.refresh();
+    }
+
+    private async getHeaders(): Promise<Record<string, string>> {
+        return this._apiClient.getHeaders();
+    }
+
+    private getServerUrl(): string {
+        return this._apiClient.getServerUrl();
     }
 
     getTreeItem(element: TreeItem): TreeItem {
@@ -35,7 +46,7 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
             return [new TreeItem('No Workspace Open', vscode.TreeItemCollapsibleState.None)];
         }
 
-        const isValidConfig = hasValidConfig();
+        const isValidConfig = this._apiClient.hasValidConfig();
         if (!isValidConfig && !element) {
             const msgItem = new TreeItem('No PyOps serverUrl set. Please configure serverUrl in settings.', vscode.TreeItemCollapsibleState.None);
             msgItem.contextValue = 'noConfig';
@@ -103,16 +114,8 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
     }
 
     private async fetchScriptlets(): Promise<unknown[]> {
-        const pyopsConfig = vscode.workspace.getConfiguration('pyops');
-        const serverUrl = pyopsConfig.get('serverUrl') as string || 'http://localhost:8000';
-        const username = pyopsConfig.get('username') as string;
-        const password = this._context.workspaceState.get('pyops.password') as string;
-
-        const headers: Record<string, string> = {};
-        if (username && password) {
-            const auth = Buffer.from(`${username}:${password}`).toString('base64');
-            headers['Authorization'] = `Basic ${auth}`;
-        }
+        const serverUrl = this.getServerUrl();
+        const headers = await this.getHeaders();
 
         try {
             const response = await fetch(`${serverUrl}/scriptlet/inventory/list`, { headers });
@@ -145,19 +148,11 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
 
         this._syncStatus.clear();
 
-        const pyopsConfig = vscode.workspace.getConfiguration('pyops');
-        const serverUrl = pyopsConfig.get('serverUrl') as string || 'http://localhost:8000';
-        const username = pyopsConfig.get('username') as string;
-        const password = this._context.workspaceState.get('pyops.password') as string;
-
-        const headers: Record<string, string> = {};
-        if (username && password) {
-            const auth = Buffer.from(`${username}:${password}`).toString('base64');
-            headers['Authorization'] = `Basic ${auth}`;
-        }
+        const serverUrl = this.getServerUrl();
+        const headers = await this.getHeaders();
 
         const workspaceRoot = vscode.workspace.workspaceFolders[0].uri.fsPath;
-        const localPyopsDir = pyopsConfig.get('localPyopsDir', 'pyops') as string;
+        const localPyopsDir = vscode.workspace.getConfiguration('pyops').get('localPyopsDir', 'pyops') as string;
         const baseLocalPath = path.join(workspaceRoot, localPyopsDir);
 
         const downloadPromises = scriptlets.map(async (s: unknown) => {
@@ -166,8 +161,8 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
             try {
                 const response = await fetch(`${serverUrl}/scriptlet/inventory/code?set=${sObj.set}&name=${sObj.name}`, { headers });
                 if (response.ok) {
-                    const responseData = await response.json() as { code?: string };
-                    const remoteCode = responseData.code ?? '';
+                    const data = await response.json() as {code: string};
+                    const remoteCode = data.code;
                     const ext = inferExt(sObj.type);
                     const dirPath = path.join(baseLocalPath, sObj.set, sObj.type);
                     if (!fs.existsSync(dirPath)) {
@@ -201,8 +196,43 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
         return vscode.workspace.getConfiguration('pyops').get('excludedSets', []) as string[];
     }
 
+    async downloadScriptlet(scriptletItem: ScriptletTreeItem): Promise<void> {
+        if (!scriptletItem.set || !scriptletItem.scriptletName || !scriptletItem.scriptletType) return;
+
+        const serverUrl = this.getServerUrl();
+        const headers = await this.getHeaders();
+
+        const sObj = { set: scriptletItem.set, name: scriptletItem.scriptletName, type: scriptletItem.scriptletType };
+        const key = `${sObj.set}-${sObj.name}-${sObj.type}`;
+        try {
+            const response = await fetch(`${serverUrl}/scriptlet/inventory/code?set=${sObj.set}&name=${sObj.name}`, { headers });
+            if (response.ok) {
+                const data = await response.json() as {code: string};
+                const remoteCode = data.code;
+                const ext = inferExt(sObj.type);
+                if (!vscode.workspace.workspaceFolders || vscode.workspace.workspaceFolders.length === 0) return;
+                const workspaceRoot = vscode.workspace.workspaceFolders[0].uri.fsPath;
+                const localPyopsDir = vscode.workspace.getConfiguration('pyops').get('localPyopsDir', 'pyops') as string;
+                const dirPath = path.join(workspaceRoot, localPyopsDir, sObj.set, sObj.type);
+                if (!fs.existsSync(dirPath)) {
+                    fs.mkdirSync(dirPath, { recursive: true });
+                }
+                const localPath = path.join(dirPath, `${sObj.name}.${ext}`);
+                fs.writeFileSync(localPath, remoteCode);
+                this._syncStatus.set(key, true);
+            } else {
+                this._syncStatus.set(key, false);
+                console.error(`Failed to fetch ${sObj.set}::${sObj.name}: ${response.statusText}`);
+            }
+        } catch (error: unknown) {
+            this._syncStatus.set(key, false);
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            console.error(`Error downloading ${sObj.set}::${sObj.name}:`, errorMessage);
+        }
+    }
+
     async refresh(): Promise<void> {
-        const isValidConfig = hasValidConfig();
+        const isValidConfig = this._apiClient.hasValidConfig();
         if (!isValidConfig) {
             this._scriptlets = [];
             this._onDidChangeTreeData.fire();

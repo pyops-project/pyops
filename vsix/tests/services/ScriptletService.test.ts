@@ -44,7 +44,6 @@ describe('ScriptletService', () => {
       file: jest.fn().mockReturnValue({}),
     };
 
-    mockUtils.hasValidConfig.mockReturnValue(true);
     mockUtils.inferExt.mockReturnValue('py');
 
     mockPath.join.mockImplementation((...args: string[]) => args.join('/'));
@@ -53,8 +52,10 @@ describe('ScriptletService', () => {
     mockApiClient = new ApiClient({} as any) as jest.Mocked<ApiClient>;
     mockApiClient.getHeaders.mockResolvedValue({ 'Authorization': 'Basic test' });
     mockApiClient.getServerUrl.mockReturnValue('http://localhost:8000');
+    (ApiClient as jest.Mocked<typeof ApiClient>).hasValidConfigStatic = jest.fn().mockReturnValue(true);
 
-    mockManagerTreeProvider = new ManagerTreeDataProvider({} as any, {} as any) as jest.Mocked<ManagerTreeDataProvider>;
+    const mockApiClientForProvider = {} as any;
+    mockManagerTreeProvider = new ManagerTreeDataProvider({} as any, {} as any, mockApiClientForProvider) as jest.Mocked<ManagerTreeDataProvider>;
     mockManagerTreeProvider.refresh = jest.fn();
 
     service = new ScriptletService(mockApiClient, mockManagerTreeProvider);
@@ -121,8 +122,7 @@ describe('ScriptletService', () => {
     });
 
     it('shows warning if no valid config', async () => {
-      const mockUtils = require('../../src/utils');
-      mockUtils.hasValidConfig.mockReturnValue(false);
+      (ApiClient.hasValidConfigStatic as jest.MockedFunction<typeof ApiClient.hasValidConfigStatic>).mockReturnValue(false);
 
       const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
 

@@ -77,4 +77,50 @@ describe('ApiClient', () => {
       expect(headers).toEqual({});
     });
   });
+
+  describe('hasValidConfigStatic', () => {
+    it('returns true when serverUrl is configured', () => {
+      (vscode.workspace.getConfiguration as jest.Mock).mockReturnValue({
+        get: jest.fn((key: string) => {
+          if (key === 'serverUrl') return 'http://localhost:8000';
+          return '';
+        }),
+      });
+
+      expect(ApiClient.hasValidConfigStatic()).toBe(true);
+    });
+
+    it('returns false when serverUrl is empty', () => {
+      (vscode.workspace.getConfiguration as jest.Mock).mockReturnValue({
+        get: jest.fn((key: string) => {
+          if (key === 'serverUrl') return '';
+          return '';
+        }),
+      });
+
+      expect(ApiClient.hasValidConfigStatic()).toBe(false);
+    });
+
+    it('returns false when serverUrl is undefined', () => {
+      (vscode.workspace.getConfiguration as jest.Mock).mockReturnValue({
+        get: jest.fn((key: string) => {
+          if (key === 'serverUrl') return undefined;
+          return '';
+        }),
+      });
+
+      expect(ApiClient.hasValidConfigStatic()).toBe(false);
+    });
+
+    it('returns false when serverUrl is null', () => {
+      (vscode.workspace.getConfiguration as jest.Mock).mockReturnValue({
+        get: jest.fn((key: string) => {
+          if (key === 'serverUrl') return null;
+          return '';
+        }),
+      });
+
+      expect(ApiClient.hasValidConfigStatic()).toBe(false);
+    });
+  });
 });

@@ -4,7 +4,6 @@ import * as path from 'path';
 import { ApiClient } from '../apiClient';
 import { ManagerTreeDataProvider, ScriptletTreeItem } from '../managerTreeProvider';
 import { inferExt } from '../utils';
-import { hasValidConfig } from '../utils';
 
 
 export class ScriptletService {
@@ -55,7 +54,7 @@ export class ScriptletService {
     }
 
     async writeLocalToRemoteDraft(treeItem?: ScriptletTreeItem): Promise<void> {
-        const isValidConfig = hasValidConfig();
+        const isValidConfig = ApiClient.hasValidConfigStatic();
         if (!isValidConfig) {
             vscode.window.showWarningMessage('No valid PyOps configuration set. Please configure in settings.');
             return;
@@ -74,7 +73,7 @@ export class ScriptletService {
         let code: string;
         try {
             code = fs.readFileSync(localPath, 'utf8');
-        } catch (error) {
+        } catch {
             vscode.window.showErrorMessage('Error reading local file');
             return;
         }
@@ -100,7 +99,7 @@ export class ScriptletService {
     }
 
     async saveRemoteDraft(treeItem?: ScriptletTreeItem): Promise<void> {
-        const isValidConfig = hasValidConfig();
+        const isValidConfig = ApiClient.hasValidConfigStatic();
         if (!isValidConfig) {
             vscode.window.showWarningMessage('No valid PyOps configuration set. Please configure in settings.');
             return;
@@ -149,7 +148,7 @@ export class ScriptletService {
     }
 
     async diffLocalRemote(treeItem?: ScriptletTreeItem): Promise<void> {
-        const isValidConfig = hasValidConfig();
+        const isValidConfig = ApiClient.hasValidConfigStatic();
         if (!isValidConfig) {
             vscode.window.showWarningMessage('No valid PyOps configuration set. Please configure in settings.');
             return;
@@ -186,7 +185,7 @@ export class ScriptletService {
     }
 
     async deleteScriptlet(treeItem?: ScriptletTreeItem): Promise<void> {
-        const isValidConfig = hasValidConfig();
+        const isValidConfig = ApiClient.hasValidConfigStatic();
         if (!isValidConfig) {
             vscode.window.showWarningMessage('No valid PyOps configuration set. Please configure in settings.');
             return;

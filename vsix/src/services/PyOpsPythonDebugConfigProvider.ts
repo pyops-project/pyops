@@ -6,6 +6,11 @@ export class PyOpsPythonDebugConfigProvider implements vscode.DebugConfiguration
     constructor(private _debugService: DebugService) {}
 
     async resolveDebugConfiguration(folder: vscode.WorkspaceFolder | undefined, config: vscode.DebugConfiguration): Promise<vscode.DebugConfiguration | null | undefined> {
+        if (config.jobId) {
+            // Already resolved, return as-is to avoid duplicate job enqueuing
+            return config;
+        }
+
         if (!folder || !vscode.workspace.workspaceFolders || vscode.workspace.workspaceFolders.length === 0) {
             return config;
         }
@@ -23,19 +28,28 @@ export class PyOpsPythonDebugConfigProvider implements vscode.DebugConfiguration
 
         // Check if file is in pyops/task/ directory
         const relativePath = path.relative(localPyopsPath, uri.fsPath);
-        if (relativePath.startsWith('..') || !relativePath.startsWith('task/')) {
+        if (relativePath.startsWith('..')) {
+            return config;
+        }
+        const dirName = path.dirname(relativePath);
+        if (!dirName.endsWith('task') || !relativePath.endsWith('.py')) {
             return config; // Not a pyops task file
         }
 
-        const parts = relativePath.split(path.sep);
-        if (parts.length < 3) {
+        const dirParts = dirName.split(path.sep);
+        if (dirParts.length !== 2 || dirParts[1] !== 'task') {
             return config;
         }
-        const set = parts[1]; // pyops/{set}/task/{scriptlet}.py
-        const scriptlet = path.basename(parts[2], '.py');
+        const set = dirParts[0];
+        const scriptlet = path.basename(relativePath, '.py');
 
         // Build overrides from all local .py files in set
-        const overrides = DebugService.buildOverrides(set, workspaceRoot);
+        const { overrides, pathMappings } = DebugService.buildOverrides(set, workspaceRoot);
+
+
+
+        console.log(`[DEBUG PyOpsPythonDebugConfigProvider] Built overrides for ${set}: ${Object.keys(overrides).length} files`);
+        console.log(`[DEBUG PyOpsPythonDebugConfigProvider] Path mappings:`, pathMappings);
 
         // Enqueue debug job
         const { jobId, port } = await this._debugService.enqueueDebugJob(set, scriptlet, overrides);
@@ -45,13 +59,16 @@ export class PyOpsPythonDebugConfigProvider implements vscode.DebugConfiguration
         }
 
         // Return attach config
-        return {
+        const debugConfig = {
             name: `Attach PyOps ${set}::${scriptlet}`,
             type: 'python',
             request: 'attach',
             connect: { host: 'localhost', port },
             path: uri.fsPath,
+            pathMappings,
             jobId
         };
+        console.log(`[DEBUG PyOpsPythonDebugConfigProvider] Returning config:`, debugConfig);
+        return debugConfig;
     }
 }

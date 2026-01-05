@@ -1,13 +1,8 @@
 import * as vscode from 'vscode';
 import { TreeDataProvider, TreeItem, TreeItemCollapsibleState, EventEmitter, ThemeIcon } from 'vscode';
+import { ApiClient } from './apiClient';
 
-function hasValidConfig(context: vscode.ExtensionContext): boolean {
-    const pyopsConfig = vscode.workspace.getConfiguration('pyops');
-    const serverUrl = pyopsConfig.get('serverUrl') as string || '';
-    const username = pyopsConfig.get('username') as string || '';
-    const password = context.workspaceState.get('pyops.password') as string || '';
-    return !!(serverUrl && username && password);
-}
+
 
 interface Job {
     id: string;
@@ -28,13 +23,23 @@ class JobsTreeDataProvider implements TreeDataProvider<JobTreeItem> {
     readonly onDidChangeTreeData: vscode.Event<JobTreeItem | undefined | null | void> = this._onDidChangeTreeData.event;
 
     private _context: vscode.ExtensionContext;
+    private _apiClient: ApiClient;
     private _jobs: Job[] = [];
     private _loading: boolean = false;
     private _lastJobsErrorShown: number = 0;
 
-    constructor(context: vscode.ExtensionContext) {
+    constructor(context: vscode.ExtensionContext, apiClient: ApiClient) {
         this._context = context;
+        this._apiClient = apiClient;
         this.refresh();
+    }
+
+    private async getHeaders(): Promise<Record<string, string>> {
+        return this._apiClient.getHeaders();
+    }
+
+    private getServerUrl(): string {
+        return this._apiClient.getServerUrl();
     }
 
     getTreeItem(element: JobTreeItem): TreeItem {
@@ -46,12 +51,12 @@ class JobsTreeDataProvider implements TreeDataProvider<JobTreeItem> {
             return [new TreeItem('No Workspace Open', TreeItemCollapsibleState.None)];
         }
 
-        const isValidConfig = hasValidConfig(this._context);
+        const isValidConfig = this._apiClient.hasValidConfig();
         if (!isValidConfig && !element) {
-            const msgItem = new TreeItem('No PyOps configuration set. Please configure serverUrl, username, and password in settings.', TreeItemCollapsibleState.None);
+            const msgItem = new TreeItem('No PyOps serverUrl set. Please configure serverUrl in settings.', TreeItemCollapsibleState.None);
             msgItem.contextValue = 'noConfig';
             msgItem.iconPath = new ThemeIcon('warning');
-            msgItem.tooltip = 'Open settings (Ctrl+,) and set PyOps configuration to connect.';
+            msgItem.tooltip = 'Open settings (Ctrl+,) to configure serverUrl.';
             return [msgItem as JobTreeItem];
         }
 
@@ -114,16 +119,8 @@ class JobsTreeDataProvider implements TreeDataProvider<JobTreeItem> {
     }
 
     private async fetchJobs(): Promise<Job[]> {
-        const pyopsConfig = vscode.workspace.getConfiguration('pyops');
-        const serverUrl = pyopsConfig.get('serverUrl') as string || 'http://localhost:8000';
-        const username = pyopsConfig.get('username') as string;
-        const password = this._context.workspaceState.get('pyops.password') as string;
-
-        const headers: Record<string, string> = {};
-        if (username && password) {
-            const auth = Buffer.from(`${username}:${password}`).toString('base64');
-            headers['Authorization'] = `Basic ${auth}`;
-        }
+        const serverUrl = this.getServerUrl();
+        const headers = await this.getHeaders();
 
         try {
             const response = await fetch(`${serverUrl}/scriptlet/job/list`, { headers });
@@ -150,7 +147,7 @@ class JobsTreeDataProvider implements TreeDataProvider<JobTreeItem> {
     }
 
     async refresh(): Promise<void> {
-        const isValidConfig = hasValidConfig(this._context);
+        const isValidConfig = this._apiClient.hasValidConfig();
         if (!isValidConfig) {
             this._jobs = [];
             this._loading = false;

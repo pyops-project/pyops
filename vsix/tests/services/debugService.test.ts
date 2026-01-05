@@ -10,6 +10,7 @@ const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation();
 
 describe('DebugService', () => {
   let mockContext: any;
+  let mockOutputChannel: any;
   let service: DebugService;
 
   beforeEach(() => {
@@ -37,7 +38,11 @@ describe('DebugService', () => {
       },
     };
 
-    service = new DebugService(mockContext);
+    mockOutputChannel = {
+      appendLine: jest.fn(),
+    };
+
+    service = new DebugService(mockContext as any, mockOutputChannel as any);
   });
 
   describe('buildOverrides', () => {
@@ -47,9 +52,9 @@ describe('DebugService', () => {
       mockFs.existsSync.mockReturnValue(false);
       mockPath.join.mockReturnValue('/test/workspace/pyops/testset');
 
-      const overrides = DebugService.buildOverrides('testset', '/test/workspace');
+      const result = DebugService.buildOverrides('testset', '/test/workspace');
 
-      expect(overrides).toEqual({});
+      expect(result).toEqual({ overrides: {}, pathMappings: [] });
       expect(mockFs.existsSync).toHaveBeenCalledWith('/test/workspace/pyops/testset');
     });
 
@@ -66,9 +71,12 @@ describe('DebugService', () => {
       mockPath.relative.mockReturnValue('lib.py');
       mockPath.basename.mockReturnValue('lib');
 
-      const overrides = DebugService.buildOverrides('testset', '/test/workspace');
+      const result = DebugService.buildOverrides('testset', '/test/workspace');
 
-      expect(overrides).toEqual({ 'set::lib': 'py code' });
+      expect(result).toEqual({
+        overrides: { 'testset::lib': 'py code' },
+        pathMappings: [{ localRoot: '${workspaceFolder}/pyops', remoteRoot: './.debug/src' }]
+      });
       expect(mockFs.readFileSync).toHaveBeenCalledWith('/test/workspace/pyops/testset/lib.py', 'utf8');
     });
 
@@ -98,11 +106,14 @@ describe('DebugService', () => {
         .mockReturnValueOnce('lib')
         .mockReturnValueOnce('sub');
 
-      const overrides = DebugService.buildOverrides('testset', '/test/workspace');
+      const result = DebugService.buildOverrides('testset', '/test/workspace');
 
-      expect(overrides).toEqual({
-        'set::lib': 'lib code',
-        'set::sub': 'sub code',
+      expect(result).toEqual({
+        overrides: {
+          'testset::lib': 'lib code',
+          'testset::sub': 'sub code',
+        },
+        pathMappings: [{ localRoot: '${workspaceFolder}/pyops', remoteRoot: './.debug/src' }]
       });
     });
 
@@ -122,9 +133,12 @@ describe('DebugService', () => {
       mockPath.relative.mockReturnValue('lib.py');
       mockPath.basename.mockReturnValue('lib');
 
-      const overrides = DebugService.buildOverrides('testset', '/test/workspace');
+      const result = DebugService.buildOverrides('testset', '/test/workspace');
 
-      expect(overrides).toEqual({ 'set::lib': 'second code' });
+      expect(result).toEqual({
+        overrides: { 'testset::lib': 'second code' },
+        pathMappings: [{ localRoot: '${workspaceFolder}/pyops', remoteRoot: './.debug/src' }]
+      });
     });
   });
 
@@ -188,7 +202,7 @@ describe('DebugService', () => {
       const result = await service.enqueueDebugJob('testset', 'testscript');
 
       expect(result).toEqual({});
-      expect(console.error).toHaveBeenCalledWith('Failed to enqueue debug job: Bad Request');
+      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith('[DEBUG enqueueDebugJob] Failed with error: server error');
     });
 
     it('handles fetch error', async () => {
@@ -197,7 +211,7 @@ describe('DebugService', () => {
       const result = await service.enqueueDebugJob('testset', 'testscript');
 
       expect(result).toEqual({});
-      expect(console.error).toHaveBeenCalledWith(expect.stringContaining('Error enqueuing debug job'));
+      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith('[DEBUG enqueueDebugJob] Exception: network error');
     });
 
     it('passes overrides to request', async () => {

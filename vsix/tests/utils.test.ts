@@ -1,4 +1,4 @@
-import { inferExt, hasValidConfig } from '../src/utils';
+import { inferExt } from '../src/utils';
 
 jest.mock('vscode');
 
@@ -33,53 +33,5 @@ describe('utils', () => {
     });
   });
 
-  describe('hasValidConfig', () => {
-    it('returns true when serverUrl is configured', () => {
-      const mockVscode = require('vscode');
-      mockVscode.workspace.getConfiguration.mockReturnValue({
-        get: jest.fn((key: string) => {
-          if (key === 'serverUrl') return 'http://localhost:8000';
-          return '';
-        }),
-      });
 
-      expect(hasValidConfig()).toBe(true);
-    });
-
-    it('returns false when serverUrl is empty', () => {
-      const mockVscode = require('vscode');
-      mockVscode.workspace.getConfiguration.mockReturnValue({
-        get: jest.fn((key: string) => {
-          if (key === 'serverUrl') return '';
-          return '';
-        }),
-      });
-
-      expect(hasValidConfig()).toBe(false);
-    });
-
-    it('returns false when serverUrl is undefined', () => {
-      const mockVscode = require('vscode');
-      mockVscode.workspace.getConfiguration.mockReturnValue({
-        get: jest.fn((key: string) => {
-          if (key === 'serverUrl') return undefined;
-          return '';
-        }),
-      });
-
-      expect(hasValidConfig()).toBe(false);
-    });
-
-    it('returns false when serverUrl is null', () => {
-      const mockVscode = require('vscode');
-      mockVscode.workspace.getConfiguration.mockReturnValue({
-        get: jest.fn((key: string) => {
-          if (key === 'serverUrl') return null;
-          return '';
-        }),
-      });
-
-      expect(hasValidConfig()).toBe(false);
-    });
-  });
 });

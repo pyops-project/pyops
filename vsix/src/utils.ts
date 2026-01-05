@@ -1,5 +1,3 @@
-import * as vscode from 'vscode';
-
 export function inferExt(type: string): string {
     switch (type) {
         case 'task':
@@ -13,10 +11,4 @@ export function inferExt(type: string): string {
         default:
             return '';
     }
-}
-
-export function hasValidConfig(): boolean {
-    const pyopsConfig = vscode.workspace.getConfiguration('pyops');
-    const serverUrl = pyopsConfig.get('serverUrl') as string || '';
-    return !!serverUrl;
 }

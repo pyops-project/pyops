@@ -23,10 +23,20 @@ jest.mock('path', () => ({
 // Mock fetch
 global.fetch = jest.fn();
 
+// Mock ApiClient
+jest.mock('../src/apiClient', () => ({
+  ApiClient: jest.fn().mockImplementation(() => ({
+    getHeaders: jest.fn().mockResolvedValue({ 'Authorization': 'Basic dGVzdHVzZXI6cGFzcw==' }),
+    getServerUrl: jest.fn().mockReturnValue('http://localhost:8000'),
+    hasValidConfig: jest.fn().mockReturnValue(true),
+  })),
+}));
+
 describe('ManagerTreeDataProvider', () => {
   let provider: ManagerTreeDataProvider;
   let mockContext: any;
   let mockOutputChannel: any;
+  let mockApiClient: any;
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -51,7 +61,9 @@ describe('ManagerTreeDataProvider', () => {
     mockOutputChannel = {
       appendLine: jest.fn(),
     };
-    provider = new ManagerTreeDataProvider(mockContext, mockOutputChannel);
+    const ApiClientMock = require('../src/apiClient').ApiClient;
+    mockApiClient = new ApiClientMock();
+    provider = new ManagerTreeDataProvider(mockContext, mockOutputChannel, mockApiClient);
   });
 
   describe('getTreeItem', () => {
@@ -77,9 +89,7 @@ describe('ManagerTreeDataProvider', () => {
     });
 
     it('should return config warning when no valid config', async () => {
-      (require('vscode').workspace.getConfiguration as jest.Mock).mockReturnValue({
-        get: jest.fn(() => ''),
-      });
+      mockApiClient.hasValidConfig.mockReturnValue(false);
       const children = await provider.getChildren();
       expect(children).toHaveLength(1);
       expect(children[0].contextValue).toBe('noConfig');

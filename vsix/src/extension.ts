@@ -7,10 +7,9 @@ import { DebugService } from './services/DebugService';
 import { DebugOutputMonitor } from './services/DebugOutputMonitor';
 import { PyOpsPythonDebugConfigProvider } from './services/PyOpsPythonDebugConfigProvider';
 import { ConnectionStatusManager } from './ConnectionStatusManager';
-import { hasValidConfig } from './utils';
+import { ApiClient } from './apiClient';
 import { JobService } from './services/JobService';
 import { ScriptletService } from './services/ScriptletService';
-import { ApiClient } from './apiClient';
 import { RemoteContentProvider, registerRemoteLanguageModeSetter } from './providers/RemoteContentProvider';
 import { AuthService } from './services/AuthService';
 import { RefreshTimerManager } from './services/RefreshTimerManager';
@@ -54,6 +53,9 @@ export async function activate(context: vscode.ExtensionContext) {
         statusBarItem = statusManager.createStatusBarItem();
         context.subscriptions.push(statusBarItem);
 
+        // Assign to global for testing
+        (global as any).connectionStatusManager = statusManager;
+
         // Initial status update
         await statusManager.update();
 
@@ -65,7 +67,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 if (managerTreeProvider) managerTreeProvider.refresh();
                 if (jobsTreeProvider) jobsTreeProvider.refresh();
                 if (refreshManager) {
-                    const isValidConfig = hasValidConfig();
+                    const isValidConfig = ApiClient.hasValidConfigStatic();
                     if (isValidConfig) {
                         refreshManager.ensureRunning();
                     } else {
@@ -82,8 +84,10 @@ export async function activate(context: vscode.ExtensionContext) {
         });
         context.subscriptions.push(refreshStatusDisposable);
 
+    const apiClient = new ApiClient(context);
+
     // Register tree view for manager
-    managerTreeProvider = new ManagerTreeDataProvider(context, outputChannel);
+    managerTreeProvider = new ManagerTreeDataProvider(context, outputChannel, apiClient);
     context.subscriptions.push(vscode.window.registerTreeDataProvider('pyops-manager', managerTreeProvider));
 
     context.subscriptions.push(vscode.commands.registerCommand('pyops.createScriptlet', async () => {
@@ -91,60 +95,58 @@ export async function activate(context: vscode.ExtensionContext) {
     }));
 
     // Register native tree view for monitor (repurposing existing ID)
-    jobsTreeProvider = new JobsTreeDataProvider(context);
+    jobsTreeProvider = new JobsTreeDataProvider(context, apiClient);
     context.subscriptions.push(vscode.window.registerTreeDataProvider('pyops-monitor', jobsTreeProvider));
 
     refreshManager = new RefreshTimerManager(managerTreeProvider!, jobsTreeProvider!);
     refreshManager.ensureRunning();
     context.subscriptions.push(refreshManager);
 
-    const apiClient = new ApiClient(context);
     const jobViewOutputChannel = vscodeWindow.createOutputChannel('PyOps Job View');
     context.subscriptions.push(jobViewOutputChannel);
     jobService = new JobService(apiClient, jobsTreeProvider, jobViewOutputChannel);
     const scriptletService = new ScriptletService(apiClient, managerTreeProvider!);
 
     // Create debug service
-    const debugService = new DebugService(context);
+    const debugService = new DebugService(context, outputChannel);
 
     // Assign to global for testing
     (global as any).jobService = jobService;
     (global as any).scriptletService = scriptletService;
     (global as any).debugService = debugService;
+    (global as any).DebugService = DebugService;
+    (global as any).managerTreeProvider = managerTreeProvider;
+    (global as any).jobsTreeProvider = jobsTreeProvider;
 
     // Register debug configuration provider for Python
-    context.subscriptions.push(vscode.debug.registerDebugConfigurationProvider('python', new PyOpsPythonDebugConfigProvider(debugService)));
+    const debugConfigProvider = new PyOpsPythonDebugConfigProvider(debugService);
+    context.subscriptions.push(vscode.debug.registerDebugConfigurationProvider('python', debugConfigProvider));
 
+    // Assign to global for testing
+    (global as any).debugConfigProvider = debugConfigProvider;
 
-    // Handle debug session termination to cancel jobs
+    // Register debug session termination handler
     context.subscriptions.push(vscode.debug.onDidTerminateDebugSession(async (session) => {
-        const config = session.configuration;
-        if (config && config.jobId) {
-            const pyopsConfig = vscode.workspace.getConfiguration('pyops');
-            const serverUrl = pyopsConfig.get('serverUrl') as string || 'http://localhost:8000';
-            const username = pyopsConfig.get('username') as string;
-            const password = context.workspaceState.get('pyops.password') as string;
-
-            const headers: Record<string, string> = {};
-            if (username && password) {
-                const auth = Buffer.from(`${username}:${password}`).toString('base64');
-                headers['Authorization'] = `Basic ${auth}`;
-            }
-
+        if (session.configuration?.jobId) {
             try {
-                await fetch(`${serverUrl}/scriptlet/job/cancel?id=${config.jobId}`, { headers });
-                vscode.window.showInformationMessage(`Canceled debug job ${config.jobId}`);
+                const apiClient = new ApiClient(context);
+                const headers = await apiClient.getHeaders();
+                const serverUrl = apiClient.getServerUrl();
+                await fetch(`${serverUrl}/scriptlet/job/cancel?id=${session.configuration.jobId}`, {
+                    method: 'PUT',
+                    headers
+                });
+                vscode.window.showInformationMessage(`Canceled debug job ${session.configuration.jobId}`);
             } catch (error: unknown) {
-                const errorMessage = error instanceof Error ? error.message : String(error);
-                console.error(`Error canceling job: ${errorMessage}`);
+                console.error('Error canceling job:', error instanceof Error ? error.message : String(error));
             }
         }
     }));
 
-        // Register commands
+    // Register commands
         context.subscriptions.push(vscode.commands.registerCommand('pyops.refreshManager', async () => {
             if (managerTreeProvider) {
-                managerTreeProvider.refresh();
+                await managerTreeProvider.refresh();
                 vscode.window.showInformationMessage('PyOps Manager refreshed');
             }
         }));
@@ -152,7 +154,7 @@ export async function activate(context: vscode.ExtensionContext) {
         // Monitor commands
         context.subscriptions.push(vscode.commands.registerCommand('pyops.refreshMonitor', async () => {
             if (jobsTreeProvider) {
-                jobsTreeProvider.refresh();
+                await jobsTreeProvider.refresh();
                 vscode.window.showInformationMessage('PyOps Monitor refreshed');
             } else {
                 vscode.window.showWarningMessage('Monitor provider not initialized');
@@ -216,7 +218,7 @@ export async function activate(context: vscode.ExtensionContext) {
         }));
 
         context.subscriptions.push(vscode.commands.registerCommand('pyops.startDebugJob', async (treeItem?: ScriptletTreeItem) => {
-            const isValidConfig = hasValidConfig();
+            const isValidConfig = ApiClient.hasValidConfigStatic();
             if (!isValidConfig) {
                 vscode.window.showWarningMessage('No valid PyOps configuration set. Please configure in settings.');
                 return;
@@ -231,21 +233,72 @@ export async function activate(context: vscode.ExtensionContext) {
             }
 
             const workspaceRoot = vscode.workspace.workspaceFolders![0].uri.fsPath;
-            const overrides = DebugService.buildOverrides(set, workspaceRoot);
+            const { overrides, pathMappings } = DebugService.buildOverrides(set, workspaceRoot);
+            outputChannel.appendLine(`[DEBUG] Built overrides for ${set}: ${Object.keys(overrides).length} files`);
+            outputChannel.appendLine(`[DEBUG] Path mappings: ${JSON.stringify(pathMappings, null, 2)}`);
             const result = await debugService.enqueueDebugJob(set, name, overrides);
             if (result.jobId) {
-                jobOutputChannel.clear();
-                jobErrOutputChannel.clear();
-                jobOutputChannel.show(true);
-                await debugOutputMonitor.startMonitoring(key, result.jobId);
-                vscode.window.showInformationMessage(`Started debug job ${result.jobId} for ${name} with local overrides`);
+                try {
+                    jobOutputChannel.clear();
+                    jobErrOutputChannel.clear();
+                    jobOutputChannel.show(true);
+                    await debugOutputMonitor.startMonitoring(key, result.jobId);
+
+                    // Wait for job to be running
+                    const serverUrl = apiClient.getServerUrl();
+                    const headers = await apiClient.getHeaders();
+                    const jobTimeoutMs = 15000;
+                    const pollIntervalMs = 1000;
+                    const jobStartTime = Date.now();
+                    let jobRunning = false;
+                    while (Date.now() - jobStartTime < jobTimeoutMs) {
+                        const response = await fetch(`${serverUrl}/scriptlet/job/item?id=${result.jobId}`, { headers });
+                        if (!response.ok) {
+                            if (response.status === 404) {
+                                throw new Error(`Job ${result.jobId} not found`);
+                            }
+                            throw new Error(`Failed to fetch job status: ${response.status}`);
+                        }
+                        const job = await response.json() as { state: string };
+                        if (job.state === 'running') {
+                            jobRunning = true;
+                            break;
+                        }
+                        if (['failed', 'killed', 'cancelled', 'removed'].includes(job.state)) {
+                            throw new Error(`Job ${result.jobId} failed with state: ${job.state}`);
+                        }
+                        await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
+                    }
+                    if (!jobRunning) {
+                        throw new Error(`Timeout waiting for job ${result.jobId} to start running`);
+                    }
+
+
+
+                    // Start debug attach
+                    const config = {
+                        name: `Attach PyOps ${set}::${name}`,
+                        type: 'debugpy',
+                        request: 'attach',
+                        connect: { host: 'localhost', port: result.port },
+                        pathMappings,
+                        jobId: result.jobId
+                    };
+                    outputChannel.appendLine(`[DEBUG] Starting debug with config: ${JSON.stringify(config, null, 2)}`);
+                    await vscode.debug.startDebugging(vscode.workspace.workspaceFolders![0], config);
+
+                    vscode.window.showInformationMessage(`Started debug job ${result.jobId} for ${name} with local overrides`);
+                } catch (error: unknown) {
+                    const errorMessage = error instanceof Error ? error.message : String(error);
+                    vscode.window.showErrorMessage(`Failed to start debug: ${errorMessage}`);
+                }
             } else {
                 vscode.window.showErrorMessage(`Failed to start debug`);
             }
         }));
 
         context.subscriptions.push(vscode.commands.registerCommand('pyops.stopDebugJob', async (treeItem?: ScriptletTreeItem) => {
-            const isValidConfig = hasValidConfig();
+            const isValidConfig = ApiClient.hasValidConfigStatic();
             if (!isValidConfig) {
                 vscode.window.showWarningMessage('No valid PyOps configuration set. Please configure in settings.');
                 return;

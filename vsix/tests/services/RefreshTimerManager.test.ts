@@ -1,12 +1,13 @@
 import { RefreshTimerManager } from '../../src/services/RefreshTimerManager';
 import { ManagerTreeDataProvider } from '../../src/managerTreeProvider';
 import { JobsTreeDataProvider } from '../../src/jobsTreeProvider';
-import { hasValidConfig } from '../../src/utils';
+import { ApiClient } from '../../src/apiClient';
 
 jest.mock('vscode');
 jest.mock('../../src/managerTreeProvider');
 jest.mock('../../src/jobsTreeProvider');
 jest.mock('../../src/utils');
+jest.mock('../../src/apiClient');
 
 describe('RefreshTimerManager', () => {
   let mockManagerProvider: jest.Mocked<ManagerTreeDataProvider>;
@@ -22,8 +23,11 @@ describe('RefreshTimerManager', () => {
     jest.spyOn(global, 'setInterval');
     jest.spyOn(global, 'clearInterval');
 
-    mockManagerProvider = new ManagerTreeDataProvider({} as any, {} as any) as jest.Mocked<ManagerTreeDataProvider>;
-    mockJobsProvider = new JobsTreeDataProvider({} as any) as jest.Mocked<JobsTreeDataProvider>;
+    (ApiClient as jest.Mocked<typeof ApiClient>).hasValidConfigStatic = jest.fn().mockReturnValue(true);
+
+    const mockApiClient = {} as any;
+    mockManagerProvider = new ManagerTreeDataProvider({} as any, {} as any, mockApiClient) as jest.Mocked<ManagerTreeDataProvider>;
+    mockJobsProvider = new JobsTreeDataProvider({} as any, mockApiClient) as jest.Mocked<JobsTreeDataProvider>;
 
     manager = new RefreshTimerManager(mockManagerProvider, mockJobsProvider);
   });
@@ -36,31 +40,31 @@ describe('RefreshTimerManager', () => {
   describe('ensureRunning', () => {
     it('starts timers when config is valid and no timers running', () => {
       const mockVscode = require('vscode');
-      (hasValidConfig as jest.MockedFunction<typeof hasValidConfig>).mockReturnValue(true);
+      (ApiClient.hasValidConfigStatic as jest.MockedFunction<typeof ApiClient.hasValidConfigStatic>).mockReturnValue(true);
       mockVscode.workspace.getConfiguration.mockReturnValue({
         get: jest.fn().mockReturnValue(15),
       });
 
       manager.ensureRunning();
 
-      expect(hasValidConfig).toHaveBeenCalled();
+      expect(ApiClient.hasValidConfigStatic).toHaveBeenCalled();
       expect(mockVscode.workspace.getConfiguration).toHaveBeenCalledWith('pyops');
       expect(setInterval).toHaveBeenCalledTimes(2);
       expect(setInterval).toHaveBeenCalledWith(expect.any(Function), 15000);
     });
 
     it('does not start timers when config is invalid', () => {
-      (hasValidConfig as jest.MockedFunction<typeof hasValidConfig>).mockReturnValue(false);
+      (ApiClient.hasValidConfigStatic as jest.MockedFunction<typeof ApiClient.hasValidConfigStatic>).mockReturnValue(false);
 
       manager.ensureRunning();
 
-      expect(hasValidConfig).toHaveBeenCalled();
+      expect(ApiClient.hasValidConfigStatic).toHaveBeenCalled();
       expect(setInterval).not.toHaveBeenCalled();
     });
 
     it('does not start duplicate timers if already running', () => {
       const mockVscode = require('vscode');
-      (hasValidConfig as jest.MockedFunction<typeof hasValidConfig>).mockReturnValue(true);
+      (ApiClient.hasValidConfigStatic as jest.MockedFunction<typeof ApiClient.hasValidConfigStatic>).mockReturnValue(true);
       mockVscode.workspace.getConfiguration.mockReturnValue({
         get: jest.fn().mockReturnValue(10),
       });
@@ -75,7 +79,7 @@ describe('RefreshTimerManager', () => {
   describe('stopIfRunning', () => {
     it('clears timers when running', () => {
       const mockVscode = require('vscode');
-      (hasValidConfig as jest.MockedFunction<typeof hasValidConfig>).mockReturnValue(true);
+      (ApiClient.hasValidConfigStatic as jest.MockedFunction<typeof ApiClient.hasValidConfigStatic>).mockReturnValue(true);
       mockVscode.workspace.getConfiguration.mockReturnValue({
         get: jest.fn().mockReturnValue(10),
       });
@@ -96,7 +100,7 @@ describe('RefreshTimerManager', () => {
   describe('dispose', () => {
     it('clears all timers', () => {
       const mockVscode = require('vscode');
-      (hasValidConfig as jest.MockedFunction<typeof hasValidConfig>).mockReturnValue(true);
+      (ApiClient.hasValidConfigStatic as jest.MockedFunction<typeof ApiClient.hasValidConfigStatic>).mockReturnValue(true);
       mockVscode.workspace.getConfiguration.mockReturnValue({
         get: jest.fn().mockReturnValue(10),
       });

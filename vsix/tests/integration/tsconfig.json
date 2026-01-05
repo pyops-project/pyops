@@ -1,12 +1,17 @@
 {
-    "extends": "../../tsconfig.json",
     "compilerOptions": {
-        "types": ["node", "jest", "@types/jest"],
+        "module": "commonjs",
+        "target": "ES2020",
         "outDir": "../../out/tests/integration",
-        "rootDir": "."
+        "rootDir": ".",
+        "lib": ["ES2020"],
+        "sourceMap": true,
+        "strict": true,
+        "types": ["jest", "node", "@types/jest"]
     },
     "include": [
-        "**/*.ts"
+        "suite/**/*.ts",
+        "utils/**/*.ts"
     ],
     "exclude": []
 }

@@ -30,7 +30,8 @@ describe('JobService', () => {
     mockApiClient.getHeaders.mockResolvedValue({ 'Authorization': 'Basic test' });
     mockApiClient.getServerUrl.mockReturnValue('http://localhost:8000');
 
-    mockJobsTreeProvider = new JobsTreeDataProvider({} as any) as jest.Mocked<JobsTreeDataProvider>;
+    const mockApiClientForProvider = {} as any;
+    mockJobsTreeProvider = new JobsTreeDataProvider({} as any, mockApiClientForProvider) as jest.Mocked<JobsTreeDataProvider>;
     mockJobsTreeProvider.refresh = jest.fn();
 
     mockJobViewOutputChannel = {

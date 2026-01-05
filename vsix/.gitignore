@@ -3,3 +3,4 @@
 *.vsix
 /coverage
 /.vscode-test/
+/.tmp/
