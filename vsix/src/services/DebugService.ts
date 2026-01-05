@@ -41,13 +41,29 @@ export class DebugService {
         const serverUrl = pyopsConfig.get('serverUrl') as string || 'http://localhost:8000';
         const username = pyopsConfig.get('username') as string;
         const password = this.context.workspaceState.get('pyops.password') as string;
-        const port = pyopsConfig.get('debugPort', 5678) as number;
 
         const headers: Record<string, string> = { 'Content-Type': 'application/json' };
         if (username && password) {
             const auth = Buffer.from(`${username}:${password}`).toString('base64');
             headers['Authorization'] = `Basic ${auth}`;
         }
+
+        // Fetch debug port from server first
+        const portResponse = await fetch(`${serverUrl}/debug/port`, {
+            method: 'GET',
+            headers
+        });
+        if (!portResponse.ok) {
+            const errorText = await portResponse.text();
+            this.outputChannel.appendLine(`[DEBUG getDebugPort] Failed: ${errorText}`);
+            throw new Error(`Failed to fetch debug port: ${errorText}`);
+        }
+        const portData = await portResponse.json() as { port: number };
+        const port = portData.port;
+        if (typeof port !== 'number' || port <= 0 || port > 65535) {
+            throw new Error(`Invalid port from server: ${port}`);
+        }
+        this.outputChannel.appendLine(`[DEBUG getDebugPort] Success: ${port}`);
 
         const data = { set, name, drop_done: false, param: '#>AWAIT_DEBUG', kind: 'debug', overrides };
         this.outputChannel.appendLine(`[DEBUG enqueueDebugJob] Request to ${serverUrl}/scriptlet/job/item with data keys: ${Object.keys(data)}`);

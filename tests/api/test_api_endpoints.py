@@ -479,3 +479,23 @@ def test_repo_status_exception(mock_client):
         response = mock_client.get("/repo/status?set=testset")
         assert response.status_code == 500
         assert "status error" in response.json()["detail"]
+
+
+def test_debug_port(mock_client):
+    with patch("app.lib.files.conf_users") as mock_conf_users:
+        mock_conf_users.return_value = {
+            "anonymous": {"debug_port": 5678},
+            "testuser": {"debug_port": 9999}
+        }
+        # anonymous
+        resp = mock_client.get("/debug/port")
+        assert resp.status_code == 200
+        assert resp.json() == {"port": 5678}
+        # testuser
+        resp = mock_client.get("/debug/port", headers={"X-User": "testuser"})
+        assert resp.status_code == 200
+        assert resp.json() == {"port": 9999}
+        # missing user port
+        resp = mock_client.get("/debug/port", headers={"X-User": "missing"})
+        assert resp.status_code == 400
+        assert resp.json()["detail"] == "No debug_port configured for user 'missing'"

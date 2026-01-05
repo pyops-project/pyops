@@ -44,6 +44,16 @@ app.include_router(monitor.router)
 app.include_router(editor.router)
 app.include_router(sets.router)
 
+@app.get("/debug/port")
+def get_debug_port(request: Request):
+    owner = sanitize_owner(request.headers.get("X-User", "anonymous"))
+    users = files.conf_users()
+    user_config = users.get(owner, {})
+    port = user_config.get("debug_port")
+    if port is None:
+        raise HTTPException(status_code=400, detail=f"No debug_port configured for user '{owner}'")
+    return {"port": int(port)}
+
 @app.get("/")
 async def root():
     try:

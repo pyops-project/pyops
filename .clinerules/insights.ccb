@@ -612,3 +612,18 @@ Runner.run_debug_job checks '#>AWAIT_DEBUG' in job.param
 VSIX.DebugService.enqueuDebugJob sets param='#>AWAIT_DEBUG'.
 ; enables waiting for VSIX debugger attach; non-VSIX enqueues non-blocking by default.
 Tests: tests/integration/runner/test_execution.py test_run_debug_inject (with directive); vsix/tests/services/debugService.test.ts.
+
+Debug-Port-Endpoint:
+app/web.py GET /debug/port uses sanitize_owner(X-User default "anonymous") & files.conf_users()[owner]["debug_port"]
+; returns {"port": int(port)}
+; 400 "No debug_port configured for user '{owner}'" if missing.
+
+VSIX-Debug-Port-Fetch:
+DebugService.enqueueDebugJob fetches /debug/port first with auth headers if set
+; logs [DEBUG getDebugPort] Success: {port} / Failed: {error}
+; validates number & range(1,65536) throws "Invalid port" else
+; returns port with jobId for vscode debug attach localhost:{port}.
+
+Tests-Debug-Port:
+tests/api/test_api_endpoints.py::test_debug_port mocks conf_users anonymous/testuser/missing -> 200/400.
+vsix/tests/services/debugService.test.ts mocks fetch /debug/port success/auth-noauth/job-fail/network/invalid-port/throw.

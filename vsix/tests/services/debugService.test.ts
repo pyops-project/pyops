@@ -144,14 +144,30 @@ describe('DebugService', () => {
 
   describe('enqueueDebugJob', () => {
     it('enqueues job successfully with auth', async () => {
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({ job: 'job123' }),
-      } as Response);
+      (global.fetch as jest.MockedFunction<typeof fetch>)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ port: 5678 }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ job: 'job123' }),
+        } as Response);
 
       const result = await service.enqueueDebugJob('testset', 'testscript');
 
       expect(result).toEqual({ jobId: 'job123', port: 5678 });
+      expect(global.fetch).toHaveBeenNthCalledWith(
+        1,
+        'http://localhost:8000/debug/port',
+        expect.objectContaining({
+          method: 'GET',
+          headers: expect.objectContaining({
+            'Content-Type': 'application/json',
+            'Authorization': 'Basic ' + Buffer.from('testuser:testpass').toString('base64'),
+          }),
+        })
+      );
       expect(global.fetch).toHaveBeenCalledWith(
         'http://localhost:8000/scriptlet/job/item',
         expect.objectContaining({
@@ -170,43 +186,61 @@ describe('DebugService', () => {
           }),
         })
       );
+      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith('[DEBUG getDebugPort] Success: 5678');
     });
 
     it('enqueues without auth if no credentials', async () => {
       mockContext.workspaceState.get.mockReturnValue(undefined);
       (require('vscode').workspace.getConfiguration().get as jest.Mock).mockImplementation((key: string) => key === 'username' ? '' : undefined);
 
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({ job: 'job123' }),
-      } as Response);
+      (global.fetch as jest.MockedFunction<typeof fetch>)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ port: 5678 }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ job: 'job123' }),
+        } as Response);
 
       await service.enqueueDebugJob('testset', 'testscript');
 
-      expect(global.fetch).toHaveBeenCalledWith(
-        expect.any(String),
+      expect(global.fetch).toHaveBeenNthCalledWith(
+        1,
+        'http://localhost:8000/debug/port',
         expect.objectContaining({
           headers: { 'Content-Type': 'application/json' },
         })
       );
+      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith('[DEBUG getDebugPort] Success: 5678');
     });
 
 
-    it('handles API failure', async () => {
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
-        ok: false,
-        statusText: 'Bad Request',
-        text: () => Promise.resolve('server error'),
-      } as Response);
+    it('handles job API failure after port fetch', async () => {
+      (global.fetch as jest.MockedFunction<typeof fetch>)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ port: 5678 }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: false,
+          statusText: 'Bad Request',
+          text: () => Promise.resolve('server error'),
+        } as Response);
 
       const result = await service.enqueueDebugJob('testset', 'testscript');
 
       expect(result).toEqual({});
-      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith('[DEBUG enqueueDebugJob] Failed with error: server error');
+      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith(expect.stringContaining('[DEBUG enqueueDebugJob] Failed with error: server error'));
     });
 
-    it('handles fetch error', async () => {
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockRejectedValue(new Error('network error'));
+    it('handles job fetch network error after port', async () => {
+      (global.fetch as jest.MockedFunction<typeof fetch>)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ port: 5678 }),
+        } as Response)
+        .mockRejectedValue(new Error('network error'));
 
       const result = await service.enqueueDebugJob('testset', 'testscript');
 
@@ -217,16 +251,42 @@ describe('DebugService', () => {
     it('passes overrides to request', async () => {
       const testOverrides = { 'set::test': 'code' };
 
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({ job: 'job123' }),
-      } as Response);
+      (global.fetch as jest.MockedFunction<typeof fetch>)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ port: 5678 }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ job: 'job123' }),
+        } as Response);
 
       await service.enqueueDebugJob('testset', 'testscript', testOverrides);
 
-      const call = (global.fetch as jest.MockedFunction<typeof fetch>).mock.calls[0][1] as any;
+      const call = (global.fetch as jest.MockedFunction<typeof fetch>).mock.calls[1][1] as any;
       expect(JSON.parse(call.body).overrides).toEqual(testOverrides);
+      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith('[DEBUG enqueueDebugJob] Overrides: ' + JSON.stringify(testOverrides));
+    });
 
+    it('throws on debug port fetch fail', async () => {
+        (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
+          ok: false,
+          status: 400,
+          statusText: 'Bad Request',
+          text: () => Promise.resolve('no port configured'),
+        } as Response);
+
+        await expect(service.enqueueDebugJob('testset', 'testscript')).rejects.toThrow('Failed to fetch debug port');
+        expect(mockOutputChannel.appendLine).toHaveBeenCalledWith(expect.stringContaining('[DEBUG getDebugPort] Failed: no port configured'));
+    });
+
+    it('throws on invalid port from server', async () => {
+      (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ port: 0 }),
+      } as Response);
+
+      await expect(service.enqueueDebugJob('testset', 'testscript')).rejects.toThrow('Invalid port');
     });
   });
 });
