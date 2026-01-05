@@ -188,39 +188,41 @@
       "view/item/context": [
         {
           "command": "pyops.resetLocalFromRemote",
-          "when": "view == 'pyops-manager' && viewItem =~ /^pyopsItem/ && pyops.hasValidConfig",
+          "when": "view == 'pyops-manager' && viewItem =~ /^pyopsItem-(task|service|library|controller|view|markdown)$/ && pyops.hasValidConfig",
           "group": "navigation"
         },
         {
           "command": "pyops.writeLocalToRemoteDraft",
-          "when": "view == 'pyops-manager' && viewItem =~ /^pyopsItem/ && pyops.hasValidConfig",
+          "when": "view == 'pyops-manager' && viewItem =~ /^pyopsItem-(task|service|library|controller|view|markdown)(-local)?$/ && pyops.hasValidConfig",
           "group": "navigation"
         },
+
         {
           "command": "pyops.saveRemoteDraft",
-          "when": "view == 'pyops-manager' && viewItem =~ /^pyopsItem/ && pyops.hasValidConfig",
+          "when": "view == 'pyops-manager' && viewItem =~ /^pyopsItem-(task|service|library|controller|view|markdown)$/ && pyops.hasValidConfig",
           "group": "navigation"
         },
         {
           "command": "pyops.startDebugJob",
-          "when": "view == 'pyops-manager' && viewItem == 'pyopsItem-task' && pyops.hasValidConfig",
+          "when": "view == 'pyops-manager' && viewItem =~ /^pyopsItem-task(-local)?$/ && pyops.hasValidConfig",
           "group": "navigation"
         },
         {
           "command": "pyops.stopDebugJob",
-          "when": "view == 'pyops-manager' && viewItem == 'pyopsItem-task'",
+          "when": "view == 'pyops-manager' && viewItem =~ /^pyopsItem-task(-local)?$/",
           "group": "navigation"
         },
         {
           "command": "pyops.diffLocalRemote",
-          "when": "view == 'pyops-manager' && viewItem =~ /^pyopsItem/ && pyops.hasValidConfig",
+          "when": "view == 'pyops-manager' && viewItem =~ /^pyopsItem-(task|service|library|controller|view|markdown)$/ && pyops.hasValidConfig",
           "group": "navigation"
         },
         {
           "command": "pyops.deleteScriptlet",
-          "when": "view == 'pyops-manager' && viewItem =~ /^pyopsItem/ && pyops.hasValidConfig",
+          "when": "view == 'pyops-manager' && viewItem =~ /^pyopsItem-(task|service|library|controller|view|markdown)(-local)?$/ && pyops.hasValidConfig",
           "group": "navigation"
         },
+
         {
           "command": "pyops.viewJob",
           "when": "view == pyops-monitor && viewItem =~ /pyopsJob-.*/ && pyops.hasValidConfig",

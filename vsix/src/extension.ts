@@ -53,6 +53,7 @@ export async function activate(context: vscode.ExtensionContext) {
         context.subscriptions.push(statusBarItem);
 
         // Assign to global for testing
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (global as any).connectionStatusManager = statusManager;
 
         // Initial status update
@@ -110,11 +111,17 @@ export async function activate(context: vscode.ExtensionContext) {
     const debugService = new DebugService(context, outputChannel);
 
     // Assign to global for testing
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (global as any).jobService = jobService;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (global as any).scriptletService = scriptletService;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (global as any).debugService = debugService;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (global as any).DebugService = DebugService;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (global as any).managerTreeProvider = managerTreeProvider;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (global as any).jobsTreeProvider = jobsTreeProvider;
 
     // Register debug configuration provider for Python
@@ -122,6 +129,7 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(vscode.debug.registerDebugConfigurationProvider('python', debugConfigProvider));
 
     // Assign to global for testing
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (global as any).debugConfigProvider = debugConfigProvider;
 
     // Register debug session termination handler
@@ -169,6 +177,7 @@ export async function activate(context: vscode.ExtensionContext) {
         debugOutputMonitor = new DebugOutputMonitor(apiClient, jobOutputChannel);
 
         // Assign to global for testing
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (global as any).debugOutputMonitor = debugOutputMonitor;
 
         context.subscriptions.push(vscode.commands.registerCommand('pyops.copyJobParam', async (treeItem?: JobTreeItem) => {

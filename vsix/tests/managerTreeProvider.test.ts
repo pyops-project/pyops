@@ -63,6 +63,11 @@ describe('ManagerTreeDataProvider', () => {
     };
     const ApiClientMock = require('../src/apiClient').ApiClient;
     mockApiClient = new ApiClientMock();
+
+    const mockFs = require('fs');
+    (mockFs.readdirSync as jest.Mock).mockReturnValue([]);
+    (mockFs.existsSync as jest.Mock).mockReturnValue(false);
+
     provider = new ManagerTreeDataProvider(mockContext, mockOutputChannel, mockApiClient);
   });
 

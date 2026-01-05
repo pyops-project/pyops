@@ -79,6 +79,39 @@ export class ScriptletService {
         }
         const serverUrl = this.getServerUrl();
         const headers = await this.getHeaders();
+
+        // Check if remote scriptlet exists; create if not
+        let checkResponse: Response;
+        try {
+            checkResponse = await fetch(`${serverUrl}/scriptlet/inventory/code?set=${encodeURIComponent(set)}&name=${encodeURIComponent(name)}`, { headers });
+        } catch (error: unknown) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            vscode.window.showErrorMessage(`Network error checking remote existence: ${errorMessage}`);
+            return;
+        }
+        if (checkResponse.status === 404) {
+            try {
+                const createData = { set, name, type: treeItem.scriptletType! };
+                const createResponse = await fetch(`${serverUrl}/scriptlet/inventory/item`, {
+                    method: 'PUT',
+                    headers: { ...headers, 'Content-Type': 'application/json' },
+                    body: JSON.stringify(createData)
+                });
+                if (!createResponse.ok) {
+                    vscode.window.showErrorMessage(`Failed to auto-create remote scriptlet ${name}: ${createResponse.statusText}`);
+                    return;
+                }
+                vscode.window.showInformationMessage(`Auto-created remote ${name}; writing draft.`);
+            } catch (error: unknown) {
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                vscode.window.showErrorMessage(`Network error auto-creating remote scriptlet ${name}: ${errorMessage}`);
+                return;
+            }
+        } else if (!checkResponse.ok) {
+            vscode.window.showErrorMessage(`Failed to check remote existence: ${checkResponse.statusText}`);
+            return;
+        }
+
         const data = { set, name, code };
         try {
             const response = await fetch(`${serverUrl}/scriptlet/inventory/draft`, {
@@ -96,6 +129,7 @@ export class ScriptletService {
             const errorMessage = error instanceof Error ? error.message : String(error);
             vscode.window.showErrorMessage(`Error writing draft: ${errorMessage}`);
         }
+
     }
 
     async saveRemoteDraft(treeItem?: ScriptletTreeItem): Promise<void> {
@@ -195,43 +229,54 @@ export class ScriptletService {
         const name = treeItem.scriptletName!;
         const type = treeItem.scriptletType!;
         const confirm = await vscode.window.showWarningMessage(
-            `Delete remote scriptlet ${set}::${name} (${type})? This cannot be undone.`,
+            `Delete scriptlet ${set}::${name} (${type})? This cannot be undone.`,
             { modal: true },
             'Delete'
         );
         if (confirm !== 'Delete') return;
         const serverUrl = this.getServerUrl();
         const headers = await this.getHeaders();
+        const workspaceRoot = vscode.workspace.workspaceFolders![0].uri.fsPath;
+        const pyopsConfig = vscode.workspace.getConfiguration('pyops');
+        const localPyopsDir = pyopsConfig.get('localPyopsDir', 'pyops') as string;
+        const localPath = this.getLocalPath(treeItem, workspaceRoot, localPyopsDir);
         try {
             const response = await fetch(`${serverUrl}/scriptlet/inventory/item?set=${set}&name=${name}`, {
                 method: 'DELETE',
                 headers
             });
             if (response.ok) {
-                const workspaceRoot = vscode.workspace.workspaceFolders![0].uri.fsPath;
-                const pyopsConfig = vscode.workspace.getConfiguration('pyops');
-                const localPyopsDir = pyopsConfig.get('localPyopsDir', 'pyops') as string;
-                const localPath = this.getLocalPath(treeItem, workspaceRoot, localPyopsDir);
+                // remote deleted
                 if (fs.existsSync(localPath)) {
                     try {
                         fs.unlinkSync(localPath);
-                    } catch (error) {
-                        // Local file deletion failed, but remote deletion succeeded
-                        // Log the error but continue with success handling
-                        console.error('Failed to delete local file:', error);
+                    } catch (unlinkError: unknown) {
+                        console.error('Failed to delete local file:', unlinkError);
                     }
                 }
                 this.managerTreeProvider.refresh();
-                vscode.window.showInformationMessage(`Deleted ${set}::${name} (${type}) locally and remotely`);
+                vscode.window.showInformationMessage(`Deleted remote and local ${set}::${name} (${type})`);
+            } else if (response.status === 404) {
+                // local only
+                if (fs.existsSync(localPath)) {
+                    try {
+                        fs.unlinkSync(localPath);
+                    } catch (unlinkError: unknown) {
+                        console.error('Failed to delete local file:', unlinkError);
+                    }
+                }
+                this.managerTreeProvider.refresh();
+                vscode.window.showInformationMessage(`Deleted local ${set}::${name} (${type})`);
             } else {
                 const err = await response.text();
-                vscode.window.showErrorMessage(`Failed to delete: ${err}`);
+                vscode.window.showErrorMessage(`Failed to delete remote: ${err}`);
             }
         } catch (error: unknown) {
             const errorMessage = error instanceof Error ? error.message : String(error);
             vscode.window.showErrorMessage(`Error deleting scriptlet: ${errorMessage}`);
         }
     }
+
 
     async openLocalFile(treeItem?: ScriptletTreeItem): Promise<void> {
         if (!treeItem || !treeItem.set || !treeItem.scriptletName || !treeItem.scriptletType) return;

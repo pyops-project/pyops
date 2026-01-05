@@ -28,8 +28,8 @@ describe('utils', () => {
       expect(inferExt('unknown')).toBe('');
     });
 
-    it('returns empty string for service type', () => {
-      expect(inferExt('service')).toBe('');
+    it('returns py for service type', () => {
+      expect(inferExt('service')).toBe('py');
     });
   });
 

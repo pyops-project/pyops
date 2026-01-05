@@ -1,5 +1,7 @@
+/// <reference types="node" />
 import * as vscode from 'vscode';
 import * as path from 'path';
+import * as fs from 'fs';
 import { Uri } from 'vscode';
 import { ManagerTreeDataProvider } from '../managerTreeProvider';
 import { inferExt } from '../utils';
@@ -68,7 +70,17 @@ export class CreateScriptletCommand {
                     if (existingNames.has(name)) {
                         vscode.window.showWarningMessage(`Name '${name}' already exists. Please choose a different name.`);
                         name = undefined; // Force loop
+                    } else {
+                        const workspaceRoot = vscode.workspace.workspaceFolders![0].uri.fsPath;
+                        const localPyopsDir = pyopsConfig.get('localPyopsDir', 'pyops') as string;
+                        const ext = inferExt(typeLower);
+                        const localPath = path.join(workspaceRoot, localPyopsDir, set, typeLower, `${name}.${ext}`);
+                        if (fs.existsSync(localPath)) {
+                            vscode.window.showWarningMessage(`Local file '${name}.${ext}' already exists. Please choose a different name.`);
+                            name = undefined;
+                        }
                     }
+
                 }
                 outputChannel.appendLine(`[Create Scriptlet] Selected unique name: ${name}`);
 
@@ -77,64 +89,26 @@ export class CreateScriptletCommand {
                     return;
                 }
 
-                const createHeaders: Record<string, string> = { 'Content-Type': 'application/json', ...headers };
-                const data = { set, name, type: typeLower };
-                outputChannel.appendLine(`[Create Scriptlet] Attempting to create ${typeLower} '${set}::${name}' with data: ${JSON.stringify(data)}`);
-                try {
-                    const response = await fetch(`${serverUrl}/scriptlet/inventory/item`, {
-                        method: 'PUT',
-                        headers: createHeaders,
-                        body: JSON.stringify(data)
-                    });
-                    outputChannel.appendLine(`[Create Scriptlet] Creation fetch status: ${response.status} ${response.statusText}`);
-                    if (response.ok) {
-                        const respText = await response.text();
-                        outputChannel.appendLine(`[Create Scriptlet] Creation response body: ${respText}`);
-                        // Verify creation
-                        try {
-                            const verifyResponse = await fetch(`${serverUrl}/scriptlet/inventory/list`, { headers });
-                            if (verifyResponse.ok) {
-                                const updatedScriptlets = await verifyResponse.json() as unknown[];
-                                const created = updatedScriptlets.some((s: unknown) => (s as { set: string; name: string; type: string }).set === set && (s as { set: string; name: string; type: string }).name === name && (s as { set: string; name: string; type: string }).type === typeLower);
-                                if (created) {
-                                    managerTreeProvider.refresh();
-                                    vscode.window.showInformationMessage(`Created ${typeLower} ${set}::${name}`);
-                                    outputChannel.appendLine(`[Create Scriptlet] Verified creation successful.`);
-                                    // Open local editor
-                                    const workspaceRoot = vscode.workspace.workspaceFolders![0].uri.fsPath;
-                                    const localPyopsDir = pyopsConfig.get('localPyopsDir', 'pyops') as string;
-                                    const ext = inferExt(typeLower);
-                                    const localPath = path.join(workspaceRoot, localPyopsDir, set, typeLower, `${name}.${ext}`);
-                                    const localUri = Uri.file(localPath);
-                                    await vscode.workspace.openTextDocument(localUri).then(doc => vscode.window.showTextDocument(doc));
-                                } else {
-                                    const errorMsg = `Creation response OK but scriptlet '${set}::${name}' not found after attempt. Server may not have created it.`;
-                                    vscode.window.showErrorMessage(errorMsg);
-                                    outputChannel.appendLine(`[Create Scriptlet] Verification failed: ${errorMsg}`);
-                                }
-                            } else {
-                                outputChannel.appendLine(`[Create Scriptlet] Could not verify creation: ${verifyResponse.statusText}`);
-                                managerTreeProvider.refresh();
-                                vscode.window.showInformationMessage(`Created ${typeLower} ${set}::${name} (verification failed)`);
-                            }
-                        } catch (error: unknown) {
-                            const errorMessage = error instanceof Error ? error.message : String(error);
-                            outputChannel.appendLine(`[Create Scriptlet] Verification failed with error: ${errorMessage}`);
-                            managerTreeProvider.refresh();
-                            vscode.window.showInformationMessage(`Created ${typeLower} ${set}::${name} (verification failed)`);
-                        }
-                    } else {
-                        const err = await response.text();
-                        const errorMsg = `Failed to create: ${err}`;
-                        vscode.window.showErrorMessage(errorMsg);
-                        outputChannel.appendLine(`[Create Scriptlet] Creation failed: ${errorMsg}`);
-                    }
-                } catch (error: unknown) {
-                    const errorMessage = error instanceof Error ? error.message : String(error);
-                    const errorMsg = `Error creating scriptlet: ${errorMessage}`;
-                    vscode.window.showErrorMessage(errorMsg);
-                    outputChannel.appendLine(`[Create Scriptlet] Creation error: ${errorMsg}`);
+                outputChannel.appendLine(`[Create Scriptlet] Creating local ${typeLower} '${set}::${name}'...`);
+                const workspaceRoot = vscode.workspace.workspaceFolders![0].uri.fsPath;
+                const localPyopsDir = pyopsConfig.get('localPyopsDir', 'pyops') as string;
+                const ext = inferExt(typeLower);
+                const localPath = path.join(workspaceRoot, localPyopsDir, set, typeLower, `${name}.${ext}`);
+                const dirPath = path.dirname(localPath);
+                if (!fs.existsSync(dirPath)) {
+                    fs.mkdirSync(dirPath, { recursive: true });
                 }
+                let template = '';
+                if (ext === 'py') {
+                    template = 'pass';
+                }
+                fs.writeFileSync(localPath, template);
+                outputChannel.appendLine(`[Create Scriptlet] Created local file: ${localPath}`);
+                managerTreeProvider.refresh();
+                vscode.window.showInformationMessage(`Created local ${typeLower} ${set}::${name}`);
+                const localUri = Uri.file(localPath);
+                await vscode.workspace.openTextDocument(localUri).then(doc => vscode.window.showTextDocument(doc));
+
             } else {
                 const errorMsg = `Failed to fetch sets: ${response.statusText}`;
                 vscode.window.showErrorMessage(errorMsg);

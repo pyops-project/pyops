@@ -581,3 +581,17 @@ VSIX-Integration-Commands:
 ; asserts tree removal state change no crash
 ; helpers.pollTree waitForJobState createTestJob deleteTestScriptlet
 ; accesses global services/providers.
+
+VSIX-ManagerTreeProvider:
+ManagerTreeProvider defines interface ScriptletInfo {set: string; name: string; type: string; isLocalOnly?: boolean}
+; _scriptlets: ScriptletInfo[]; fetchScriptlets(): Promise<ScriptletInfo[]> /scriptlet/inventory/list
+; scanLocalScriptlets(): Promise<ScriptletInfo[]> discovers pyops/{set}/{type}/*.{inferExt(type)} isLocalOnly:true
+; refresh merges remote & localOnly; filters excludedSets; downloads remoteOnly sets _syncStatus.
+
+VSIX-LocalOnly-Display:
+ManagerTreeProvider.getChildren root: pyopsSet folders; leaf: pyopsItem-{type}(-local)
+; localOnly: diff-added icon & contextValue pyopsItem-{type}-local & tooltip &#39;Local only - Set: {set}, Name: {name}, Type: {type}&#39; & description .ext (local)
+; remote: check/warning syncStatus icon & contextValue pyopsItem-{type} & tooltip sync status.
+
+VSIX-LocalDebug:
+Local-only task scriptlets support pyops.startDebugJob & pyops.stopDebugJob context menus via package.json when /^pyopsItem-task(-local)?$/; sync commands resetLocalFromRemote/saveRemoteDraft/diffLocalRemote restricted excluding -local; writeLocalToRemoteDraft & deleteScriptlet available via /^pyopsItem-(task|service|library|controller|view|markdown)(-local)?$/; writeLocalToRemoteDraft auto-creates remote via PUT /inventory/item if 404 then POST /draft & handles network errors on check/create with specific try-catch showErrorMessages; integration test9 tests write on local-only -> auto-create + draft success.

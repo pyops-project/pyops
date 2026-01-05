@@ -1,6 +1,7 @@
 export function inferExt(type: string): string {
     switch (type) {
         case 'task':
+        case 'service':
         case 'library':
         case 'controller':
             return 'py';

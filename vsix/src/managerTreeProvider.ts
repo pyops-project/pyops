@@ -11,6 +11,13 @@ interface ScriptletTreeItem extends TreeItem {
     scriptletType?: string;
 }
 
+interface ScriptletInfo {
+    set: string;
+    name: string;
+    type: string;
+    isLocalOnly?: boolean;
+}
+
 class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
     private _onDidChangeTreeData: vscode.EventEmitter<TreeItem | undefined | null | void> = new EventEmitter<TreeItem | undefined | null | void>();
     readonly onDidChangeTreeData: vscode.Event<TreeItem | undefined | null | void> = this._onDidChangeTreeData.event;
@@ -18,7 +25,7 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
     private _context: vscode.ExtensionContext;
     private _outputChannel: vscode.OutputChannel;
     private _apiClient: ApiClient;
-    private _scriptlets: unknown[] = [];
+    private _scriptlets: ScriptletInfo[] = [];
     private _syncStatus: Map<string, boolean> = new Map();
     private _lastScriptletErrorShown: number = 0;
 
@@ -66,41 +73,46 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
             } else if (element.contextValue?.startsWith('pyopsSet')) {
                 // Children of set: items (2-level: set > name (type))
                 const set = element.label as string;
-                const setItems = this._scriptlets.filter((s: unknown) => (s as { set: string }).set === set);
-                const itemTrees: TreeItem[] = setItems.map((item: unknown) => {
-                    const itemObj = item as { name: string; type: string };
+                const setItems = this._scriptlets.filter(s => s.set === set);
+                const itemTrees: TreeItem[] = setItems.map(item => {
+                    const itemObj = item;
                     const label = `${itemObj.name} (${itemObj.type})`;
                     const ext = inferExt(itemObj.type);
                     const key = `${set}-${itemObj.name}-${itemObj.type}`;
-                    const isSynced = this._syncStatus.get(key) ?? true;
                     const treeItem = new TreeItem(label, vscode.TreeItemCollapsibleState.None) as ScriptletTreeItem;
                     treeItem.description = ext ? `.${ext}` : '';
-                    treeItem.contextValue = `pyopsItem-${itemObj.type}`;
                     treeItem.id = key;
-                    treeItem.iconPath = isSynced ? new vscode.ThemeIcon('check') : new vscode.ThemeIcon('warning');
-                    treeItem.tooltip = `Set: ${set}, Name: ${itemObj.name}, Type: ${itemObj.type}, Sync: ${isSynced ? 'Synced' : 'Unsynced'}`;
                     treeItem.set = set;
                     treeItem.scriptletName = itemObj.name;
                     treeItem.scriptletType = itemObj.type;
                     treeItem.command = { command: 'pyops.openLocalFile', title: 'Open Local File', arguments: [treeItem] };
+                    if (itemObj.isLocalOnly) {
+                        treeItem.iconPath = new vscode.ThemeIcon('diff-added');
+                        treeItem.contextValue = `pyopsItem-${itemObj.type}-local`;
+                        treeItem.tooltip = `Local only - Set: ${itemObj.set}, Name: ${itemObj.name}, Type: ${itemObj.type}`;
+                        treeItem.description += ' (local)';
+                    } else {
+                        const isSynced = this._syncStatus.get(key) ?? true;
+                        treeItem.iconPath = isSynced ? new vscode.ThemeIcon('check') : new vscode.ThemeIcon('warning');
+                        treeItem.contextValue = `pyopsItem-${itemObj.type}`;
+                        treeItem.tooltip = `Set: ${itemObj.set}, Name: ${itemObj.name}, Type: ${itemObj.type}, Sync: ${isSynced ? 'Synced' : 'Unsynced'}`;
+                    }
                     return treeItem;
                 });
+
                 return itemTrees.sort((a, b) => (a.label as string).localeCompare(b.label as string));
             }
             return [];
         } else {
             // Root: sets only (commands via toolbar)
+            if (this._scriptlets.length === 0 && isValidConfig) {
+                await this.refresh();
+            }
             if (this._scriptlets.length === 0) {
-                if (isValidConfig) {
-                    await this.fetchScriptlets();
-                    await this.downloadScriptlets(this._scriptlets);
-                }
-                if (this._scriptlets.length === 0) {
-                    return [new TreeItem('No scriptlets available', vscode.TreeItemCollapsibleState.None)];
-                }
+                return [new TreeItem('No scriptlets available', vscode.TreeItemCollapsibleState.None)];
             }
 
-            const sets = [...new Set(this._scriptlets.map((s: unknown) => (s as { set: string }).set))].sort();
+            const sets = [...new Set(this._scriptlets.map(s => s.set))].sort();
             const setItems: TreeItem[] = sets.map(g => {
                 const gi = new TreeItem(g, vscode.TreeItemCollapsibleState.Collapsed);
                 gi.contextValue = 'pyopsSet';
@@ -113,7 +125,7 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
         }
     }
 
-    private async fetchScriptlets(): Promise<unknown[]> {
+    private async fetchScriptlets(): Promise<ScriptletInfo[]> {
         const serverUrl = this.getServerUrl();
         const headers = await this.getHeaders();
 
@@ -121,7 +133,9 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
             const response = await fetch(`${serverUrl}/scriptlet/inventory/list`, { headers });
             if (response.ok) {
                 this._lastScriptletErrorShown = 0;
-                return await response.json() as unknown[];
+                const scriptlets = await response.json();
+                return Array.isArray(scriptlets) ? scriptlets as ScriptletInfo[] : [];
+
             } else {
                 const now = Date.now();
                 if (now - this._lastScriptletErrorShown > 30000) {
@@ -143,7 +157,7 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
         }
     }
 
-    private async downloadScriptlets(scriptlets: unknown[]): Promise<void> {
+    private async downloadScriptlets(scriptlets: ScriptletInfo[]): Promise<void> {
         if (!vscode.workspace.workspaceFolders || vscode.workspace.workspaceFolders.length === 0) return;
 
         this._syncStatus.clear();
@@ -155,8 +169,8 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
         const localPyopsDir = vscode.workspace.getConfiguration('pyops').get('localPyopsDir', 'pyops') as string;
         const baseLocalPath = path.join(workspaceRoot, localPyopsDir);
 
-        const downloadPromises = scriptlets.map(async (s: unknown) => {
-            const sObj = s as { set: string; name: string; type: string };
+        const downloadPromises = scriptlets.map(async (s) => {
+            const sObj = { set: s.set, name: s.name, type: s.type };
             const key = `${sObj.set}-${sObj.name}-${sObj.type}`;
             try {
                 const response = await fetch(`${serverUrl}/scriptlet/inventory/code?set=${sObj.set}&name=${sObj.name}`, { headers });
@@ -192,9 +206,50 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
         await Promise.all(downloadPromises);
     }
 
+    private getBaseLocalPath(): string {
+        if (!vscode.workspace.workspaceFolders || vscode.workspace.workspaceFolders.length === 0) {
+            throw new Error('No workspace open');
+        }
+        const workspaceRoot = vscode.workspace.workspaceFolders[0].uri.fsPath;
+        const localPyopsDir = vscode.workspace.getConfiguration('pyops').get('localPyopsDir', 'pyops') as string;
+        return path.join(workspaceRoot, localPyopsDir);
+    }
+
+    private async scanLocalScriptlets(): Promise<ScriptletInfo[]> {
+        const baseLocalPath = this.getBaseLocalPath();
+        if (!fs.existsSync(baseLocalPath)) {
+            return [];
+        }
+        const localScriptlets: ScriptletInfo[] = [];
+        const setDirs = fs.readdirSync(baseLocalPath).filter(dir => {
+            const dirPath = path.join(baseLocalPath, dir);
+            return fs.statSync(dirPath).isDirectory();
+        }).sort();
+        const knownTypes = ['task', 'service', 'library', 'controller', 'view', 'markdown'];
+        for (const set of setDirs) {
+            const setPath = path.join(baseLocalPath, set);
+            for (const type of knownTypes) {
+                const typePath = path.join(setPath, type);
+                if (!fs.existsSync(typePath) || !fs.statSync(typePath).isDirectory()) continue;
+                const files = fs.readdirSync(typePath);
+                for (const file of files) {
+                    const ext = path.extname(file);
+                    const expectedExtNoDot = inferExt(type);
+                    const expectedExt = `.${expectedExtNoDot}`;
+                    if (ext === expectedExt) {
+                        const name = path.basename(file, ext);
+                        localScriptlets.push({ set, name, type, isLocalOnly: true });
+                    }
+                }
+            }
+        }
+        return localScriptlets;
+    }
+
     private getExcludedSets(): string[] {
         return vscode.workspace.getConfiguration('pyops').get('excludedSets', []) as string[];
     }
+
 
     async downloadScriptlet(scriptletItem: ScriptletTreeItem): Promise<void> {
         if (!scriptletItem.set || !scriptletItem.scriptletName || !scriptletItem.scriptletType) return;
@@ -239,14 +294,22 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
             return;
         }
 
+        const remoteScriptlets = await this.fetchScriptlets();
+        const remoteKeys = new Set(remoteScriptlets.map(s => `${s.set}-${s.name}-${s.type}`));
+        const localScriptlets = await this.scanLocalScriptlets();
+        const localOnlyScriptlets = localScriptlets.filter(l => !remoteKeys.has(`${l.set}-${l.name}-${l.type}`));
+        let allScriptlets = [...remoteScriptlets, ...localOnlyScriptlets];
         const excludedSets = this.getExcludedSets();
-        const scriptlets = await this.fetchScriptlets();
-        this._scriptlets = scriptlets.filter((s: unknown) => !excludedSets.includes((s as { set: string }).set));
-        if (this._scriptlets.length > 0) {
-            await this.downloadScriptlets(this._scriptlets);
+        allScriptlets = allScriptlets.filter(s => !excludedSets.includes(s.set));
+        this._scriptlets = allScriptlets;
+        this._syncStatus.clear();
+        const remoteOnly = allScriptlets.filter(s => !s.isLocalOnly);
+        if (remoteOnly.length > 0) {
+            await this.downloadScriptlets(remoteOnly);
         }
         this._onDidChangeTreeData.fire();
     }
+
 }
 
 export { ManagerTreeDataProvider, ScriptletTreeItem };
