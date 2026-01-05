@@ -81,6 +81,13 @@ describe('PyOpsPythonDebugConfigProvider', () => {
         expect(result).toEqual(config);
     });
 
+    it('should return attach config unchanged without enqueuing', async () => {
+        const config = { name: 'test', type: 'python', request: 'attach' } as any;
+        const result = await provider.resolveDebugConfiguration({ uri: { fsPath: '/workspace' } } as any, config);
+        expect(result).toEqual(config);
+        expect(enqueueDebugJobSpy).not.toHaveBeenCalled();
+    });
+
     it('should return config unchanged if no workspace folders', async () => {
         (require('vscode').workspace as any).workspaceFolders = undefined;
 

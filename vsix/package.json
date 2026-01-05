@@ -150,6 +150,12 @@
         "title": "Delete All Failed/Killed",
         "category": "PyOps",
         "icon": "$(trash)"
+      },
+      {
+        "command": "pyops.attachDebugJob",
+        "title": "Attach to Debug Job",
+        "category": "PyOps",
+        "icon": "$(debug-start)"
       }
     ],
     "menus": {
@@ -161,6 +167,11 @@
         },
         {
           "command": "pyops.refreshManager",
+          "when": "view == 'pyops-manager' && pyops.hasValidConfig",
+          "group": "navigation"
+        },
+        {
+          "command": "pyops.attachDebugJob",
           "when": "view == 'pyops-manager' && pyops.hasValidConfig",
           "group": "navigation"
         },

@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { StatusBarItem, window as vscodeWindow } from 'vscode';
-import { JobsTreeDataProvider, JobTreeItem } from './jobsTreeProvider';
+import { Job, JobsTreeDataProvider, JobTreeItem } from './jobsTreeProvider';
 import { ManagerTreeDataProvider, ScriptletTreeItem } from './managerTreeProvider';
 import { CreateScriptletCommand } from './commands/CreateScriptletCommand';
 import { DebugService } from './services/DebugService';
@@ -35,6 +35,10 @@ let refreshManager: RefreshTimerManager | undefined;
 export async function activate(context: vscode.ExtensionContext) {
     outputChannel = vscodeWindow.createOutputChannel('PyOps');
     outputChannel.appendLine('PyOps extension activating...');
+
+    // Assign to global for testing
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (global as any).outputChannel = outputChannel;
 
     try {
 
@@ -132,23 +136,6 @@ export async function activate(context: vscode.ExtensionContext) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (global as any).debugConfigProvider = debugConfigProvider;
 
-    // Register debug session termination handler
-    context.subscriptions.push(vscode.debug.onDidTerminateDebugSession(async (session) => {
-        if (session.configuration?.jobId) {
-            try {
-                const apiClient = new ApiClient(context);
-                const headers = await apiClient.getHeaders();
-                const serverUrl = apiClient.getServerUrl();
-                await fetch(`${serverUrl}/scriptlet/job/cancel?id=${session.configuration.jobId}`, {
-                    method: 'PUT',
-                    headers
-                });
-                vscode.window.showInformationMessage(`Canceled debug job ${session.configuration.jobId}`);
-            } catch (error: unknown) {
-                console.error('Error canceling job:', error instanceof Error ? error.message : String(error));
-            }
-        }
-    }));
 
     // Register commands
         context.subscriptions.push(vscode.commands.registerCommand('pyops.refreshManager', async () => {
@@ -284,7 +271,7 @@ export async function activate(context: vscode.ExtensionContext) {
                     // Start debug attach
                     const config = {
                         name: `Attach PyOps ${set}::${name}`,
-                        type: 'debugpy',
+                        type: 'python',
                         request: 'attach',
                         connect: { host: 'localhost', port: result.port },
                         pathMappings,
@@ -314,6 +301,49 @@ export async function activate(context: vscode.ExtensionContext) {
             const name = treeItem.scriptletName!;
             const key = `${set}-${name}`;
             await debugOutputMonitor.stopMonitoring(key);
+        }));
+
+        context.subscriptions.push(vscode.commands.registerCommand('pyops.attachDebugJob', async () => {
+            const folder = vscode.workspace.workspaceFolders?.[0];
+            if (!folder) {
+                vscode.window.showWarningMessage('No workspace folder');
+                return;
+            }
+            const jobs = await jobService.listJobs();
+            const runningDebugJobs = jobs.filter(j => j.kind === 'debug' && (j.state === 'running' || j.state === 'dequeued'));
+            if (runningDebugJobs.length === 0) {
+                vscode.window.showErrorMessage('No running debug job found');
+                return;
+            }
+            if (runningDebugJobs.length > 1) {
+                vscode.window.showErrorMessage('Multiple running debug jobs. Cannot attach.');
+                return;
+            }
+            const debugJob: Job = runningDebugJobs[0];
+            let port: number;
+            try {
+                port = await debugService.getDebugPort();
+            } catch (error: unknown) {
+                vscode.window.showErrorMessage(`Failed to get debug port: ${error instanceof Error ? error.message : String(error)}`);
+                return;
+            }
+            outputChannel.appendLine(`Attaching to job ${debugJob.id} (${debugJob.set || '?'}::${debugJob.name || '?'}) at port ${port}`);
+            const config: vscode.DebugConfiguration = {
+                name: `Attach to PyOps Debug (${debugJob.set || 'unknown'}::${debugJob.name || 'unknown'})`,
+                type: 'python',
+                request: 'attach',
+                connect: {
+                    host: 'localhost',
+                    port
+                },
+                justMyCode: false
+            };
+            try {
+                await vscode.debug.startDebugging(folder, config);
+                vscode.window.showInformationMessage(`Attached to debug job ${debugJob.id}`);
+            } catch (error: unknown) {
+                vscode.window.showErrorMessage(`Failed to start debug session: ${error instanceof Error ? error.message : String(error)}`);
+            }
         }));
 
         context.subscriptions.push(vscode.commands.registerCommand('pyops.diffLocalRemote', async (treeItem?: ScriptletTreeItem) => {

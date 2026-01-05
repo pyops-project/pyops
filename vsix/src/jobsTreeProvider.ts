@@ -6,11 +6,14 @@ import { ApiClient } from './apiClient';
 
 interface Job {
     id: string;
-    start: string;
-    end: string;
     kind: string;
+    name: string;
+    set: string;
+    owner?: string;
+    start: string;
     state: string;
     detail?: string;
+    end: string;
     param?: string;
 }
 

@@ -11,6 +11,11 @@ export class PyOpsPythonDebugConfigProvider implements vscode.DebugConfiguration
             return config;
         }
 
+        // Skip enqueuing for attach requests - we don't want to start new jobs when attaching
+        if (config.request === 'attach') {
+            return config;
+        }
+
         if (!folder || !vscode.workspace.workspaceFolders || vscode.workspace.workspaceFolders.length === 0) {
             return config;
         }

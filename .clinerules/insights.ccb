@@ -627,3 +627,31 @@ DebugService.enqueueDebugJob fetches /debug/port first with auth headers if set
 Tests-Debug-Port:
 tests/api/test_api_endpoints.py::test_debug_port mocks conf_users anonymous/testuser/missing -> 200/400.
 vsix/tests/services/debugService.test.ts mocks fetch /debug/port success/auth-noauth/job-fail/network/invalid-port/throw.
+
+VSIX-AttachDebug:
+VSIX adds "Attach Debug" title bar button in pyops-manager panel executes pyops.attachDebugJob command
+; lists jobs via JobService.listJobs() filters kind="debug" state="running"|"dequeued"
+; requires exactly one running debug job
+; fetches port DebugService.getDebugPort()
+; launches vscode.debug.startDebugging folder config=debugpy attach localhost:port justMyCode=false
+; name=`Attach to PyOps Debug (${set||'unknown'}::${name||'unknown'})`
+; logs "Attaching to job {id} ({set||?}::{name||?}) at port {port}"
+; handles no/missing/multiple/port fail gracefully.
+
+JobService-listJobs:
+JobService adds public async listJobs(): Promise<Job[]> { return this.fetchJobs(); }
+; enables pyops.attachDebugJob access.
+
+DebugService-getDebugPort:
+DebugService adds public async getDebugPort(): Promise<number> extracts `/debug/port` fetch/auth/logic
+; refactors enqueueDebugJob to call it
+; unit tests in debugService.test.ts success/throw-fetch-fail/invalid-port/no-auth.
+
+Global-AttachDebug:
+pyops.attachDebugJob enables reattach to detached VSIX PyOps debugpy sessions on running jobs without reenqueue or restart.
+
+VSIX-AttachDebug-Fix:
+pyops.attachDebugJob simplified: removed buildOverrides/pathMappings (only for new enqueues)
+; pure {type:'python', request:'attach', connect:localhost:{port}, justMyCode:false}
+; no local file dependency/crash on undefined job.set
+; extension.test.ts: success/single-job, missing-set/name no-crash, no-job, multiple-jobs.

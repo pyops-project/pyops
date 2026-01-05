@@ -7,6 +7,10 @@ export class JobService {
 
     constructor(private apiClient: ApiClient, private jobsTreeProvider: JobsTreeDataProvider | undefined, private jobViewOutputChannel: vscode.OutputChannel) {}
 
+    public async listJobs(): Promise<Job[]> {
+        return await this.fetchJobs();
+    }
+
     private async getHeaders(): Promise<Record<string, string>> {
         return this.apiClient.getHeaders();
     }

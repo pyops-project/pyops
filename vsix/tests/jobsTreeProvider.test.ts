@@ -154,6 +154,8 @@ jest.mock('../src/apiClient', () => {
       const mockJobs: Job[] = [
         {
           id: 'job1',
+          set: 'testset',
+          name: 'testtask',
           start: '2023-01-01T10:00:00Z',
           end: '2023-01-01T10:05:00Z',
           kind: 'task',
@@ -163,6 +165,8 @@ jest.mock('../src/apiClient', () => {
         },
         {
           id: 'job2',
+          set: 'testset',
+          name: 'testscript',
           start: '2023-01-01T09:00:00Z',
           end: '2023-01-01T09:10:00Z',
           kind: 'script',
@@ -207,6 +211,8 @@ jest.mock('../src/apiClient', () => {
       const mockJobs: Job[] = [
         {
           id: 'job1',
+          set: 'testset',
+          name: 'testtask',
           start: '2023-01-01T10:00:00Z',
           end: '2023-01-01T10:05:00Z',
           kind: 'task',
@@ -248,7 +254,7 @@ jest.mock('../src/apiClient', () => {
     });
 
     it('should fetch jobs successfully', async () => {
-      const mockJobs: Job[] = [{ id: 'job1', start: '', end: '', kind: '', state: '' }];
+      const mockJobs: Job[] = [{ id: 'job1', set: 'testset', name: 'testtask', start: '', end: '', kind: '', state: '' }];
       const mockResponse = {
         ok: true,
         json: jest.fn().mockResolvedValue(mockJobs),
@@ -349,7 +355,7 @@ jest.mock('../src/apiClient', () => {
     });
 
     it('should fetch jobs and update state when config is valid', async () => {
-      const mockJobs: Job[] = [{ id: 'job1', start: '', end: '', kind: '', state: '' }];
+      const mockJobs: Job[] = [{ id: 'job1', set: 'testset', name: 'testtask', start: '', end: '', kind: '', state: '' }];
       (global.fetch as jest.Mock).mockResolvedValue({
         ok: true,
         json: jest.fn().mockResolvedValue(mockJobs),

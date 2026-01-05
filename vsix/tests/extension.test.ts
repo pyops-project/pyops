@@ -26,6 +26,7 @@ jest.mock('../src/services/AuthService', () => ({
 jest.mock('../src/services/DebugService', () => {
   const mockDebugService = jest.fn().mockImplementation(() => ({
     enqueueDebugJob: jest.fn().mockResolvedValue({ jobId: '123', port: 5678 }),
+    getDebugPort: jest.fn().mockResolvedValue(5678),
   }));
   // @ts-ignore
   mockDebugService.buildOverrides = jest.fn().mockReturnValue({ overrides: { 'testset::testname': 'print("test")' }, pathMappings: [] });
@@ -33,7 +34,7 @@ jest.mock('../src/services/DebugService', () => {
 });
 
 jest.mock('../src/services/DebugOutputMonitor', () => ({ DebugOutputMonitor: jest.fn().mockImplementation(() => ({ dispose: jest.fn(), isMonitoring: jest.fn().mockReturnValue(false), startMonitoring: jest.fn().mockResolvedValue(undefined), stopMonitoring: jest.fn(), })) }));
-jest.mock('../src/services/JobService', () => ({ JobService: jest.fn().mockImplementation(() => ({ dispose: jest.fn(), copyJobParam: jest.fn(), cancelJob: jest.fn(), downloadJob: jest.fn(), deleteJob: jest.fn(), viewJob: jest.fn(), cancelAllJobs: jest.fn(), deleteAllDone: jest.fn(), deleteAllFailed: jest.fn(), })) }));
+jest.mock('../src/services/JobService', () => ({ JobService: jest.fn().mockImplementation(() => ({ dispose: jest.fn(), listJobs: jest.fn(), copyJobParam: jest.fn(), cancelJob: jest.fn(), downloadJob: jest.fn(), deleteJob: jest.fn(), viewJob: jest.fn(), cancelAllJobs: jest.fn(), deleteAllDone: jest.fn(), deleteAllFailed: jest.fn(), })) }));
 jest.mock('../src/services/PyOpsPythonDebugConfigProvider');
 jest.mock('../src/services/RefreshTimerManager', () => ({
   RefreshTimerManager: jest.fn().mockImplementation(function() {
@@ -169,7 +170,7 @@ describe('Extension', () => {
       expect(require('vscode').window.registerTreeDataProvider).toHaveBeenCalledWith('pyops-manager', expect.any(Object));
       expect(require('vscode').window.registerTreeDataProvider).toHaveBeenCalledWith('pyops-monitor', expect.any(Object));
       expect(require('vscode').debug.registerDebugConfigurationProvider).toHaveBeenCalledWith('python', expect.any(Object));
-      expect(require('vscode').commands.registerCommand).toHaveBeenCalledTimes(20); // Count from source
+      expect(require('vscode').commands.registerCommand).toHaveBeenCalledTimes(21); // Updated for attachDebugJob
       expect(mockContext.subscriptions).toHaveLength(31); // Exact count
       expect(require('vscode').window.createOutputChannel).toHaveBeenCalledWith('PyOps');
     });
@@ -633,6 +634,54 @@ describe('Extension', () => {
       const handler = commandHandlers.get('pyops.openLocalFile');
       await handler!(mockScriptletTreeItem);
       expect(scriptletServiceInstance.openLocalFile).toHaveBeenCalledWith(mockScriptletTreeItem);
+    });
+
+    it('should attach to single running debug job', async () => {
+      jobServiceInstance.listJobs.mockResolvedValueOnce([
+        { id: 'debug123', kind: 'debug', state: 'running', set: 'foo', name: 'bar' }
+      ]);
+      (global.fetch as jest.Mock).mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ port: 5678 })
+      });
+      const handler = commandHandlers.get('pyops.attachDebugJob');
+      await handler!();
+      expect((global as any).outputChannel.appendLine).toHaveBeenCalledWith('Attaching to job debug123 (foo::bar) at port 5678');
+      expect(require('vscode').debug.startDebugging).toHaveBeenCalled();
+      expect(require('vscode').window.showInformationMessage).toHaveBeenCalledWith('Attached to debug job debug123');
+    });
+
+    it('should handle debug job with missing set/name (no crash)', async () => {
+      jobServiceInstance.listJobs.mockResolvedValueOnce([
+        { id: 'debug456', kind: 'debug', state: 'running', set: undefined, name: undefined }
+      ]);
+      (global.fetch as jest.Mock).mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ port: 5678 })
+      });
+      const handler = commandHandlers.get('pyops.attachDebugJob');
+      await handler!();
+      expect((global as any).outputChannel.appendLine).toHaveBeenCalledWith('Attaching to job debug456 (?::?) at port 5678');
+      expect(require('vscode').debug.startDebugging).toHaveBeenCalled();
+    });
+
+    it('should error if no running debug job', async () => {
+      jobServiceInstance.listJobs.mockResolvedValueOnce([]);
+      const handler = commandHandlers.get('pyops.attachDebugJob');
+      await handler!();
+      expect(require('vscode').window.showErrorMessage).toHaveBeenCalledWith('No running debug job found');
+      expect(require('vscode').debug.startDebugging).not.toHaveBeenCalled();
+    });
+
+    it('should error if multiple running debug jobs', async () => {
+      jobServiceInstance.listJobs.mockResolvedValueOnce([
+        { id: 'debug1', kind: 'debug', state: 'running' },
+        { id: 'debug2', kind: 'debug', state: 'running' }
+      ]);
+      const handler = commandHandlers.get('pyops.attachDebugJob');
+      await handler!();
+      expect(require('vscode').window.showErrorMessage).toHaveBeenCalledWith('Multiple running debug jobs. Cannot attach.');
+      expect(require('vscode').debug.startDebugging).not.toHaveBeenCalled();
     });
   });
 });

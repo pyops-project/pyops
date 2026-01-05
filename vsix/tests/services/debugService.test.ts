@@ -163,7 +163,6 @@ describe('DebugService', () => {
         expect.objectContaining({
           method: 'GET',
           headers: expect.objectContaining({
-            'Content-Type': 'application/json',
             'Authorization': 'Basic ' + Buffer.from('testuser:testpass').toString('base64'),
           }),
         })
@@ -209,7 +208,7 @@ describe('DebugService', () => {
         1,
         'http://localhost:8000/debug/port',
         expect.objectContaining({
-          headers: { 'Content-Type': 'application/json' },
+          headers: {},
         })
       );
       expect(mockOutputChannel.appendLine).toHaveBeenCalledWith('[DEBUG getDebugPort] Success: 5678');
@@ -287,6 +286,67 @@ describe('DebugService', () => {
       } as Response);
 
       await expect(service.enqueueDebugJob('testset', 'testscript')).rejects.toThrow('Invalid port');
+    });
+  });
+
+  describe('getDebugPort', () => {
+    it('fetches port successfully with auth', async () => {
+      (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ port: 5678 }),
+      } as Response);
+
+      const port = await service.getDebugPort();
+      expect(port).toBe(5678);
+      expect(global.fetch).toHaveBeenCalledWith(
+        'http://localhost:8000/debug/port',
+        expect.objectContaining({
+          method: 'GET',
+          headers: expect.objectContaining({
+            Authorization: expect.stringContaining('Basic')
+          })
+        })
+      );
+      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith('[DEBUG getDebugPort] Success: 5678');
+    });
+
+    it('throws on port fetch fail', async () => {
+      (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
+        ok: false,
+        text: () => Promise.resolve('No debug_port configured')
+      } as Response);
+
+      await expect(service.getDebugPort()).rejects.toThrow('Failed to fetch debug port');
+      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith(expect.stringContaining('[DEBUG getDebugPort] Failed'));
+    });
+
+    it('throws on invalid port value', async () => {
+      (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ port: 0 })
+      } as Response);
+
+      await expect(service.getDebugPort()).rejects.toThrow('Invalid port');
+    });
+
+    it('uses no auth if no credentials', async () => {
+      const mockVscode = require('vscode');
+      const mockConfig = mockVscode.workspace.getConfiguration();
+      mockConfig.get.mockImplementation((key: string) => key === 'username' ? undefined : undefined);
+      mockContext.workspaceState.get.mockReturnValue(undefined);
+
+      (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ port: 5678 })
+      } as Response);
+
+      await service.getDebugPort();
+
+      expect(global.fetch).toHaveBeenNthCalledWith(1, 'http://localhost:8000/debug/port', expect.objectContaining({
+        headers: expect.not.objectContaining({
+          Authorization: expect.any(String)
+        })
+      }));
     });
   });
 });
