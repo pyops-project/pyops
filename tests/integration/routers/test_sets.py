@@ -60,3 +60,15 @@ def test_switch_branch(mock_conf_data, mock_sets):
     assert response.status_code == 200
     data_resp = response.json()
     assert data_resp["status"] == "ok"
+
+def test_get_sets_html():
+    with patch('app.routers.scriptlet.sets.sites.get', return_value='<html></html>'):
+        response = client.get("/scriptlet/sets")
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "text/html; charset=utf-8"
+
+def test_get_sets_exception():
+    with patch('app.routers.scriptlet.sets.sites.get', side_effect=Exception("site error")):
+        response = client.get("/scriptlet/sets")
+        assert response.status_code == 500
+        assert "site error" in response.json()["detail"]

@@ -160,7 +160,7 @@ class TestJobRouter:
             job_diff = Job(id=job_diff_id, owner="other", set="default", name="diff", kind="task", state=state, param="{}")
             session.add_all([job_same, job_diff])
             session.commit()
-        
+
         response = mock_client.get("/scriptlet/job/list", headers={"X-User": "testuser"})
         data = response.json()
         assert len(data) == 1
@@ -168,9 +168,16 @@ class TestJobRouter:
         assert data[0]["state"] == state
 
     @patch("app.lib.git.read_content")
-    def test_post_job_cancel_killed_path(self, mock_read_content, mock_client, mock_db, test_temp_dir, patch_tempfile, mock_datetime):
+    @patch('app.runner.terminate_job_processes')
+    def test_post_job_cancel_killed_path(self, mock_terminate, mock_read_content, mock_client, mock_db, test_temp_dir, patch_tempfile, mock_datetime):
+        from app.runner import postTerm
         # Mock git.read_content to return dummy code for enqueue
         mock_read_content.return_value = "print('dummy task code')"
+
+        # Mock terminate_job_processes to simulate force kill and call postTerm
+        def mock_terminate_func(job_id, pid, is_debug, owner):
+            postTerm(job_id, killed=True)
+        mock_terminate.side_effect = mock_terminate_func
 
         # Enqueue a debug job
         run_data = {
@@ -200,18 +207,10 @@ class TestJobRouter:
             cancel_response = mock_client.get(f"/scriptlet/job/cancel?id={job_id}", headers={"X-User": "testuser"})
             assert cancel_response.status_code == 200
 
-        # Simulate daemon's term (full logic with time mocking for kill path)
-        mock_process = Mock()
-        mock_process.is_alive.side_effect = [True] * 52  # 51 loop + killed
-        mock_process.join.return_value = None
-        mock_processes = {12345: mock_process}
-        job_dict = {"id": job_id, "pid": 12345}
-        time_values = [0.0] + [0.1 * i for i in range(1, 52)]
-        with patch('app.runner.time.time', side_effect=time_values):
-            with patch('app.runner.time.sleep', return_value=None):
-                from app.runner import term
-                term(job_dict, mock_processes)
-        # Verify state after term (which calls postTerm)
+        # Simulate daemon starting termination thread
+        mock_terminate(job_id, 12345, True, "testuser")
+
+        # Verify state after termination
         with Session(get_db_engine()) as session:
             updated_job = session.query(Job).filter_by(id=job_id).first()
             assert updated_job.state == "killed"
@@ -220,9 +219,16 @@ class TestJobRouter:
             assert updated_job.end is not None
 
     @patch("app.lib.git.read_content")
-    def test_post_job_cancel_graceful_path(self, mock_read_content, mock_client, mock_db, test_temp_dir, patch_tempfile, mock_datetime):
+    @patch('app.runner.terminate_job_processes')
+    def test_post_job_cancel_graceful_path(self, mock_terminate, mock_read_content, mock_client, mock_db, test_temp_dir, patch_tempfile, mock_datetime):
+        from app.runner import postTerm
         # Mock git.read_content to return dummy code for enqueue
         mock_read_content.return_value = "print('dummy task code')"
+
+        # Mock terminate_job_processes to simulate graceful termination and call postTerm
+        def mock_terminate_func(job_id, pid, is_debug, owner):
+            postTerm(job_id, killed=False)
+        mock_terminate.side_effect = mock_terminate_func
 
         # Enqueue a debug job
         run_data = {
@@ -252,17 +258,138 @@ class TestJobRouter:
             cancel_response = mock_client.get(f"/scriptlet/job/cancel?id={job_id}", headers={"X-User": "testuser"})
             assert cancel_response.status_code == 200
 
-        # Simulate daemon's term (full logic with time mocking for graceful path)
-        mock_process = Mock()
-        mock_process.is_alive.return_value = False  # Dies immediately after terminate
-        mock_processes = {12345: mock_process}
-        job_dict = {"id": job_id, "pid": 12345}
-        from app.runner import term
-        term(job_dict, mock_processes)
-        # Verify state after term (which calls postTerm)
+        # Simulate daemon starting termination thread
+        mock_terminate(job_id, 12345, True, "testuser")
+
+        # Verify state after termination
         with Session(get_db_engine()) as session:
             updated_job = session.query(Job).filter_by(id=job_id).first()
             assert updated_job.state == "cancelled"
             assert updated_job.detail == "terminated gracefully"
             assert updated_job.pid is None
             assert updated_job.end is not None
+
+    def test_put_job_item_invalid_overrides_key(self, mock_client, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
+        run_data = {
+            "set": "default",
+            "name": "test_task",
+            "drop_done": False,
+            "param": "{}",
+            "kind": "debug",
+            "overrides": {"invalid_key": "code"}
+        }
+        response = mock_client.put("/scriptlet/job/item", json=run_data, headers={"X-User": "testuser"})
+        assert response.status_code == 400
+        assert "Invalid override key" in response.json()["detail"]
+
+    def test_put_job_item_scriptlet_not_existing(self, mock_client, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
+        with patch("app.lib.git.read_content", side_effect=FileNotFoundError):
+            run_data = {
+                "set": "default",
+                "name": "nonexistent",
+                "drop_done": False,
+                "param": "{}"
+            }
+            response = mock_client.put("/scriptlet/job/item", json=run_data, headers={"X-User": "testuser"})
+            assert response.status_code == 404
+            assert "not existing" in response.json()["detail"]
+
+    def test_put_job_item_exception(self, mock_client, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
+        with patch("app.lib.git.get_repo_path", side_effect=Exception("repo error")):
+            run_data = {
+                "set": "default",
+                "name": "test_task",
+                "drop_done": False,
+                "param": "{}"
+            }
+            response = mock_client.put("/scriptlet/job/item", json=run_data, headers={"X-User": "testuser"})
+            assert response.status_code == 500
+            assert "repo error" in response.json()["detail"]
+
+    def test_get_job_item_with_logs(self, mock_client, mock_db, tmp_path, test_temp_dir, patch_tempfile, mock_datetime):
+        with Session(get_db_engine()) as session:
+            job_id = str(uuid.uuid4().hex)
+            job = Job(id=job_id, owner="testuser", set="default", name="test", kind="task", state="done", param="{}", detail="test detail")
+            session.add(job)
+            session.commit()
+        
+        # Create log files
+        workspace = tmp_path / f"data/jobs/testuser/default/{job_id}"
+        workspace.mkdir(parents=True)
+        (workspace / "stdout.log").write_text("stdout content")
+        (workspace / "stderr.log").write_text("stderr content")
+        
+        with patch("app.lib.files.conf_data", return_value={"jobs": str(tmp_path / "data/jobs")}):
+            response = mock_client.get(f"/scriptlet/job/item?id={job_id}", headers={"X-User": "testuser"})
+            assert response.status_code == 200
+            data = response.json()
+            assert data["stdout"] == "stdout content"
+            assert data["stderr"] == "stderr content"
+
+    def test_get_job_item_exception(self, mock_client, mock_db, test_temp_dir, patch_tempfile, mock_datetime):
+        with patch("app.lib.runner.query", side_effect=Exception("query error")):
+            response = mock_client.get("/scriptlet/job/item?id=123", headers={"X-User": "testuser"})
+            assert response.status_code == 500
+            assert "query error" in response.json()["detail"]
+
+    def test_delete_job_item_not_found(self, mock_client, test_temp_dir, patch_tempfile, mock_datetime):
+        with patch("app.lib.runner.remove", return_value=None):
+            response = mock_client.delete("/scriptlet/job/item?id=999", headers={"X-User": "testuser"})
+            assert response.status_code == 404
+
+    def test_delete_job_item_exception(self, mock_client, test_temp_dir, patch_tempfile, mock_datetime):
+        # Mock query to return a job in valid state
+        mock_job = MagicMock()
+        mock_job.state = "done"
+        with patch("app.lib.runner.query", return_value=mock_job), \
+             patch("app.lib.runner.remove", side_effect=Exception("remove error")):
+            response = mock_client.delete("/scriptlet/job/item?id=123", headers={"X-User": "testuser"})
+            assert response.status_code == 500
+            assert "remove error" in response.json()["detail"]
+
+    @pytest.mark.parametrize("state", ["todo", "cancelled", "killed", "failed", "done"])
+    def test_delete_job_item_allowed_states(self, mock_client, mock_db, state, test_temp_dir, patch_tempfile, mock_datetime):
+        with Session(get_db_engine()) as session:
+            job_id = str(uuid.uuid4().hex)
+            job = Job(id=job_id, owner="testuser", set="default", name="test", kind="task", state=state, param="{}")
+            session.add(job)
+            session.commit()
+
+        response = mock_client.delete(f"/scriptlet/job/item?id={job_id}", headers={"X-User": "testuser"})
+        assert response.status_code == 200
+
+        # Verify job state is set to "remove"
+        with Session(get_db_engine()) as session:
+            updated_job = session.query(Job).filter_by(id=job_id).first()
+            assert updated_job.state == "remove"
+
+    @pytest.mark.parametrize("state", ["dequeued", "running", "cancel", "remove", "removed"])
+    def test_delete_job_item_invalid_states(self, mock_client, mock_db, state, test_temp_dir, patch_tempfile, mock_datetime):
+        with Session(get_db_engine()) as session:
+            job_id = str(uuid.uuid4().hex)
+            job = Job(id=job_id, owner="testuser", set="default", name="test", kind="task", state=state, param="{}")
+            session.add(job)
+            session.commit()
+
+        response = mock_client.delete(f"/scriptlet/job/item?id={job_id}", headers={"X-User": "testuser"})
+        assert response.status_code == 400
+        assert f"is in state '{state}' and cannot be deleted" in response.json()["detail"]
+        assert "Allowed states: todo, cancelled, killed, failed, done" in response.json()["detail"]
+
+    def test_get_job_cancel_exception(self, mock_client, test_temp_dir, patch_tempfile, mock_datetime):
+        with patch("app.lib.runner.cancel", side_effect=Exception("cancel error")):
+            response = mock_client.get("/scriptlet/job/cancel?id=123", headers={"X-User": "testuser"})
+            assert response.status_code == 500
+            assert "cancel error" in response.json()["detail"]
+
+    def test_get_job_download_exception(self, mock_client, test_temp_dir, patch_tempfile, mock_datetime):
+        with patch("app.lib.runner.query", side_effect=Exception("query error")):
+            response = mock_client.get("/scriptlet/job/download?id=123", headers={"X-User": "testuser"})
+            assert response.status_code == 500
+            assert "query error" in response.json()["detail"]
+
+    def test_get_job_list_exception(self, mock_client, test_temp_dir, patch_tempfile, mock_datetime):
+        with patch("app.routers.scriptlet.job.Session", side_effect=Exception("db error")):
+            response = mock_client.get("/scriptlet/job/list", headers={"X-User": "testuser"})
+            assert response.status_code == 500
+            assert "db error" in response.json()["detail"]

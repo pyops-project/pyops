@@ -65,7 +65,7 @@ async def item_get(id: int):
             if schedule == None:
                 raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Schedule {} not existing".format(id))
 
-            return job.__dict__ if job else None
+            return schedule.__dict__ if schedule else None
 
     except HTTPException as ex:
         raise ex

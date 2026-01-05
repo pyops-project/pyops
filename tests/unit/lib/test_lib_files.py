@@ -122,3 +122,130 @@ def test_conf_users_error():
         mock_config.users.side_effect = Exception("config error")
         with pytest.raises(Exception, match="config error"):
             files.conf_users()
+
+def test_conf_data_error():
+    from app.lib import files
+    with patch('app.lib.files.config') as mock_config:
+        mock_config.data.side_effect = Exception("data error")
+        with pytest.raises(Exception, match="data error"):
+            files.conf_data()
+
+def test_conf_runner_error():
+    from app.lib import files
+    with patch('app.lib.files.config') as mock_config:
+        mock_config.runner.side_effect = Exception("runner error")
+        with pytest.raises(Exception, match="runner error"):
+            files.conf_runner()
+
+def test_config_data_with_data_section(tmp_path):
+    from app.lib.files import Config
+    mock_content = '{"data": {"jobs": "/custom/jobs", "git": "/custom/git"}}'
+    conf_path = tmp_path / "test.json"
+    with open(conf_path, "w") as f:
+        f.write(mock_content)
+    config = Config.init(str(conf_path))
+    result = config.data()
+    assert result["jobs"] == "/custom/jobs"
+    assert result["git"] == "/custom/git"
+    assert "db" in result
+
+def test_config_runner_with_runner_section(tmp_path):
+    from app.lib.files import Config
+    mock_content = '{"runner": {"git_pull_interval": 120, "venv": "/custom/venv"}}'
+    conf_path = tmp_path / "test.json"
+    with open(conf_path, "w") as f:
+        f.write(mock_content)
+    config = Config.init(str(conf_path))
+    result = config.runner()
+    assert result["git_pull_interval"] == 120
+    assert result["venv"] == "/custom/venv"
+
+def test_config_users_with_users_section(tmp_path):
+    from app.lib.files import Config
+    mock_content = '{"users": {"user1": {"debug_port": 5678}}}'
+    conf_path = tmp_path / "test.json"
+    with open(conf_path, "w") as f:
+        f.write(mock_content)
+    config = Config.init(str(conf_path))
+    result = config.users()
+    assert result == {"user1": {"debug_port": 5678}}
+
+def test_config_data_exception_in_update(tmp_path):
+    from app.lib.files import Config
+    mock_content = '{"data": "not_dict"}'
+    conf_path = tmp_path / "test.json"
+    with open(conf_path, "w") as f:
+        f.write(mock_content)
+    config = Config.init(str(conf_path))
+    with pytest.raises(ValueError):  # update on dict with str
+        config.data()
+
+def test_config_runner_exception_in_update(tmp_path):
+    from app.lib.files import Config
+    mock_content = '{"runner": "not_dict"}'
+    conf_path = tmp_path / "test.json"
+    with open(conf_path, "w") as f:
+        f.write(mock_content)
+    config = Config.init(str(conf_path))
+    with pytest.raises(ValueError):
+        config.runner()
+
+def test_config_data_os_path_join_exception(tmp_path):
+    from app.lib.files import Config
+    mock_content = '{"data": {"jobs": "/custom/jobs"}}'
+    conf_path = tmp_path / "test.json"
+    with open(conf_path, "w") as f:
+        f.write(mock_content)
+    config = Config.init(str(conf_path))
+    with patch('os.path.join', side_effect=Exception("os error")):
+        with pytest.raises(Exception, match="os error"):
+            config.data()
+
+
+def test_config_users_get_exception(tmp_path):
+    from app.lib.files import Config
+    mock_content = '{"users": "not_dict"}'
+    conf_path = tmp_path / "test.json"
+    with open(conf_path, "w") as f:
+        f.write(mock_content)
+    config = Config.init(str(conf_path))
+    with patch('app.lib.files.Config.users', side_effect=Exception("get error")):
+        with pytest.raises(Exception, match="get error"):
+            config.users()
+
+def test_conf_log():
+    from app.lib import files
+    with patch('app.lib.files.config') as mock_config:
+        mock_config.log.return_value = {"info": "/test/info.log"}
+        result = files.conf_log()
+        assert result == {"info": "/test/info.log"}
+        mock_config.log.assert_called_once()
+
+def test_conf_log_error():
+    from app.lib import files
+    with patch('app.lib.files.config') as mock_config:
+        mock_config.log.side_effect = Exception("log error")
+        with pytest.raises(Exception, match="log error"):
+            files.conf_log()
+
+def test_config_log_with_log_section(tmp_path):
+    from app.lib.files import Config
+    mock_content = '{"log": {"info": "/custom/info.log", "loglevel": "debug"}}'
+    conf_path = tmp_path / "test.json"
+    with open(conf_path, "w") as f:
+        f.write(mock_content)
+    config = Config.init(str(conf_path))
+    result = config.log()
+    assert result["info"] == "/custom/info.log"
+    assert result["loglevel"] == "debug"
+    assert result["access"] == "log/access.log"
+
+def test_config_log_exception_in_update(tmp_path):
+    from app.lib.files import Config
+    mock_content = '{"log": "not_dict"}'
+    conf_path = tmp_path / "test.json"
+    with open(conf_path, "w") as f:
+        f.write(mock_content)
+    config = Config.init(str(conf_path))
+    with pytest.raises(Exception):
+        config.log()

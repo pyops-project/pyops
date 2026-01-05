@@ -46,7 +46,7 @@
             function genActions(j) {
                 if(["cancel", "dequeued"].includes(j.state))
                     return genTransActions(j);
-                else if(["cancelled", "killed", "failed", "done", "killed"].includes(j.state))
+                else if(["cancelled", "killed", "failed", "done"].includes(j.state))
                     return genDoneActions(j);
                 else
                     return genUndoneActions(j);
@@ -284,7 +284,7 @@
                 </li>
                 
                 <li class="nav-item m-1">
-                    <button type="button" class="btn btn-danger" onclick="delAllOf(['failed'])">
+                    <button type="button" class="btn btn-danger" onclick="delAllOf(['failed', 'killed'])">
                         <span class="material-icons-round">delete_forever</span>
                     </button>
                 </li>

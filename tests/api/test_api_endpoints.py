@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, mock_open
 from fastapi import HTTPException
 from app.web import app
 from app.routers.scriptlet.inventory import CreateArgument, SaveArgument
@@ -288,3 +288,194 @@ def test_controller_q_http_exception(mock_client, mock_git_ops):
         response = mock_client.get("/controller/nonexistent/missing/q", headers={"X-User": "testuser"})
         assert response.status_code == 404
         assert "Not found" in response.json()["detail"]
+
+@pytest.mark.parametrize("method", ["post", "put", "delete"])
+def test_controller_q_exec_fail_other_methods(mock_client, mock_controller_glob, method):
+    # Test /q exec failure for POST/PUT/DELETE returns {"error"}
+    with patch("builtins.exec", side_effect=SyntaxError("exec error")):
+        headers = {"X-User": "testuser"}
+        if method == "post":
+            response = mock_client.post("/controller/testset/testname/q", headers=headers)
+        elif method == "put":
+            response = mock_client.put("/controller/testset/testname/q", headers=headers)
+        else:  # delete
+            response = mock_client.delete("/controller/testset/testname/q", headers=headers)
+        assert response.status_code == 200
+        data = response.json()
+        assert "error" in data
+        assert "execution failed" in data["error"]
+
+def test_root_exception(mock_client):
+    # Test root endpoint exception handling
+    with patch("app.lib.sites.get", side_effect=Exception("site error")):
+        response = mock_client.get("/")
+        assert response.status_code == 500
+        assert "site error" in response.json()["detail"]
+
+def test_favicon_exception(mock_client):
+    # Test favicon endpoint exception handling
+    with patch("app.lib.files.get", side_effect=Exception("file error")):
+        response = mock_client.get("/favicon.ico")
+        assert response.status_code == 500
+        assert "file error" in response.json()["detail"]
+
+def test_file_exception(mock_client):
+    # Test file endpoint exception handling
+    with patch("app.lib.files.get", side_effect=Exception("file error")):
+        response = mock_client.get("/files/test.css")
+        assert response.status_code == 500
+        assert "file error" in response.json()["detail"]
+
+def test_controller_get_controller_code_404(mock_client, mock_git_ops):
+    # Test controller GET with missing controller file
+    with patch("app.web.get_controller_code", side_effect=HTTPException(status_code=404, detail="Not found")):
+        response = mock_client.get("/controller/testset/missing")
+        assert response.status_code == 404
+
+def test_controller_get_view_content_404(mock_client, mock_git_ops):
+    # Test controller GET with missing view files
+    with patch("app.web.get_view_content", side_effect=HTTPException(status_code=404, detail="Not found")):
+        response = mock_client.get("/controller/testset/missing")
+        assert response.status_code == 404
+
+def test_controller_get_wrong_type_controller(mock_client, mock_git_ops):
+    # Test controller GET with wrong type (not controller)
+    with patch("app.web.get_controller_code", side_effect=HTTPException(status_code=405, detail="Not a controller")):
+        response = mock_client.get("/controller/testset/wrongtype")
+        assert response.status_code == 405
+
+def test_controller_get_wrong_type_view(mock_client, mock_git_ops):
+    # Test controller GET with wrong type view
+    with patch("app.web.get_view_content", side_effect=HTTPException(status_code=405, detail="Not a view")):
+        response = mock_client.get("/controller/testset/wrongtype")
+        assert response.status_code == 405
+
+def test_menu_exception(mock_client):
+    # Test menu endpoint exception handling
+    with patch("app.lib.git.list_scriptlets", side_effect=Exception("git error")):
+        response = mock_client.get("/menu")
+        assert response.status_code == 500
+        assert "git error" in response.json()["detail"]
+
+def test_inventory_list_exception(mock_client):
+    # Test inventory list exception
+    with patch("app.lib.git.list_scriptlets", side_effect=Exception("list error")):
+        response = mock_client.get("/scriptlet/inventory/list", headers={"X-User": "testuser"})
+        assert response.status_code == 500
+        assert "list error" in response.json()["detail"]
+
+def test_inventory_item_put_exception(mock_client, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
+    # Test item_put exception
+    create_data = {"set": "testset", "name": "exception", "type": "task"}
+    with patch("app.lib.git.get_git_base", side_effect=Exception("git base error")):
+        response = mock_client.put("/scriptlet/inventory/item", json=create_data, headers={"X-User": "testuser"})
+        assert response.status_code == 500
+        assert "git base error" in response.json()["detail"]
+
+def test_inventory_item_post_no_files(mock_client, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
+    # Test item_post with no files
+    save_data = {"set": "testset", "name": "nofile", "code": "pass"}
+    with patch("os.listdir", return_value=[]):
+        response = mock_client.post("/scriptlet/inventory/item", json=save_data, headers={"X-User": "testuser"})
+        assert response.status_code == 404
+        assert "not existing" in response.json()["detail"]
+
+def test_inventory_item_post_exception(mock_client, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
+    # Test item_post exception
+    save_data = {"set": "testset", "name": "exception", "code": "pass"}
+    with patch("os.listdir", return_value=["exception.task.py"]), \
+         patch("app.lib.git.write_content", side_effect=Exception("write error")):
+        response = mock_client.post("/scriptlet/inventory/item", json=save_data, headers={"X-User": "testuser"})
+        assert response.status_code == 500
+        assert "write error" in response.json()["detail"]
+
+def test_inventory_draft_post_no_files(mock_client, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
+    # Test draft_post with no files
+    save_data = {"set": "testset", "name": "nofile", "code": "pass"}
+    with patch("os.listdir", return_value=[]):
+        response = mock_client.post("/scriptlet/inventory/draft", json=save_data)
+        assert response.status_code == 404
+        assert "not existing" in response.json()["detail"]
+
+def test_inventory_draft_post_exception(mock_client, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
+    # Test draft_post exception
+    save_data = {"set": "testset", "name": "exception", "code": "pass"}
+    with patch("os.listdir", return_value=["exception.task.py"]), \
+         patch("app.lib.git.write_content", side_effect=Exception("write error")):
+        response = mock_client.post("/scriptlet/inventory/draft", json=save_data)
+        assert response.status_code == 500
+        assert "write error" in response.json()["detail"]
+
+def test_inventory_item_del_no_files(mock_client, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
+    # Test item_del with no files
+    with patch("os.listdir", return_value=[]):
+        response = mock_client.delete("/scriptlet/inventory/item?set=testset&name=nofile", headers={"X-User": "testuser"})
+        assert response.status_code == 404
+        assert "not existing" in response.json()["detail"]
+
+def test_inventory_item_del_exception(mock_client, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
+    # Test item_del exception
+    with patch("os.listdir", return_value=["exception.task.py"]), \
+         patch("app.lib.git.delete_file_and_commit", side_effect=Exception("delete error")):
+        response = mock_client.delete("/scriptlet/inventory/item?set=testset&name=exception", headers={"X-User": "testuser"})
+        assert response.status_code == 500
+        assert "delete error" in response.json()["detail"]
+
+def test_inventory_draft_del_no_files(mock_client):
+    # Test draft_del with no files
+    response = mock_client.delete("/scriptlet/inventory/draft?set=testset&name=nofile")
+    assert response.status_code == 404
+    assert "not existing" in response.json()["detail"]
+
+
+
+def test_inventory_draft_del_exception(mock_client):
+    # Test draft_del exception
+    with patch("app.lib.git.get_repo_path", side_effect=Exception("repo error")):
+        response = mock_client.delete("/scriptlet/inventory/draft?set=testset&name=exception")
+        assert response.status_code == 500
+        assert "repo error" in response.json()["detail"]
+
+def test_inventory_code_get_no_files(mock_client):
+    # Test code_get with no files
+    with patch("os.listdir", return_value=[]):
+        response = mock_client.get("/scriptlet/inventory/code?set=testset&name=nofile")
+        assert response.status_code == 404
+        assert "not existing" in response.json()["detail"]
+
+def test_inventory_code_get_exception(mock_client):
+    # Test code_get exception
+    with patch("os.listdir", return_value=["exception.task.py"]), \
+         patch("app.lib.git.read_content", side_effect=Exception("read error")):
+        response = mock_client.get("/scriptlet/inventory/code?set=testset&name=exception")
+        assert response.status_code == 500
+        assert "read error" in response.json()["detail"]
+
+def test_inventory_sets_exception(mock_client):
+    # Test list_sets exception
+    with patch("app.lib.git.get_git_base", side_effect=Exception("git base error")):
+        response = mock_client.get("/scriptlet/inventory/sets", headers={"X-User": "testuser"})
+        assert response.status_code == 500
+        assert "git base error" in response.json()["detail"]
+
+def test_inventory_status_no_files(mock_client):
+    # Test status_get with no files
+    with patch("os.listdir", return_value=[]):
+        response = mock_client.get("/scriptlet/inventory/status?set=testset&name=nofile")
+        assert response.status_code == 404
+        assert "not existing" in response.json()["detail"]
+
+def test_inventory_status_exception(mock_client):
+    # Test status_get exception
+    with patch("os.listdir", return_value=["exception.task.py"]), \
+         patch("app.lib.git.has_unstaged_changes", side_effect=Exception("status error")):
+        response = mock_client.get("/scriptlet/inventory/status?set=testset&name=exception")
+        assert response.status_code == 500
+        assert "status error" in response.json()["detail"]
+
+def test_repo_status_exception(mock_client):
+    # Test repo_status exception
+    with patch("app.lib.git.get_repo_status", side_effect=Exception("status error")):
+        response = mock_client.get("/repo/status?set=testset")
+        assert response.status_code == 500
+        assert "status error" in response.json()["detail"]

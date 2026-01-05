@@ -2,6 +2,9 @@ import os, shutil, signal
 from datetime import datetime
 import tempfile
 
+import psutil
+import time
+
 from sqlalchemy import select, and_
 from sqlalchemy.orm import Session
 
@@ -13,6 +16,8 @@ from app.lib import git
 
 import logging
 logger = logging.getLogger(__name__)
+
+
 
 def enqueue(set: str, name: str, owner: str, kind: str, drop_done: bool, param: str, overrides: str | None = None):
     """Enqueues a new job into the database.
@@ -31,21 +36,15 @@ def enqueue(set: str, name: str, owner: str, kind: str, drop_done: bool, param: 
     """
     with Session(get_db_engine()) as session:
         if kind == "debug":
-            # Kill existing debug job for user to allow new one
+            # Mark existing debug job for cancellation to allow new one
             stmt = select(Job).where(and_(Job.owner == owner, Job.kind == "debug", Job.state.in_(["dequeued", "running"]))).limit(1)
             existing = session.scalar(stmt)
             if existing:
-                if existing.pid:
-                    try:
-                        os.kill(existing.pid, signal.SIGTERM)
-                    except OSError:
-                        pass  # Process already dead
-                existing.state = "cancelled"
-                existing.pid = None
+                existing.state = "cancel"
                 existing.detail = f"Cancelled by new debug job start for {owner}"
                 existing.end = datetime.now()
                 session.commit()
-                logger.info(f"Killed existing debug job {existing.id} for new debug enqueue by {owner}")
+                logger.info(f"Marked existing debug job {existing.id} for cancellation by new debug enqueue by {owner}")
 
         job = Job(
             id = "{}_{}_{}_{}".format(owner, set, name, datetime.now().strftime("%Y%m%dT%H%M%S%f")),

@@ -475,7 +475,9 @@ def delete_file_and_commit(repo: str, file_path: str, msg: str) -> None:
     with repo_lock(git_base, set_name):
         _call(["git", "rm", "-f", rel_path], repo)
         _call(["git", "commit", "-m", msg], repo)
-        _call(["git", "push"], repo)
+        remotes = _check(["git", "remote"], repo)
+        if remotes:
+            _call(["git", "push"], repo)
 
 def get_repo_status(set: str) -> Dict[str, any]:
     """Gets repo branch and tag status.

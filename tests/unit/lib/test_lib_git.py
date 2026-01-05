@@ -425,6 +425,7 @@ class TestCommitOps:
 
     def test_delete_file_and_commit(self, mock_repo, mock_subprocess, mock_files_conf, mock_fcntl):
         mock_run, mock_check = mock_subprocess
+        mock_check.side_effect = [b'origin\n']  # remote for push check
         # No tag check in delete, only pull (patched)
         file_path = os.path.join(mock_repo, 'test.py')
         with patch('app.lib.git.pull_if_needed', return_value=True):
@@ -432,6 +433,16 @@ class TestCommitOps:
             assert any(call.args[0] == ['git', 'rm', '-f', 'test.py'] for call in mock_run.call_args_list)
             assert any(call.args[0] == ['git', 'commit', '-m', 'delete msg'] for call in mock_run.call_args_list)
             assert any(call.args[0] == ['git', 'push'] for call in mock_run.call_args_list)
+
+    def test_delete_file_and_commit_no_remote(self, mock_repo, mock_subprocess, mock_files_conf, mock_fcntl):
+        mock_run, mock_check = mock_subprocess
+        mock_check.side_effect = [b'']  # _check git remote empty
+        file_path = os.path.join(mock_repo, 'test.py')
+        with patch('app.lib.git.pull_if_needed', return_value=True):
+            git.delete_file_and_commit(mock_repo, file_path, 'delete msg')
+            assert any(call.args[0] == ['git', 'rm', '-f', 'test.py'] for call in mock_run.call_args_list)
+            assert any(call.args[0] == ['git', 'commit', '-m', 'delete msg'] for call in mock_run.call_args_list)
+            assert not any(call.args[0] == ['git', 'push'] for call in mock_run.call_args_list)
 
 class TestStatusAndRollback:
     def test_get_repo_status_not_tag(self, tmp_path, mock_subprocess, mock_files_conf):

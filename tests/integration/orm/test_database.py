@@ -195,3 +195,14 @@ def test_thread_safety_concurrency(mock_db, test_temp_dir, patch_tempfile, mock_
     with Session(get_db_engine()) as check_session:
         concurrent_jobs = check_session.query(Job).filter_by(set="concurrent").all()
         assert len(concurrent_jobs) == num_threads
+
+def test_destroy_db():
+    from app.orm.database import destroy_db, get_db_engine
+    # Ensure engine is created
+    engine = get_db_engine()
+    assert engine is not None
+    # Destroy it
+    destroy_db()
+    # Next call should create new engine
+    engine2 = get_db_engine()
+    assert engine2 is not engine

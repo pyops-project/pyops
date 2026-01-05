@@ -48,3 +48,10 @@ class TestEditorRouter:
         # Assuming no auth required for completions
         response = mock_client.post("/scriptlet/completion", json={"code": "print(", "line": 0, "column": 6})
         assert response.status_code == 200
+
+    @pytest.mark.parametrize("editor_type", ["task", "library", "view", "md"])
+    def test_get_editor_html_exception(self, mock_client, editor_type, test_temp_dir, patch_tempfile, mock_datetime):
+        with patch("app.lib.sites.get", side_effect=Exception("site error")):
+            response = mock_client.get(f"/scriptlet/editor_{editor_type}")
+            assert response.status_code == 500
+            assert "site error" in response.json()["detail"]

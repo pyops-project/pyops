@@ -69,6 +69,25 @@ class Config:
             logger.error("Conf users access failed: %s", e)
             raise
 
+    def log(self):
+        try:
+            logger.debug("Accessing conf_log, _raw_conf type: %s", type(self._raw_conf))
+            if self._raw_conf is None:
+                raise ValueError("Config not initialized. Call Config.init(conf_path) first.")
+            # Log section with defaults
+            log = {
+                "access": "log/access.log",
+                "info": "log/info.log",
+                "loglevel": "info",
+            }
+            if "log" in self._raw_conf:
+                log.update(self._raw_conf["log"])
+            logger.debug("Conf log accessed successfully")
+            return log
+        except Exception as e:
+            logger.error("Conf log access failed: %s", e)
+            raise
+
 config = None
 
 def conf_data():
@@ -88,3 +107,9 @@ def conf_users():
     if config is None:
         raise ValueError("Config not initialized. Call Config.init(conf_path) first.")
     return config.users()
+
+def conf_log():
+    global config
+    if config is None:
+        raise ValueError("Config not initialized. Call Config.init(conf_path) first.")
+    return config.log()

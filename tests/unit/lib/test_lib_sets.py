@@ -1,6 +1,6 @@
 import pytest
 import subprocess
-from unittest.mock import Mock, patch, call
+from unittest.mock import Mock, patch, call, mock_open
 from pathlib import Path
 import shutil
 import os
@@ -15,6 +15,11 @@ class TestSets:
 
     def test_list_sets_empty_dir(self):
         result = sets.list_sets(str(self.git_dir))
+        assert result == []
+
+    def test_list_sets_nonexistent_dir(self):
+        nonexistent_dir = self.git_dir / "nonexistent"
+        result = sets.list_sets(str(nonexistent_dir))
         assert result == []
 
     def test_list_sets_no_git_dirs(self):
@@ -66,6 +71,26 @@ class TestSets:
             call(["git", "config", "user.name", "User"], str(self.git_dir / "newset")),
             call(["git", "config", "user.email", "user@example.com"], str(self.git_dir / "newset"))
         ], any_order=False)
+
+    def test_clone_set_with_credentials(self):
+        from contextlib import contextmanager
+        @contextmanager
+        def mock_repo_lock(*args, **kwargs):
+            yield
+        with patch('app.lib.sets.repo_lock', mock_repo_lock), \
+             patch('app.lib.sets._call') as mock_call, \
+             patch('builtins.open', mock_open()) as mock_file:
+            mock_call.return_value = None
+            result = sets.clone_set(str(self.git_dir), "newset", "https://example.com/repo", username="user", password="pass")
+        assert result is True
+        # Check clone URL has credentials
+        mock_call.assert_any_call(["git", "clone", "https://user:pass@example.com/repo", "newset"], str(self.git_dir))
+        # Check credentials stored
+        mock_file.assert_called_once_with(Path(self.git_dir) / "newset" / ".git" / "credentials", "w")
+        mock_file().write.assert_called_once_with("https://user:pass@example.com\n")
+        mock_call.assert_any_call(["git", "config", "credential.helper", "store --file .git/credentials"], str(self.git_dir / "newset"))
+
+
 
     def test_remove_set_not_found(self):
         with pytest.raises(ValueError, match="not found"):

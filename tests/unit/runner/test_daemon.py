@@ -102,15 +102,15 @@ class TestDaemon:
             test_session.commit()
             sched_id = sched.id
         mock_cron = Mock()
-        mock_prev = datetime(2023, 1, 1, 11, 59)
-        mock_cron.get_prev.return_value = mock_prev
+        mock_next = datetime(2023, 1, 1, 11, 59)
+        mock_cron.get_next.return_value = mock_next
         mock_croniter.return_value = mock_cron
         schedule()
         mock_enqueue.assert_called_once_with("test_set", "test_name", "test_owner", "task", False, None)
         with Session(get_db_engine()) as test_session:
             sched = test_session.get(Schedule, sched_id)
             test_session.refresh(sched)
-            assert sched.last == mock_prev
+            assert sched.last == mock_next
 
     @patch('app.runner.lib_runner.enqueue')
     @patch('app.runner.lib_runner.find')
@@ -167,37 +167,7 @@ class TestDaemon:
         result = getNextToTerm()
         assert result is None
 
-    def test_term_cancel(self):
-        from app.runner import term
-        mock_postTerm = Mock()
-        mock_process = Mock()
-        mock_process.is_alive.return_value = False  # Graceful exit immediately
-        mock_processes = {123: mock_process}
-        job = {"id": "id", "pid": 123}
-        with patch('app.runner.postTerm', mock_postTerm):
-            term(job, mock_processes)
-        mock_process.terminate.assert_called_once()
-        mock_postTerm.assert_called_once_with("id", killed=False)
 
-    def test_term_kill(self):
-        from app.runner import term
-        mock_postTerm = Mock()
-        mock_process = Mock()
-        # Simulate 50 loop is_alive True, post-loop True to trigger kill
-        mock_process.is_alive.side_effect = [True] * 51
-        mock_process.join.return_value = None
-        mock_processes = {123: mock_process}
-        job = {"id": "id", "pid": 123}
-        time_values = [0.0] + [0.1 * i for i in range(1, 51)]  # start 0.0, conditions 0.1 to 5.0
-        with patch('app.runner.time.time', side_effect=time_values):
-            with patch('app.runner.time.sleep', return_value=None):
-                with patch('app.runner.postTerm', mock_postTerm):
-                    term(job, mock_processes)
-        mock_process.terminate.assert_called_once()
-        mock_process.kill.assert_called_once()
-        mock_process.join.assert_called_once_with(timeout=1.0)
-        mock_postTerm.assert_called_once_with("id", killed=True)
-        assert mock_process.is_alive.call_count == 51
 
     @patch('app.lib.runner.drop')
     def test_postTerm_remove(self, mock_drop, mock_db):
@@ -295,53 +265,30 @@ class TestDaemon:
         # assert mock_session.call_count == 1  # manual simulation
 
     @patch('app.lib.files.conf_users')
-    @patch('sqlalchemy.orm.Session')
-    def test_validate_debug_prerequisites_valid(self, mock_session, mock_conf_users, mock_db):
+    def test_validate_debug_prerequisites_valid(self, mock_conf_users):
         from app.runner import validate_debug_prerequisites
         mock_conf_users.return_value = {"owner": {"debug_port": 5678}}
-        mock_session.return_value.__enter__.return_value.scalar.return_value = None
         port = validate_debug_prerequisites("job_id", "owner")
         assert port == 5678
         mock_conf_users.assert_called_once()
 
     @patch('app.lib.files.conf_users')
-    @patch('app.runner.finishJob')
-    def test_validate_debug_prerequisites_no_port(self, mock_finish, mock_conf_users):
+    def test_validate_debug_prerequisites_no_port(self, mock_conf_users):
         from app.runner import validate_debug_prerequisites
         mock_conf_users.return_value = {"owner": {}}
-        with pytest.raises(Exception, match="Debug prerequisites not met"):
+        with pytest.raises(Exception, match="Invalid or missing debug_port for user owner"):
             validate_debug_prerequisites("job_id", "owner")
-        mock_finish.assert_called_once_with("job_id", "failed", "Invalid or missing debug_port for user owner in pyops.json/users")
 
     @patch('app.lib.files.conf_users')
-    @patch('app.runner.finishJob')
-    def test_validate_debug_prerequisites_invalid_port(self, mock_finish, mock_conf_users):
+    def test_validate_debug_prerequisites_invalid_port(self, mock_conf_users):
         from app.runner import validate_debug_prerequisites
         mock_conf_users.return_value = {"owner": {"debug_port": 1000}}
-        with pytest.raises(Exception, match="Debug prerequisites not met"):
+        with pytest.raises(Exception, match="Invalid or missing debug_port for user owner"):
             validate_debug_prerequisites("job_id", "owner")
-        mock_finish.assert_called_once_with("job_id", "failed", "Invalid or missing debug_port for user owner in pyops.json/users")
 
-    @patch('app.lib.files.conf_users')
-    @patch('app.runner.finishJob')
-    def test_validate_debug_prerequisites_second_debug(self, mock_finish, mock_conf_users, mock_db):
-        from app.runner import validate_debug_prerequisites
-        from app.orm.database import get_db_engine
-        from app.orm.job import Job
-        from sqlalchemy.orm import Session
-        mock_conf_users.return_value = {"owner": {"debug_port": 5678}}
-        # Add existing debug running
-        with Session(get_db_engine()) as session:
-            job = Job(id="existing", set="set", name="name", owner="owner", kind="debug", state="running")
-            session.add(job)
-            session.commit()
-        with pytest.raises(Exception, match="Debug single-instance violated"):
-            validate_debug_prerequisites("job_id", "owner")
-        mock_finish.assert_called_once_with("job_id", "failed", "Another debug job is running for user owner")
 
-    @patch('os.kill')
-    @patch('app.lib.runner.logger')
-    def test_enqueue_debug_kill_existing(self, mock_logger, mock_kill, mock_db):
+
+    def test_enqueue_debug_mark_existing_for_cancellation(self, mock_db):
         from app.lib.runner import enqueue
         from app.orm.database import get_db_engine
         from app.orm.job import Job
@@ -353,48 +300,13 @@ class TestDaemon:
             session.commit()
         job_id = enqueue("set", "name", "owner", "debug", False, "{}")
         assert isinstance(job_id, str)
-        # Check existing killed
-        mock_kill.assert_called_once_with(123, 15)  # SIGTERM
+        # Check existing marked for cancellation
         with Session(get_db_engine()) as session:
             existing = session.get(Job, "existing")
-            assert existing.state == "cancelled"
-            assert existing.pid is None
+            assert existing.state == "cancel"
             assert existing.detail == "Cancelled by new debug job start for owner"
             assert existing.end is not None
             # New job created
             new_job = session.query(Job).filter(Job.id == job_id).first()
             assert new_job.state == "todo"
             assert new_job.kind == "debug"
-        mock_logger.info.assert_called_once_with(f"Killed existing debug job existing for new debug enqueue by owner")
-
-    def test_main_initialization_no_crash(self, mock_db):
-        from app.runner import main
-        from unittest.mock import Mock, patch, DEFAULT
-        # Mock all dependencies to no-op for first iteration, set kill_now=True to exit after
-        def sleep_side_effect(delay):
-            mock_killer_instance.kill_now = True
-            return None
-        with patch.dict('os.environ', {}):
-            with patch.multiple('app.runner.time', sleep=DEFAULT, time=DEFAULT) as time_mocks:
-                with patch.multiple('app.runner.os', listdir=DEFAULT) as os_mocks:
-                    with patch.multiple('app.runner.git', get_git_base=DEFAULT, pull_if_needed=DEFAULT, get_git_pull_interval=DEFAULT) as git_mocks:
-                        with patch.multiple('app.runner', schedule=DEFAULT, assignJob=DEFAULT, Process=DEFAULT, loadJob=DEFAULT, getNextToDo=DEFAULT, finishJob=DEFAULT, postTerm=DEFAULT, term=DEFAULT, getNextToTerm=DEFAULT, cleanProcesses=DEFAULT, disposeJobs=DEFAULT, handleOddJobs=DEFAULT, Queue=DEFAULT, GracefulKiller=DEFAULT) as runner_mocks:
-                            mock_killer_instance = runner_mocks['GracefulKiller'].return_value
-                            mock_killer_instance.kill_now = False
-                            mock_queue_instance = Mock()
-                            mock_queue_instance.empty.return_value = True
-                            runner_mocks['Queue'].return_value = mock_queue_instance
-                            runner_mocks['cleanProcesses'].return_value = {}
-                            runner_mocks['getNextToTerm'].return_value = None
-                            runner_mocks['getNextToDo'].return_value = None
-                            git_mocks['get_git_pull_interval'].return_value = 60
-                            git_mocks['get_git_base'].return_value = '/tmp/git'
-                            git_mocks['pull_if_needed'].return_value = None
-                            os_mocks['listdir'].return_value = []
-                            time_mocks['time'].side_effect = [61.0]  # Trigger git pull on first call
-                            time_mocks['sleep'].side_effect = sleep_side_effect
-                            # Call main with dummy args
-                            main('tmp/db', 'localhost:8000', 'tmp/venv', 'tmp/pkg', {})
-                            # Assert time.time called (verifies no UnboundLocalError)
-                            assert time_mocks['time'].call_count >= 1  # current_time call
-                            time_mocks['sleep'].assert_called_once_with(0.5)

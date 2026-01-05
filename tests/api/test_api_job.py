@@ -242,7 +242,7 @@ def test_post_job_download_not_found(mock_client, mock_db, mock_git_ops, test_te
 
 
 def test_delete_job_item(mock_client, mock_db, mock_git_ops, mock_enqueue, test_temp_dir, patch_tempfile, mock_datetime):
-    # Enqueue then delete
+    # Enqueue then set to done and delete
     unique_name = "deletetask_delete"
     with patch("subprocess.check_output", return_value=b"pass\n"):
         enqueue_resp = mock_client.put(
@@ -257,7 +257,16 @@ def test_delete_job_item(mock_client, mock_db, mock_git_ops, mock_enqueue, test_
             headers={"X-User": "testuser"}
         )
         job_id = enqueue_resp.json()["job"]
-    
+
+    # Set job state to 'done' to allow deletion
+    from app.orm.job import Job
+    from sqlalchemy.orm import Session
+    from app.orm.database import get_db_engine
+    with Session(get_db_engine()) as session:
+        job = session.get(Job, job_id)
+        job.state = "done"
+        session.commit()
+
     response = mock_client.delete(f"/scriptlet/job/item?id={job_id}", headers={"X-User": "testuser"})
     assert response.status_code == 200
 
@@ -265,3 +274,63 @@ def test_job_unauthorized(mock_client, mock_db, mock_git_ops, test_temp_dir, pat
     # No auth
     response = mock_client.get("/scriptlet/job/list")
     assert response.status_code == 200
+
+
+@pytest.mark.parametrize("existing_state", ["dequeued", "running"])
+def test_debug_job_cancellation_sequencing(mock_client, mock_db, mock_git_ops, existing_state, test_temp_dir, patch_tempfile, mock_datetime):
+    # Regression test for debug job sequencing issues
+    # Test that enqueuing a debug job cancels existing debug jobs properly
+
+    from app.orm.job import Job
+    from sqlalchemy.orm import Session
+    from app.orm.database import get_db_engine
+
+    # Create existing debug job in specified state
+    existing_job_id = "existing_debug_job"
+    with Session(get_db_engine()) as session:
+        existing_job = Job(
+            id=existing_job_id,
+            owner="testuser",
+            set="testset",
+            name="existing",
+            kind="debug",
+            state=existing_state,
+            drop_done=False,
+            param="{}",
+            overrides=None
+        )
+        session.add(existing_job)
+        session.commit()
+
+    # Enqueue new debug job (use real enqueue logic, not mocked)
+    with patch("subprocess.check_output", return_value=b"pass\n"):
+        response = mock_client.put(
+            "/scriptlet/job/item",
+            json={
+                "set": "testset",
+                "name": "newdebug",
+                "drop_done": False,
+                "param": '{"key": "value"}',
+                "kind": "debug"
+            },
+            headers={"X-User": "testuser"}
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert "job" in data
+        new_job_id = data["job"]
+        assert isinstance(new_job_id, str)
+
+    # Verify existing job was marked for cancellation
+    with Session(get_db_engine()) as session:
+        existing = session.get(Job, existing_job_id)
+        assert existing is not None
+        assert existing.state == "cancel"
+        assert existing.detail == "Cancelled by new debug job start for testuser"
+
+    # Verify new job was created
+    with Session(get_db_engine()) as session:
+        new_job = session.get(Job, new_job_id)
+        assert new_job is not None
+        assert new_job.state == "todo"
+        assert new_job.kind == "debug"

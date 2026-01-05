@@ -178,3 +178,75 @@ class TestScheduleRouter:
                 assert schedule.name == "test_job"
                 assert schedule.owner == "testuser"
                 assert schedule.param == "{}"
+
+    def test_put_schedule_item_exception(self, mock_client, mock_db, mock_git_ops):
+        with patch('app.lib.git.read_content', side_effect=Exception("git error")):
+            create_data = {
+                "set": "default",
+                "name": "test_job",
+                "drop_done": False,
+                "schedule": "* * * * *",
+                "param": "{}"
+            }
+            response = mock_client.put("/scriptlet/schedule/item", json=create_data, headers={"X-User": "testuser"})
+            assert response.status_code == 500
+            assert "git error" in response.json()["detail"]
+
+    def test_get_schedule_list_exception(self, mock_client, mock_db):
+        with patch('app.routers.scriptlet.schedule.Session', side_effect=Exception("db error")):
+            response = mock_client.get("/scriptlet/schedule/list", headers={"X-User": "testuser"})
+            assert response.status_code == 500
+            assert "db error" in response.json()["detail"]
+
+    def test_post_schedule_activate_exception(self, mock_client, mock_db):
+        with patch('app.routers.scriptlet.schedule.Session', side_effect=Exception("db error")):
+            response = mock_client.get("/scriptlet/schedule/activate?id=1", headers={"X-User": "testuser"})
+            assert response.status_code == 500
+            assert "db error" in response.json()["detail"]
+
+    def test_post_schedule_deactivate_exception(self, mock_client, mock_db):
+        with patch('app.routers.scriptlet.schedule.Session', side_effect=Exception("db error")):
+            response = mock_client.get("/scriptlet/schedule/deactivate?id=1", headers={"X-User": "testuser"})
+            assert response.status_code == 500
+            assert "db error" in response.json()["detail"]
+
+    def test_post_schedule_run_enqueue_exception(self, mock_client, mock_db):
+        with Session(get_db_engine()) as session:
+            schedule = Schedule(set="default", name="test_job", owner="testuser", schedule="* * * * *", active=True, param="{}", last=None, drop_done=False)
+            session.add(schedule)
+            session.commit()
+            schedule_id = schedule.id
+        
+        with patch("app.lib.runner.enqueue", side_effect=Exception("enqueue error")):
+            response = mock_client.get(f"/scriptlet/schedule/run?id={schedule_id}", headers={"X-User": "testuser"})
+            assert response.status_code == 500
+            assert "enqueue error" in response.json()["detail"]
+
+    def test_delete_schedule_item_exception(self, mock_client, mock_db):
+        with patch('app.routers.scriptlet.schedule.Session', side_effect=Exception("db error")):
+            response = mock_client.delete("/scriptlet/schedule/item?id=1", headers={"X-User": "testuser"})
+            assert response.status_code == 500
+            assert "db error" in response.json()["detail"]
+
+    def test_get_schedule_item(self, mock_client, mock_db):
+        with Session(get_db_engine()) as session:
+            schedule = Schedule(set="default", name="test_job", owner="testuser", schedule="* * * * *", active=True, param="{}", last=None, drop_done=False)
+            session.add(schedule)
+            session.commit()
+            schedule_id = schedule.id
+        
+        response = mock_client.get(f"/scriptlet/schedule/item?id={schedule_id}", headers={"X-User": "testuser"})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["set"] == "default"
+        assert data["name"] == "test_job"
+
+    def test_get_schedule_item_not_found(self, mock_client, mock_db):
+        response = mock_client.get("/scriptlet/schedule/item?id=999", headers={"X-User": "testuser"})
+        assert response.status_code == 404
+
+    def test_get_schedule_item_exception(self, mock_client, mock_db):
+        with patch('app.routers.scriptlet.schedule.Session', side_effect=Exception("db error")):
+            response = mock_client.get("/scriptlet/schedule/item?id=1", headers={"X-User": "testuser"})
+            assert response.status_code == 500
+            assert "db error" in response.json()["detail"]

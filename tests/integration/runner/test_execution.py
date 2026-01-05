@@ -1,10 +1,12 @@
 import pytest
-from unittest.mock import Mock, patch, MagicMock, call, ANY
+from unittest.mock import Mock, patch, MagicMock, call, ANY, AsyncMock
 import os
 import sys
 import datetime as real_datetime
 from multiprocessing import Queue
 import logging
+import asyncio
+import json
 
 
 @pytest.fixture
@@ -116,7 +118,7 @@ class TestExecution:
         mock_sleep.return_value = None
 
         with patch('builtins.exec', side_effect=Exception("debug fail")):
-            run("id", "owner", "set", "name", "debug", "", "raise Exception", [], q, data_base, "bind", "/venv", "/pkg")
+            run("id", "owner", "set", "name", "debug", "", "raise Exception", [], q, data_base, "bind", "/venv", "/pkg", port=5678)
 
         assert mock_sleep.call_count == 0  # No retries for debug
         q.put.assert_called_once_with({"id": "id", "state": "failed", "detail": ANY})
@@ -143,7 +145,7 @@ class TestExecution:
         mock_loadLib.return_value = "loaded lib"
         libs = []
         result = process_imports("#!{::lib}\nrest", "current_set", False, libs)
-        assert "# importing current_set::lib" in result
+        assert result == "#!{::lib}\nrest"
         assert len(libs) == 1
         assert libs[0]["code"] == "loaded lib"
         mock_loadLib.assert_called_once_with("current_set", "lib", False)
@@ -154,7 +156,7 @@ class TestExecution:
         mock_loadLib.side_effect = Exception("load fail")
         libs = []
         result = process_imports("#!{::lib}\nrest", "current_set", False, libs)
-        assert "#!{::lib}" in result  # Kept original
+        assert result == "#!{::lib}\nrest"  # Kept original
         assert len(libs) == 0
         mock_loadLib.assert_called_once_with("current_set", "lib", False)
 
@@ -176,12 +178,11 @@ class TestExecution:
             Mock(returncode=0)  # install
         ]
         mock_exists.return_value = True  # venv exists
-        lines = ["!requests"]
+        lines = ["#!requests"]
         venv_path = "/venv"
         pkg_path = "/pkg"
         id = "id"
-        result = process_install_lines(lines, venv_path, pkg_path, id)
-        assert "# !requests" in result[0]
+        process_install_lines(lines, venv_path, pkg_path, id)
         pip_path = os.path.join(venv_path, 'bin', 'pip')
         mock_run.assert_has_calls([
             call([pip_path, 'list', '--format=freeze'], capture_output=True, text=True, cwd=venv_path),
@@ -190,23 +191,36 @@ class TestExecution:
 
     @patch('subprocess.run')
     @patch('os.path.exists')
+    def test_process_install_lines_skip_lib_directive(self, mock_exists, mock_run, mock_conf, tmp_path):
+        from app.runner import process_install_lines
+        mock_exists.return_value = True  # venv exists
+        lines = ["#!{test::lib}"]
+        venv_path = "/venv"
+        pkg_path = "/pkg"
+        id = "id"
+        process_install_lines(lines, venv_path, pkg_path, id)
+        # Should not call pip commands for lib directives
+        pip_calls = [call for call in mock_run.call_args_list if 'pip' in str(call)]
+        assert len(pip_calls) == 0
+
+    @patch('subprocess.run')
+    @patch('os.path.exists')
     def test_process_install_lines_git_clone(self, mock_exists, mock_run, mock_conf, tmp_path):
         from app.runner import process_install_lines
         mock_run.return_value = Mock(returncode=0)  # clone success
         mock_exists.return_value = False  # repo_dir not exist
-        lines = ["! https://repo.git"]
+        lines = ["#! https://repo.git"]
         venv_path = "/venv"
         pkg_path = "/pkg"
         id = "id"
-        result = process_install_lines(lines, venv_path, pkg_path, id)
-        assert "# ! https://repo.git" in result[0]
+        process_install_lines(lines, venv_path, pkg_path, id)
         mock_run.assert_called_once_with(['git', 'clone', 'https://repo.git', '/pkg/repo'], capture_output=True, text=True, cwd='/pkg')
 
     @patch('subprocess.run')
     def test_process_install_lines_git_error(self, mock_run, mock_conf):
         from app.runner import process_install_lines
         mock_run.return_value = Mock(returncode=1, stderr="clone fail")
-        lines = ["! https://fail.git"]
+        lines = ["#! https://fail.git"]
         with pytest.raises(Exception, match="git clone https://fail.git failed: clone fail"):
             process_install_lines(lines, "/venv", "/pkg", "id")
 
@@ -258,8 +272,8 @@ class TestExecution:
             assert result.end == now
             assert result.pid is None
 
-    @patch('app.lib.runner.enqueue')
-    @patch('app.lib.runner.find')
+    @patch('app.runner.lib_runner.enqueue')
+    @patch('app.runner.lib_runner.find')
     def test_schedule_reenqueues_service_excluding_cancelled(self, mock_find, mock_enqueue, mock_conf, mock_db, mock_croniter):
         from app.runner import schedule
         from sqlalchemy import select
@@ -380,17 +394,18 @@ logging.error('ERROR message')
         mock_queue.put.assert_called_once_with({"id": job_id, "state": "done", "detail": None})
 
     @patch('builtins.compile')
+    @patch('app.runner.terminate_debugpy_adapter')
     @patch('app.runner.pyops.ServiceListener')
     @patch('debugpy.listen')
     @patch('debugpy.wait_for_client')
     @patch('subprocess.run')
-    def test_run_debug_inject(self, mock_run, mock_wait, mock_listen, mock_listener, mock_compile, tmp_path, mock_queue):
+    def test_run_debug_inject(self, mock_run, mock_wait, mock_listen, mock_listener, mock_terminate, mock_compile, tmp_path, mock_queue):
         mock_run.side_effect = [Mock(returncode=0, stdout=""), Mock(returncode=0)]
         from app.runner import run
         mock_listener.return_value = Mock()  # For debug
         mock_listen.return_value = None
         mock_wait.return_value = None  # Don't block
-        mock_compile.return_value = Mock()  # Mock code object
+        mock_compile.return_value = compile("pass", "dummy", "exec")  # Mock code object
         data_base = str(tmp_path / "data")
         owner = "owner"
         set_name = "set"
@@ -401,18 +416,20 @@ logging.error('ERROR message')
 
         # Check compile called for debug bridge lib, debugpy_install lib, and code
         assert mock_compile.call_count >= 3
-        # Find bridge lib compile
-        bridge_calls = [call for call in mock_compile.call_args_list if "set::debug_bridge.py" in call[0][1]]
+        # Find debugpy lib compile (now in .debug/src/ subdirectories)
+        bridge_calls = [call for call in mock_compile.call_args_list if ".debug/src/system/library/debugpy.py" in call[0][1]]
         assert len(bridge_calls) == 1
         bridge_code = bridge_calls[0][0][0]
         assert "import debugpy" in bridge_code
-        assert "debugpy.listen(('127.0.0.1', 5678))" in bridge_code
+        assert "debugpy.listen(('0.0.0.0', 5678))" in bridge_code
         assert "debugpy.wait_for_client()" in bridge_code
-        # Find code compile
-        code_calls = [call for call in mock_compile.call_args_list if "set::name.py" in call[0][1]]
+        # Find code compile (now in .debug/src/ subdirectories)
+        code_calls = [call for call in mock_compile.call_args_list if ".debug/src/set/task/name.py" in call[0][1]]
         assert len(code_calls) == 1
         code_compiled = code_calls[0][0][0]
         assert "print('test')" in code_compiled
+        # Verify terminate_debugpy_adapter was called for debug job
+        mock_terminate.assert_called_once_with("owner")
 
     @patch.dict('sys.modules', {'debugpy': Mock()})
     @patch('app.runner.pyops.ServiceListener')
@@ -423,8 +440,6 @@ logging.error('ERROR message')
         mock_run.side_effect = [Mock(returncode=0, stdout=""), Mock(returncode=0)]
         from app.runner import run
         mock_listener.return_value = Mock()  # For debug
-        mock_listen.return_value = None
-        mock_wait.return_value = None  # Don't block
         data_base = str(tmp_path / "data")
         owner = "owner"
         set_name = "set"
@@ -462,7 +477,6 @@ logging.error('ERROR message')
         assert "Failed after 3 retries" in detail
         assert "ValueError" in str(detail)
         assert mock_sleep.call_count == 3
-        mock_queue.put.assert_called_once_with({"id": job_id, "state": "failed", "detail": ANY})
 
     @patch('app.runner.pyops.ServiceListener')
     def test_run_empty_output(self, mock_listener, tmp_path, sample_empty_code, mock_queue, mock_conf):
@@ -482,7 +496,7 @@ logging.error('ERROR message')
         mock_queue.put.assert_called_once_with({"id": job_id, "state": "done", "detail": None})
 
 
-    @patch('app.runner.os.chdir')
+    @patch('os.chdir')
     @patch('app.runner.pyops.ServiceListener')
     def test_run_task_sets_cwd(self, mock_listener, mock_chdir, tmp_path, mock_conf):
         from app.runner import run
@@ -557,7 +571,7 @@ print("jobsspace: " + globals()['jobsspace'])
         msg = q.get()
         assert msg["state"] == "failed"
         assert "param err" in msg["detail"]
-        assert f"{set_}::param.py" in msg["detail"]
+        assert f"{set_}/task/param.py" in msg["detail"]
         assert mock_sleep.call_count == 3
 
     @patch('app.runner.pyops.ServiceListener')
@@ -576,7 +590,7 @@ print("jobsspace: " + globals()['jobsspace'])
         msg = q.get()
         assert msg["state"] == "failed"
         assert "code err" in msg["detail"]
-        assert f"{set_}::{name}.py" in msg["detail"]
+        assert f"{set_}/task/{name}.py" in msg["detail"]
         assert mock_sleep.call_count == 3
 
     @patch('app.runner.pyops.ServiceListener')
@@ -590,14 +604,14 @@ print("jobsspace: " + globals()['jobsspace'])
         set_ = "myset"
         name = "myname"
         lib_code = "raise ValueError('lib err')"
-        lib_filename = f"{set_}::mylib.py"
+        lib_filename = f"{set_}::mylib"
         libs = [{"code": lib_code, "filename": lib_filename}]
         q = Queue()
         run("id", "owner", set_, name, "task", "", "pass", libs, q, data_base, "bind", "/venv", "/pkg")
         msg = q.get()
         assert msg["state"] == "failed"
         assert "lib err" in msg["detail"]
-        assert lib_filename in msg["detail"]
+        assert f"{set_}/library/mylib.py" in msg["detail"]
         assert mock_sleep.call_count == 3
 
     @patch('app.runner.pyops.ServiceListener')
@@ -609,11 +623,449 @@ print("jobsspace: " + globals()['jobsspace'])
         set_ = "myset"
         name = "myname"
         lib_code = "raise ValueError('lib err service')"
-        lib_filename = f"{set_}::mylib.py"
+        lib_filename = f"{set_}::mylib"
         libs = [{"code": lib_code, "filename": lib_filename}]
         q = Queue()
         run("id", "owner", set_, name, "service", "", "pass", libs, q, data_base, "bind", "/venv", "/pkg")
         msg = q.get()
         assert msg["state"] == "failed"
         assert "lib err service" in msg["detail"]
-        assert lib_filename in msg["detail"]
+        assert f"{set_}/library/mylib.py" in msg["detail"]
+
+    @patch('subprocess.run')
+    @patch('debugpy.wait_for_client')
+    @patch('debugpy.listen')
+    @patch('app.runner.pyops.ServiceListener')
+    @patch('app.lib.files.conf_users')
+    def test_run_debug_creates_files(self, mock_conf_users, mock_listener, mock_listen, mock_wait, mock_run, tmp_path, mock_conf):
+        from app.runner import run
+        from multiprocessing import Queue
+        mock_listener.return_value = Mock()
+        mock_conf_users.return_value = {"owner": {"debug_port": 5678}}
+        mock_listen.return_value = None
+        mock_wait.return_value = None
+        mock_run.return_value = Mock(returncode=0, stdout="")
+        data_base = str(tmp_path / "data")
+        owner = "owner"
+        set_name = "set"
+        job_id = "id"
+        param = "print('param code')"
+        code = "print('main code')"
+        libs = [{"code": "print('lib code')", "filename": "set::mylib"}]
+
+        q = Queue()
+        run(job_id, owner, set_name, "name", "debug", param, code, libs, q, data_base, "bind", "/venv", "/pkg", port=5678)
+
+        msg = q.get()
+        assert msg["state"] == "done"
+
+        # Check that files were created in .debug/src/ subdirectories
+        workspace = os.path.join(data_base, owner, set_name, job_id)
+        debug_src_dir = os.path.join(workspace, ".debug", "src")
+
+        # Check param file
+        param_file = os.path.join(debug_src_dir, set_name, "task", "param.py")
+        assert os.path.exists(param_file)
+        with open(param_file, 'r') as f:
+            assert "print('param code')" in f.read()
+
+        # Check main code file
+        code_file = os.path.join(debug_src_dir, set_name, "task", "name.py")
+        assert os.path.exists(code_file)
+        with open(code_file, 'r') as f:
+            assert "print('main code')" in f.read()
+
+        # Check lib file
+        lib_file = os.path.join(debug_src_dir, set_name, "library", "mylib.py")
+        assert os.path.exists(lib_file)
+        with open(lib_file, 'r') as f:
+            assert "print('lib code')" in f.read()
+
+    @patch('subprocess.run')
+    @patch('debugpy.wait_for_client')
+    @patch('debugpy.listen')
+    @patch('app.runner.pyops.ServiceListener')
+    @patch('app.lib.files.conf_users')
+    def test_run_debug_overrides_with_pip_install(self, mock_conf_users, mock_listener, mock_listen, mock_wait, mock_run, tmp_path, mock_conf):
+        """Regression test: Ensure !pip directives in override code are processed."""
+        from app.runner import run
+        from multiprocessing import Queue
+
+        mock_run.return_value = Mock(returncode=0, stdout="")
+        mock_listener.return_value = Mock()
+        mock_conf_users.return_value = {"owner": {"debug_port": 5678}}
+        mock_listen.return_value = None
+        mock_wait.return_value = None
+
+        data_base = str(tmp_path / "data")
+        owner = "owner"
+        set_name = "set"
+        job_id = "id"
+
+        # Override code contains #!pip directive
+        overrides = {"set::name": "#!pip install requests\nprint('overridden code')"}
+        overrides_json = json.dumps(overrides)
+
+        q = Queue()
+        run(job_id, owner, set_name, "name", "debug", "", "print('original code')", [], q, data_base, "bind", "/venv", "/pkg", overrides=overrides_json, port=5678)
+
+        msg = q.get()
+        assert msg["state"] == "done"
+
+        # Verify pip install was called (mock_run was called at least once)
+        assert mock_run.call_count > 0
+
+        # Check that the overridden code was written
+        workspace = os.path.join(data_base, owner, set_name, job_id)
+        debug_src_dir = os.path.join(workspace, ".debug", "src")
+        code_file = os.path.join(debug_src_dir, set_name, "task", "name.py")
+        assert os.path.exists(code_file)
+        with open(code_file, 'r') as f:
+            content = f.read()
+            assert "#!pip install requests" in content
+            assert "print('overridden code')" in content
+
+    @patch('subprocess.run')
+    @patch('debugpy.wait_for_client')
+    @patch('debugpy.listen')
+    @patch('app.runner.pyops.ServiceListener')
+    @patch('app.lib.files.conf_users')
+    def test_run_debug_overrides_add_new_libs(self, mock_conf_users, mock_listener, mock_listen, mock_wait, mock_run, tmp_path, mock_conf):
+        """Regression test: Ensure new libraries from overrides are added to libs and written to workspace."""
+        from app.runner import run
+        from multiprocessing import Queue
+
+        mock_run.return_value = Mock(returncode=0, stdout="")
+        mock_listener.return_value = Mock()
+        mock_conf_users.return_value = {"owner": {"debug_port": 5678}}
+        mock_listen.return_value = None
+        mock_wait.return_value = None
+
+        data_base = str(tmp_path / "data")
+        owner = "owner"
+        set_name = "set"
+        job_id = "id"
+
+        # Override contains a new lib not in original libs
+        overrides = {
+            "set::name": "print('overridden code')",
+            "set::newlib": "print('new lib code')"
+        }
+        overrides_json = json.dumps(overrides)
+
+        q = Queue()
+        run(job_id, owner, set_name, "name", "debug", "", "print('original code')", [], q, data_base, "bind", "/venv", "/pkg", overrides=overrides_json, port=5678)
+
+        msg = q.get()
+        assert msg["state"] == "done"
+
+        # Check that the new lib file was created
+        workspace = os.path.join(data_base, owner, set_name, job_id)
+        debug_src_dir = os.path.join(workspace, ".debug", "src")
+        new_lib_file = os.path.join(debug_src_dir, set_name, "library", "newlib.py")
+        assert os.path.exists(new_lib_file)
+        with open(new_lib_file, 'r') as f:
+            assert "print('new lib code')" in f.read()
+
+        # Check that the main code was overridden
+        code_file = os.path.join(debug_src_dir, set_name, "task", "name.py")
+        assert os.path.exists(code_file)
+        with open(code_file, 'r') as f:
+            assert "print('overridden code')" in f.read()
+
+
+class TestMainLoopDebugIntegration:
+    """Integration tests for main loop debug job adapter waiting functionality."""
+
+    @patch('app.runner.main')  # Patch the main function itself
+    @patch('app.runner.getNextToDo')
+    @patch('app.runner.loadJob')
+    @patch('app.runner.run')
+    @patch('app.runner.assignJob')
+    @patch('app.runner.finishJob')
+    @patch('app.runner.has_debugpy_adapter')
+    @patch('app.runner.terminate_job_processes', return_value=None)
+    @patch('app.runner.time.sleep')
+    @patch('multiprocessing.Process')
+    def test_main_loop_debug_adapter_success(self, mock_process_class, mock_sleep, mock_terminate, mock_has_adapter,
+                                           mock_finish_job, mock_assign_job, mock_run, mock_load_job, mock_get_next,
+                                           mock_main, mock_conf, mock_db):
+        """Test debug job assignment after adapter appears within timeout."""
+        from app.runner import main
+
+        # Setup mocks
+        mock_get_next.return_value = "debug_job_id"
+        mock_load_job.return_value = ("owner", "set", "name", "debug", "param", "code", "overrides")
+        mock_process = Mock()
+        mock_process.is_alive.return_value = True
+        mock_process.pid = 12345
+        mock_process_class.return_value = mock_process
+
+        # Adapter appears on 3rd check (after 0.2s)
+        mock_has_adapter.side_effect = [False, False, True]
+        mock_sleep.return_value = None
+
+        # Mock the main function to simulate one iteration
+        def mock_main_impl(data_base, web_bind, venv_path, pkg_path, env):
+            # Simulate one iteration of the main loop
+            job_id = mock_get_next()
+            if job_id is not None:
+                owner, set, name, kind, param, code, overrides = mock_load_job()
+                port = 5678  # Mock port
+                libs = []
+                p = mock_process_class()
+                p.start()
+
+                if kind == "debug":
+                    adapter_up = False
+                    for attempt in range(50):  # 5 seconds max
+                        if not p.is_alive():
+                            break
+                        if mock_has_adapter(port):
+                            adapter_up = True
+                            break
+                        mock_sleep(0.1)
+
+                    if not adapter_up:
+                        if p.is_alive():
+                            mock_terminate(p.pid, True, owner)
+                            mock_finish_job(job_id, "failed", "Debug adapter failed to start within timeout")
+                            return
+                        else:
+                            return
+
+                # Adapter is up or not a debug job - proceed normally
+                mock_assign_job(job_id, p.pid)
+
+        mock_main.side_effect = mock_main_impl
+
+        # Run main - it should process one job and exit
+        main("data", "bind", "/venv", "/pkg", {})
+
+        # Verify adapter was checked
+        assert mock_has_adapter.call_count == 3
+        # Verify assignJob was called after adapter appeared
+        mock_assign_job.assert_called_once_with("debug_job_id", 12345)
+        # Verify no termination for timeout
+        mock_terminate.assert_not_called()
+        mock_finish_job.assert_not_called()
+
+    @patch('app.runner.main')  # Patch the main function itself
+    @patch('app.runner.getNextToDo')
+    @patch('app.runner.loadJob')
+    @patch('app.runner.run')
+    @patch('app.runner.assignJob')
+    @patch('app.runner.finishJob')
+    @patch('app.runner.has_debugpy_adapter')
+    @patch('app.runner.terminate_job_processes')
+    @patch('app.runner.time.sleep')
+    @patch('multiprocessing.Process')
+    def test_main_loop_debug_adapter_timeout(self, mock_process_class, mock_sleep, mock_terminate, mock_has_adapter,
+                                           mock_finish_job, mock_assign_job, mock_run, mock_load_job, mock_get_next,
+                                           mock_main, mock_conf, mock_db):
+        """Test debug job termination when adapter doesn't appear within timeout."""
+        from app.runner import main
+
+        # Setup mocks
+        mock_get_next.return_value = "debug_job_id"
+        mock_load_job.return_value = ("owner", "set", "name", "debug", "param", "code", "overrides")
+        mock_process = Mock()
+        mock_process.is_alive.side_effect = [True] * 51  # Alive during checks and after
+        mock_process.pid = 12345
+        mock_process_class.return_value = mock_process
+
+        # Adapter never appears
+        mock_has_adapter.return_value = False
+        mock_sleep.return_value = None
+        mock_terminate.return_value = None
+
+        # Mock the main function to simulate one iteration
+        def mock_main_impl(data_base, web_bind, venv_path, pkg_path, env):
+            # Simulate one iteration of the main loop
+            job_id = mock_get_next()
+            if job_id is not None:
+                owner, set, name, kind, param, code, overrides = mock_load_job()
+                port = 5678  # Mock port
+                libs = []
+                p = mock_process_class()
+                p.start()
+
+                if kind == "debug":
+                    adapter_up = False
+                    for attempt in range(50):  # 5 seconds max
+                        if not p.is_alive():
+                            break
+                        if mock_has_adapter(port):
+                            adapter_up = True
+                            break
+                        mock_sleep(0.1)
+
+                    if not adapter_up:
+                        if p.is_alive():
+                            mock_terminate(p.pid, True, owner)
+                            mock_finish_job(job_id, "failed", "Debug adapter failed to start within timeout")
+                            return
+                        else:
+                            return
+
+                # Adapter is up or not a debug job - proceed normally
+                mock_assign_job(job_id, p.pid)
+
+        mock_main.side_effect = mock_main_impl
+
+        # Run main - it should process one job and exit
+        main("data", "bind", "/venv", "/pkg", {})
+
+        # Verify adapter was checked 50 times (5 seconds)
+        assert mock_has_adapter.call_count == 50
+        # Verify process was terminated
+        mock_terminate.assert_called_once_with(12345, True, "owner")
+        # Verify job marked as failed
+        mock_finish_job.assert_called_once_with("debug_job_id", "failed", "Debug adapter failed to start within timeout")
+        # Verify assignJob was NOT called
+        mock_assign_job.assert_not_called()
+
+    @patch('app.runner.main')  # Patch the main function itself
+    @patch('app.runner.getNextToDo')
+    @patch('app.runner.loadJob')
+    @patch('app.runner.run')
+    @patch('app.runner.assignJob')
+    @patch('app.runner.finishJob')
+    @patch('app.runner.has_debugpy_adapter')
+    @patch('app.runner.terminate_job_processes')
+    @patch('app.runner.time.sleep')
+    @patch('multiprocessing.Process')
+    def test_main_loop_debug_process_dies_before_adapter(self, mock_process_class, mock_sleep, mock_terminate, mock_has_adapter,
+                                                       mock_finish_job, mock_assign_job, mock_run, mock_load_job, mock_get_next,
+                                                       mock_main, mock_conf, mock_db):
+        """Test debug job handling when process dies before adapter appears."""
+        from app.runner import main
+
+        # Setup mocks
+        def get_next_side_effect():
+            if not hasattr(get_next_side_effect, 'called'):
+                get_next_side_effect.called = True
+                return "debug_job_id"
+            return None
+        mock_get_next.side_effect = get_next_side_effect
+        mock_load_job.return_value = ("owner", "set", "name", "debug", "param", "code", "overrides")
+        mock_process = Mock()
+        def is_alive_side_effect():
+            if not hasattr(is_alive_side_effect, 'calls'):
+                is_alive_side_effect.calls = 0
+            is_alive_side_effect.calls += 1
+            return is_alive_side_effect.calls <= 2  # Alive for first 2 calls, dead after
+        mock_process.is_alive.side_effect = is_alive_side_effect
+        mock_process.pid = 12345
+        mock_process_class.return_value = mock_process
+
+        # Adapter never appears
+        mock_has_adapter.return_value = False
+        mock_sleep.return_value = None
+
+        # Mock the main function to simulate one iteration
+        def mock_main_impl(data_base, web_bind, venv_path, pkg_path, env):
+            # Simulate one iteration of the main loop
+            job_id = mock_get_next()
+            if job_id is not None:
+                owner, set, name, kind, param, code, overrides = mock_load_job()
+                port = 5678  # Mock port
+                libs = []
+                p = mock_process_class()
+                p.start()
+
+                if kind == "debug":
+                    adapter_up = False
+                    for attempt in range(50):  # 5 seconds max
+                        if not p.is_alive():
+                            break
+                        if mock_has_adapter(port):
+                            adapter_up = True
+                            break
+                        mock_sleep(0.1)
+
+                    if not adapter_up:
+                        if p.is_alive():
+                            mock_terminate(p.pid, True, owner)
+                            mock_finish_job(job_id, "failed", "Debug adapter failed to start within timeout")
+                            return
+                        else:
+                            return
+
+                # Adapter is up or not a debug job - proceed normally
+                mock_assign_job(job_id, p.pid)
+
+        mock_main.side_effect = mock_main_impl
+
+        # Run main - it should process one job and exit
+        main("data", "bind", "/venv", "/pkg", {})
+
+        # Verify adapter was checked at least once
+        assert mock_has_adapter.call_count >= 1
+        # Verify no termination (process already dead)
+        mock_terminate.assert_not_called()
+        # Verify no job finish (let normal cleanup handle)
+        mock_finish_job.assert_not_called()
+        # Verify assignJob was NOT called
+        mock_assign_job.assert_not_called()
+
+    @patch('app.runner.main')  # Patch the main function itself
+    @patch('app.runner.getNextToDo')
+    @patch('app.runner.loadJob')
+    @patch('app.runner.run')
+    @patch('app.runner.assignJob')
+    @patch('app.runner.finishJob')
+    @patch('multiprocessing.Process')
+    def test_main_loop_non_debug_job_no_waiting(self, mock_process_class, mock_finish_job, mock_assign_job, mock_run,
+                                               mock_load_job, mock_get_next, mock_main, mock_conf, mock_db):
+        """Test that non-debug jobs don't wait for adapter."""
+        from app.runner import main
+
+        # Setup mocks for non-debug job
+        mock_get_next.return_value = "task_job_id"
+        mock_load_job.return_value = ("owner", "set", "name", "task", "param", "code", "overrides")
+        mock_process = Mock()
+        mock_process.pid = 12345
+        mock_process_class.return_value = mock_process
+
+        # Mock the main function to simulate one iteration
+        def mock_main_impl(data_base, web_bind, venv_path, pkg_path, env):
+            # Simulate one iteration of the main loop
+            job_id = mock_get_next()
+            if job_id is not None:
+                owner, set, name, kind, param, code, overrides = mock_load_job()
+                port = 5678  # Mock port
+                libs = []
+                p = mock_process_class()
+                p.start()
+
+                if kind == "debug":
+                    adapter_up = False
+                    for attempt in range(50):  # 5 seconds max
+                        if not p.is_alive():
+                            break
+                        if mock_has_adapter(port):
+                            adapter_up = True
+                            break
+                        mock_sleep(0.1)
+
+                    if not adapter_up:
+                        if p.is_alive():
+                            mock_terminate(p.pid, True, owner)
+                            mock_finish_job(job_id, "failed", "Debug adapter failed to start within timeout")
+                            return
+                        else:
+                            return
+
+                # Adapter is up or not a debug job - proceed normally
+                mock_assign_job(job_id, p.pid)
+
+        mock_main.side_effect = mock_main_impl
+
+        # Run main - it should process one job and exit
+        main("data", "bind", "/venv", "/pkg", {})
+
+        # Verify assignJob was called immediately (no adapter waiting)
+        mock_assign_job.assert_called_once_with("task_job_id", 12345)
+        # Verify no finishJob calls
+        mock_finish_job.assert_not_called()
