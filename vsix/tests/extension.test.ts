@@ -27,6 +27,7 @@ jest.mock('../src/services/DebugService', () => {
   const mockDebugService = jest.fn().mockImplementation(() => ({
     enqueueDebugJob: jest.fn().mockResolvedValue({ jobId: '123', port: 5678 }),
     getDebugPort: jest.fn().mockResolvedValue(5678),
+    getDebugHost: jest.fn().mockReturnValue('localhost'),
   }));
   // @ts-ignore
   mockDebugService.buildOverrides = jest.fn().mockReturnValue({ overrides: { 'testset::testname': 'print("test")' }, pathMappings: [] });

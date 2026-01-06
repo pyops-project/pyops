@@ -153,6 +153,13 @@
                     checkStatus();
                 });
 
+                document.addEventListener('keydown', function(e) {
+                    if(e.ctrlKey && e.key === 's') {
+                        e.preventDefault();
+                        save();
+                    }
+                });
+
                 save_draft();
                 refresh();
                 setTimeout(checkStatus, 1000);

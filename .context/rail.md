@@ -1,0 +1,3 @@
+- vsix test mock standardization
+- vsix route all API calls via API client
+- vsix clean up tests

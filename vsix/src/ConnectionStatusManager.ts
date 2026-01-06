@@ -1,5 +1,7 @@
 import * as vscode from 'vscode';
 
+import { AuthService } from './services/AuthService';
+
 export class ConnectionStatusManager {
     private statusBarItem: vscode.StatusBarItem | undefined;
 
@@ -38,10 +40,31 @@ export class ConnectionStatusManager {
                     isValid = true;
                     this.outputChannel.appendLine(`Status: Connected to ${serverUrl}`);
                 } else {
-                    this.statusBarItem.text = `$(circle-slash) PyOps: Failed (${response.status})`;
-                    this.statusBarItem.color = new vscode.ThemeColor('statusBarItem.errorForeground');
-                    this.statusBarItem.tooltip = `Connection failed (${response.status}). Check server, credentials, and network.`;
-                    this.outputChannel.appendLine(`Status: Failed to connect to ${serverUrl} (${response.status})`);
+                    if (response.status === 401) {
+                        this.outputChannel.appendLine('[AUTH] Invalid credentials (401), clearing stored password and prompting for new one.');
+                        await this.context.workspaceState.update('pyops.password', undefined);
+                        await AuthService.setupAuth(this.context, this.outputChannel);
+                        // retry
+                        const headers2 = this.getAuthHeaders(username, password);
+                        const response2 = await fetch(url, { headers: headers2 });
+                        if (response2.ok) {
+                            this.statusBarItem.text = `$(check) PyOps: Connected`;
+                            this.statusBarItem.color = new vscode.ThemeColor('statusBarItem.foreground');
+                            this.statusBarItem.tooltip = 'PyOps connected successfully.';
+                            isValid = true;
+                            this.outputChannel.appendLine(`Status: Connected to ${serverUrl}`);
+                        } else {
+                            this.statusBarItem.text = `$(circle-slash) PyOps: Failed (${response2.status})`;
+                            this.statusBarItem.color = new vscode.ThemeColor('statusBarItem.errorForeground');
+                            this.statusBarItem.tooltip = `Connection failed (${response2.status}). Check server, credentials, and network.`;
+                            this.outputChannel.appendLine(`Status: Failed to connect to ${serverUrl} (${response2.status})`);
+                        }
+                    } else {
+                        this.statusBarItem.text = `$(circle-slash) PyOps: Failed (${response.status})`;
+                        this.statusBarItem.color = new vscode.ThemeColor('statusBarItem.errorForeground');
+                        this.statusBarItem.tooltip = `Connection failed (${response.status}). Check server, credentials, and network.`;
+                        this.outputChannel.appendLine(`Status: Failed to connect to ${serverUrl} (${response.status})`);
+                    }
                 }
             } catch (error: unknown) {
                 const errorMessage = error instanceof Error ? error.message : String(error);

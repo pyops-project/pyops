@@ -238,7 +238,7 @@ def test_config_log_with_log_section(tmp_path):
     result = config.log()
     assert result["info"] == "/custom/info.log"
     assert result["loglevel"] == "debug"
-    assert result["access"] == "log/access.log"
+    assert "access" not in result  # No access if not in config
 
 def test_config_log_exception_in_update(tmp_path):
     from app.lib.files import Config
@@ -249,3 +249,63 @@ def test_config_log_exception_in_update(tmp_path):
     config = Config.init(str(conf_path))
     with pytest.raises(Exception):
         config.log()
+
+def test_config_log_no_log_section(tmp_path):
+    from app.lib.files import Config
+    mock_content = '{"data": {"jobs": "/test"}}'  # No "log" section
+    conf_path = tmp_path / "test.json"
+    with open(conf_path, "w") as f:
+        f.write(mock_content)
+    config = Config.init(str(conf_path))
+    result = config.log()
+    assert result == {"loglevel": "info"}
+    assert "info" not in result
+    assert "access" not in result
+
+def test_config_log_loglevel_only(tmp_path):
+    from app.lib.files import Config
+    mock_content = '{"log": {"loglevel": "debug"}}'
+    conf_path = tmp_path / "test.json"
+    with open(conf_path, "w") as f:
+        f.write(mock_content)
+    config = Config.init(str(conf_path))
+    result = config.log()
+    assert result == {"loglevel": "debug"}
+    assert "info" not in result
+    assert "access" not in result
+
+def test_config_log_access_only(tmp_path):
+    from app.lib.files import Config
+    mock_content = '{"log": {"access": "log/access.log"}}'
+    conf_path = tmp_path / "test.json"
+    with open(conf_path, "w") as f:
+        f.write(mock_content)
+    config = Config.init(str(conf_path))
+    result = config.log()
+    assert result["loglevel"] == "info"
+    assert result["access"] == "log/access.log"
+    assert "info" not in result
+
+def test_config_log_info_only(tmp_path):
+    from app.lib.files import Config
+    mock_content = '{"log": {"info": "log/info.log"}}'
+    conf_path = tmp_path / "test.json"
+    with open(conf_path, "w") as f:
+        f.write(mock_content)
+    config = Config.init(str(conf_path))
+    result = config.log()
+    assert result["loglevel"] == "info"
+    assert result["info"] == "log/info.log"
+    assert "access" not in result
+
+def test_config_log_full(tmp_path):
+    from app.lib.files import Config
+    mock_content = '{"log": {"info": "log/info.log", "access": "log/access.log", "loglevel": "debug"}}'
+    conf_path = tmp_path / "test.json"
+    with open(conf_path, "w") as f:
+        f.write(mock_content)
+    config = Config.init(str(conf_path))
+    result = config.log()
+    assert result["loglevel"] == "debug"
+    assert result["info"] == "log/info.log"
+    assert result["access"] == "log/access.log"

@@ -269,11 +269,12 @@ export async function activate(context: vscode.ExtensionContext) {
 
 
                     // Start debug attach
+                    const host = debugService.getDebugHost();
                     const config = {
                         name: `Attach PyOps ${set}::${name}`,
                         type: 'python',
                         request: 'attach',
-                        connect: { host: 'localhost', port: result.port },
+                        connect: { host, port: result.port },
                         pathMappings,
                         jobId: result.jobId
                     };
@@ -328,12 +329,13 @@ export async function activate(context: vscode.ExtensionContext) {
                 return;
             }
             outputChannel.appendLine(`Attaching to job ${debugJob.id} (${debugJob.set || '?'}::${debugJob.name || '?'}) at port ${port}`);
+            const host = debugService.getDebugHost();
             const config: vscode.DebugConfiguration = {
                 name: `Attach to PyOps Debug (${debugJob.set || 'unknown'}::${debugJob.name || 'unknown'})`,
                 type: 'python',
                 request: 'attach',
                 connect: {
-                    host: 'localhost',
+                    host,
                     port
                 },
                 justMyCode: false

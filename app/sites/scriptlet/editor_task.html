@@ -126,7 +126,7 @@
                         const d = await r.json();
                         console.debug("pull", d);
 
-                        if(["todo", "dequeued", "running", "cancel"].includes(d.state)) {
+                        if(["todo", "dequeued", "loading", "running", "cancel"].includes(d.state)) {
                             if(d.stdout)
                                 log(d.stdout.trim(), d.stderr ? d.stderr.trim() : "");
                             else
@@ -322,7 +322,14 @@
                 editor.on("change", ()=>{
                     editor_dirty = true;
                     checkStatus();
-                });              
+                });
+
+                document.addEventListener('keydown', function(e) {
+                    if(e.ctrlKey && e.key === 's') {
+                        e.preventDefault();
+                        save();
+                    }
+                });
 
                 save_draft();
                 refresh();

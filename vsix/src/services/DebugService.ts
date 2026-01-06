@@ -104,4 +104,15 @@ export class DebugService {
         this.outputChannel.appendLine(`[DEBUG getDebugPort] Success: ${port}`);
         return port;
     }
+
+    public getDebugHost(): string {
+        const pyopsConfig = vscode.workspace.getConfiguration('pyops');
+        const serverUrl = pyopsConfig.get('serverUrl') as string || 'http://localhost:8000';
+        try {
+            return new URL(serverUrl).hostname;
+        } catch {
+            this.outputChannel.appendLine(`[DEBUG getDebugHost] Invalid serverUrl ${serverUrl}, defaulting to localhost`);
+            return 'localhost';
+        }
+    }
 }

@@ -125,8 +125,8 @@ get(path) serves static files.
 
 Access-ConfLog:
 conf_log() provides log config from `app/lib/files.py`
-; accesses `etc/pyops.json`"log" with defaults {"access": "../log/access.log", "info": "../log/info.log", "loglevel": "info"}
-; used by `app/runner.py` main for logging setup.
+; accesses `etc/pyops.json`"log"; only includes "access" and "info" if explicitly set in config; always includes "loglevel" default "info"
+; used by `app/runner.py` main for logging setup; conditionally creates file handlers with makedirs; dual logs to stdout/stderr + files if configured.
 
 Global-Reload:
 Config supports dynamic reload on change.
@@ -485,7 +485,8 @@ Checks hasValidConfig() for serverUrl only.
 Status bar shows connection.
 Integrates Cline for code gen.
 DebugService: `src/services/DebugService.ts` provides buildOverrides (recursive FS walk local pyops/set/*.py) & enqueueDebugJob (API POST /job/item kind=debug)
-; used by PyOpsPythonDebugConfigProvider & pyops.startDebugJob
+; getDebugHost() parses hostname from pyops.serverUrl ; fallback localhost on invalid URL
+; used by PyOpsPythonDebugConfigProvider & pyops.startDebugJob & pyops.attachDebugJob
 ; unit tests `tests/services/debugService.test.ts` >90% coverage.
 
 Extension-Test:

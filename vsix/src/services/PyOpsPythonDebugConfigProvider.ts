@@ -64,11 +64,12 @@ export class PyOpsPythonDebugConfigProvider implements vscode.DebugConfiguration
         }
 
         // Return attach config
+        const host = this._debugService.getDebugHost();
         const debugConfig = {
             name: `Attach PyOps ${set}::${scriptlet}`,
             type: 'python',
             request: 'attach',
-            connect: { host: 'localhost', port },
+            connect: { host, port },
             path: uri.fsPath,
             pathMappings,
             jobId

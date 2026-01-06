@@ -113,3 +113,17 @@ def test_controller_proxy_path_exec_fail(client, mock_git_ops, mock_db):
         data = response.json()
         assert "error" in data
         assert "controller syntax error" in data["error"]
+
+def test_controller_proxy_preserves_query_path(client, mock_git_ops, mock_db):
+    # Test backward compatibility: preserves ?path= if present
+    with patch("app.lib.pyops.ServiceClient") as mock_service:
+        mock_instance = MagicMock()
+        mock_service.return_value = mock_instance
+        mock_instance.request.return_value = {"path_preserved": True}
+
+        response = client.get("/controller/testset/testname/?path=/custom&cmd=foo", headers={"X-User": "testuser"})
+        assert response.status_code == 200
+        mock_instance.request.assert_called_once()
+        params = mock_instance.request.call_args[0][0]
+        assert params["path"] == "/custom"
+        assert params["cmd"] == "foo"

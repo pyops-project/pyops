@@ -27,10 +27,14 @@ with open(os.path.join(project_root, "etc", "pyops.json"), "r") as file:
 bind = conf["web"]["bind"]
 workers = conf["web"]["worker"]
 timeout = conf["web"]["timeout"]
-if "access" in conf["log"] and conf["log"]["access"]:
-    accesslog = os.path.join(project_root, conf["log"]["access"])
-if "info" in conf["log"] and conf["log"]["info"]:
-    errorlog = os.path.join(project_root, conf["log"]["info"])
+if "access" in conf.get("log", {}) and conf["log"].get("access"):
+    access_path = os.path.join(project_root, conf["log"]["access"])
+    os.makedirs(os.path.dirname(access_path), exist_ok=True)
+    accesslog = access_path
+if "info" in conf.get("log", {}) and conf["log"].get("info"):
+    error_path = os.path.join(project_root, conf["log"]["info"])
+    os.makedirs(os.path.dirname(error_path), exist_ok=True)
+    errorlog = error_path
 loglevel = conf["log"]["loglevel"]
 capture_output = True
 

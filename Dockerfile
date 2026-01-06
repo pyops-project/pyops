@@ -6,7 +6,7 @@ RUN apt update && \
 
 # Python Base Requirements for PyOps
 RUN DEBIAN_FRONTEND=noninteractive apt -y install \
-        git python3 python3-pip python3-venv python3-virtualenv \
+        git python3 python3-pip python3-psutil python3-venv python3-virtualenv \
         python3-jedi python3-rich python3-requests \
         python3-zmq python3-msgpack python3-debugpy \
         gunicorn python3-gunicorn uvicorn python3-uvicorn python3-fastapi python3-bonsai \

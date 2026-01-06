@@ -505,6 +505,8 @@ def execute_job_code(compiled_param, compiled_code, compiled_libs, glob: dict, j
                     else:
                         error_msg = f"Failed after {max_retries} retries\n{traceback.format_exc()}"
                         print(error_msg, file=sys.stderr)  # Write to stderr for logging
+                        sys.stdout.flush()
+                        sys.stderr.flush()
                         q.put({"id": job_id, "state": "failed", "detail": error_msg})
                         break
         else:
@@ -518,6 +520,8 @@ def execute_job_code(compiled_param, compiled_code, compiled_libs, glob: dict, j
     except Exception:
         error_msg = f"Error executing {job_type} job {job_id}\n{traceback.format_exc()}"
         print(error_msg, file=sys.stderr)  # Write to stderr for logging
+        sys.stdout.flush()
+        sys.stderr.flush()
         q.put({"id": job_id, "state": "failed", "detail": error_msg})
 
 def run_debug_job(job_id: str, owner: str, set: str, name: str, param: str, code: str, libs: list[dict[str, str]], q: Queue, data_base: str, web_bind: str, venv_path: str, pkg_path: str, overrides: str | None, port: int):
@@ -850,16 +854,24 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
     log_conf = files.conf_log()
     level_str = log_conf["loglevel"]
     level = logging.DEBUG if level_str.lower() == "debug" else logging.INFO
-    info_path = log_conf["info"]
+    handlers = [logging.StreamHandler(sys.stdout)]
+    if "info" in log_conf:
+        info_path = log_conf["info"]
+        os.makedirs(os.path.dirname(info_path), exist_ok=True)
+        handlers.append(logging.FileHandler(info_path))
+    # Add stderr handler for warnings
+    stderr_handler = logging.StreamHandler(sys.stderr)
+    stderr_handler.setLevel(logging.WARNING)
+    handlers.append(stderr_handler)
     logging.basicConfig(
         level=level,
         format="%(asctime)s [%(name)s] %(levelname)s %(message)s",
-        handlers=[
-            logging.FileHandler(info_path),
-            logging.StreamHandler(sys.stdout)
-        ]
+        handlers=handlers
     )
-    logger.info("Runner logging configured: level=%s info=%s", level_str, info_path)
+    if "info" in log_conf:
+        logger.info("Runner logging configured: level=%s info=%s", level_str, info_path)
+    else:
+        logger.info("Runner logging configured: level=%s (no file logging)", level_str)
 
     os.environ = env
     killer = GracefulKiller()

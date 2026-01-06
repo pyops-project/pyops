@@ -7,4 +7,3 @@ pyrightconfig.json
 .cache
 /data/
 /pyops/
-/.context/

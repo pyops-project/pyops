@@ -1,6 +1,7 @@
 import { ConnectionStatusManager } from '../src/ConnectionStatusManager';
 
 jest.mock('vscode');
+jest.mock('../src/services/AuthService');
 
 // Mock fetch
 global.fetch = jest.fn();
@@ -32,11 +33,14 @@ describe('ConnectionStatusManager', () => {
     mockContext = {
       workspaceState: {
         get: jest.fn().mockReturnValue('password'),
+        update: jest.fn(),
       },
     };
     mockOutputChannel = {
       appendLine: jest.fn(),
     };
+    const mockAuthService = require('../src/services/AuthService');
+    mockAuthService.AuthService.setupAuth = jest.fn().mockResolvedValue(undefined);
     manager = new ConnectionStatusManager(mockContext, mockOutputChannel);
   });
 
@@ -157,6 +161,32 @@ describe('ConnectionStatusManager', () => {
       expect(global.fetch).toHaveBeenCalledWith('http://localhost:8000/', {
         headers: {},
       });
+    });
+
+    it('should handle 401 by clearing password, prompting, and connecting on retry', async () => {
+      (global.fetch as jest.Mock).mockResolvedValueOnce({ ok: false, status: 401 }).mockResolvedValueOnce({ ok: true });
+
+      await manager.update();
+
+      expect(mockContext.workspaceState.update).toHaveBeenCalledWith('pyops.password', undefined);
+      expect(require('../src/services/AuthService').AuthService.setupAuth).toHaveBeenCalledWith(mockContext, mockOutputChannel);
+      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith('[AUTH] Invalid credentials (401), clearing stored password and prompting for new one.');
+      expect(mockStatusBarItem.text).toBe('$(check) PyOps: Connected');
+      expect(global.fetch).toHaveBeenCalledTimes(2);
+      expect(require('vscode').commands.executeCommand).toHaveBeenCalledWith('setContext', 'pyops.hasValidConfig', true);
+    });
+
+    it('should handle 401 and show failed if retry also fails', async () => {
+      (global.fetch as jest.Mock).mockResolvedValueOnce({ ok: false, status: 401 }).mockResolvedValueOnce({ ok: false, status: 401 });
+
+      await manager.update();
+
+      expect(mockContext.workspaceState.update).toHaveBeenCalledWith('pyops.password', undefined);
+      expect(require('../src/services/AuthService').AuthService.setupAuth).toHaveBeenCalledWith(mockContext, mockOutputChannel);
+      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith('[AUTH] Invalid credentials (401), clearing stored password and prompting for new one.');
+      expect(mockStatusBarItem.text).toBe('$(circle-slash) PyOps: Failed (401)');
+      expect(global.fetch).toHaveBeenCalledTimes(2);
+      expect(require('vscode').commands.executeCommand).toHaveBeenCalledWith('setContext', 'pyops.hasValidConfig', false);
     });
 
     it('should throw error if statusBarItem not created', async () => {

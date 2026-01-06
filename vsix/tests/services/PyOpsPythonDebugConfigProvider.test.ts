@@ -6,7 +6,8 @@ jest.mock('path');
 
 jest.mock('../../src/services/DebugService', () => {
   const mockDebugService = jest.fn().mockImplementation(() => ({
-    enqueueDebugJob: jest.fn()
+    enqueueDebugJob: jest.fn(),
+    getDebugHost: jest.fn().mockReturnValue('localhost')
   }));
   // @ts-ignore
   mockDebugService.buildOverrides = jest.fn();

@@ -349,4 +349,30 @@ describe('DebugService', () => {
       }));
     });
   });
+
+  describe('getDebugHost', () => {
+    it('returns hostname from valid serverUrl', () => {
+      const mockConfigGet = require('vscode').workspace.getConfiguration().get as jest.Mock;
+      mockConfigGet.mockImplementationOnce((key: string) => key === 'serverUrl' ? 'http://example.com:8000' : mockConfigGet(key));
+      expect(service.getDebugHost()).toBe('example.com');
+      expect(mockOutputChannel.appendLine).not.toHaveBeenCalled();
+    });
+
+    it('logs warning and returns localhost for invalid serverUrl', () => {
+      const mockConfigGet = require('vscode').workspace.getConfiguration().get as jest.Mock;
+      mockConfigGet.mockImplementationOnce((key: string) => key === 'serverUrl' ? 'invalid' : mockConfigGet(key));
+      expect(service.getDebugHost()).toBe('localhost');
+      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith('[DEBUG getDebugHost] Invalid serverUrl invalid, defaulting to localhost');
+    });
+
+    it('uses default http://localhost:8000 if serverUrl not set', () => {
+      const mockConfigGet = require('vscode').workspace.getConfiguration().get as jest.Mock;
+      mockConfigGet.mockImplementationOnce((key: string) => {
+        if(key === 'serverUrl') return undefined;
+        return mockConfigGet(key);
+      });
+      expect(service.getDebugHost()).toBe('localhost');
+      expect(mockOutputChannel.appendLine).not.toHaveBeenCalled();
+    });
+  });
 });

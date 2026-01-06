@@ -244,7 +244,8 @@ async def controller_proxy(set: str, name: str, rest: str, request: Request):
 
         params = dict(request.query_params)
         params["type"] = request.method
-        params["path"] = f"/{rest}"
+        if "path" not in params:
+            params["path"] = f"/{rest}"
 
         body = await request.body()
         content_type = request.headers.get("content-type", "").lower()
