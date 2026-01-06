@@ -232,32 +232,22 @@ def controller(set: str, name: str):
             status_code=HTTP_200_OK
         )
     
-@app.get("/controller/{set}/{name}/q")
-def controller_get(set: str, name: str, request: Request):
+@app.api_route("/controller/{set}/{name}/{rest:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"])
+async def controller_proxy(set: str, name: str, rest: str, request: Request):
     try:
-        params = dict(request.query_params)
-        params["type"] = "GET"
-        
         glob = {}
         code = get_controller_code(set, name)
         exec(code, glob)
 
-        user = sanitize_owner(request.headers.get("X-User"))
+        user = sanitize_owner(request.headers.get("X-User", "anonymous"))
         s = pyops.ServiceClient(glob["set"], glob["service"], debug=glob.get("debug", False), owner=user)
-        return s.request(params)
-    except HTTPException:
-        raise
-    except Exception as ex:
-        logger.exception("Controller execution failed in GET: %s", ex)
-        return {"error": f"Controller execution failed: {str(ex)}"}
-    
-@app.delete("/controller/{set}/{name}/q")
-async def controller_delete(set: str, name: str, request: Request):
-    try:
+
+        params = dict(request.query_params)
+        params["type"] = request.method
+        params["path"] = f"/{rest}"
+
         body = await request.body()
         content_type = request.headers.get("content-type", "").lower()
-        params = dict(request.query_params)
-        params["type"] = "DELETE"
         if body:
             if "application/json" in content_type:
                 try:
@@ -281,108 +271,14 @@ async def controller_delete(set: str, name: str, request: Request):
         else:
             params["data"] = None
             params["data_type"] = "none"
-        
-        glob = {}
-        code = get_controller_code(set, name)
-        exec(code, glob)
 
-        user = sanitize_owner(request.headers.get("X-User"))
-        s = pyops.ServiceClient(glob["set"], glob["service"], debug=glob.get("debug", False), owner=user)
         return s.request(params)
     except HTTPException:
         raise
     except Exception as ex:
-        logger.exception("Controller execution failed in DELETE: %s", ex)
+        logger.exception("Controller proxy failed: %s", ex)
         return {"error": f"Controller execution failed: {str(ex)}"}
-    
-@app.put("/controller/{set}/{name}/q")
-async def controller_put(set: str, name: str, request: Request):
-    try:
-        body = await request.body()
-        content_type = request.headers.get("content-type", "").lower()
-        params = dict(request.query_params)
-        params["type"] = "PUT"
-        if body:
-            if "application/json" in content_type:
-                try:
-                    parsed = json.loads(body.decode('utf-8'))
-                    params["data"] = parsed
-                    params["data_type"] = "json"
-                except json.JSONDecodeError:
-                    params["data"] = body
-                    params["data_type"] = "binary"
-            elif "text/" in content_type:
-                try:
-                    text = body.decode('utf-8')
-                    params["data"] = text
-                    params["data_type"] = "text"
-                except UnicodeDecodeError:
-                    params["data"] = body
-                    params["data_type"] = "binary"
-            else:
-                params["data"] = body
-                params["data_type"] = "binary"
-        else:
-            params["data"] = None
-            params["data_type"] = "none"
-        
-        glob = {}
-        code = get_controller_code(set, name)
-        exec(code, glob)
 
-        user = sanitize_owner(request.headers.get("X-User"))
-        s = pyops.ServiceClient(glob["set"], glob["service"], debug=glob.get("debug", False), owner=user)
-        return s.request(params)
-    except HTTPException:
-        raise
-    except Exception as ex:
-        logger.exception("Controller execution failed in PUT: %s", ex)
-        return {"error": f"Controller execution failed: {str(ex)}"}
-    
-@app.post("/controller/{set}/{name}/q")
-async def controller_post(set: str, name: str, request: Request):
-    try:
-        body = await request.body()
-        content_type = request.headers.get("content-type", "").lower()
-        params = dict(request.query_params)
-        params["type"] = "POST"
-        if body:
-            if "application/json" in content_type:
-                try:
-                    parsed = json.loads(body.decode('utf-8'))
-                    params["data"] = parsed
-                    params["data_type"] = "json"
-                except json.JSONDecodeError:
-                    params["data"] = body
-                    params["data_type"] = "binary"
-            elif "text/" in content_type:
-                try:
-                    text = body.decode('utf-8')
-                    params["data"] = text
-                    params["data_type"] = "text"
-                except UnicodeDecodeError:
-                    params["data"] = body
-                    params["data_type"] = "binary"
-            else:
-                params["data"] = body
-                params["data_type"] = "binary"
-        else:
-            params["data"] = None
-            params["data_type"] = "none"
-        
-        glob = {}
-        code = get_controller_code(set, name)
-        exec(code, glob)
-
-        user = sanitize_owner(request.headers.get("X-User"))
-        s = pyops.ServiceClient(glob["set"], glob["service"], debug=glob.get("debug", False), owner=user)
-        return s.request(params)
-    except HTTPException:
-        raise
-    except Exception as ex:
-        logger.exception("Controller execution failed in POST: %s", ex)
-        return {"error": f"Controller execution failed: {str(ex)}"}
-    
 @app.get("/menu")
 async def menu():
     """

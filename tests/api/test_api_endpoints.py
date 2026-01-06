@@ -499,3 +499,40 @@ def test_debug_port(mock_client):
         resp = mock_client.get("/debug/port", headers={"X-User": "missing"})
         assert resp.status_code == 400
         assert resp.json()["detail"] == "No debug_port configured for user 'missing'"
+
+def test_controller_path_forwarding(mock_client, mock_controller_glob):
+    # Test that additional path is forwarded in ZMQ msg
+    with patch("app.lib.pyops.ServiceClient") as mock_service:
+        mock_instance = MagicMock()
+        mock_service.return_value = mock_instance
+        mock_instance.request.return_value = {"path": "/v1/chat/completions"}
+
+        # Test GET with subpath
+        response = mock_client.get("/controller/testset/testname/v1/chat/completions?param=value", headers={"X-User": "testuser"})
+        assert response.status_code == 200
+        mock_instance.request.assert_called_once()
+        params = mock_instance.request.call_args[0][0]
+        assert params["path"] == "/v1/chat/completions"
+        assert params["type"] == "GET"
+        assert params["param"] == "value"  # query param
+
+        # Test POST with body and subpath
+        json_data = {"model": "gpt-4"}
+        mock_instance.request.reset_mock()
+        response = mock_client.post("/controller/testset/testname/v1/chat/completions", json=json_data, headers={"X-User": "testuser"})
+        assert response.status_code == 200
+        mock_instance.request.assert_called_once()
+        params = mock_instance.request.call_args[0][0]
+        assert params["path"] == "/v1/chat/completions"
+        assert params["type"] == "POST"
+        assert params["data"] == json_data
+        assert params["data_type"] == "json"
+
+        # Test empty rest
+        mock_instance.request.reset_mock()
+        response = mock_client.get("/controller/testset/testname/", headers={"X-User": "testuser"})
+        assert response.status_code == 200
+        mock_instance.request.assert_called_once()
+        params = mock_instance.request.call_args[0][0]
+        assert params["path"] == "/"
+        assert params["type"] == "GET"

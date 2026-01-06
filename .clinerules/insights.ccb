@@ -204,7 +204,7 @@ Control(web_bind) wraps job/schedule controls
 Global-Attributes:
 Control available in scriptlet glob for API calls like `control.job.list()`.
 Listener in services for inbound from controllers/UI.
-Msg format: {"type": "GET/POST", "cmd": query, "data": body, "data_type": "json/text/binary/none"}.
+Msg format: {"type": "GET/POST", "path": str, "cmd": query, "data": body, "data_type": "json/text/binary/none"}.
 TERM signals shutdown.
 Uses msgpack for serialization.
 ServiceListener.poll uses zmq.Poller non-blocking timeout=0.
@@ -384,19 +384,20 @@ root() serves root.html
 ; favicon() serves favicon.ico
 ; file(path) serves static /files/{path} like ace.js bootstrap.css.
 
-Controller-Routes:
+Controller-Proxy:
 controller(set, name) renders UI via get_controller_code & get_view_content
 ; loads controller.py globals (set service debug head menu body name)
 ; injects {{SET}} {{NAME}} in views.
-controller_get/set() handles GET /controller/{set}/{name}
-; post/put/delete forward to service via ZMQ.
+controller_proxy(set, name, rest:path) handles all HTTP methods /controller/{set}/{name}/{rest:path}
+; exec controller.py to get service
+; sends ZMQ msg with type, path="/{rest}", query_params, body/data_type to service.
 menu() lists controllers from DB.
 
 View-Rendering:
 get_controller_code(set, name, debug) reads controller.py
 ; get_view_content(set, name, debug) reads html views (head menu body).
 Dynamic UI uses Bootstrap & Ace & jQuery from /files/
-; controllers route requests to /q?cmd= or POST data.
+; controllers proxy requests to /{rest:path} with path forwarded to service.
 
 Global-Attributes:
 FastAPI uses async routes.
