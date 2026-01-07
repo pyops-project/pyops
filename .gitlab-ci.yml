@@ -32,9 +32,27 @@ test:
       when: always
     - when: manual
 
+test:vsix:
+  stage: test
+  cache:
+    paths:
+      - vsix/node_modules/
+  before_script:
+    - apt-get update
+    - apt-get install -y nodejs npm
+    - npm config set cache $NPM_CACHE_DIR
+  script:
+    - cd vsix
+    - npm ci
+    - npm run test
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"'
+      when: always
+    - when: manual
+
 build:
   stage: build
-  needs: [test]
+  needs: [test, test:vsix]
   cache:
     paths:
       - vsix/node_modules/
