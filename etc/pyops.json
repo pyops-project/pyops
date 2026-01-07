@@ -15,8 +15,6 @@
         "git_pull_interval": 60
     },
     "log": {
-        "access": "log/access.log",
-        "info": "log/info.log",
         "loglevel": "debug"
     },
     "users": {

@@ -88,12 +88,20 @@ services:
         "timeout": 300
     },
     "data": {
-        "jobs": "../data/jobs"
+        "jobs": "data/jobs",
+        "git": "data/git",
+        "db": "data/app.db"
+    },
+    "runner": {
+        "venv": "data/venv",
+        "pkg": "data/pkg",
+        "git_pull_interval": 60
     },
     "log": {
-        "access": "../log/access.log",
-        "info": "../log/info.log",
         "loglevel": "debug"
+    },
+    "users": {
+        "someuser": {"debug_port": 15678}
     }
 }
 ```
