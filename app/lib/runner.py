@@ -223,7 +223,7 @@ def loadJob(id: str):
             raise Exception(f"Scriptlet {job.set}::{job.name} not existing")
         filename = files_list[0]
         type_ = git.infer_type_from_filename(filename)
-        committed = kind != "debug" # if debug job prefer unstaged changes
+        committed = job.kind != "debug" # if debug job prefer unstaged changes
         code = git.read_content(repo, job.name, type_, committed=committed)
 
         job.state = "running"

@@ -591,3 +591,74 @@ class TestTerminateJobProcesses:
         terminate_job_processes("job_id", 123, False, 'owner')
         mock_conf_users.assert_not_called()
         mock_postTerm.assert_called_once_with("job_id", killed=False)
+
+
+class TestLibRunnerLoad:
+    def test_load_lib_task_committed(self, mock_git_ops):
+        from app.lib.runner import loadLib
+        with patch('os.listdir', return_value=['lib.task.py']):
+            mock_git_ops.infer_type_from_filename.return_value = 'task'
+            result = loadLib("testset", "lib", "task")
+            mock_git_ops.read_content.assert_called_once_with('data/git/testset', 'lib', 'task', committed=True)
+
+    def test_load_lib_debug_uncommitted(self, mock_git_ops):
+        from app.lib.runner import loadLib
+        with patch('os.listdir', return_value=['lib.task.py']):
+            mock_git_ops.infer_type_from_filename.return_value = 'task'
+            result = loadLib("testset", "lib", "debug")
+            mock_git_ops.read_content.assert_called_once_with('data/git/testset', 'lib', 'task', committed=False)
+
+    def test_load_lib_no_file(self, mock_git_ops):
+        from app.lib.runner import loadLib
+        with patch('os.listdir', return_value=[]):
+            with pytest.raises(Exception, match="Library testset::lib not existing"):
+                loadLib("testset", "lib", "task")
+
+    def test_load_job_success(self, mock_db, mock_git_ops):
+        from app.lib.runner import loadJob
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        from sqlalchemy.orm import Session
+        with Session(get_db_engine()) as session:
+            job = Job(id="testid", owner="owner", set="testset", name="testname", kind="task", param="param", state="dequeued")
+            session.add(job)
+            session.commit()
+        with patch('os.listdir', return_value=['testname.task.py']):
+            mock_git_ops.infer_type_from_filename.return_value = "task"
+            result = loadJob("testid")
+            with Session(get_db_engine()) as session:
+                updated = session.get(Job, "testid")
+                assert updated.state == "running"
+                assert updated.start is not None
+
+    def test_load_job_debug_uncommitted(self, mock_db, mock_git_ops):
+        from app.lib.runner import loadJob
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        from sqlalchemy.orm import Session
+        with Session(get_db_engine()) as session:
+            job = Job(id="testid", owner="owner", set="testset", name="testname", kind="debug", param="param", state="dequeued")
+            session.add(job)
+            session.commit()
+        with patch('os.listdir', return_value=['testname.task.py']):
+            mock_git_ops.infer_type_from_filename.return_value = "task"
+            result = loadJob("testid")
+            mock_git_ops.read_content.assert_called_with('data/git/testset', 'testname', 'task', committed=False)
+
+    def test_load_job_no_job(self, mock_db, mock_git_ops):
+        from app.lib.runner import loadJob
+        with pytest.raises(Exception, match="Job testid not existing"):
+            loadJob("testid")
+
+    def test_load_job_no_file(self, mock_db, mock_git_ops):
+        from app.lib.runner import loadJob
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        from sqlalchemy.orm import Session
+        with Session(get_db_engine()) as session:
+            job = Job(id="testid", owner="owner", set="testset", name="testname", kind="task", param="param", state="dequeued")
+            session.add(job)
+            session.commit()
+        with patch('os.listdir', return_value=[]):
+            with pytest.raises(Exception, match="Scriptlet testset::testname not existing"):
+                loadJob("testid")

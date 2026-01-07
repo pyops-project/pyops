@@ -309,3 +309,21 @@ def test_config_log_full(tmp_path):
     assert result["loglevel"] == "debug"
     assert result["info"] == "log/info.log"
     assert result["access"] == "log/access.log"
+
+
+def test_conf_users_no_init():
+    from app.lib import files
+    orig_config = files.config
+    files.config = None
+    try:
+        with pytest.raises(ValueError, match="Config not initialized"):
+            files.conf_users()
+    finally:
+        files.config = orig_config
+
+
+def test_config_users_uninit():
+    from app.lib.files import Config
+    config = Config()
+    with pytest.raises(ValueError, match="Config not initialized"):
+        config.users()

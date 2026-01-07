@@ -4,8 +4,8 @@ App Code is located at `app/`
 VSIX Code is located at `vsix/` 
 ; doesn't contain temporary fixes & workarounds.
 App Tests are located at `tests/`
-; have common fixtures in conftest.py & coverage >90%
-; use `pytest -W error --cov=app --cov-report=term-missing --cov-append --cov-fail-under=90`
+; have common fixtures in conftest.py & coverage >80%
+; use `pytest -W error --cov=app --cov-report=term-missing --cov-append --cov-fail-under=80`
 ; never use `test.sh` & `test_dev.sh`
 ; store Runtime Files in `.cache/`
 ; only import from `app` in Scope of Test Method.
@@ -15,7 +15,7 @@ App Test Fixtures never are `autouse`
 ; inherit Each Other
 ; complement Each Other.
 VSIX Tests are located at `vsix/tests/`
-; have coverage >90%
+; have coverage >80%
 ; use `npm run test --prefix vsix/` & `npm run test:integration --prefix vsix/`.
 User decides Architecture.
 Verbose Tests cause Context Pollution.

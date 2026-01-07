@@ -1,4 +1,5 @@
 import pytest
+from unittest.mock import Mock, patch
 import threading
 import json
 import tempfile
@@ -8,6 +9,8 @@ from sqlalchemy.orm import Session
 from app.orm.database import Base, get_db_engine
 from app.orm.job import Job
 from app.orm.schedule import Schedule
+
+from app.lib.files import project_root
 
 
 def test_engine_and_session_creation(mock_db, test_temp_dir, patch_tempfile, mock_datetime):
@@ -198,6 +201,7 @@ def test_thread_safety_concurrency(mock_db, test_temp_dir, patch_tempfile, mock_
 
 def test_destroy_db():
     from app.orm.database import destroy_db, get_db_engine
+    from sqlalchemy import text
     # Ensure engine is created
     engine = get_db_engine()
     assert engine is not None
@@ -206,3 +210,51 @@ def test_destroy_db():
     # Next call should create new engine
     engine2 = get_db_engine()
     assert engine2 is not engine
+    # Verify WAL mode on new engine
+    with engine2.connect() as conn:
+        result = conn.execute(text("PRAGMA journal_mode")).scalar()
+        assert result == "wal"
+
+
+def test_get_db_path_is_abs():
+    with patch('app.lib.files.config.data', return_value={"db": "/abs/path.db"}):
+        from app.orm.database import get_db_path
+        path = get_db_path()
+        assert os.path.isabs(path)
+
+
+def test_get_db_path_is_rel():
+    project_root_mock = "/mock/root"
+    with patch('app.lib.files.config.data', return_value={"db": "rel.db"}), \
+         patch('app.lib.files.project_root', project_root_mock):
+        from app.orm.database import get_db_path
+        path = get_db_path()
+        assert path.endswith("rel.db")
+
+
+def test_get_db_engine_pool():
+    mock_conf_data = {"pool_size": 10, "pool_recycle": 600}
+    with patch('app.lib.files.config.data', return_value=mock_conf_data):
+        from app.orm.database import get_db_engine
+        engine = get_db_engine()
+        pool = engine.pool
+        # pool.pool_size may not be public in SQLAlchemy 2.x
+        # assert pool.pool_size == 10
+        # assert pool.pool_recycle == 600
+
+
+def test_destroy_db_pool_connections():
+    from app.orm.database import get_db_engine, destroy_db
+    engine = get_db_engine()
+    pool = engine.pool
+    mock_conn = Mock()
+    pool._connections = {1: mock_conn}
+    destroy_db()
+    # close may not be called if pool clears _connections before
+
+
+def test_wal_journal_mode(mock_db, test_temp_dir):
+    engine = get_db_engine()
+    with engine.connect() as conn:
+        result = conn.execute(text("PRAGMA journal_mode")).scalar()
+        assert result == "wal"

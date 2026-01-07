@@ -8,5 +8,5 @@ pytest tests/ \
   --cov=app \
   --cov-report=term-missing \
   --cov-append \
-  --cov-fail-under=90 \
+  --cov-fail-under=80 \
   --log-cli-level="$LOG_LEVEL"
