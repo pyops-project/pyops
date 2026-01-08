@@ -1,16 +1,16 @@
 import { PyOpsPythonDebugConfigProvider } from '../../src/services/PyOpsPythonDebugConfigProvider';
 import { DebugService } from '../../src/services/DebugService';
+import { createMockVscodeWindow } from '../utils/helpers';
 
 jest.mock('vscode');
-jest.mock('path');
+jest.mock('path', () => require('../utils/helpers').pathMockFactory());
 
 jest.mock('../../src/services/DebugService', () => {
   const mockDebugService = jest.fn().mockImplementation(() => ({
     enqueueDebugJob: jest.fn(),
     getDebugHost: jest.fn().mockReturnValue('localhost')
   }));
-  // @ts-ignore
-  mockDebugService.buildOverrides = jest.fn();
+  (mockDebugService as any).buildOverrides = jest.fn();
   return { DebugService: mockDebugService };
 });
 
@@ -34,6 +34,7 @@ describe('PyOpsPythonDebugConfigProvider', () => {
     let enqueueDebugJobSpy: jest.SpyInstance;
 
     beforeEach(() => {
+        createMockVscodeWindow();
         const mockOutputChannel = {
             appendLine: jest.fn(),
             name: 'PyOps',
@@ -62,12 +63,7 @@ describe('PyOpsPythonDebugConfigProvider', () => {
 
         (require('vscode').workspace as any).workspaceFolders = [{ uri: { fsPath: '/workspace' } }];
         (require('vscode').window as any).activeTextEditor = { document: { languageId: 'python', uri: { fsPath: '/workspace/pyops/set1/task/script.py' } } };
-        (require('vscode').workspace.getConfiguration as jest.Mock).mockReturnValue({
-            get: jest.fn((key: string) => {
-                if (key === 'localPyopsDir') return 'pyops';
-                return undefined;
-            })
-        });
+        require('../utils/helpers').setupConfigMock({localPyopsDir: 'pyops'});
     });
 
     afterEach(() => {
@@ -156,12 +152,7 @@ describe('PyOpsPythonDebugConfigProvider', () => {
             document: { languageId: 'python', uri: { fsPath: '/workspace/pyops/set1/task/script.py' } }
         };
 
-        (require('vscode').workspace.getConfiguration as jest.Mock).mockReturnValue({
-            get: jest.fn((key: string) => {
-                if (key === 'localPyopsDir') return 'pyops';
-                return undefined;
-            })
-        });
+        require('../utils/helpers').setupConfigMock({localPyopsDir: 'pyops'});
 
         const mockOverrides = { 'set1::override1': 'code1', 'set1::override2': 'code2' };
         const mockPathMappings = [{ localRoot: '${workspaceFolder}/pyops', remoteRoot: './.debug/src' }];
@@ -190,13 +181,6 @@ describe('PyOpsPythonDebugConfigProvider', () => {
             document: { languageId: 'python', uri: { fsPath: '/workspace/pyops/set1/task/script.py' } }
         };
 
-        (require('vscode').workspace.getConfiguration as jest.Mock).mockReturnValue({
-            get: jest.fn((key: string) => {
-                if (key === 'localPyopsDir') return 'pyops';
-                return undefined;
-            })
-        });
-
         buildOverridesSpy.mockReturnValue({ overrides: {}, pathMappings: [] });
         enqueueDebugJobSpy.mockResolvedValue({ jobId: undefined, port: 0 });
 
@@ -213,12 +197,7 @@ describe('PyOpsPythonDebugConfigProvider', () => {
             document: { languageId: 'python', uri: { fsPath: '/workspace/custom/set1/task/script.py' } }
         };
 
-        (require('vscode').workspace.getConfiguration as jest.Mock).mockReturnValue({
-            get: jest.fn((key: string) => {
-                if (key === 'localPyopsDir') return 'custom';
-                return undefined;
-            })
-        });
+        require('../utils/helpers').setupConfigMock({localPyopsDir: 'custom'});
 
         buildOverridesSpy.mockReturnValue({ overrides: {}, pathMappings: [] });
         enqueueDebugJobSpy.mockResolvedValue({ jobId: 'job456', port: 9999 });

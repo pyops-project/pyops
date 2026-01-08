@@ -2,14 +2,18 @@ import { ScriptletService } from '../../src/services/ScriptletService';
 import { ApiClient } from '../../src/apiClient';
 import { ManagerTreeDataProvider, ScriptletTreeItem } from '../../src/managerTreeProvider';
 
+import { createMockVscodeWindow, createMockApiClient, createMockTreeProvider } from '../utils/helpers';
+
 jest.mock('vscode');
-jest.mock('../../src/apiClient');
-jest.mock('../../src/managerTreeProvider');
-jest.mock('fs');
-jest.mock('path');
 jest.mock('../../src/utils');
+jest.mock('../../src/apiClient', () => ({ ApiClient: jest.fn() }));
 
 global.fetch = jest.fn();
+
+jest.mock('fs', () => require('../utils/helpers').fsMockFactory());
+jest.mock('path', () => require('../utils/helpers').pathMockFactory());
+
+
 
 const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation();
 
@@ -27,15 +31,8 @@ describe('ScriptletService', () => {
     const mockUtils = require('../../src/utils');
 
     mockVscode.workspace.workspaceFolders = [{ uri: { fsPath: '/workspace' } }];
-    mockVscode.workspace.getConfiguration = jest.fn().mockReturnValue({
-      get: jest.fn((key) => {
-        if (key === 'localPyopsDir') return 'pyops';
-        return undefined;
-      }),
-    });
-    mockVscode.window.showWarningMessage = jest.fn();
-    mockVscode.window.showInformationMessage = jest.fn();
-    mockVscode.window.showErrorMessage = jest.fn();
+    require('../utils/helpers').setupConfigMock({localPyopsDir: 'pyops'});
+    createMockVscodeWindow();
     mockVscode.commands.executeCommand = jest.fn();
     mockVscode.workspace.openTextDocument = jest.fn().mockResolvedValue({});
     mockVscode.window.showTextDocument = jest.fn();
@@ -49,14 +46,9 @@ describe('ScriptletService', () => {
     mockPath.join.mockImplementation((...args: string[]) => args.join('/'));
     mockPath.dirname.mockImplementation((path: string) => path.substring(0, path.lastIndexOf('/')));
 
-    mockApiClient = new ApiClient({} as any) as jest.Mocked<ApiClient>;
-    mockApiClient.getHeaders.mockResolvedValue({ 'Authorization': 'Basic test' });
-    mockApiClient.getServerUrl.mockReturnValue('http://localhost:8000');
-    (ApiClient as jest.Mocked<typeof ApiClient>).hasValidConfigStatic = jest.fn().mockReturnValue(true);
+    mockApiClient = createMockApiClient(ApiClient, { headers: { 'Authorization': 'Basic test' }, serverUrl: 'http://localhost:8000' }) as any;
 
-    const mockApiClientForProvider = {} as any;
-    mockManagerTreeProvider = new ManagerTreeDataProvider({} as any, {} as any, mockApiClientForProvider) as jest.Mocked<ManagerTreeDataProvider>;
-    mockManagerTreeProvider.refresh = jest.fn();
+    mockManagerTreeProvider = createMockTreeProvider('manager');
 
     service = new ScriptletService(mockApiClient, mockManagerTreeProvider);
   });

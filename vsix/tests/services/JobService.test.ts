@@ -1,10 +1,10 @@
 import { JobService } from '../../src/services/JobService';
 import { ApiClient } from '../../src/apiClient';
 import { JobsTreeDataProvider, JobTreeItem } from '../../src/jobsTreeProvider';
+import { createMockOutputChannel, createMockVscodeWindow, createMockApiClient, createMockTreeProvider } from '../utils/helpers';
 
 jest.mock('vscode');
-jest.mock('../../src/apiClient');
-jest.mock('../../src/jobsTreeProvider');
+jest.mock('../../src/apiClient', () => ({ ApiClient: jest.fn() }));
 
 global.fetch = jest.fn();
 
@@ -22,25 +22,14 @@ describe('JobService', () => {
     jest.clearAllMocks();
     fetchCallCount = 0;
     const mockVscode = require('vscode');
-
-    mockVscode.window.showSaveDialog = jest.fn();
+    createMockVscodeWindow();
     mockVscode.workspace = { fs: { writeFile: jest.fn() } };
 
-    mockApiClient = new ApiClient({} as any) as jest.Mocked<ApiClient>;
-    mockApiClient.getHeaders.mockResolvedValue({ 'Authorization': 'Basic test' });
-    mockApiClient.getServerUrl.mockReturnValue('http://localhost:8000');
+    mockApiClient = createMockApiClient(ApiClient, { headers: { 'Authorization': 'Basic test' } }) as any;
 
-    const mockApiClientForProvider = {} as any;
-    mockJobsTreeProvider = new JobsTreeDataProvider({} as any, mockApiClientForProvider) as jest.Mocked<JobsTreeDataProvider>;
-    mockJobsTreeProvider.refresh = jest.fn();
+    mockJobsTreeProvider = createMockTreeProvider('jobs');
 
-    mockJobViewOutputChannel = {
-      clear: jest.fn(),
-      show: jest.fn(),
-      appendLine: jest.fn(),
-      append: jest.fn(),
-      dispose: jest.fn(),
-    };
+    mockJobViewOutputChannel = createMockOutputChannel();
 
     service = new JobService(mockApiClient, mockJobsTreeProvider, mockJobViewOutputChannel);
   });
@@ -78,10 +67,10 @@ describe('JobService', () => {
 
       expect(global.fetch).toHaveBeenCalledWith('http://localhost:8000/scriptlet/job/cancel?id=job1', {
         headers: { 'Authorization': 'Basic test' },
-      });
+  });
       expect(mockJobsTreeProvider.refresh).toHaveBeenCalled();
       expect(mockVscode.window.showInformationMessage).toHaveBeenCalledWith('Canceled job job1');
-    });
+});
 
     it('handles cancel failure', async () => {
       const mockVscode = require('vscode');
@@ -116,11 +105,11 @@ describe('JobService', () => {
       expect(mockVscode.window.showSaveDialog).toHaveBeenCalledWith({
         defaultUri: mockVscode.Uri.file('job1.zip'),
         filters: { 'ZIP Files': ['zip'] },
-      });
+  });
       expect(mockVscode.workspace.fs.writeFile).toHaveBeenCalled();
       expect(mockVscode.window.showInformationMessage).toHaveBeenCalledWith('Downloaded workspace for job job1 to /path/to/job1.zip');
     });
-  });
+});
 
   describe('deleteJob', () => {
     it('deletes job after confirmation', async () => {

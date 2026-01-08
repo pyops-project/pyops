@@ -22,13 +22,7 @@ describe('ConnectionStatusManager', () => {
       show: jest.fn(),
     };
     (require('vscode').window.createStatusBarItem as jest.Mock).mockReturnValue(mockStatusBarItem);
-    (require('vscode').workspace.getConfiguration as jest.Mock).mockReturnValue({
-      get: jest.fn((key: string) => {
-        if (key === 'serverUrl') return 'http://localhost:8000';
-        if (key === 'username') return 'testuser';
-        return '';
-      }),
-    });
+    require('./utils/helpers').setupConfigMock();
     (require('vscode').commands.executeCommand as jest.Mock).mockResolvedValue(undefined);
     mockContext = {
       workspaceState: {
@@ -62,9 +56,7 @@ describe('ConnectionStatusManager', () => {
     });
 
     it('should set status bar to no serverUrl when config has no serverUrl', async () => {
-      (require('vscode').workspace.getConfiguration as jest.Mock).mockReturnValue({
-        get: jest.fn(() => ''),
-      });
+      require('./utils/helpers').setupConfigMock({serverUrl: ''});
 
       await manager.update();
 

@@ -1,13 +1,18 @@
 import { JobsTreeDataProvider, Job, JobTreeItem } from '../src/jobsTreeProvider';
+import { createMockVscodeWindow, createMockApiClient } from './utils/helpers';
 
 jest.mock('vscode');
+jest.mock('../src/apiClient', () => ({ ApiClient: jest.fn() }));
+const ApiClientClass = require('../src/apiClient').ApiClient;
 
 describe('JobsTreeDataProvider', () => {
   let mockContext: any;
+  let mockApiClient: any;
   let provider: JobsTreeDataProvider;
 
   beforeEach(() => {
     jest.clearAllMocks();
+    createMockVscodeWindow();
 
     mockContext = {
       workspaceState: {
@@ -22,33 +27,12 @@ describe('JobsTreeDataProvider', () => {
     (require('vscode').workspace.workspaceFolders as any) = [{ uri: { fsPath: '/test/workspace' } }];
 
     // Mock configuration
-    (require('vscode').workspace.getConfiguration as jest.Mock).mockReturnValue({
-      get: jest.fn((key: string) => {
-        if (key === 'serverUrl') return 'http://localhost:8000';
-        if (key === 'username') return 'testuser';
-        return '';
-      }),
-    });
+    require('./utils/helpers').setupConfigMock({serverUrl: 'http://localhost:8000', username: 'testuser'});
 
-// Mock fetch
-global.fetch = jest.fn();
+    // Mock fetch
+    global.fetch = jest.fn();
 
-// Mock ApiClient
-jest.mock('../src/apiClient', () => {
-  const mockApiClient = jest.fn().mockImplementation(() => ({
-    getHeaders: jest.fn().mockResolvedValue({ 'Authorization': 'Basic dGVzdHVzZXI6dGVzdHBhc3M=' }),
-    getServerUrl: jest.fn().mockReturnValue('http://localhost:8000'),
-    hasValidConfig: jest.fn().mockReturnValue(true),
-  }));
-  (mockApiClient as any).hasValidConfigStatic = jest.fn().mockReturnValue(true);
-  return {
-    ApiClient: mockApiClient,
-  };
-});
-
-// Mock vscode window
-(require('vscode').window.showErrorMessage as jest.Mock).mockResolvedValue(undefined);
-
+    mockApiClient = createMockApiClient(ApiClientClass, { headers: { 'Authorization': 'Basic dGVzdHVzZXI6dGVzdHBhc3M=' }, serverUrl: 'http://localhost:8000' });
 
   });
 
@@ -59,7 +43,6 @@ jest.mock('../src/apiClient', () => {
       // Spy on refresh to track calls
       const refreshSpy = jest.spyOn(JobsTreeDataProvider.prototype, 'refresh');
 
-      const mockApiClient = new (require('../src/apiClient').ApiClient)();
       provider = new JobsTreeDataProvider(mockContext, mockApiClient);
 
       expect(refreshSpy).toHaveBeenCalled();
@@ -71,7 +54,6 @@ jest.mock('../src/apiClient', () => {
     beforeEach(() => {
       // Mock refresh to prevent constructor from calling it
       jest.spyOn(JobsTreeDataProvider.prototype, 'refresh').mockResolvedValue(undefined);
-      const mockApiClient = new (require('../src/apiClient').ApiClient)();
       provider = new JobsTreeDataProvider(mockContext, mockApiClient);
     });
 
@@ -88,7 +70,6 @@ jest.mock('../src/apiClient', () => {
     beforeEach(() => {
       // Mock refresh to prevent constructor from calling it
       jest.spyOn(JobsTreeDataProvider.prototype, 'refresh').mockResolvedValue(undefined);
-      const mockApiClient = new (require('../src/apiClient').ApiClient)();
       provider = new JobsTreeDataProvider(mockContext, mockApiClient);
     });
 
@@ -249,7 +230,6 @@ jest.mock('../src/apiClient', () => {
     beforeEach(() => {
       // Mock refresh to prevent constructor from calling it
       jest.spyOn(JobsTreeDataProvider.prototype, 'refresh').mockResolvedValue(undefined);
-      const mockApiClient = new (require('../src/apiClient').ApiClient)();
       provider = new JobsTreeDataProvider(mockContext, mockApiClient);
     });
 
@@ -335,7 +315,6 @@ jest.mock('../src/apiClient', () => {
 
   describe('refresh', () => {
     beforeEach(() => {
-      const mockApiClient = new (require('../src/apiClient').ApiClient)();
       provider = new JobsTreeDataProvider(mockContext, mockApiClient);
       // Restore the original refresh method for these tests
       jest.spyOn(JobsTreeDataProvider.prototype, 'refresh').mockRestore();
@@ -377,3 +356,4 @@ jest.mock('../src/apiClient', () => {
     });
   });
 });
+

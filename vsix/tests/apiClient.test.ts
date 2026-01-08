@@ -8,13 +8,7 @@ describe('ApiClient', () => {
   let apiClient: ApiClient;
 
   beforeEach(() => {
-    (vscode.workspace.getConfiguration as jest.Mock).mockReturnValue({
-      get: jest.fn((key: string) => {
-        if (key === 'serverUrl') return 'http://localhost:8000';
-        if (key === 'username') return 'testuser';
-        return undefined;
-      }),
-    });
+    require('./utils/helpers').setupConfigMock({serverUrl: 'http://localhost:8000', username: 'testuser'});
     context = {
       workspaceState: {
         get: jest.fn((key) => key === 'pyops.password' ? 'testpassword' : undefined),
@@ -30,23 +24,13 @@ describe('ApiClient', () => {
     });
 
     it('should return default when serverUrl not set', () => {
-      (vscode.workspace.getConfiguration as jest.Mock).mockReturnValue({
-        get: jest.fn((key: string) => {
-          if (key === 'serverUrl') return undefined;
-          return undefined;
-        }),
-      });
+      require('./utils/helpers').setupConfigMock({serverUrl: undefined});
       const url = apiClient.getServerUrl();
       expect(url).toBe('http://localhost:8000');
     });
 
     it('should return custom default when serverUrl not set', () => {
-      (vscode.workspace.getConfiguration as jest.Mock).mockReturnValue({
-        get: jest.fn((key: string) => {
-          if (key === 'serverUrl') return undefined;
-          return undefined;
-        }),
-      });
+      require('./utils/helpers').setupConfigMock({serverUrl: undefined});
       const url = apiClient.getServerUrl('http://custom:8000');
       expect(url).toBe('http://custom:8000');
     });
@@ -61,12 +45,7 @@ describe('ApiClient', () => {
     });
 
     it('should return empty headers when username is not set', async () => {
-      (vscode.workspace.getConfiguration as jest.Mock).mockReturnValue({
-        get: jest.fn((key: string) => {
-          if (key === 'username') return undefined;
-          return undefined;
-        }),
-      });
+      require('./utils/helpers').setupConfigMock({username: undefined});
       const headers = await apiClient.getHeaders();
       expect(headers).toEqual({});
     });
@@ -80,45 +59,25 @@ describe('ApiClient', () => {
 
   describe('hasValidConfigStatic', () => {
     it('returns true when serverUrl is configured', () => {
-      (vscode.workspace.getConfiguration as jest.Mock).mockReturnValue({
-        get: jest.fn((key: string) => {
-          if (key === 'serverUrl') return 'http://localhost:8000';
-          return '';
-        }),
-      });
+      require('./utils/helpers').setupConfigMock();
 
       expect(ApiClient.hasValidConfigStatic()).toBe(true);
     });
 
     it('returns false when serverUrl is empty', () => {
-      (vscode.workspace.getConfiguration as jest.Mock).mockReturnValue({
-        get: jest.fn((key: string) => {
-          if (key === 'serverUrl') return '';
-          return '';
-        }),
-      });
+      require('./utils/helpers').setupConfigMock({serverUrl: ''});
 
       expect(ApiClient.hasValidConfigStatic()).toBe(false);
     });
 
     it('returns false when serverUrl is undefined', () => {
-      (vscode.workspace.getConfiguration as jest.Mock).mockReturnValue({
-        get: jest.fn((key: string) => {
-          if (key === 'serverUrl') return undefined;
-          return '';
-        }),
-      });
+      require('./utils/helpers').setupConfigMock({serverUrl: undefined});
 
       expect(ApiClient.hasValidConfigStatic()).toBe(false);
     });
 
     it('returns false when serverUrl is null', () => {
-      (vscode.workspace.getConfiguration as jest.Mock).mockReturnValue({
-        get: jest.fn((key: string) => {
-          if (key === 'serverUrl') return null;
-          return '';
-        }),
-      });
+      require('./utils/helpers').setupConfigMock({serverUrl: null});
 
       expect(ApiClient.hasValidConfigStatic()).toBe(false);
     });

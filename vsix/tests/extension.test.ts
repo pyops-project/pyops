@@ -1,18 +1,19 @@
 import { activate, deactivate } from '../src/extension';
+import { createMockApiClient, createMockTreeProvider } from './utils/helpers';
 
 jest.mock('vscode');
 jest.mock('../src/utils');
 jest.mock('../src/jobsTreeProvider', () => ({
-  JobsTreeDataProvider: jest.fn().mockImplementation(function() {
-    // @ts-ignore
-    this.refresh = jest.fn();
+  JobsTreeDataProvider: jest.fn().mockImplementation(function(this: any) {
+    const mockObj = createMockTreeProvider('jobs');
+    this.refresh = mockObj.refresh;
   })
 }));
 
 jest.mock('../src/managerTreeProvider', () => ({
-  ManagerTreeDataProvider: jest.fn().mockImplementation(function() {
-    // @ts-ignore
-    this.refresh = jest.fn();
+  ManagerTreeDataProvider: jest.fn().mockImplementation(function(this: any) {
+    const mockObj = createMockTreeProvider('manager');
+    this.refresh = mockObj.refresh;
   })
 }));
 
@@ -29,8 +30,7 @@ jest.mock('../src/services/DebugService', () => {
     getDebugPort: jest.fn().mockResolvedValue(5678),
     getDebugHost: jest.fn().mockReturnValue('localhost'),
   }));
-  // @ts-ignore
-  mockDebugService.buildOverrides = jest.fn().mockReturnValue({ overrides: { 'testset::testname': 'print("test")' }, pathMappings: [] });
+  (mockDebugService as any).buildOverrides = jest.fn().mockReturnValue({ overrides: { 'testset::testname': 'print("test")' }, pathMappings: [] });
   return { DebugService: mockDebugService };
 });
 
@@ -38,31 +38,25 @@ jest.mock('../src/services/DebugOutputMonitor', () => ({ DebugOutputMonitor: jes
 jest.mock('../src/services/JobService', () => ({ JobService: jest.fn().mockImplementation(() => ({ dispose: jest.fn(), listJobs: jest.fn(), copyJobParam: jest.fn(), cancelJob: jest.fn(), downloadJob: jest.fn(), deleteJob: jest.fn(), viewJob: jest.fn(), cancelAllJobs: jest.fn(), deleteAllDone: jest.fn(), deleteAllFailed: jest.fn(), })) }));
 jest.mock('../src/services/PyOpsPythonDebugConfigProvider');
 jest.mock('../src/services/RefreshTimerManager', () => ({
-  RefreshTimerManager: jest.fn().mockImplementation(function() {
-    // @ts-ignore
+  RefreshTimerManager: jest.fn().mockImplementation(function(this: any) {
     this.ensureRunning = jest.fn();
-    // @ts-ignore
     this.stopIfRunning = jest.fn();
   })
 }));
 
 
 jest.mock('../src/services/ScriptletService', () => ({ ScriptletService: jest.fn().mockImplementation(() => ({ resetLocalFromRemote: jest.fn(), writeLocalToRemoteDraft: jest.fn(), saveRemoteDraft: jest.fn(), diffLocalRemote: jest.fn(), deleteScriptlet: jest.fn(), openLocalFile: jest.fn(), })) }));
-jest.mock('../src/apiClient');
 jest.mock('../src/providers/RemoteContentProvider');
 jest.mock('../src/ConnectionStatusManager', () => ({
-  ConnectionStatusManager: jest.fn().mockImplementation(function() {
-    // @ts-ignore
+  ConnectionStatusManager: jest.fn().mockImplementation(function(this: any) {
     this.createStatusBarItem = () => (require('vscode').window.createStatusBarItem as jest.Mock)();
-    // @ts-ignore
     this.update = jest.fn().mockResolvedValue(undefined);
   })
 }));
 
-
-
-
-
+jest.mock('../src/apiClient', () => ({
+  ApiClient: jest.fn()
+}));
 
 describe('Extension', () => {
   let mockContext: any;
@@ -105,21 +99,15 @@ describe('Extension', () => {
       dispose: jest.fn(),
     };
 
-    (require('vscode').window.createOutputChannel as jest.Mock).mockImplementation((name: string) => {
+    (require('vscode').window.createOutputChannel as jest.Mock).mockImplementation((...args: unknown[]) => {
+      const name = args[0] as string;
       if (name === 'PyOps') return mockOutputChannel;
       if (name === 'PyOps Job Output') return mockJobOutputChannel;
       return mockOutputChannel;
     });
     (require('vscode').window.createStatusBarItem as jest.Mock).mockImplementation(() => mockStatusBarItem);
 
-    // Mock config
-    (require('vscode').workspace.getConfiguration as jest.Mock).mockReturnValue({
-      get: jest.fn((key: string) => {
-        if (key === 'serverUrl') return 'http://localhost:8000';
-        if (key === 'username') return 'testuser';
-        return '';
-      }),
-    });
+    require('./utils/helpers').setupConfigMock();
 
     // Mock fetch for debug session terminate
     global.fetch = jest.fn().mockResolvedValue({ ok: true });
@@ -142,17 +130,10 @@ describe('Extension', () => {
     // Mock providers/services constructors
     (require('../src/providers/RemoteContentProvider').RemoteContentProvider as jest.Mock).mockImplementation(() => ({}));
     (require('../src/providers/RemoteContentProvider').registerRemoteLanguageModeSetter as jest.Mock).mockReturnValue({});
-    (require('../src/apiClient').ApiClient as jest.Mock).mockImplementation(() => ({
-      getHeaders: jest.fn().mockResolvedValue({ 'Authorization': 'Basic dGVzdHVzZXI6dGVzdHBhc3M=' }),
-      getServerUrl: jest.fn().mockReturnValue('http://localhost:8000'),
-    }));
-
-
-
-
+    const ApiClientClass = require('../src/apiClient').ApiClient;
+    createMockApiClient(ApiClientClass);
 
     (require('../src/commands/CreateScriptletCommand').CreateScriptletCommand.execute as jest.Mock).mockResolvedValue(undefined);
-    (require('../src/apiClient').ApiClient.hasValidConfigStatic as jest.Mock).mockReturnValue(true);
 
     mockJobTreeItem = { jobId: '123', status: 'running' };
     mockScriptletTreeItem = { set: 'testset', scriptletName: 'testname', scriptletType: 'task' };
@@ -343,22 +324,15 @@ describe('Extension', () => {
         dispose: jest.fn(),
       };
 
-      // @ts-ignore
-      jest.spyOn(vscode.window, 'createOutputChannel').mockImplementation((name: string) => {
+      jest.spyOn(vscode.window as any, 'createOutputChannel').mockImplementation((...args: unknown[]) => {
+        const name = args[0] as string;
         if (name === 'PyOps') return mockOutputChannel;
         if (name === 'PyOps Job Output') return mockJobOutputChannel;
         return mockOutputChannel;
       });
-      // @ts-ignore
-      jest.spyOn(vscode.window, 'createStatusBarItem').mockImplementation(() => mockStatusBarItem);
+      jest.spyOn(vscode.window as any, 'createStatusBarItem').mockImplementation(() => mockStatusBarItem);
 
-      jest.spyOn(vscode.workspace, 'getConfiguration').mockReturnValue({
-        get: jest.fn((key: string) => {
-          if (key === 'serverUrl') return 'http://localhost:8000';
-          if (key === 'username') return 'testuser';
-          return '';
-        }),
-      });
+      require('./utils/helpers').setupConfigMock();
 
       Object.defineProperty(vscode.workspace, 'workspaceFolders', {
         get: () => [{ uri: { fsPath: '/test/workspace' } }],
@@ -373,18 +347,14 @@ describe('Extension', () => {
       jest.spyOn(vscode.debug, 'onDidTerminateDebugSession').mockReturnValue({});
       jest.spyOn(vscode.debug, 'startDebugging').mockResolvedValue(undefined);
       jest.spyOn(vscode.window, 'registerTreeDataProvider').mockReturnValue({});
-      jest.spyOn(vscode.window, 'showErrorMessage').mockResolvedValue(undefined);
-      jest.spyOn(vscode.window, 'showWarningMessage').mockResolvedValue(undefined);
-      jest.spyOn(vscode.window, 'showInformationMessage').mockResolvedValue(undefined);
+      require('./utils/helpers').createMockVscodeWindow();
 
       (require('../src/services/AuthService').AuthService.setupAuth as jest.Mock).mockResolvedValue(undefined);
       (require('../src/providers/RemoteContentProvider').RemoteContentProvider as jest.Mock).mockImplementation(() => ({}));
       (require('../src/providers/RemoteContentProvider').registerRemoteLanguageModeSetter as jest.Mock).mockReturnValue({});
-      (require('../src/apiClient').ApiClient as jest.Mock).mockImplementation(() => ({
-        getHeaders: jest.fn().mockResolvedValue({ 'Authorization': 'Basic dGVzdHVzZXI6dGVzdHBhc3M=' }),
-        getServerUrl: jest.fn().mockReturnValue('http://localhost:8000'),
-      }));
-      (require('../src/apiClient').ApiClient.hasValidConfigStatic as jest.Mock).mockReturnValue(true);
+      const ApiClientClass = require('../src/apiClient').ApiClient;
+      createMockApiClient(ApiClientClass);
+
 
       // Reset instances
       const JobServiceModule = require('../src/services/JobService');

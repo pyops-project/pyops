@@ -1,17 +1,19 @@
 import { AuthService } from '../../src/services/AuthService';
+import { createMockVscodeWindow } from '../utils/helpers';
 
 jest.mock('vscode');
 
 describe('AuthService', () => {
   let mockContext: any;
   let mockOutputChannel: any;
+  let mockVscode: any;
 
   beforeEach(() => {
     jest.clearAllMocks();
-    const mockVscode = require('vscode');
+    createMockVscodeWindow();
+    mockVscode = require('vscode');
 
     mockVscode.workspace.getConfiguration = jest.fn();
-    mockVscode.window.showInputBox = jest.fn();
 
     mockContext = {
       workspaceState: {
@@ -27,10 +29,7 @@ describe('AuthService', () => {
 
   describe('setupAuth', () => {
     it('does nothing when no username configured', async () => {
-      const mockVscode = require('vscode');
-      mockVscode.workspace.getConfiguration.mockReturnValue({
-        get: jest.fn().mockReturnValue(undefined),
-      });
+      require('../utils/helpers').setupConfigMock({username: undefined});
 
       await AuthService.setupAuth(mockContext, mockOutputChannel);
 
@@ -40,10 +39,7 @@ describe('AuthService', () => {
     });
 
     it('does nothing when username is empty string', async () => {
-      const mockVscode = require('vscode');
-      mockVscode.workspace.getConfiguration.mockReturnValue({
-        get: jest.fn().mockReturnValue(''),
-      });
+      require('../utils/helpers').setupConfigMock({username: ''});
 
       await AuthService.setupAuth(mockContext, mockOutputChannel);
 
@@ -53,10 +49,7 @@ describe('AuthService', () => {
     });
 
     it('logs found credentials when username and password exist', async () => {
-      const mockVscode = require('vscode');
-      mockVscode.workspace.getConfiguration.mockReturnValue({
-        get: jest.fn().mockReturnValue('testuser'),
-      });
+      require('../utils/helpers').setupConfigMock();
       mockContext.workspaceState.get.mockReturnValue('testpass');
 
       await AuthService.setupAuth(mockContext, mockOutputChannel);
@@ -67,12 +60,9 @@ describe('AuthService', () => {
     });
 
     it('prompts for password, stores it, and logs success when user provides password', async () => {
-      const mockVscode = require('vscode');
-      mockVscode.workspace.getConfiguration.mockReturnValue({
-        get: jest.fn().mockReturnValue('testuser'),
-      });
+      require('../utils/helpers').setupConfigMock();
       mockContext.workspaceState.get.mockReturnValue(undefined);
-      mockVscode.window.showInputBox.mockResolvedValue('newpass');
+      (require('vscode').window.showInputBox as jest.Mock).mockResolvedValue('newpass');
 
       await AuthService.setupAuth(mockContext, mockOutputChannel);
 
@@ -86,12 +76,9 @@ describe('AuthService', () => {
     });
 
     it('prompts for password and logs failure when user cancels', async () => {
-      const mockVscode = require('vscode');
-      mockVscode.workspace.getConfiguration.mockReturnValue({
-        get: jest.fn().mockReturnValue('testuser'),
-      });
+      require('../utils/helpers').setupConfigMock();
       mockContext.workspaceState.get.mockReturnValue(undefined);
-      mockVscode.window.showInputBox.mockResolvedValue(undefined);
+      (require('vscode').window.showInputBox as jest.Mock).mockResolvedValue(undefined);
 
       await AuthService.setupAuth(mockContext, mockOutputChannel);
 

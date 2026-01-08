@@ -1,14 +1,14 @@
 import { CreateScriptletCommand } from '../../src/commands/CreateScriptletCommand';
+import { createMockTreeProvider } from '../utils/helpers';
 
 jest.mock('vscode');
-jest.mock('fs');
-jest.mock('path', () => ({
-  join: jest.fn(),
-  dirname: jest.fn()
-}));
-
 
 (global as any).fetch = jest.fn();
+
+jest.mock('fs', () => require('../utils/helpers').fsMockFactory());
+jest.mock('path', () => require('../utils/helpers').pathMockFactory());
+
+
 
 describe('CreateScriptletCommand', () => {
   let mockShowQuickPick: jest.Mock;
@@ -33,20 +33,14 @@ describe('CreateScriptletCommand', () => {
     const fs = require('fs');
     const path = require('path');
 
-    (vscode.workspace.getConfiguration as jest.Mock).mockReturnValue({
-      get: jest.fn((key: string) => {
-        if (key === 'serverUrl') return 'http://localhost:8000';
-        if (key === 'localPyopsDir') return 'pyops';
-        if (key === 'username') return 'testuser';
-        return undefined;
-      }),
-    });
+    require('../utils/helpers').setupConfigMock({serverUrl: 'http://localhost:8000', localPyopsDir: 'pyops', username: 'testuser'});
+    const mockWindow = require('../utils/helpers').createMockVscodeWindow();
     (vscode.workspace.workspaceFolders as any) = [{ uri: { fsPath: '/test/workspace' } }];
-    mockShowQuickPick = vscode.window.showQuickPick as jest.Mock;
-    mockShowInputBox = vscode.window.showInputBox as jest.Mock;
-    mockShowErrorMessage = vscode.window.showErrorMessage as jest.Mock;
-    mockShowInformationMessage = vscode.window.showInformationMessage as jest.Mock;
-    mockShowWarningMessage = vscode.window.showWarningMessage as jest.Mock;
+    mockShowQuickPick = mockWindow.showQuickPick;
+    mockShowInputBox = mockWindow.showInputBox;
+    mockShowErrorMessage = mockWindow.showErrorMessage;
+    mockShowInformationMessage = mockWindow.showInformationMessage;
+    mockShowWarningMessage = mockWindow.showWarningMessage;
     mockOpenTextDocument = vscode.workspace.openTextDocument as jest.Mock;
     mockOpenTextDocument.mockResolvedValue({});
 
@@ -64,7 +58,7 @@ describe('CreateScriptletCommand', () => {
       },
     };
     outputChannel = { appendLine: jest.fn() };
-    managerTreeProvider = { refresh: jest.fn() };
+    managerTreeProvider = createMockTreeProvider('manager');
     (global.fetch as jest.Mock).mockResolvedValue({
       ok: true,
       json: jest.fn().mockResolvedValue([]),
@@ -230,5 +224,5 @@ describe('CreateScriptletCommand', () => {
 
     expect(mockFsWriteFileSync).toHaveBeenCalledWith(localPath, '');
   });
-
 });
+

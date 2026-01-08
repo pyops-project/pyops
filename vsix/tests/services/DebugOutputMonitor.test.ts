@@ -1,8 +1,9 @@
 import { DebugOutputMonitor } from '../../src/services/DebugOutputMonitor';
 import { ApiClient } from '../../src/apiClient';
+import { createMockOutputChannel, createMockVscodeWindow, createMockApiClient } from '../utils/helpers';
 
 jest.mock('vscode');
-jest.mock('../../src/apiClient');
+jest.mock('../../src/apiClient', () => ({ ApiClient: jest.fn() }));
 
 global.fetch = jest.fn();
 
@@ -19,24 +20,14 @@ describe('DebugOutputMonitor', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     const mockVscode = require('vscode');
+    createMockVscodeWindow();
 
-    mockVscode.window.showWarningMessage = jest.fn();
-    mockVscode.window.showInformationMessage = jest.fn();
-    mockVscode.window.showErrorMessage = jest.fn();
-
-    mockApiClient = new ApiClient({} as any) as jest.Mocked<ApiClient>;
-    // @ts-ignore
-    mockApiClient.getHeaders.mockResolvedValue({ 'Authorization': 'Basic test' });
-    mockApiClient.getServerUrl.mockReturnValue('http://localhost:8000');
+    mockApiClient = createMockApiClient(ApiClient, { headers: { 'Authorization': 'Basic test' }, serverUrl: 'http://localhost:8000' }) as any;
 
     mockFetch = global.fetch as jest.MockedFunction<typeof global.fetch>;
     mockFetch.mockResolvedValue({ ok: true, json: jest.fn().mockResolvedValue({ state: 'running' }) } as any);
 
-    mockOutputChannel = {
-      append: jest.fn(),
-      appendLine: jest.fn(),
-      show: jest.fn(),
-    };
+    mockOutputChannel = createMockOutputChannel();
 
     monitor = new DebugOutputMonitor(mockApiClient, mockOutputChannel);
   });
@@ -60,8 +51,8 @@ describe('DebugOutputMonitor', () => {
       await monitor.startMonitoring('key1', 'job2');
 
       expect(mockVscode.window.showWarningMessage).toHaveBeenCalledWith('Debug job already running');
-    });
   });
+});
 
   describe('startMonitoring polling', () => {
     it('appends incremental stdout', async () => {

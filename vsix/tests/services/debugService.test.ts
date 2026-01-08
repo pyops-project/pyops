@@ -1,10 +1,15 @@
 import { DebugService } from '../../src/services/DebugService';
 
+
+
 jest.mock('vscode');
-jest.mock('fs');
-jest.mock('path');
 
 global.fetch = jest.fn();
+
+jest.mock('fs', () => require('../utils/helpers').fsMockFactory());
+jest.mock('path', () => require('../utils/helpers').pathMockFactory());
+
+
 
 const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation();
 
@@ -20,17 +25,7 @@ describe('DebugService', () => {
     const mockVscode = require('vscode');
 
     mockVscode.workspace.workspaceFolders = [{ uri: { fsPath: '/test/workspace' } }];
-    mockVscode.workspace.getConfiguration.mockReturnValue({
-      get: jest.fn((key: string) => {
-        const configMap: Record<string, any> = {
-          'localPyopsDir': 'pyops',
-          'serverUrl': 'http://localhost:8000',
-          'username': 'testuser',
-          'debugPort': 5678,
-        };
-        return configMap[key as keyof typeof configMap] ?? '';
-      }),
-    });
+    require('../utils/helpers').setupConfigMock({localPyopsDir: 'pyops', serverUrl: 'http://localhost:8000', username: 'testuser'});
 
     mockContext = {
       workspaceState: {
@@ -190,7 +185,7 @@ describe('DebugService', () => {
 
     it('enqueues without auth if no credentials', async () => {
       mockContext.workspaceState.get.mockReturnValue(undefined);
-      (require('vscode').workspace.getConfiguration().get as jest.Mock).mockImplementation((key: string) => key === 'username' ? '' : undefined);
+      require('../utils/helpers').setupConfigMock({username: ''});
 
       (global.fetch as jest.MockedFunction<typeof fetch>)
         .mockResolvedValueOnce({
@@ -352,25 +347,19 @@ describe('DebugService', () => {
 
   describe('getDebugHost', () => {
     it('returns hostname from valid serverUrl', () => {
-      const mockConfigGet = require('vscode').workspace.getConfiguration().get as jest.Mock;
-      mockConfigGet.mockImplementationOnce((key: string) => key === 'serverUrl' ? 'http://example.com:8000' : mockConfigGet(key));
+      require('../utils/helpers').setupConfigMock({serverUrl: 'http://example.com:8000'});
       expect(service.getDebugHost()).toBe('example.com');
       expect(mockOutputChannel.appendLine).not.toHaveBeenCalled();
     });
 
     it('logs warning and returns localhost for invalid serverUrl', () => {
-      const mockConfigGet = require('vscode').workspace.getConfiguration().get as jest.Mock;
-      mockConfigGet.mockImplementationOnce((key: string) => key === 'serverUrl' ? 'invalid' : mockConfigGet(key));
+      require('../utils/helpers').setupConfigMock({serverUrl: 'invalid'});
       expect(service.getDebugHost()).toBe('localhost');
       expect(mockOutputChannel.appendLine).toHaveBeenCalledWith('[DEBUG getDebugHost] Invalid serverUrl invalid, defaulting to localhost');
     });
 
     it('uses default http://localhost:8000 if serverUrl not set', () => {
-      const mockConfigGet = require('vscode').workspace.getConfiguration().get as jest.Mock;
-      mockConfigGet.mockImplementationOnce((key: string) => {
-        if(key === 'serverUrl') return undefined;
-        return mockConfigGet(key);
-      });
+      require('../utils/helpers').setupConfigMock({serverUrl: undefined});
       expect(service.getDebugHost()).toBe('localhost');
       expect(mockOutputChannel.appendLine).not.toHaveBeenCalled();
     });

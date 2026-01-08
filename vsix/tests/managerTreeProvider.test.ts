@@ -1,36 +1,16 @@
 import { ManagerTreeDataProvider, ScriptletTreeItem } from '../src/managerTreeProvider';
+import { createMockVscodeWindow, createMockApiClient } from './utils/helpers';
 
 jest.mock('vscode');
 
-// Mock fs
-jest.mock('fs', () => ({
-  existsSync: jest.fn(),
-  readFileSync: jest.fn(),
-  writeFileSync: jest.fn(),
-  mkdirSync: jest.fn(),
-  readdirSync: jest.fn(),
-  statSync: jest.fn(() => ({ isDirectory: jest.fn(() => false) })),
-}));
+jest.mock('fs', () => require('./utils/helpers').fsMockFactory());
+jest.mock('path', () => require('./utils/helpers').pathMockFactory());
 
-// Mock path
-jest.mock('path', () => ({
-  join: jest.fn((...args) => args.join('/')),
-  relative: jest.fn(),
-  basename: jest.fn(),
-  dirname: jest.fn(),
-}));
+
+jest.mock('../src/apiClient', () => ({ ApiClient: jest.fn() }));
 
 // Mock fetch
 global.fetch = jest.fn();
-
-// Mock ApiClient
-jest.mock('../src/apiClient', () => ({
-  ApiClient: jest.fn().mockImplementation(() => ({
-    getHeaders: jest.fn().mockResolvedValue({ 'Authorization': 'Basic dGVzdHVzZXI6cGFzcw==' }),
-    getServerUrl: jest.fn().mockReturnValue('http://localhost:8000'),
-    hasValidConfig: jest.fn().mockReturnValue(true),
-  })),
-}));
 
 describe('ManagerTreeDataProvider', () => {
   let provider: ManagerTreeDataProvider;
@@ -40,15 +20,9 @@ describe('ManagerTreeDataProvider', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    createMockVscodeWindow();
     (require('vscode').workspace.workspaceFolders as any) = [{ uri: { fsPath: '/test/workspace' } }];
-    (require('vscode').workspace.getConfiguration as jest.Mock).mockReturnValue({
-      get: jest.fn((key: string) => {
-        if (key === 'localPyopsDir') return 'pyops';
-        if (key === 'serverUrl') return 'http://localhost:8000';
-        if (key === 'username') return 'testuser';
-        return '';
-      }),
-    });
+    require('./utils/helpers').setupConfigMock();
     (global.fetch as jest.Mock).mockResolvedValue({
       ok: true,
       json: jest.fn().mockResolvedValue([]),
@@ -61,10 +35,11 @@ describe('ManagerTreeDataProvider', () => {
     mockOutputChannel = {
       appendLine: jest.fn(),
     };
-    const ApiClientMock = require('../src/apiClient').ApiClient;
-    mockApiClient = new ApiClientMock();
+    const ApiClientClass = require('../src/apiClient').ApiClient;
+    mockApiClient = createMockApiClient(ApiClientClass, { headers: { 'Authorization': 'Basic dGVzdHVzZXI6cGFzcw==' } });
 
     const mockFs = require('fs');
+
     (mockFs.readdirSync as jest.Mock).mockReturnValue([]);
     (mockFs.existsSync as jest.Mock).mockReturnValue(false);
 
@@ -101,9 +76,7 @@ describe('ManagerTreeDataProvider', () => {
     });
 
     it('should return commands children', async () => {
-      (require('vscode').workspace.getConfiguration as jest.Mock).mockReturnValue({
-        get: jest.fn(() => 'http://localhost:8000'),
-      });
+      require('./utils/helpers').setupConfigMock();
       const element = { contextValue: 'commands' };
       const children = await provider.getChildren(element);
       expect(children).toHaveLength(2);
@@ -112,9 +85,7 @@ describe('ManagerTreeDataProvider', () => {
     });
 
     it('should return set items', async () => {
-      (require('vscode').workspace.getConfiguration as jest.Mock).mockReturnValue({
-        get: jest.fn(() => 'http://localhost:8000'),
-      });
+      require('./utils/helpers').setupConfigMock();
       (global.fetch as jest.Mock).mockResolvedValueOnce({
         ok: true,
         json: jest.fn().mockResolvedValueOnce([
@@ -135,9 +106,7 @@ describe('ManagerTreeDataProvider', () => {
     });
 
     it('should return empty array for pyopsSet with no items', async () => {
-      (require('vscode').workspace.getConfiguration as jest.Mock).mockReturnValue({
-        get: jest.fn(() => 'http://localhost:8000'),
-      });
+      require('./utils/helpers').setupConfigMock();
       (global.fetch as jest.Mock).mockResolvedValueOnce({
         ok: true,
         json: jest.fn().mockResolvedValueOnce([
@@ -157,9 +126,7 @@ describe('ManagerTreeDataProvider', () => {
     });
 
     it('should return root sets', async () => {
-      (require('vscode').workspace.getConfiguration as jest.Mock).mockReturnValue({
-        get: jest.fn(() => 'http://localhost:8000'),
-      });
+      require('./utils/helpers').setupConfigMock();
       (global.fetch as jest.Mock).mockResolvedValueOnce({
         ok: true,
         json: jest.fn().mockResolvedValueOnce([
@@ -183,9 +150,7 @@ describe('ManagerTreeDataProvider', () => {
 
   describe('fetchScriptlets', () => {
     it('should fetch scriptlets successfully', async () => {
-      (require('vscode').workspace.getConfiguration as jest.Mock).mockReturnValue({
-        get: jest.fn(() => 'http://localhost:8000'),
-      });
+      require('./utils/helpers').setupConfigMock();
       mockContext.workspaceState.get.mockReturnValue('password');
       (global.fetch as jest.Mock).mockResolvedValue({
         ok: true,
@@ -196,9 +161,7 @@ describe('ManagerTreeDataProvider', () => {
     });
 
     it('should handle fetch error', async () => {
-      (require('vscode').workspace.getConfiguration as jest.Mock).mockReturnValue({
-        get: jest.fn(() => 'http://localhost:8000'),
-      });
+      require('./utils/helpers').setupConfigMock();
       (global.fetch as jest.Mock).mockResolvedValue({
         ok: false,
         statusText: 'Error',
@@ -210,14 +173,7 @@ describe('ManagerTreeDataProvider', () => {
 
   describe('downloadScriptlets', () => {
     it('should download scriptlets', async () => {
-      (require('vscode').workspace.getConfiguration as jest.Mock).mockReturnValue({
-        get: jest.fn((key: string) => {
-          if (key === 'localPyopsDir') return 'pyops';
-          if (key === 'serverUrl') return 'http://localhost:8000';
-          if (key === 'username') return 'testuser';
-          return '';
-        }),
-      });
+      require('./utils/helpers').setupConfigMock();
       (global.fetch as jest.Mock).mockResolvedValue({
         ok: true,
         json: jest.fn().mockResolvedValue({ code: 'remote code' }),
@@ -233,18 +189,14 @@ describe('ManagerTreeDataProvider', () => {
 
   describe('fetchScriptlets', () => {
     it('should handle fetch errors', async () => {
-      (require('vscode').workspace.getConfiguration as jest.Mock).mockReturnValue({
-        get: jest.fn(() => 'http://localhost:8000'),
-      });
+      require('./utils/helpers').setupConfigMock();
       (global.fetch as jest.Mock).mockRejectedValue(new Error('Network error'));
       const result = await (provider as any).fetchScriptlets();
       expect(result).toEqual([]);
     });
 
     it('should handle non-ok responses', async () => {
-      (require('vscode').workspace.getConfiguration as jest.Mock).mockReturnValue({
-        get: jest.fn(() => 'http://localhost:8000'),
-      });
+      require('./utils/helpers').setupConfigMock();
       (global.fetch as jest.Mock).mockResolvedValue({
         ok: false,
         statusText: 'Server Error',
@@ -257,14 +209,7 @@ describe('ManagerTreeDataProvider', () => {
   describe('downloadScriptlets', () => {
     it('should handle fetch errors during download', async () => {
       const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation();
-      (require('vscode').workspace.getConfiguration as jest.Mock).mockReturnValue({
-        get: jest.fn((key: string) => {
-          if (key === 'localPyopsDir') return 'pyops';
-          if (key === 'serverUrl') return 'http://localhost:8000';
-          if (key === 'username') return 'testuser';
-          return '';
-        }),
-      });
+      require('./utils/helpers').setupConfigMock();
       (global.fetch as jest.Mock).mockRejectedValue(new Error('Network error'));
       (require('fs').existsSync as jest.Mock).mockReturnValue(false);
 
@@ -276,14 +221,7 @@ describe('ManagerTreeDataProvider', () => {
 
     it('should handle non-ok responses during download', async () => {
       const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation();
-      (require('vscode').workspace.getConfiguration as jest.Mock).mockReturnValue({
-        get: jest.fn((key: string) => {
-          if (key === 'localPyopsDir') return 'pyops';
-          if (key === 'serverUrl') return 'http://localhost:8000';
-          if (key === 'username') return 'testuser';
-          return '';
-        }),
-      });
+      require('./utils/helpers').setupConfigMock();
       (global.fetch as jest.Mock).mockResolvedValue({
         ok: false,
         statusText: 'Not Found',
@@ -298,14 +236,7 @@ describe('ManagerTreeDataProvider', () => {
 
     it('should handle file system errors during write', async () => {
       const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation();
-      (require('vscode').workspace.getConfiguration as jest.Mock).mockReturnValue({
-        get: jest.fn((key: string) => {
-          if (key === 'localPyopsDir') return 'pyops';
-          if (key === 'serverUrl') return 'http://localhost:8000';
-          if (key === 'username') return 'testuser';
-          return '';
-        }),
-      });
+      require('./utils/helpers').setupConfigMock();
       (global.fetch as jest.Mock).mockResolvedValue({
         ok: true,
         json: jest.fn().mockResolvedValue({ code: 'remote code' }),
@@ -324,9 +255,7 @@ describe('ManagerTreeDataProvider', () => {
 
   describe('refresh', () => {
     it('should refresh scriptlets', async () => {
-      (require('vscode').workspace.getConfiguration as jest.Mock).mockReturnValue({
-        get: jest.fn(() => 'http://localhost:8000'),
-      });
+      require('./utils/helpers').setupConfigMock();
       (global.fetch as jest.Mock).mockResolvedValue({
         ok: true,
         json: jest.fn().mockResolvedValue([]),
@@ -336,9 +265,7 @@ describe('ManagerTreeDataProvider', () => {
     });
 
     it('should handle refresh errors gracefully', async () => {
-      (require('vscode').workspace.getConfiguration as jest.Mock).mockReturnValue({
-        get: jest.fn(() => 'http://localhost:8000'),
-      });
+      require('./utils/helpers').setupConfigMock();
       (global.fetch as jest.Mock).mockRejectedValue(new Error('Network error'));
 
       // Should not throw
@@ -346,14 +273,7 @@ describe('ManagerTreeDataProvider', () => {
     });
 
     it('should filter out excluded sets', async () => {
-      (require('vscode').workspace.getConfiguration as jest.Mock).mockReturnValue({
-        get: jest.fn((key: string) => {
-          if (key === 'excludedSets') return ['excludedSet'];
-          if (key === 'serverUrl') return 'http://localhost:8000';
-          if (key === 'username') return 'testuser';
-          return '';
-        }),
-      });
+      require('./utils/helpers').setupConfigMock({excludedSets: ['excludedSet']});
       (global.fetch as jest.Mock).mockResolvedValue({
         ok: true,
         json: jest.fn().mockResolvedValue([
@@ -379,9 +299,7 @@ describe('ManagerTreeDataProvider', () => {
 
   describe('getChildren with pyopsSet filtering', () => {
     it('should return empty array for pyopsSet with no matching items', async () => {
-      (require('vscode').workspace.getConfiguration as jest.Mock).mockReturnValue({
-        get: jest.fn(() => 'http://localhost:8000'),
-      });
+      require('./utils/helpers').setupConfigMock();
       (global.fetch as jest.Mock).mockResolvedValueOnce({
         ok: true,
         json: jest.fn().mockResolvedValueOnce([
@@ -403,9 +321,7 @@ describe('ManagerTreeDataProvider', () => {
 
   describe('fetchScriptlets error throttling', () => {
     it('should throttle error messages for non-ok responses', async () => {
-      (require('vscode').workspace.getConfiguration as jest.Mock).mockReturnValue({
-        get: jest.fn(() => 'http://localhost:8000'),
-      });
+      require('./utils/helpers').setupConfigMock();
       mockContext.workspaceState.get.mockReturnValue('password');
       (global.fetch as jest.Mock).mockResolvedValue({
         ok: false,
@@ -427,9 +343,7 @@ describe('ManagerTreeDataProvider', () => {
     });
 
     it('should throttle error messages for exceptions', async () => {
-      (require('vscode').workspace.getConfiguration as jest.Mock).mockReturnValue({
-        get: jest.fn(() => 'http://localhost:8000'),
-      });
+      require('./utils/helpers').setupConfigMock();
       mockContext.workspaceState.get.mockReturnValue('password');
       (global.fetch as jest.Mock).mockRejectedValue(new Error('Network error'));
 
@@ -450,9 +364,8 @@ describe('ManagerTreeDataProvider', () => {
 
   describe('getChildren with unsynced files', () => {
     it('should return scriptlet items with warning icon when unsynced', async () => {
-      (require('vscode').workspace.getConfiguration as jest.Mock).mockReturnValue({
-        get: jest.fn(() => 'http://localhost:8000'),
-      });
+      require('./utils/helpers').setupConfigMock();
+
       (global.fetch as jest.Mock).mockResolvedValueOnce({
         ok: true,
         json: jest.fn().mockResolvedValueOnce([
@@ -476,14 +389,7 @@ describe('ManagerTreeDataProvider', () => {
 
   describe('downloadScriptlets file operations', () => {
     it('should write file when local file does not exist', async () => {
-      (require('vscode').workspace.getConfiguration as jest.Mock).mockReturnValue({
-        get: jest.fn((key: string) => {
-          if (key === 'localPyopsDir') return 'pyops';
-          if (key === 'serverUrl') return 'http://localhost:8000';
-          if (key === 'username') return 'testuser';
-          return '';
-        }),
-      });
+      require('./utils/helpers').setupConfigMock();
       (global.fetch as jest.Mock).mockResolvedValue({
         ok: true,
         json: jest.fn().mockResolvedValue({ code: 'remote code' }),
@@ -497,14 +403,7 @@ describe('ManagerTreeDataProvider', () => {
     });
 
     it('should not write file when local file exists and is synced', async () => {
-      (require('vscode').workspace.getConfiguration as jest.Mock).mockReturnValue({
-        get: jest.fn((key: string) => {
-          if (key === 'localPyopsDir') return 'pyops';
-          if (key === 'serverUrl') return 'http://localhost:8000';
-          if (key === 'username') return 'testuser';
-          return '';
-        }),
-      });
+      require('./utils/helpers').setupConfigMock();
       (global.fetch as jest.Mock).mockResolvedValue({
         ok: true,
         json: jest.fn().mockResolvedValue({ code: 'remote code' }),
@@ -516,14 +415,7 @@ describe('ManagerTreeDataProvider', () => {
     });
 
     it('should not write file when local file exists but differs from remote', async () => {
-      (require('vscode').workspace.getConfiguration as jest.Mock).mockReturnValue({
-        get: jest.fn((key: string) => {
-          if (key === 'localPyopsDir') return 'pyops';
-          if (key === 'serverUrl') return 'http://localhost:8000';
-          if (key === 'username') return 'testuser';
-          return '';
-        }),
-      });
+      require('./utils/helpers').setupConfigMock();
       (global.fetch as jest.Mock).mockResolvedValue({
         ok: true,
         json: jest.fn().mockResolvedValue({ code: 'remote code' }),
@@ -538,9 +430,7 @@ describe('ManagerTreeDataProvider', () => {
 
   describe('fetchScriptlets error handling', () => {
     it('should handle non-ok responses with error message throttling', async () => {
-      (require('vscode').workspace.getConfiguration as jest.Mock).mockReturnValue({
-        get: jest.fn(() => 'http://localhost:8000'),
-      });
+      require('./utils/helpers').setupConfigMock();
       mockContext.workspaceState.get.mockReturnValue('password');
       (global.fetch as jest.Mock).mockResolvedValue({
         ok: false,
@@ -561,9 +451,7 @@ describe('ManagerTreeDataProvider', () => {
     });
 
     it('should handle fetch exceptions with error message throttling', async () => {
-      (require('vscode').workspace.getConfiguration as jest.Mock).mockReturnValue({
-        get: jest.fn(() => 'http://localhost:8000'),
-      });
+      require('./utils/helpers').setupConfigMock();
       mockContext.workspaceState.get.mockReturnValue('password');
       (global.fetch as jest.Mock).mockRejectedValue(new Error('Network error'));
 
