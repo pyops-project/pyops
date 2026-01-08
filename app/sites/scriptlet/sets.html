@@ -1,0 +1,330 @@
+<html>
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+
+        <link rel="stylesheet" href="/files/css/bootstrap/bootstrap.min.css">
+        <link rel="stylesheet" href="/files/css/material/material-icons.css">
+
+        <script src="/files/js/jquery.min.js"></script>
+        <script src="/files/js/js.cookie.min.js"></script>
+        <script src="/files/js/bootstrap/bootstrap.bundle.min.js"></script>
+
+        <script>
+            const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+            function setTheme(e) {
+                const body = document.body;
+                const table = document.querySelector('table');
+                if (e.matches) {
+                    document.documentElement.setAttribute('data-bs-theme', 'dark');
+                    body.classList.remove('bg-body');
+                    body.classList.add('bg-dark');
+                    if (table) {
+                        table.classList.remove('table-secondary');
+                        table.classList.add('table-dark');
+                    }
+                } else {
+                    document.documentElement.setAttribute('data-bs-theme', 'light');
+                    body.classList.remove('bg-dark');
+                    body.classList.add('bg-body');
+                    if (table) {
+                        table.classList.remove('table-dark');
+                        table.classList.add('table-secondary');
+                    }
+                }
+            }
+            mediaQuery.addEventListener('change', setTheme);
+            $(document).ready(function() {
+                setTheme(mediaQuery);
+            });
+        </script>
+
+        <script>
+            'use strict';
+
+            function genCloneModal() {
+                return `
+                    <div class="modal fade" data-bs-backdrop="static" id="cloneModal" tabindex="-1" aria-labelledby="cloneModalLabel" aria-hidden="true">
+                        <div class="modal-dialog">
+                            <div class="modal-content">
+                                <div class="modal-header">
+                                    <h5 class="modal-title" id="cloneModalLabel">Clone Set</h5>
+                                    <p id="cloneModal-error" class="text-danger"></p>
+                                </div>
+                                <div class="modal-body">
+                                    <div class="mb-3">
+                                        <label for="cloneModal-name" class="col-form-label">Name:</label>
+                                        <input id="cloneModal-name" type="text" class="form-control">
+                                    </div>
+                                    <div class="mb-3">
+                                        <label for="cloneModal-url" class="col-form-label">URL:</label>
+                                        <input id="cloneModal-url" type="text" class="form-control">
+                                    </div>
+                                    <div class="mb-3">
+                                        <label for="cloneModal-username" class="col-form-label">Username (optional):</label>
+                                        <input id="cloneModal-username" type="text" class="form-control">
+                                    </div>
+                                    <div class="mb-3">
+                                        <label for="cloneModal-password" class="col-form-label">Password (optional):</label>
+                                        <input id="cloneModal-password" type="password" class="form-control">
+                                    </div>
+                                    <div class="mb-3">
+                                        <label for="cloneModal-git_name" class="col-form-label">Git Name:</label>
+                                        <input id="cloneModal-git_name" type="text" class="form-control">
+                                    </div>
+                                    <div class="mb-3">
+                                        <label for="cloneModal-git_email" class="col-form-label">Git Email:</label>
+                                        <input id="cloneModal-git_email" type="text" class="form-control">
+                                    </div>
+                                </div>
+                                <div class="modal-footer">
+                                    <button type="button" class="btn btn-danger" data-bs-dismiss="modal">Cancel</button>
+                                    <button type="button" class="btn btn-primary" onclick="onClone()">Clone</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+
+            function genSwitchModal() {
+                return `
+                    <div class="modal fade" data-bs-backdrop="static" id="switchModal" tabindex="-1" aria-labelledby="switchModalLabel" aria-hidden="true">
+                        <div class="modal-dialog">
+                            <div class="modal-content">
+                                <div class="modal-header">
+                                    <h5 class="modal-title" id="switchModalLabel">Switch Branch</h5>
+                                    <p id="switchModal-error" class="text-danger"></p>
+                                </div>
+                                <div class="modal-body">
+                                    <div class="mb-3">
+                                        <label for="switchModal-name" class="col-form-label">Set:</label>
+                                        <select id="switchModal-name" class="form-select" disabled></select>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label for="switchModal-branch" class="col-form-label">Branch:</label>
+                                        <input type="text" id="switchModal-branch" class="form-control" list="branchSuggestions">
+                                        <datalist id="branchSuggestions"></datalist>
+                                    </div>
+                                </div>
+                                <div class="modal-footer">
+                                    <button type="button" class="btn btn-danger" data-bs-dismiss="modal">Cancel</button>
+                                    <button type="button" class="btn btn-primary" onclick="onSwitch()">Switch</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+
+            function genActions(name, branch) {
+                return `
+                    <button type="button" onclick="onRemove('${name}')" class="btn btn-danger p-0">
+                        <span class="material-icons-round">delete</span>
+                    </button>
+                    <button type="button" onclick="onSwitchBranch('${name}')" class="btn btn-warning p-0">
+                        <span class="material-icons-round">swap_horiz</span>
+                    </button>
+                `;
+            }
+
+            function genSetItem(name, branch) {
+                return `
+                    <tr>
+                        <th scope="row">${name}</th>
+                        <th scope="row">${branch}</th>
+                        <td>${genActions(name, branch)}</td>
+                    </tr>
+                `;
+            }
+
+            function refreshList() {
+                $("#sets").empty();
+                fetch("/scriptlet/sets/list").then(async (r)=>{
+                    console.debug("GET", "/scriptlet/sets/list", r)
+                    if(r.ok) {
+                        const d = await r.json();
+                        console.debug("sets", d);
+                        for(const i of d.sets)
+                            $("#sets").append(genSetItem(i.name, i.branch));
+                    } else
+                        console.error("GET", "/scriptlet/sets/list", r.statusText);
+                }).catch((e)=>console.error("GET", "/scriptlet/sets/list", e.toString()));
+            }
+
+            function enqueueRefreshList() {
+                setTimeout(function() { refreshList(); }, 500);
+            }
+
+            function clearCloneModal() {
+                $("#cloneModal-error").text("");
+                $("#cloneModal-name").val("");
+                $("#cloneModal-url").val("");
+                $("#cloneModal-username").val("");
+                $("#cloneModal-password").val("");
+                $("#cloneModal-git_name").val("");
+                $("#cloneModal-git_email").val("");
+            }
+
+            function onClone() {
+                const name = $("#cloneModal-name").val();
+                const url = $("#cloneModal-url").val();
+                const username = $("#cloneModal-username").val();
+                const password = $("#cloneModal-password").val();
+                const git_name = $("#cloneModal-git_name").val();
+                const git_email = $("#cloneModal-git_email").val();
+
+                if (!name || !url) {
+                    $("#cloneModal-error").text("Please provide name and URL");
+                    return;
+                }
+
+                const data = {
+                    "name": name,
+                    "url": url,
+                    "username": username,
+                    "password": password,
+                    "git_name": git_name,
+                    "git_email": git_email
+                };
+
+                console.debug("POST", "/scriptlet/sets/clone", data);
+
+                fetch("/scriptlet/sets/clone", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify(data)
+                }).then(async (r)=>{
+                    if(r.ok) {
+                        $("#cloneModal").modal('hide');
+                        clearCloneModal();
+                        enqueueRefreshList();
+                    } else {
+                        const d = await r.json();
+                        $("#cloneModal-error").text(d.detail);
+                    }
+                }).catch((e)=>$("#cloneModal-error").text(e.toString()));
+            }
+
+            function populateSwitchBranches(name) {
+                $("#switchModal-name").empty().append(`<option value="${name}">${name}</option>`).val(name);
+                $("#branchSuggestions").empty();
+            }
+
+            function onSwitchBranch(name) {
+                populateSwitchBranches(name);
+                $("#switchModal").modal('show');
+            }
+
+            function onSwitch() {
+                const name = $("#switchModal-name").val();
+                const branch = $("#switchModal-branch").val();
+
+                if (!name) {
+                    $("#switchModal-error").text("Please select set");
+                    return;
+                }
+
+                if (!branch) {
+                    $("#switchModal-error").text("Please select branch");
+                    return;
+                }
+
+                const data = {
+                    "name": name,
+                    "branch": branch
+                };
+
+                console.debug("POST", "/scriptlet/sets/switch", data);
+
+                fetch("/scriptlet/sets/switch", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify(data)
+                }).then(async (r)=>{
+                    if(r.ok) {
+                        $("#switchModal").modal('hide');
+                        enqueueRefreshList();
+                    } else {
+                        const d = await r.json();
+                        $("#switchModal-error").text(d.detail);
+                    }
+                }).catch((e)=>$("#switchModal-error").text(e.toString()));
+            }
+
+            function onRemove(name) {
+                console.debug("onRemove", name);
+
+                if(window.confirm(`are you sure you want to remove set ${name}`)) {
+                    console.debug("DELETE", `/scriptlet/sets/remove/${name}`);
+
+                    fetch(`/scriptlet/sets/remove/${name}`, {
+                        method: "DELETE"
+                    }).then(async (r)=>{
+                        if(r.ok)
+                            enqueueRefreshList();
+                        else
+                            console.error("DELETE", `/scriptlet/sets/remove/${name}`, r.statusText);
+                    }).catch((e)=>console.error("DELETE", `/scriptlet/sets/remove/${name}`, e.toString()));
+                }
+            }
+
+            $(document).ready(() => {
+                refreshList();
+                setInterval(function() {
+                    refreshList();
+                }, 10000);
+
+                // Modals
+                $("body").append(genCloneModal());
+                $("body").append(genSwitchModal());
+
+                // Show clone modal on add button
+                $("#addButton").on('click', function () {
+                    clearCloneModal();
+                    $("#cloneModal").modal('show');
+                });
+            });
+        </script>
+    </head>
+    <body class="bg-body">
+        <nav class="navbar navbar-expand navbar-dark bg-dark pt-3">
+            <ul class="navbar-nav w-100">
+                <li class="navbar-brand">
+                    <span class="material-icons-round">folder</span>
+                    <span>Sets Manager</span>
+                </li>
+                
+                <li class="nav-item m-1">
+                    <button type="button" id="addButton" class="btn btn-success">
+                        <span class="material-icons-round">add</span>
+                    </button>
+                </li>
+
+                <li class="nav-item mx-auto"></li>
+
+                <li class="nav-item m-1">
+                    <button type="button" class="btn btn-success" onclick="refreshList()">
+                        <span class="material-icons-round">refresh</span>
+                    </button>
+                </li>
+            </ul>
+        </nav>
+
+        <table class="table table-secondary">
+            <thead>
+              <tr>
+                <th scope="col">Name</th>
+                <th scope="col">Branch</th>
+                <th scope="col">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="sets">
+            </tbody>
+        </table>
+    </body>
+</html>

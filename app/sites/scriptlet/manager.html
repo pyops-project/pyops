@@ -12,58 +12,105 @@
         <script src="/files/js/bootstrap/bootstrap.bundle.min.js"></script>
 
         <script>
+            const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+            function setTheme(e) {
+                const body = document.body;
+                const table = document.querySelector('table');
+                if (e.matches) {
+                    document.documentElement.setAttribute('data-bs-theme', 'dark');
+                    body.classList.remove('bg-body');
+                    body.classList.add('bg-dark');
+                    if (table) {
+                        table.classList.remove('table-secondary');
+                        table.classList.add('table-dark');
+                    }
+                } else {
+                    document.documentElement.setAttribute('data-bs-theme', 'light');
+                    body.classList.remove('bg-dark');
+                    body.classList.add('bg-body');
+                    if (table) {
+                        table.classList.remove('table-dark');
+                        table.classList.add('table-secondary');
+                    }
+                }
+            }
+            mediaQuery.addEventListener('change', setTheme);
+            $(document).ready(function() {
+                setTheme(mediaQuery);
+            });
+        </script>
+
+        <script>
             'use strict';
 
-            function genTaskActions(group, name) {
+            function genTaskActions(set, name) {
                 return `
-                    <button type="button" onclick="del('${group}', '${name}')" class="btn btn-danger p-0">
+                    <button type="button" onclick="del('${set}', '${name}')" class="btn btn-danger p-0">
                         <span class="material-icons-round">delete</span>
                     </button>
-                    <button type="button" onclick="onEditTask('${group}', '${name}')" class="btn btn-warning p-0">
+                    <button type="button" onclick="onEditTask('${set}', '${name}')" class="btn btn-warning p-0">
                         <span class="material-icons-round">edit</span>
                     </button>
                 `
             }
 
-            function genLibraryActions(group, name) {
+            function genLibraryActions(set, name) {
                 return `
-                    <button type="button" onclick="del('${group}', '${name}')" class="btn btn-danger p-0">
+                    <button type="button" onclick="del('${set}', '${name}')" class="btn btn-danger p-0">
                         <span class="material-icons-round">delete</span>
                     </button>
-                    <button type="button" onclick="onEditLibrary('${group}', '${name}', 'library')" class="btn btn-warning p-0">
+                    <button type="button" onclick="onEditLibrary('${set}', '${name}')" class="btn btn-warning p-0">
                         <span class="material-icons-round">edit</span>
                     </button>
                 `
             }
 
-            function genViewActions(group, name) {
+            function genViewActions(set, name) {
                 return `
-                    <button type="button" onclick="del('${group}', '${name}')" class="btn btn-danger p-0">
+                    <button type="button" onclick="del('${set}', '${name}')" class="btn btn-danger p-0">
                         <span class="material-icons-round">delete</span>
                     </button>
-                    <button type="button" onclick="onEditView('${group}', '${name}', 'library')" class="btn btn-warning p-0">
+                    <button type="button" onclick="onEditView('${set}', '${name}')" class="btn btn-warning p-0">
                         <span class="material-icons-round">edit</span>
                     </button>
                 `
             }
 
-            function genActions(group, name, type) {
+            function genMdActions(set, name) {
+                return `
+                    <button type="button" onclick="del('${set}', '${name}')" class="btn btn-danger p-0"${name == 'README' ? ' disabled' : ''}>
+                        <span class="material-icons-round">delete</span>
+                    </button>
+                    <button type="button" onclick="onEditMd('${set}', '${name}')" class="btn btn-warning p-0">
+                        <span class="material-icons-round">edit</span>
+                    </button>
+                `
+            }
+
+            function genActions(set, name, type) {
+                let actions = "";
                 if(type == "task")
-                    return genTaskActions(group, name);
+                    actions = genTaskActions(set, name);
                 else if(["library", "controller"].includes(type))
-                    return genLibraryActions(group, name);
+                    actions = genLibraryActions(set, name);
                 else if(type == "view")
-                    return genViewActions(group, name);
+                    actions = genViewActions(set, name);
+                else if(type == "markdown")
+                    actions = genMdActions(set, name);
+                return actions + `
+                    <button type="button" class="btn btn-danger p-0 save-rev-btn" onclick="saveRevision('${set}', '${name}')" disabled>
+                        <span class="material-icons-round">save_alt</span>
+                    </button>
+                `;
             }
 
-            function genScriptletItem(group, name, description, type) {
+            function genScriptletItem(set, name, type) {
                 return `
                     <tr>
-                        <th scope="row">${group}</th>
+                        <th scope="row">${set}</th>
                         <th scope="row">${name}</th>
-                        <td>${description}</td>
                         <td>${type}</td>
-                        <td>${genActions(group, name, type)}</td>
+                        <td>${genActions(set, name, type)}</td>
                     </tr>
                 `;
             }
@@ -76,7 +123,8 @@
                         const d = await r.json();
                         console.debug("scriptlets", d);
                         for(const i of d)
-                            $("#scriptlets").append(genScriptletItem(i.group, i.name, i.description, i.type));
+                            $("#scriptlets").append(genScriptletItem(i.set, i.name, i.type));
+                        checkStatuses();
                     } else
                         console.error("GET", "/scriptlet/inventory/list", r.statusText);
                 }).catch((e)=>console.error("GET", "/scriptlet/inventory/list", e.toString()));
@@ -88,38 +136,63 @@
 
             function clearCreateModal() {
                 $("#createModal-error").text("");
-                $("#createModal-group").val("");
+                $("#createModal-set").empty().append('<option value="">Select a set</option>');
                 $("#createModal-name").val("");
                 $("#createModal-type").val("task");
             }
 
-            function onEditTask(group, name) {
-                console.debug("onEdit", group, name);
-
-                window.open(`${window.location.origin}/scriptlet/editor_task?group=${group}&name=${name}`,`InfraOps - Scriptlet/Editor ${group}/${name}`,"titlebar=no,toolbar=no,menubar=no,scrollbars=no");
+            function populateSets() {
+                fetch("/scriptlet/inventory/sets").then(async (r)=>{
+                    if(r.ok) {
+                        const d = await r.json();
+                        console.debug("sets", d.sets);
+                        const select = $("#createModal-set");
+                        select.empty().append('<option value="">Select a set</option>');
+                        for(const set of d.sets) {
+                            select.append(`<option value="${set}">${set}</option>`);
+                        }
+                    } else
+                        console.error("GET", "/scriptlet/inventory/sets", r.statusText);
+                }).catch((e)=>console.error("GET", "/scriptlet/inventory/sets", e.toString()));
             }
 
-            function onEditLibrary(group, name) {
-                console.debug("onEdit", group, name);
+            function onEditTask(set, name) {
+                console.debug("onEdit", set, name);
 
-                window.open(`${window.location.origin}/scriptlet/editor_library?group=${group}&name=${name}`,`InfraOps - Scriptlet/Editor ${group}/${name}`,"titlebar=no,toolbar=no,menubar=no,scrollbars=no");
+                window.open(`${window.location.origin}/scriptlet/editor_task?set=${set}&name=${name}`,`PyOps - Task Editor ${set}/${name}`,"titlebar=no,toolbar=no,menubar=no,scrollbars=no");
             }
 
-            function onEditView(group, name) {
-                console.debug("onEdit", group, name);
+            function onEditLibrary(set, name) {
+                console.debug("onEdit", set, name);
 
-                window.open(`${window.location.origin}/scriptlet/editor_view?group=${group}&name=${name}`,`InfraOps - Scriptlet/Editor ${group}/${name}`,"titlebar=no,toolbar=no,menubar=no,scrollbars=no");
+                window.open(`${window.location.origin}/scriptlet/editor_library?set=${set}&name=${name}`,`PyOps - Library Editor ${set}/${name}`,"titlebar=no,toolbar=no,menubar=no,scrollbars=no");
+            }
+
+            function onEditView(set, name) {
+                console.debug("onEdit", set, name);
+
+                window.open(`${window.location.origin}/scriptlet/editor_view?set=${set}&name=${name}`,`PyOps - View Editor ${set}/${name}`,"titlebar=no,toolbar=no,menubar=no,scrollbars=no");
+            }
+
+            function onEditMd(set, name) {
+                console.debug("onEdit", set, name);
+
+                window.open(`${window.location.origin}/scriptlet/editor_md?set=${set}&name=${name}`,`PyOps - Markdown Editor ${set}/${name}`,"titlebar=no,toolbar=no,menubar=no,scrollbars=no");
             }
 
             function onCreate(edit = false) {
                 console.debug("onCreate");
 
-                const group = $("#createModal-group").val();
+                const set = $("#createModal-set").val();
+                if (!set) {
+                    $("#createModal-error").text("Please select a set");
+                    return;
+                }
                 const name = $("#createModal-name").val();
                 const type = $("#createModal-type").val();
 
                 const data = {
-                    "group": group,
+                    "set": set,
                     "name": name,
                     "type": type
                 }
@@ -140,11 +213,11 @@
 
                         if(edit) {
                             if(["library", "controller"].includes(type))
-                                onEditLibrary(group, name);
+                                onEditLibrary(set, name);
                             else if(type == "view")
-                                onEditView(group, name);
+                                onEditView(set, name);
                             else if(type == "task")
-                                onEditTask(group, name);
+                                onEditTask(set, name);
                         }
                     } else {
                         const d = await r.json();
@@ -153,29 +226,99 @@
                 }).catch((e)=>$("#createModal-error").text(e.toString()));
             }
 
-            function del(group, name) {
+            function del(set, name) {
                 console.debug("del");
 
-                if(window.confirm(`are you sure you want to delete ${group}::${name}`)) {
-                    console.debug("DELETE", `/scriptlet/inventory/item?group=${group}&name=${name}`);
+                if(window.confirm(`are you sure you want to delete ${set}::${name}`)) {
+                    console.debug("DELETE", `/scriptlet/inventory/item?set=${set}&name=${name}`);
 
-                    fetch(`/scriptlet/inventory/item?group=${group}&name=${name}`, {
+                    fetch(`/scriptlet/inventory/item?set=${set}&name=${name}`, {
                         method: "DELETE"
                     }).then(async (r)=>{
                         if(r.ok)
                             enqueueRefreshList();
                         else
-                            console.error("DELETE", `/scriptlet/inventory/item?group=${group}&name=${name}`, r.statusText);
-                    }).catch((e)=>console.error("DELETE", `/scriptlet/inventory/item?group=${group}&name=${name}`, e.toString()));
+                            console.error("DELETE", `/scriptlet/inventory/item?set=${set}&name=${name}`, r.statusText);
+                    }).catch((e)=>console.error("DELETE", `/scriptlet/inventory/item?set=${set}&name=${name}`, e.toString()));
+                }
+            }
+
+            async function saveRevision(set, name) {
+                console.debug("saveRevision", set, name);
+                try {
+                    const codeResp = await fetch(`/scriptlet/inventory/code?set=${set}&name=${name}`);
+                    if (!codeResp.ok) {
+                        console.error("Failed to fetch code", codeResp.statusText);
+                        return;
+                    }
+                    const codeData = await codeResp.json();
+                    const data = {
+                        "set": set,
+                        "name": name,
+                        "code": codeData.code
+                    };
+                    const saveResp = await fetch("/scriptlet/inventory/item", {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json"
+                        },
+                        body: JSON.stringify(data)
+                    });
+                    if (saveResp.ok) {
+                        console.debug("Revision saved");
+                        enqueueRefreshList();
+                    } else {
+                        console.error("Failed to save revision", saveResp.statusText);
+                    }
+                } catch (e) {
+                    console.error("saveRevision error", e.toString());
+                }
+            }
+
+            function checkStatuses() {
+                const rows = $("#scriptlets tr");
+                const promises = [];
+                rows.each(function() {
+                    const set = $(this).find("th").eq(0).text();
+                    const name = $(this).find("th").eq(1).text();
+                    if (set && name) {
+                        promises.push(
+                            fetch(`/scriptlet/inventory/status?set=${set}&name=${name}`).then(async (r) => {
+                                const btn = $(this).find(".save-rev-btn");
+                                if (r.ok) {
+                                    const d = await r.json();
+                                    console.log(`Status for ${set}::${name}:`, d.has_unstaged);
+                                    btn.prop("disabled", !d.has_unstaged);
+                                } else {
+                                    btn.prop("disabled", true);
+                                    console.error("Status fetch failed", r.statusText);
+                                }
+                            }).catch((e) => {
+                                console.error("Status fetch error", e.toString());
+                                $(this).find(".save-rev-btn").prop("disabled", true);
+                            })
+                        );
+                    }
+                });
+                if (promises.length > 0) {
+                    Promise.all(promises).catch((e) => console.error("Batch status error", e));
                 }
             }
 
             $(document).ready(() => {
                 refreshList();
+                setInterval(function() {
+                    refreshList();
+                }, 10000);
+
+                // Populate sets when modal is shown
+                $("#createModal").on('shown.bs.modal', function () {
+                    populateSets();
+                });
             });
         </script>
     </head>
-    <body class="bg-light">
+    <body class="bg-body">
         <nav class="navbar navbar-expand navbar-dark bg-dark pt-3">
             <ul class="navbar-nav w-100">
                 <li class="navbar-brand">
@@ -202,9 +345,8 @@
         <table class="table table-secondary">
             <thead>
               <tr>
-                <th scope="col">Group</th>
+                <th scope="col">Set</th>
                 <th scope="col">Name</th>
-                <th scope="col">Description</th>
                 <th scope="col">Type</th>
                 <th scope="col">Actions</th>
               </tr>
@@ -224,8 +366,8 @@
                     </div>
                     <div class="modal-body">
                         <div class="mb-3">
-                            <label for="createModal-group" class="col-form-label">Group:</label>
-                            <input id="createModal-group" type="text" class="form-control">
+                            <label for="createModal-set" class="col-form-label">Set:</label>
+                            <select id="createModal-set" class="form-select"></select>
                         </div>
                         <div class="mb-3">
                             <label for="createModal-name" class="col-form-label">Name:</label>

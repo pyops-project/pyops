@@ -21,7 +21,7 @@
             'use strict';
 
             const urlParams = new URLSearchParams(window.location.search);
-            const group = urlParams.get("group");
+            const set = urlParams.get("set");
             const name = urlParams.get("name");
 
             var editor = null;
@@ -61,7 +61,7 @@
                 console.debug("refresh");
                 
                 draftLock = true;
-                fetch(`/scriptlet/inventory/code?group=${group}&name=${name}`).then(async (r)=>{
+                fetch(`/scriptlet/inventory/code?set=${set}&name=${name}`).then(async (r)=>{
                     if(r.ok) {
                         const d = await r.json();
                         editor.setValue(d.code);
@@ -81,7 +81,7 @@
             function save(draft = true) {
                 if(!draft || !draftLock) {
                     const data = {
-                        "group": group,
+                        "set": set,
                         "name": name,
                         "code": editor.getValue()
                     };
@@ -114,12 +114,13 @@
                 if(editor_dirty) {
                     save();
                     editor_dirty = false;
+                    checkStatus();
                 }
                 setTimeout(function() { save_draft(); }, 1000);
             }
 
             function rollback() {
-                fetch(`/scriptlet/inventory/draft?name=${name}&group=${group}`, {
+                fetch(`/scriptlet/inventory/draft?name=${name}&set=${set}`, {
                     method: "DELETE"
                 }).then(async (r)=>{
                     if(r.ok) {
@@ -131,7 +132,7 @@
             }
 
             $(document).ready(() =>{
-                $("#scriptlet-id").text(`${group}::${name}`);
+                $("#scriptlet-id").text(`${set}::${name}`);
 
                 editor = ace.edit("editor", {
                     mode: "ace/mode/python",
@@ -148,12 +149,39 @@
                 });
 
                 editor.on("change", ()=>{
-                    editor_dirty = true
+                    editor_dirty = true;
+                    checkStatus();
+                });
+
+                document.addEventListener('keydown', function(e) {
+                    if(e.ctrlKey && e.key === 's') {
+                        e.preventDefault();
+                        save();
+                    }
                 });
 
                 save_draft();
                 refresh();
+                setTimeout(checkStatus, 1000);
             });
+
+            async function checkStatus() {
+                try {
+                    const resp = await fetch(`/scriptlet/inventory/status?set=${set}&name=${name}`);
+                    if (resp.ok) {
+                        const d = await resp.json();
+                        console.log(`Status for ${set}::${name}:`, d.has_unstaged);
+                        const has = d.has_unstaged;
+                        $("#btn-save, #btn-revert").prop("disabled", !has);
+                    } else {
+                        $("#btn-save, #btn-revert").prop("disabled", true);
+                        console.error("Status fetch failed", resp.statusText);
+                    }
+                } catch (e) {
+                    console.error("Status check error", e.toString());
+                    $("#btn-save, #btn-revert").prop("disabled", true);
+                }
+            }
         </script>
     </head>
     <body class="d-flex flex-column bg-dark h-100">
@@ -161,28 +189,25 @@
             <ul class="navbar-nav">
                 <li class="navbar-brand m-1">
                     <span class="material-icons-round">description</span>
-                    <span>Scriptlet/Editor</span>
+                    <span>Library Editor</span>
                     <span id="scriptlet-id"></span>
                 </li>
                 <li class="nav-item m-1">
-                    <button type="button" class="btn btn-danger" onclick="save(false)">
+                    <button id="btn-save" type="button" class="btn btn-danger" onclick="save(false)" disabled="disabled">
                         <span class="material-icons-round">save_alt</span>
                     </button>
                 </li>
                 <li class="nav-item m-1">
-                    <button type="button" class="btn btn-danger" onclick="rollback()">
+                    <button id="btn-revert" type="button" class="btn btn-danger" onclick="rollback()" disabled="disabled">
                         <span class="material-icons-round">backspace</span>
                     </button>
                 </li>
                 <li class="nav-item m-1">
                     <select id="font-size" class="form-select bg-dark text-light" onchange="fontSizeChanged()">
                         <option value="8pt">8pt</option>
-                        <option value="9pt">9pt</option>
-                        <option value="10pt" selected>10pt</option>
-                        <option value="11pt">11pt</option>
+                        <option value="9pt" selected>9pt</option>
                         <option value="12pt">12pt</option>
                         <option value="13pt">13pt</option>
-                        <option value="14pt">14pt</option>
                     </select>
                 </li>
             </ul>

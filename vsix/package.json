@@ -1,0 +1,360 @@
+{
+  "name": "pyops",
+  "displayName": "PyOps",
+  "description": "VSCodium extension for integrating with PyOps server",
+  "version": "0.0.1",
+  "publisher": "pyops-team",
+  "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "git@git.ralph.or.at:pyops/pyops.git"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onView:pyops-manager",
+    "onView:pyops-monitor"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "pyops-container",
+          "title": "PyOps",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "pyops-container": [
+        {
+          "id": "pyops-manager",
+          "name": "Manager"
+        },
+        {
+          "id": "pyops-monitor",
+          "name": "Monitor"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "pyops.refreshManager",
+        "title": "Refresh PyOps Manager",
+        "category": "PyOps",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "pyops.createScriptlet",
+        "title": "Create Scriptlet",
+        "category": "PyOps",
+        "icon": "$(add)"
+      },
+      {
+        "command": "pyops.resetLocalFromRemote",
+        "title": "Reset Local from Remote Draft",
+        "category": "PyOps",
+        "icon": "$(download)"
+      },
+      {
+        "command": "pyops.writeLocalToRemoteDraft",
+        "title": "Write Local to Remote Draft",
+        "category": "PyOps",
+        "icon": "$(upload)"
+      },
+      {
+        "command": "pyops.saveRemoteDraft",
+        "title": "Save Remote Draft",
+        "category": "PyOps",
+        "icon": "$(check)"
+      },
+      {
+        "command": "pyops.startDebugJob",
+        "title": "Start Debug Job",
+        "category": "PyOps",
+        "icon": "$(play)"
+      },
+      {
+        "command": "pyops.stopDebugJob",
+        "title": "Stop Debug Job",
+        "category": "PyOps",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "pyops.diffLocalRemote",
+        "title": "Diff Local vs Remote",
+        "category": "PyOps",
+        "icon": "$(diff-compare)"
+      },
+      {
+        "command": "pyops.deleteScriptlet",
+        "title": "Delete Scriptlet",
+        "category": "PyOps",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "pyops.refreshMonitor",
+        "title": "Refresh Monitor",
+        "category": "PyOps",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "pyops.copyJobParam",
+        "title": "Copy Job Param",
+        "category": "PyOps",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "pyops.cancelJob",
+        "title": "Cancel Job",
+        "category": "PyOps",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "pyops.downloadJob",
+        "title": "Download Job Workspace",
+        "category": "PyOps",
+        "icon": "$(download)"
+      },
+      {
+        "command": "pyops.deleteJob",
+        "title": "Delete Job",
+        "category": "PyOps",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "pyops.viewJob",
+        "title": "View Job Details",
+        "category": "PyOps",
+        "icon": "$(eye)"
+      },
+      {
+        "command": "pyops.cancelAllJobs",
+        "title": "Cancel All Jobs",
+        "category": "PyOps",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "pyops.deleteAllDone",
+        "title": "Delete All Done/Canceled",
+        "category": "PyOps",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "pyops.deleteAllFailed",
+        "title": "Delete All Failed/Killed",
+        "category": "PyOps",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "pyops.attachDebugJob",
+        "title": "Attach to Debug Job",
+        "category": "PyOps",
+        "icon": "$(debug-start)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "pyops.createScriptlet",
+          "when": "view == 'pyops-manager' && pyops.hasValidConfig",
+          "group": "navigation"
+        },
+        {
+          "command": "pyops.refreshManager",
+          "when": "view == 'pyops-manager' && pyops.hasValidConfig",
+          "group": "navigation"
+        },
+        {
+          "command": "pyops.attachDebugJob",
+          "when": "view == 'pyops-manager' && pyops.hasValidConfig",
+          "group": "navigation"
+        },
+        {
+          "command": "pyops.refreshMonitor",
+          "when": "view == pyops-monitor && pyops.hasValidConfig",
+          "group": "navigation"
+        },
+        {
+          "command": "pyops.cancelAllJobs",
+          "when": "view == pyops-monitor && pyops.hasValidConfig",
+          "group": "navigation"
+        },
+        {
+          "command": "pyops.deleteAllDone",
+          "when": "view == pyops-monitor && pyops.hasValidConfig",
+          "group": "navigation"
+        },
+        {
+          "command": "pyops.deleteAllFailed",
+          "when": "view == pyops-monitor",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "pyops.resetLocalFromRemote",
+          "when": "view == 'pyops-manager' && viewItem =~ /^pyopsItem-(task|service|library|controller|view|markdown)$/ && pyops.hasValidConfig",
+          "group": "navigation"
+        },
+        {
+          "command": "pyops.writeLocalToRemoteDraft",
+          "when": "view == 'pyops-manager' && viewItem =~ /^pyopsItem-(task|service|library|controller|view|markdown)(-local)?$/ && pyops.hasValidConfig",
+          "group": "navigation"
+        },
+
+        {
+          "command": "pyops.saveRemoteDraft",
+          "when": "view == 'pyops-manager' && viewItem =~ /^pyopsItem-(task|service|library|controller|view|markdown)$/ && pyops.hasValidConfig",
+          "group": "navigation"
+        },
+        {
+          "command": "pyops.startDebugJob",
+          "when": "view == 'pyops-manager' && viewItem =~ /^pyopsItem-task(-local)?$/ && pyops.hasValidConfig",
+          "group": "navigation"
+        },
+        {
+          "command": "pyops.stopDebugJob",
+          "when": "view == 'pyops-manager' && viewItem =~ /^pyopsItem-task(-local)?$/",
+          "group": "navigation"
+        },
+        {
+          "command": "pyops.diffLocalRemote",
+          "when": "view == 'pyops-manager' && viewItem =~ /^pyopsItem-(task|service|library|controller|view|markdown)$/ && pyops.hasValidConfig",
+          "group": "navigation"
+        },
+        {
+          "command": "pyops.deleteScriptlet",
+          "when": "view == 'pyops-manager' && viewItem =~ /^pyopsItem-(task|service|library|controller|view|markdown)(-local)?$/ && pyops.hasValidConfig",
+          "group": "navigation"
+        },
+
+        {
+          "command": "pyops.viewJob",
+          "when": "view == pyops-monitor && viewItem =~ /pyopsJob-.*/ && pyops.hasValidConfig",
+          "group": "navigation"
+        },
+        {
+          "command": "pyops.cancelJob",
+          "when": "view == pyops-monitor && viewItem =~ /pyopsJob-(todo|running|dequeued)/ && pyops.hasValidConfig",
+          "group": "navigation"
+        },
+        {
+          "command": "pyops.downloadJob",
+          "when": "view == pyops-monitor && viewItem =~ /pyopsJob-.*/ && pyops.hasValidConfig",
+          "group": "navigation"
+        },
+        {
+          "command": "pyops.deleteJob",
+          "when": "view == pyops-monitor && viewItem =~ /pyopsJob-(done|failed|cancelled|killed)/ && pyops.hasValidConfig",
+          "group": "navigation"
+        },
+        {
+          "command": "pyops.deleteAllFailed",
+          "when": "view == pyops-monitor && pyops.hasValidConfig",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "PyOps",
+      "properties": {
+        "pyops.serverUrl": {
+          "type": "string",
+          "default": "http://localhost:8000",
+          "description": "URL of the PyOps server instance"
+        },
+        "pyops.username": {
+          "type": "string",
+          "description": "Username for HTTP Basic Auth"
+        },
+        "pyops.timeout": {
+          "type": "number",
+          "default": 30,
+          "description": "Request timeout in seconds"
+        },
+        "pyops.useRemoteLinter": {
+          "type": "boolean",
+          "default": true,
+          "description": "Use remote PyOps linter for IntelliSense (switchable to local)"
+        },
+        "pyops.localPyopsDir": {
+          "type": "string",
+          "default": "pyops",
+          "description": "Local directory for PyOps scriptlets relative to workspace"
+        },
+        "pyops.autoRefreshInterval": {
+          "type": "number",
+          "default": 10,
+          "description": "Auto-refresh interval for Manager tree in seconds"
+        },
+        "pyops.excludedSets": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "List of set names to exclude from the Manager tree view"
+        },
+        "pyops.debugPort": {
+          "type": "number",
+          "default": 5678,
+          "description": "Port for PyOps remote debug attach"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src --ext ts",
+    "test": "jest",
+    "test:coverage": "jest --coverage",
+    "test:integration": "npm run compile && tsc -p tests/integration/ && node tests/integration/runTests.js"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.12",
+    "@types/node": "20.x",
+    "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^8.7.0",
+    "@typescript-eslint/parser": "^8.7.0",
+    "@vscode/test-electron": "^2.5.2",
+    "eslint": "^8.57.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.2",
+    "typescript": "^5.5.4"
+  },
+  "jest": {
+    "preset": "ts-jest",
+    "testEnvironment": "node",
+    "roots": [
+      "<rootDir>/src",
+      "<rootDir>/tests"
+    ],
+    "testMatch": [
+      "**/__tests__/**/*.ts",
+      "**/?(*.)+(spec|test).ts"
+    ],
+    "testPathIgnorePatterns": [
+      "<rootDir>/tests/integration/"
+    ],
+    "collectCoverageFrom": [
+      "src/**/*.ts"
+    ],
+    "coverageThreshold": {
+      "global": {
+        "branches": 80,
+        "functions": 80,
+        "lines": 90,
+        "statements": 80
+      }
+    }
+  }
+}

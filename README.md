@@ -1,23 +1,19 @@
-# InfraOps
-Execution Platform for Infrastructural Oriented Python Scriptlets
+# PyOps
+Execution Platform for Python Operations Scriptlets
 
 ## Architecture
 ![Architecture](doc/architecture.png)
 
 ## Configuration
 ### Settings
-Example: [etc/infraops.json](etc/infraops.json)
+Example: [etc/pyops.json](etc/pyops.json)
 - Not providing log paths logs to stdout/stderr
 - Not providing a jobs data path defaults to "app/../data/jobs"
-- InfraOps does not Provide SSL by itself, you should use a reverse proxy.
+- PyOps does not Provide SSL by itself, you should use a reverse proxy.
 
 ### Authentication
-At the moment InfraOps provides no authentication method.
+At the moment PyOps provides no authentication method.
 Implementing an authentication method at reverse proxy level is strongly advised for public systems.
-
-### External Packages
-The `pkg` directory could contain Python packages which are available in scriptles via `import`.
-Best Practice is to directly clone the package's Git repository.
 
 ## Scriptlets
 ### Types
@@ -28,16 +24,19 @@ One time executed, usually for debugging.
 Cron like scheduling of tasks.
 
 #### Service
-Not timed schedule which is kept running unless there are 3 fails.
+Not timed schedule which is kept running unless there are 3 fails or a user cancel.
 
 A service should consist of a main loop.
 This main loop can be a [websocket client](https://github.com/websocket-client/websocket-client) receiving messages from FastAPI controller.
 
+#### Controller
+
+
 ## Setup
 ### Direct
 ```
-git clone https://git.ralph.or.at/infraops/infraops.git
-cd infraops
+git clone https://git.ralph.or.at/pyops/pyops.git
+cd pyops
 ./run.sh
 ```
 
@@ -53,17 +52,17 @@ networks:
 
 services:
   app:
-    container_name: infraops_app.SOMEDOMAIN
-    image: 'registry.ralph.or.at/infraops/infraops:latest'
+    container_name: pyops_app.SOMEDOMAIN
+    image: 'registry.ralph.or.at/pyops/pyops:latest'
     restart: unless-stopped
     networks:
       - default
     volumes:
-      - './volumes/app/data:/opt/infraops/data'
-      - './volumes/app/etc:/opt/infraops/etc'
-      - './volumes/app/pkg:/opt/infraops/pkg'
+      - './volumes/app/data:/opt/pyops/data'
+      - './volumes/app/etc:/opt/pyops/etc'
+      - './volumes/app/venv:/opt/pyops/venv'
   nginx:
-    container_name: infraops.SOMEDOMAIN
+    container_name: pyops.SOMEDOMAIN
     image: 'nginx:1.25'
     restart: unless-stopped
     ports:
@@ -80,7 +79,7 @@ services:
 ```
 :exclamation: instead of using original nginx container as reverse proxy you could use [jonasal/nginx-certbot](https://hub.docker.com/r/jonasal/nginx-certbot) for using LetsEncrypt certificates.
 
-- `./volumes/app/etc/infraops.json`
+- `./volumes/app/etc/pyops.json`
 ```
 {
     "web": {
@@ -89,12 +88,20 @@ services:
         "timeout": 300
     },
     "data": {
-        "jobs": "../data/jobs"
+        "jobs": "data/jobs",
+        "git": "data/git",
+        "db": "data/app.db"
+    },
+    "runner": {
+        "venv": "data/venv",
+        "pkg": "data/pkg",
+        "git_pull_interval": 60
     },
     "log": {
-        "access": "../log/access.log",
-        "info": "../log/info.log",
         "loglevel": "debug"
+    },
+    "users": {
+        "someuser": {"debug_port": 15678}
     }
 }
 ```
@@ -104,7 +111,7 @@ services:
 ```
 server {
 	listen 443 ssl;
-	server_name infraops.SOMEDOMAIN;
+	server_name pyops.SOMEDOMAIN;
 
         ssl_certificate /etc/nginx/ssl/SOMECERT.crt;
         ssl_certificate_key /etc/nginx/ssl/SOMEKEY.key;
@@ -116,12 +123,12 @@ server {
 	    error_log /var/log/nginx/app_error.log;
 
         location / {
-                auth_basic           "InfraOps";
+                auth_basic           "PyOps";
                 auth_basic_user_file /etc/nginx/auth/htpasswd; 
 
-                proxy_pass http://infraops_app.SOMEDOMAIN;
+                proxy_pass http://pyops_app.SOMEDOMAIN;
                 proxy_set_header X-Real-IP $remote_addr;
-                proxy_set_header Host infraops.SOMEDOMAIN;
+                proxy_set_header Host pyops.SOMEDOMAIN;
                 proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
                 proxy_set_header X-Protocol https;
                 proxy_set_header X-Original-Host $host;

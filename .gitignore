@@ -1,3 +1,9 @@
 __pycache__
-.vscode
 pyrightconfig.json
+/.pyops
+/.pyops.*
+/.venv
+/.coverage
+.cache
+/data/
+/pyops/

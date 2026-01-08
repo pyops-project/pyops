@@ -2,7 +2,10 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import HTMLResponse
 from starlette.status import HTTP_200_OK, HTTP_500_INTERNAL_SERVER_ERROR
 
-from lib import sites
+from app.lib import sites
+
+import logging
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -16,4 +19,5 @@ async def get():
     except HTTPException as ex:
         raise ex
     except Exception as ex:
+        logger.exception("Error in get scheduler: %s", ex)
         raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))

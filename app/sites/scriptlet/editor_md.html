@@ -1,0 +1,191 @@
+<html>
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+
+    	<meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+
+		<link rel="stylesheet" href="/files/css/bootstrap/bootstrap.min.css">
+        <link rel="stylesheet" href="/files/css/material/material-icons.css">
+		<link rel="stylesheet" href="/files/css/ace/ace.css">
+
+        <script src="/files/js/jquery.min.js"></script>
+        <script src="/files/js/js.cookie.min.js"></script>
+        <script src="/files/js/bootstrap/bootstrap.bundle.min.js"></script>
+        <script src="/files/js/ace/ace.js"></script>
+        <script src="/files/js/ace/mode-markdown.js"></script>
+        <script src="/files/js/ace/ext-linking.js"></script>
+        <script src="/files/js/ace/ext-language_tools.js"></script>
+
+
+        <script>
+            'use strict';
+
+            const urlParams = new URLSearchParams(window.location.search);
+            const set = urlParams.get("set");
+            const name = urlParams.get("name");
+
+            var editor = null;
+            var langTools = ace.require('ace/ext/language_tools');
+            var draftLock = false;
+            var editor_dirty = false;
+
+            var job_id = null;
+
+            function refresh() {
+                console.debug("refresh");
+                
+                draftLock = true;
+                fetch(`/scriptlet/inventory/code?set=${set}&name=${name}`).then(async (r)=>{
+                    if(r.ok) {
+                        const d = await r.json();
+                        editor.setValue(d.code);
+                        editor.moveCursorTo(0,0);
+                        draftLock = false;
+                    } else
+                        console.error("refresh", r.statusText);
+                }).catch((e)=>console.error(e.toString()));
+            }
+
+            function fontSizeChanged() {
+                editor.setOptions({
+                    fontSize: $("#font-size").val()
+                });
+            }
+
+            function save(draft = true) {
+                if(!draft || !draftLock) {
+                    const data = {
+                        "set": set,
+                        "name": name,
+                        "code": editor.getValue()
+                    };
+
+                    let url;
+                    if(draft)
+                        url = "/scriptlet/inventory/draft";
+                    else
+                        url = "/scriptlet/inventory/item";
+
+                    fetch(url, {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json"
+                        },
+                        body: JSON.stringify(data)
+                    }).then(async (r)=>{
+                        if(r.ok) {
+                            if(draft)
+                                console.debug("save", "Draft Stored");
+                            else
+                                console.debug("save", "Stored");
+                        } else
+                            console.error(r.statusText);
+                    }).catch((e)=>console.error("save", e.toString()));
+                }
+            }
+
+            function save_draft() {
+                if(editor_dirty) {
+                    save();
+                    editor_dirty = false;
+                    checkStatus();
+                }
+                setTimeout(function() { save_draft(); }, 1000);
+            }
+
+            async function checkStatus() {
+                try {
+                    const resp = await fetch(`/scriptlet/inventory/status?set=${set}&name=${name}`);
+                    if (resp.ok) {
+                        const d = await resp.json();
+                        console.log(`Status for ${set}::${name}:`, d.has_unstaged);
+                        const has = d.has_unstaged;
+                        $("#btn-save, #btn-revert").prop("disabled", !has);
+                    } else {
+                        $("#btn-save, #btn-revert").prop("disabled", true);
+                        console.error("Status fetch failed", resp.statusText);
+                    }
+                } catch (e) {
+                    console.error("Status check error", e.toString());
+                    $("#btn-save, #btn-revert").prop("disabled", true);
+                }
+            }
+
+            function rollback() {
+                fetch(`/scriptlet/inventory/draft?name=${name}&set=${set}`, {
+                    method: "DELETE"
+                }).then(async (r)=>{
+                    if(r.ok) {
+                        console.debug("rollback", "to last revision");
+                        refresh();
+                    } else
+                        console.error(r.statusText);
+                }).catch((e)=>console.error(e.toString()));
+            }
+
+            $(document).ready(() =>{
+                $("#scriptlet-id").text(`${set}::${name}`);
+
+                editor = ace.edit("editor", {
+                    mode: "ace/mode/markdown",
+                    theme: "ace/theme/twilight",
+                    showPrintMargin: false,
+                    enableLinking: true,
+                    enableBasicAutocompletion: true,
+                    enableLiveAutocompletion: true,
+                    enableSnippets: true,
+                    selectionStyle: "text",
+                    fontSize: $("#font-size").val(),
+                    useWorker: false
+                });
+
+                editor.on("change", ()=>{
+                    editor_dirty = true;
+                    checkStatus();
+                });
+
+                document.addEventListener('keydown', function(e) {
+                    if(e.ctrlKey && e.key === 's') {
+                        e.preventDefault();
+                        save();
+                    }
+                });
+
+                save_draft();
+                refresh();
+                setTimeout(checkStatus, 1000);
+            });
+        </script>
+    </head>
+    <body class="d-flex flex-column bg-dark h-100">
+        <nav class="d-flex flex-column navbar navbar-expand navbar-dark bg-dark align-items-stretch">
+            <ul class="navbar-nav">
+                <li class="navbar-brand m-1">
+                    <span class="material-icons-round">description</span>
+                    <span> Markdown Editor</span>
+                    <span id="scriptlet-id"></span>
+                </li>
+                <li class="nav-item m-1">
+                    <button id="btn-save" type="button" class="btn btn-danger" onclick="save(false)" disabled="disabled">
+                        <span class="material-icons-round">save_alt</span>
+                    </button>
+                </li>
+                <li class="nav-item m-1">
+                    <button id="btn-revert" type="button" class="btn btn-danger" onclick="rollback()" disabled="disabled">
+                        <span class="material-icons-round">backspace</span>
+                    </button>
+                </li>
+                <li class="nav-item m-1">
+                    <select id="font-size" class="form-select bg-dark text-light" onchange="fontSizeChanged()">
+                        <option value="8pt">8pt</option>
+                        <option value="9pt" selected>9pt</option>
+                        <option value="12pt">12pt</option>
+                        <option value="13pt">13pt</option>
+                    </select>
+                </li>
+            </ul>
+        </nav>
+
+        <div id="editor" class="d-flex flex-column flex-grow-1 mt-1"></div>
+    </body>
+</html>

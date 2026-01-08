@@ -11,13 +11,42 @@
         <script src="/files/js/js.cookie.min.js"></script>
         <script src="/files/js/bootstrap/bootstrap.bundle.min.js"></script>
 
+        <script>
+            const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+            function setTheme(e) {
+                const body = document.body;
+                const table = document.querySelector('table');
+                if (e.matches) {
+                    document.documentElement.setAttribute('data-bs-theme', 'dark');
+                    body.classList.remove('bg-body');
+                    body.classList.add('bg-dark');
+                    if (table) {
+                        table.classList.remove('table-secondary');
+                        table.classList.add('table-dark');
+                    }
+                } else {
+                    document.documentElement.setAttribute('data-bs-theme', 'light');
+                    body.classList.remove('bg-dark');
+                    body.classList.add('bg-body');
+                    if (table) {
+                        table.classList.remove('table-dark');
+                        table.classList.add('table-secondary');
+                    }
+                }
+            }
+            mediaQuery.addEventListener('change', setTheme);
+            $(document).ready(function() {
+                setTheme(mediaQuery);
+            });
+        </script>
+
         <script type="text/javascript">
             'use strict';
 
             function genActions(j) {
                 if(["cancel", "dequeued"].includes(j.state))
                     return genTransActions(j);
-                else if(["canceled", "failed", "done"].includes(j.state))
+                else if(["cancelled", "killed", "failed", "done"].includes(j.state))
                     return genDoneActions(j);
                 else
                     return genUndoneActions(j);
@@ -102,7 +131,7 @@
 
             function clearCreateModal() {
                 $("#createModal-error").text("");
-                $("#createModal-group").val("");
+                $("#createModal-set").val("");
                 $("#createModal-name").val("");
                 $("#createModal-schedule").val("");
                 $("#createModal-param").val("");
@@ -111,13 +140,13 @@
             function onCreate() {
                 console.debug("onCreate");
 
-                const group = $("#createModal-group").val();
+                const set = $("#createModal-set").val();
                 const name = $("#createModal-name").val();
                 const schedule = $("#createModal-schedule").val();
                 const param = $("#createModal-param").val();
 
                 const data = {
-                    "group": group,
+                    "set": set,
                     "name": name,
                     "schedule": schedule,
                     "param": param
@@ -166,7 +195,7 @@
                         const d = await r.json();
                         console.debug("jobs", d);
                         for(const i of d)
-                            if(!["canceled", "failed", "done", "cancel", "dequeued"].includes(i.state))
+                            if(!["cancelled", "killed", "failed", "done", "cancel", "dequeued"].includes(i.state))
                                 cancel(i.id, i == d[d.length - 1]);
                     } else
                         console.error("GET", "/scriptlet/job/list", r.statusText);
@@ -223,15 +252,18 @@
             function view(id) {
                 console.debug(`view(${id})`);
 
-                window.open(`${window.location.origin}/scriptlet/view_job?id=${id}`,`InfraOps - Scriptlet/View ${id}`,"titlebar=no,toolbar=no,menubar=no,scrollbars=no");
+                window.open(`${window.location.origin}/scriptlet/view_job?id=${id}`,`PyOps - Scriptlet/View ${id}`,"titlebar=no,toolbar=no,menubar=no,scrollbars=no");
             }
 
             $(document).ready(() => {
                 refreshList();
+                setInterval(function() {
+                    refreshList();
+                }, 10000);
             });
         </script>
     </head>
-    <body class="bg-light">
+    <body class="bg-body">
         <nav class="navbar navbar-expand navbar-dark bg-dark pt-3">
             <ul class="navbar-nav w-100">
                 <li class="navbar-brand">
@@ -246,13 +278,13 @@
                 </li>
                 
                 <li class="nav-item m-1">
-                    <button type="button" class="btn btn-danger" onclick="delAllOf(['done', 'canceled'])">
+                    <button type="button" class="btn btn-danger" onclick="delAllOf(['done', 'cancelled'])">
                         <span class="material-icons-round">delete</span>
                     </button>
                 </li>
                 
                 <li class="nav-item m-1">
-                    <button type="button" class="btn btn-danger" onclick="delAllOf(['failed'])">
+                    <button type="button" class="btn btn-danger" onclick="delAllOf(['failed', 'killed'])">
                         <span class="material-icons-round">delete_forever</span>
                     </button>
                 </li>

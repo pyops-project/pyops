@@ -1,0 +1,6 @@
+/node_modules
+/out
+*.vsix
+/coverage
+/.vscode-test/
+/.tmp/

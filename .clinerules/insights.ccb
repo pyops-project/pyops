@@ -1,0 +1,659 @@
+Insigths:
+Insights are "Condensations of technically relevant Insights into Project as a set of CCB"
+; don't exceed 32768 Tokens
+; contain general project detail given by user & derrived from explicitly approved code
+; never contain task detail
+; are persisted/updated to `.clinerules/insights.ccb` & before using `replace_in_file` or `write_to_file` on any other file.
+The block `Insigths:` is immutable & always located on top of `.clinerules/insights.ccb`.
+
+Project-Overview:
+PyOps is "Execution Platform" for "Python Operations Scriptlets"; is licensed "GNU AGPLv3"; is organized Monorepo; has core functionality in `app/`; has VSCode extension in `vsix/`; has tests in `tests/`; has documentation in `doc/`.
+
+Monorepo-App:
+`app/` contains web.py & runner.py & gunicorn.py.
+
+Monorepo-Lib:
+`lib/` has git.py & pyops.py & files.py & sets.py & sites.py.
+
+Monorepo-Orm:
+`orm/` defines Job & Schedule models.
+
+Monorepo-Routers:
+`routers/scriptlet/` provides API endpoints.
+
+Monorepo-Sites:
+`sites/scriptlet/` serves HTML views.
+
+Deployment-Run:
+run.sh starts dev server; uses Gunicorn & Uvicorn.
+
+Deployment-Docker:
+PyOps supports Docker with Nginx reverse proxy.
+
+Deployment-Config:
+Config is via `etc/pyops.json`; provides web bind & data paths & logs.
+
+Architecture-Presentation:
+Presentation Layer uses FastAPI routes & static HTML; integrates Ace Editor & Bootstrap 5 & jQuery; renders dynamic controllers/views.
+
+Architecture-API:
+APILayer handles CRUD via routers/scriptlet/editor.py & inventory.py & job.py & manager.py & monitor.py & schedule.py & scheduler.py & sets.py.
+
+Architecture-Business:
+Business Layer manages Git sets & ZMQ IPC & job execution.
+
+Architecture-Persistence:
+Persistence Layer uses SQLite via SQLAlchemy.
+
+Architecture-Execution:
+Execution Layer isolates venv & processes directives.
+
+Core-Runner:
+runner.py is daemon; polls DB for todo jobs; executes scriptlets in workspaces `data/jobs/{owner}/{set}/{id}/`; handles states todo dequeued running done failed cancelled remove.
+
+Core-Web:
+web.py serves /controller/{set}/{name} & /menu & static /files/.
+
+Core-Pyops:
+pyops.py provides `Control` for API calls & `ServiceListener` for services.
+
+Stack-Backend:
+Backend uses Python 3.12 & FastAPI & SQLAlchemy 2.x & ZMQ & msgpack.
+
+Stack-Frontend:
+Frontend uses Bootstrap 5 & jQuery 3.6 & Ace Editor & Material Icons.
+
+Stack-Database:
+Database is SQLite thread-safe.
+
+Stack-Tests:
+Tests use pytest with >90% coverage & mocks in conftest.py.
+
+Stack-VSIX:
+VSIX is TypeScript with TreeDataProviders.
+
+Key-Features:
+Scriptlets support types task & service & library & controller & view.html; support directives `!pip` & `!git` & `!{set::lib}`; support scheduling via croniter; support monitoring & bulk ops; support VSIX trees for manager & jobs.
+
+Global-PyOps:
+PyOps is "IT Infrastructure Python Leveraging Tool".
+
+Global-Web:
+`app/web.py` mounts routers & static.
+
+Global-Jobs:
+Job states are tracked with PID & logs.
+
+Global-Services:
+Services use `listener.listen()` or `poll()`.
+
+Global-Config:
+Config loads from `etc/pyops.json`.
+
+Global-Tests:
+Tests store runtime in `.cache/`.
+
+Global-VSIXTests:
+VSIX tests use Mocha coverage >80%.
+
+Global-VSIX:
+VSIX provides `pyops-manager` & `pyops-monitor` trees.
+
+Config-Management:
+`app/lib/files.py` defines Config class; init(conf_path) loads `etc/pyops.json`; data() returns web data log sections; runner() returns runner-specific.
+
+JSON-Web:
+"web" contains {"bind": "0.0.0.0:80", "worker": 4, "timeout": 300}.
+
+JSON-Data:
+"data" contains {"jobs": "../data/jobs", "git": "../data/git"}.
+
+JSON-Log:
+"log" contains {"access": "../log/access.log", "info": "../log/info.log", "loglevel": "debug"}.
+
+JSON-Optional:
+Optional paths default to stdout & app/../data/jobs.
+
+Access-ConfData:
+conf_data() provides loaded config.
+
+Access-ConfRunner:
+conf_runner() provides runner-specific config.
+
+Access-Get:
+get(path) serves static files.
+
+Access-ConfLog:
+conf_log() provides log config from `app/lib/files.py`
+; accesses `etc/pyops.json`"log"; only includes "access" and "info" if explicitly set in config; always includes "loglevel" default "info"
+; used by `app/runner.py` main for logging setup; conditionally creates file handlers with makedirs; dual logs to stdout/stderr + files if configured.
+
+Global-Reload:
+Config supports dynamic reload on change.
+
+Global-Defaults:
+Defaults include web bind "0.0.0.0:80" & jobs "data/jobs" & no SSL.
+
+Global-Auth:
+App has no auth; proxy recommended.
+
+Global-Logs:
+Log levels include debug & info & etc.
+
+Git-Operations:
+`app/lib/git.py` manages scriptlet code in Git sets
+; uses repo_lock() for serialized access
+; pulls repos via pull_if_needed().
+
+Set-Scriptlet-Mgmt:
+get_repo_path(set) returns `data/git/{set}/`
+; list_scriptlets() lists {name}.{type}.py/html from sets
+; infer_type_from_filename(fn) derives task/service/etc.
+read_content(repo, name, type, committed/debug) reads file
+; write_content() writes & stages.
+
+Commit-Push:
+perform_git_add_commit_push(repo, file, msg) adds commits pushes
+; batch_commit(repo, msg, files) for multiples
+; delete_file_and_commit() removes & commits.
+get_repo_status(set) returns git status
+; has_unstaged_changes() checks drafts.
+
+Rollback:
+rollback_staged/committed(set, name, type) resets changes.
+
+Global-Attributes:
+Sets are Git repos in `data/git/{set}/`.
+Scriptlets: {name}.task.py {name}.service.py etc.
+check_name_unique() prevents duplicates in set.
+pull_if_needed() syncs at interval; skips dirty/tag soft reset clean.
+batch_commit() adds multiple/all commits pushes.
+rollback_staged backs .bck & checkout HEAD.
+Unique lock per set prevents concurrent git.
+; commit-push ops (add/commit/push) check remotes; skip push if no remote.
+
+Debugpy-Config:
+debugpy.listen binds ('0.0.0.0', port) intentionally for Docker remote debugging (VSCode on host to container port-forward).
+; Cline never changes debugpy.listen host/port binding without explicit user instruction.
+
+ZMQ-Control:
+`app/lib/pyops.py` provides "IPC via ZMQ" for scriptlets
+; ControlRequest handles "HTTP proxy" to FastAPI.
+
+JobControl:
+JobControl.list() queries jobs
+; create/get/delete/cancel/download.
+
+ScheduleControl:
+ScheduleControl.list/create/get/delete/activate/deactivate.
+
+Service-Listener:
+ServiceListener(job_id, owner) polls ZMQ
+; listen() blocks 1s for msg or TERM
+; poll() non-blocking
+; response(msg) sends dict back.
+
+Service-Client:
+ServiceClient(set, name, debug, owner) proxies to listener
+; request(msg) sends & receives.
+
+Control-Class:
+Control(web_bind) wraps job/schedule controls
+; get/post/put/delete(set, name, params/json) proxies to /controller/{set}/{name}/q.
+
+Global-Attributes:
+Control available in scriptlet glob for API calls like `control.job.list()`.
+Listener in services for inbound from controllers/UI.
+Msg format: {"type": "GET/POST", "path": str, "cmd": query, "data": body, "data_type": "json/text/binary/none"}.
+TERM signals shutdown.
+Uses msgpack for serialization.
+ServiceListener.poll uses zmq.Poller non-blocking timeout=0.
+JobControl.create(set: str, name: str, drop_done: bool, param: str, debug: bool) returns job_id.
+
+Sets-Management:
+`app/lib/sets.py` handles Git repositories
+; list_sets(git_dir) lists available sets.
+
+Clone-Set:
+clone_set(git_dir, name, url, username, password, git_name, git_email) clones remote to `data/git/{name}/`
+; adds .gitignore & README if needed.
+
+Remove-Set:
+remove_set(git_dir, name) deletes dir.
+
+Switch-Branch:
+switch_branch(git_dir, name, branch) checks out local branch.
+
+Global-Attributes:
+Sets group scriptlets in Git repos.
+Managed via /scriptlet/sets UI or API.
+VSIX supports clone/switch/remove via trees.
+Locking via git.py prevents conflicts.
+Auto-sync via pull_if_needed().
+
+ORM-Models:
+`app/orm/` uses SQLAlchemy Base
+; `job.py` defines Job class
+; `schedule.py` defines Schedule class.
+
+Database-Functions:
+`database.py` provides get_db_path() & init_db() & get_db_engine() & destroy_db()
+; uses SQLite file-based DB.
+
+Job-Model:
+Job tracks id owner set name kind param code libs state pid debugpy_pid detail drop_done created updated workspace.
+
+Schedule-Model:
+Schedule tracks id owner set name kind param schedule state active drop_done created updated.
+
+Global-Attributes:
+DB in data/ sqlite thread-safe WAL mode connect_args.
+init_db() creates tables on startup.
+Runner polls Jobs todo & Schedules cron.
+Job tracks fields id( PK str) owner(set name kind state indexed str) param(code libs detail str) pid(int) drop_done(bool) start(end DateTime indexed).
+Schedule tracks id(PK int) schedule(set name owner indexed str) param(str) active(drop_done bool indexed) last(DateTime).
+Job states todo dequeued running done failed cancel cancelled killed remove removed.
+
+Scriptlet-Routers:
+`app/routers/scriptlet/` submounts to /scriptlet/
+; editor.py handles code editing & Jedi completion
+; inventory.py CRUD scriptlets list.
+
+Job-Routers:
+job.py manages job lifecycle enqueue query cancel remove
+; enqueues jobs with kind ("task", "service", "debug")
+; for debug kind, accepts overrides dict[str, str] with keys 'set::name' for overriding scriptlets
+; delete /item allows todo cancelled killed failed done states via runner.remove setting state=remove
+; manager.py UI for jobs bulk ops.
+
+Monitor-Scheduler:
+monitor.py lists jobs/schedules by state
+; schedule.py CRUD schedules
+; scheduler.py activates cron triggers
+; sets.py manages Git sets clone switch remove.
+
+Editor-Features:
+editor_task/md/view/library supports Ace & preview
+; autocompletion via Jedi.
+
+Global-Attributes:
+Routers use FastAPI APIRouter.
+X-User header for owner (default anonymous).
+Endpoints: /scriptlet/job/item POST enqueue, /schedule/item etc.
+Integrates git.py for code read/write.
+UI: manager.html monitor.html scheduler.html sets.html.
+
+Runner-Daemon:
+`app/runner.py` implements background job executor
+; uses GracefulKiller for signal handling
+; main() loops schedule() & handleOddJobs().
+Polls DB via getNextToDo() for todo jobs
+; assigns PID via assignJob().
+
+Job-Execution:
+loadJob(job_id) fetches from DB; returns ..., code
+; run() processes param & libs & code in subprocess
+; handles venv activation & directives via process_imports() & process_install_lines()
+; for debug without overrides, uses unstaged code (preview)
+; for debug with overrides (VSIX), uses override code
+; uses compile() with custom filenames for accurate stacktraces.
+finishJob(job_id, state, detail) updates DB.
+
+Directive-Processing:
+process_imports(text, set, kind, libs) handles `!pip` `!git` `#!{set::lib}`
+; installs pip -q & clones git to pkg/ & prepends sys.path & exec libs
+; uses committed code for libs.
+process_install_lines(lines, venv, pkg, id) executes installs.
+
+Termination:
+getNextToTerm() finds to-kill jobs
+; term() kills processes
+; postTerm() updates DB.
+cleanProcesses() reaps zombies.
+
+Scheduling:
+schedule() enqueues from cron Schedules via croniter.
+
+Global-Attributes:
+Runner spawns isolated processes per job.
+Workspaces in `data/jobs/{owner}/{set}/{id}/`.
+States: todo dequeued running done failed cancelled remove.
+Supports debug mode & drop_done cleanup.
+GracefulKiller handles SIGTERM/SIGINT.
+
+Debug-Kind-Implementation:
+Runner treats debug kind specially for web preview/VSIX.
+; web preview: no overrides, unstaged main code, committed libs.
+; VSIX: overrides for local code.
+; injects debugpy.listen(('0.0.0.0', port)) always, +wait_for_client() if '#>AWAIT_DEBUG' in param.
+; requires user debug_port.
+; kills previous debug job for owner.
+
+Config-Extension:
+files.py added conf_users() for pyops.json "users" {}
+; pyops.json added "users": {"anonymous": {"debug_port": 5678}} example.
+
+Enqueue-Logic:
+enqueue() in lib/runner.py handles debug kind specially
+; queries existing debug job for owner in running/dequeued states
+; kills existing if found.
+; creates new todo.
+
+Validation-Logic:
+validate_debug_prerequisites(job_id, owner) checks port only
+; called in main() after loadJob for kind=="debug"
+; fails job to "failed" state with detail if invalid port.
+
+Execution-Logic:
+run() injects debugpy code as first lib for debug kind
+; compiles debug_bridge.py with debugpy.listen(('127.0.0.1', port)) and wait_for_client()
+; keeps listener/glob/logging like draft/service
+; exec param/libs/code with debugpy bridge first.
+
+Auto-Install-Debugpy:
+Runner injects !debugpy as first lib for debug kind before process_install_lines
+; ensures debugpy available like user !pip directives
+; processed by same install logic (venv/bin/pip install -q debugpy if not installed).
+
+Tests-Added:
+test_api_job.py has debug enqueue tests
+; integration tests in tests/integration/runner/ for full debug execution
+; test_run_debug_inject asserts debugpy in bridge lib and code compile
+; unit tests for validate_debug_prerequisites with port checks
+; unit tests for enqueue with existing debug kill.
+
+Global-Attributes:
+Debug kind enables VSCode debugger attach to localhost:{port}.
+Allows second debug job by killing previous one at enqueue time to handle disconnections.
+Overrides allow custom code injection for debugging.
+
+Debug-Overrides:
+VSIX DebugService.buildOverrides constructs overrides[`{set}::{name}`] = local fs.readFileSync(fullPath)
+; recursive walk pyops/set/*.py basename(relative).py
+; runner.run() json.loads(overrides); if f"{set}::{name}" in override_dict: code=override_dict[...]; for lib if lib["filename"] in override_dict: lib["code"]=...
+; enables local code in debug jobs matching runner compile(..., f"{set}::{name}.py").
+
+FastAPI-App:
+`app/web.py` creates FastAPI application
+; mounts routers from `app/routers/`
+; serves static files from `app/files/`
+; handles dynamic rendering.
+
+Root-Routes:
+root() serves root.html
+; favicon() serves favicon.ico
+; file(path) serves static /files/{path} like ace.js bootstrap.css.
+
+Controller-Proxy:
+controller(set, name) renders UI via get_controller_code & get_view_content
+; loads controller.py globals (set service debug head menu body name)
+; injects {{SET}} {{NAME}} in views.
+controller_proxy(set, name, rest:path) handles all HTTP methods /controller/{set}/{name}/{rest:path}
+; exec controller.py to get service
+; sends ZMQ msg with type, path="/{rest}", query_params, body/data_type to service.
+menu() lists controllers from DB.
+
+View-Rendering:
+get_controller_code(set, name, debug) reads controller.py
+; get_view_content(set, name, debug) reads html views (head menu body).
+Dynamic UI uses Bootstrap & Ace & jQuery from /files/
+; controllers proxy requests to /{rest:path} with path forwarded to service.
+
+Global-Attributes:
+FastAPI uses async routes.
+Controllers enable /controller/{set}/{name}/q for API proxy to services.
+Views support light/dark theme via Bootstrap data-bs-theme.
+Ace Editor loaded dynamically for modes like python json html.
+
+Tests-Structure:
+`tests/` uses pytest
+; conftest.py provides fixtures mock_conf mock_db mock_client mock_git_dir mock_git_ops etc.
+; coverage >90% via pytest --cov-fail-under=90.
+
+Test-Types:
+unit/lib/ tests lib_files lib_git lib_pyops lib_runner_utils lib_sets lib_sites.
+unit/orm/ tests job schedule.
+integration/ tests git orm routers runner execution.
+api/ tests api_editor api_endpoints api_job api_schedule api_sets.
+
+Fixtures-Mocks:
+mock_db creates temp SQLite.
+mock_git_dir creates mock sets/scriptlets.
+mock_git_ops overrides list_scriptlets read/write etc.
+mock_process mocks subprocess.
+mock_croniter mock_jedi mock_datetime.
+Overrides for controller_code/view_content file_path etc.
+
+Global-Attributes:
+Tests store runtime in `.cache/`.
+No autouse fixtures; isolated.
+conftest.py custom_showwarning & pytest_configure.
+Integration tests prefix routers/ lib/ runner/.
+
+VSIX-Extension:
+`vsix/` is VSCodium extension for PyOps
+; `src/extension.ts` activates context & registers providers
+; `src/jobsTreeProvider.ts` provides JobsTreeDataProvider
+; `src/managerTreeProvider.ts` provides ManagerTreeDataProvider
+; `src/utils.ts` contains shared functions like inferExt hasValidConfig
+; `src/commands/CreateScriptletCommand.ts` handles create scriptlet command logic.
+
+VSIX-Tests:
+Unit tests in `tests/` use Jest with mocked vscode APIs & API client
+; integration tests in `tests/integration/` use @vscode/test-electron for real VS Code environment with simple assert-based testing
+; integration tests run against separately started localhost PyOps development server without authentication
+; PyOps server must be started externally before running integration tests (not managed by test framework)
+; run unit tests with `npm run test` or `npm run test:coverage`
+; run integration tests with `npm run test:integration` (requires running local development PyOps server on localhost:8000)
+; integration tests excluded from CI/CD since VS Code not available
+; infrastructure set up with simple console-based test runner that works in VS Code extension host
+; tests verify extension activation, configuration (server URL only), views, and command registration
+; no authentication testing in integration tests (development server runs without auth).
+
+Auth-Service:
+`src/services/AuthService.ts` handles auth setup for Basic Auth
+; prompts for password if username configured but no password stored
+; stores password securely in workspace state
+; unit tests in `tests/services/AuthService.test.ts`.
+
+Refresh-Timer-Manager:
+`src/services/RefreshTimerManager.ts` manages auto-refresh timers for manager/jobs tree providers
+; starts/stops timers based on config validity
+; prevents duplicate timers
+; unit tests in `tests/services/RefreshTimerManager.test.ts`.
+
+Tree-Providers:
+ManagerTreeDataProvider fetches scriptlets via API
+; downloads to local .pyops/{set}/
+; supports create/upload/save/diff/reset/delete/debug
+; has unit tests in `tests/managerTreeProvider.test.ts`.
+JobsTreeDataProvider lists jobs by state
+; bulk cancel/delete & refresh.
+
+Content-Provider:
+RemoteContentProvider serves remote files
+; onDidChange events.
+
+Config:
+VSCode workspace settings sets serverUrl username password (state) localPyopsDir autoRefreshInterval
+; auth optional (Basic if username/password set).
+
+Global-Attributes:
+Trees: pyops-manager (sets/scriptlets), pyops-monitor (jobs).
+Actions: enqueue debug download view.
+Checks hasValidConfig() for serverUrl only.
+Status bar shows connection.
+Integrates Cline for code gen.
+DebugService: `src/services/DebugService.ts` provides buildOverrides (recursive FS walk local pyops/set/*.py) & enqueueDebugJob (API POST /job/item kind=debug)
+; getDebugHost() parses hostname from pyops.serverUrl ; fallback localhost on invalid URL
+; used by PyOpsPythonDebugConfigProvider & pyops.startDebugJob & pyops.attachDebugJob
+; unit tests `tests/services/debugService.test.ts` >90% coverage.
+
+Extension-Test:
+`extension.test.ts` tests activate() success & auth failure
+; deactivate() disposals
+; config change handler: pyops config only, refresh providers/timers based on hasValidConfig()
+; debug terminate: cancel job via API if jobId
+; command handlers: 20+ commands via registerCommand capture in beforeAll, mock instances from globals.
+
+Service-Tests:
+JobService.test.ts: CRUD ops, bulk cancel/delete, viewJob polling with stdout/stderr updates & state transitions (done/failed/cancelled/remove/404), error handling for all async methods, undefined provider handling, timer cleanup.
+; ScriptletService.test.ts: local/remote sync ops, network error handling, filesystem branch tests (existsSync conditions), multi-step error scenarios.
+; DebugService.test.ts: buildOverrides, enqueueDebugJob
+; DebugOutputMonitor.test.ts: start/stop monitoring & polling (incremental stdout/stderr append, show channels, stop on done/failed/cancelled/remove/404, fetch error log).
+; RefreshTimerManager.test.ts: ensureRunning, stopIfRunning
+; AuthService.test.ts: setupAuth prompts/storage
+; PyOpsPythonDebugConfigProvider.test.ts: config provision.
+
+Provider-Tests:
+managerTreeProvider.test.ts: getTreeItem/Children API fetch/download, error handling for fetchScriptlets/downloadScriptlets, refresh graceful failure.
+; jobsTreeProvider.test.ts: job states bulk ops
+; RemoteContentProvider.test.ts: provideTextDocumentContent, registerRemoteLanguageModeSetter conditional logic, missing language mappings, event emitter access.
+
+Utility-Tests:
+utils.test.ts: inferExt all switch cases including unknown types, hasValidConfig false paths (empty/undefined/null serverUrl).
+
+Other-Tests:
+apiClient.test.ts: API calls with auth
+; ConnectionStatusManager.test.ts: status bar updates
+; CreateScriptletCommand.test.ts: command execution.
+
+Test-Mocking:
+Hoisted jest.mock('../src/services/*') with mockImplementation for instances/methods
+; dynamic require for overrides
+; vscode mocks: window.createOutputChannel, workspace.getConfiguration etc.
+; global.fetch for API, fs/path mocks for filesystem ops.
+
+Global-Attributes:
+Tests use beforeAll for shared activate/setup; beforeEach(jest.clearAllMocks())
+; no autouse fixtures; isolation via mocks/clear.
+; run: `npm run test --prefix vsix/`
+; focus on error paths, edge cases, complex conditional logic for branch coverage.
+
+VSIX-Integration-Monitor:
+`vsix/tests/integration/suite/monitor.test.ts` tests JobsTreeDataProvider & JobService
+; covers job lifecycle/tree visibility/state description/viewJob(basic)/bulk cancelAllJobs/errors
+; uses helpers.pollTree & waitForJobState & createTestJob/Scriptlet
+; accesses global.jobsTreeProvider & jobService after activation
+; creates print stdout jobs; polls real API; graceful no-crash.
+VSIX-Integration-Monitor updates for runner env waits `'done'` state & asserts `'done - task'` description.
+; param empty avoids `exec` error.
+; test5 `cancelAllJobs` dialog refused in test env.
+
+VSIX-Integration-Manager:
+`vsix/tests/integration/suite/manager.test.ts` tests ManagerTreeDataProvider & ScriptletService
+; covers full scriptlet lifecycle: create/visibility synced 'check'; download local fs; local edit unsynced 'warning'; reset synced; writeLocalToRemoteDraft synced; saveRemoteDraft commit; delete gone; errors graceful fakeItem.
+; uses helpers.pollTreeItemIcon('check'/'warning') editLocalFile pollTree deleteTestScriptlet; accesses global.managerTreeProvider scriptletService.
+; polls tree state transitions; verifies local/remote sync via icons; deletes via API helper to avoid dialog in test env.
+
+Runner-Execution-Details:
+Runner executes `job.param` as Python code via `exec(compiled_param, glob)`
+; retries 3 times on error
+; sets state `'failed'` on `NameError` & exec errors
+; runs as thread in `web/gunicorn` process.
+
+Build-Process-Insights:
+TypeScript compilation requires strict output directory discipline
+; compiled JavaScript files must only exist in `out/` directories
+; any JS files in source directories indicate misconfiguration.
+
+Integration-Test-Compilation:
+Integration tests require separate TypeScript configuration from main extension
+; cannot share same tsconfig.json due to different include patterns & output requirements
+; rootDir must exactly match directory containing all source files being compiled
+; include patterns must explicitly list both test suite files AND utility files.
+
+Output-Directory-Management:
+Incorrect rootDir in tsconfig.json leads to nested or misplaced output directories
+; outDir path must be calculated relative to rootDir, not tsconfig.json location
+; verify compilation output matches expected structure before running tests.
+
+Test-Architecture-Access:
+Integration tests in VS Code environment access extension services through global objects
+; use `(global as any).serviceName` for service access, not direct TypeScript imports
+; static methods accessed via `serviceInstance.constructor.methodName` or class name
+; do not assume instance methods exist where only static methods are defined.
+
+VSIX-Integration-Commands:
+`vsix/tests/integration/suite/command_integration.test.ts` tests pyops commands execution & effects
+; mocks vscode.env.clipboard.writeText (read-only), vscode.window.showWarningMessage (return items[0])
+; covers copyJobParam downloadJob deleteJob cancelJob viewJob refreshConnectionStatus openLocalFile diffLocalRemote deleteScriptlet cancelAllJobs deleteAllDone
+; asserts tree removal state change no crash
+; helpers.pollTree waitForJobState createTestJob deleteTestScriptlet
+; accesses global services/providers.
+
+VSIX-ManagerTreeProvider:
+ManagerTreeProvider defines interface ScriptletInfo {set: string; name: string; type: string; isLocalOnly?: boolean}
+; _scriptlets: ScriptletInfo[]; fetchScriptlets(): Promise<ScriptletInfo[]> /scriptlet/inventory/list
+; scanLocalScriptlets(): Promise<ScriptletInfo[]> discovers pyops/{set}/{type}/*.{inferExt(type)} isLocalOnly:true
+; refresh merges remote & localOnly; filters excludedSets; downloads remoteOnly sets _syncStatus.
+
+VSIX-LocalOnly-Display:
+ManagerTreeProvider.getChildren root: pyopsSet folders; leaf: pyopsItem-{type}(-local)
+; localOnly: diff-added icon & contextValue pyopsItem-{type}-local & tooltip &#39;Local only - Set: {set}, Name: {name}, Type: {type}&#39; & description .ext (local)
+; remote: check/warning syncStatus icon & contextValue pyopsItem-{type} & tooltip sync status.
+
+VSIX-LocalDebug:
+Local-only task scriptlets support pyops.startDebugJob & pyops.stopDebugJob context menus via package.json when /^pyopsItem-task(-local)?$/; sync commands resetLocalFromRemote/saveRemoteDraft/diffLocalRemote restricted excluding -local; writeLocalToRemoteDraft & deleteScriptlet available via /^pyopsItem-(task|service|library|controller|view|markdown)(-local)?$/; writeLocalToRemoteDraft auto-creates remote via PUT /inventory/item if 404 then POST /draft & handles network errors on check/create with specific try-catch showErrorMessages; integration test9 tests write on local-only -> auto-create + draft success.
+
+Debug-Job-Enqueue-SkipCheck:
+`app/routers/scriptlet/job.py` PUT /scriptlet/job/item skips `git.read_content` existence check for `kind=="debug"` if `overrides[f"{ru.set}::{ru.name}"]` exists
+; enables VSIX local-only debug jobs without requiring remote scriptlet file.
+
+Runner-LoadJob-SkipCheck:
+`app/runner.py` loadJob skips `os.listdir/files_list` existence check for `kind=="debug"` if `job.overrides` valid JSON & `f"{job.set}::{job.name}" in parsed dict
+; sets `code = override_dict[main_key]`
+; fallback git.read_content if no main override or invalid JSON (logs warning)
+; `committed=False` for debug fallback
+; enables full local-only debug lifecycle (enqueue->dequeue->load->run).
+
+Debug-Await-Directive:
+Runner.run_debug_job checks '#>AWAIT_DEBUG' in job.param
+; injects debugpy bridge with listen(('0.0.0.0', port)) always
+; appends wait_for_client() if directive present.
+VSIX.DebugService.enqueuDebugJob sets param='#>AWAIT_DEBUG'.
+; enables waiting for VSIX debugger attach; non-VSIX enqueues non-blocking by default.
+Tests: tests/integration/runner/test_execution.py test_run_debug_inject (with directive); vsix/tests/services/debugService.test.ts.
+
+Debug-Port-Endpoint:
+app/web.py GET /debug/port uses sanitize_owner(X-User default "anonymous") & files.conf_users()[owner]["debug_port"]
+; returns {"port": int(port)}
+; 400 "No debug_port configured for user '{owner}'" if missing.
+
+VSIX-Debug-Port-Fetch:
+DebugService.enqueueDebugJob fetches /debug/port first with auth headers if set
+; logs [DEBUG getDebugPort] Success: {port} / Failed: {error}
+; validates number & range(1,65536) throws "Invalid port" else
+; returns port with jobId for vscode debug attach localhost:{port}.
+
+Tests-Debug-Port:
+tests/api/test_api_endpoints.py::test_debug_port mocks conf_users anonymous/testuser/missing -> 200/400.
+vsix/tests/services/debugService.test.ts mocks fetch /debug/port success/auth-noauth/job-fail/network/invalid-port/throw.
+
+VSIX-AttachDebug:
+VSIX adds "Attach Debug" title bar button in pyops-manager panel executes pyops.attachDebugJob command
+; lists jobs via JobService.listJobs() filters kind="debug" state="running"|"dequeued"
+; requires exactly one running debug job
+; fetches port DebugService.getDebugPort()
+; launches vscode.debug.startDebugging folder config=debugpy attach localhost:port justMyCode=false
+; name=`Attach to PyOps Debug (${set||'unknown'}::${name||'unknown'})`
+; logs "Attaching to job {id} ({set||?}::{name||?}) at port {port}"
+; handles no/missing/multiple/port fail gracefully.
+
+JobService-listJobs:
+JobService adds public async listJobs(): Promise<Job[]> { return this.fetchJobs(); }
+; enables pyops.attachDebugJob access.
+
+DebugService-getDebugPort:
+DebugService adds public async getDebugPort(): Promise<number> extracts `/debug/port` fetch/auth/logic
+; refactors enqueueDebugJob to call it
+; unit tests in debugService.test.ts success/throw-fetch-fail/invalid-port/no-auth.
+
+Global-AttachDebug:
+pyops.attachDebugJob enables reattach to detached VSIX PyOps debugpy sessions on running jobs without reenqueue or restart.
+
+VSIX-AttachDebug-Fix:
+pyops.attachDebugJob simplified: removed buildOverrides/pathMappings (only for new enqueues)
+; pure {type:'python', request:'attach', connect:localhost:{port}, justMyCode:false}
+; no local file dependency/crash on undefined job.set
+; extension.test.ts: success/single-job, missing-set/name no-crash, no-job, multiple-jobs.

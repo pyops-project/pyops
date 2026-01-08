@@ -12,6 +12,35 @@
         <script src="/files/js/bootstrap/bootstrap.bundle.min.js"></script>
 
         <script>
+            const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+            function setTheme(e) {
+                const body = document.body;
+                const table = document.querySelector('table');
+                if (e.matches) {
+                    document.documentElement.setAttribute('data-bs-theme', 'dark');
+                    body.classList.remove('bg-body');
+                    body.classList.add('bg-dark');
+                    if (table) {
+                        table.classList.remove('table-secondary');
+                        table.classList.add('table-dark');
+                    }
+                } else {
+                    document.documentElement.setAttribute('data-bs-theme', 'light');
+                    body.classList.remove('bg-dark');
+                    body.classList.add('bg-body');
+                    if (table) {
+                        table.classList.remove('table-dark');
+                        table.classList.add('table-secondary');
+                    }
+                }
+            }
+            mediaQuery.addEventListener('change', setTheme);
+            $(document).ready(function() {
+                setTheme(mediaQuery);
+            });
+        </script>
+
+        <script>
             'use strict';
 
             function genActions(s) {
@@ -35,7 +64,7 @@
                 return `
                     <tr>
                         <th scope="row">${s.id}</th>
-                        <th scope="row">${s.group}</th>
+                        <th scope="row">${s.set}</th>
                         <th scope="row">${s.name}</th>
                         <th scope="row">${s.drop_done}</th>
                         <td>${s.schedule}</td>
@@ -65,13 +94,9 @@
                 }).catch((e)=>console.error("GET", "/scriptlet/schedule/list", e.toString()));
             }
 
-            function enqueueRefreshList() {
-                setTimeout(function() { refreshList(); }, 500);
-            }
-
             function clearCreateModal() {
                 $("#createModal-error").text("");
-                $("#createModal-group").val("");
+                $("#createModal-set").val("");
                 $("#createModal-name").val("");
                 $("#createModal-dropDone").prop( "checked", false);
                 $("#createModal-schedule").val("");
@@ -81,14 +106,14 @@
             function onCreate() {
                 console.debug("onCreate");
 
-                const group = $("#createModal-group").val();
+                const set = $("#createModal-set").val();
                 const name = $("#createModal-name").val();
                 const drop_done = $("#createModal-dropDone").is(':checked');
                 const schedule = $("#createModal-schedule").val();
                 const param = $("#createModal-param").val();
 
                 const data = {
-                    "group": group,
+                    "set": set,
                     "name": name,
                     "drop_done": drop_done,
                     "schedule": schedule,
@@ -107,7 +132,7 @@
                     if(r.ok) {
                         $("#createModal").modal('hide');
                         clearCreateModal();
-                        enqueueRefreshList();
+                        refreshList();
                     } else {
                         const d = await r.json();
                         $("#createModal-error").text(d.detail);
@@ -125,7 +150,7 @@
                         method: "DELETE"
                     }).then(async (r)=>{
                         if(r.ok)
-                            enqueueRefreshList();
+                            refreshList();
                         else
                             console.error("DELETE", `/scriptlet/schedule/item?id=${id}`, r.statusText);
                     }).catch((e)=>console.error("DELETE", `/scriptlet/schedule/item?id=${id}`, e.toString()));
@@ -147,28 +172,28 @@
             }
 
             function activate(id) {
-                console.debug(`run(${id})`);
+                console.debug(`activate(${id})`);
                 
                 fetch(`/scriptlet/schedule/activate?id=${id}`).then(async (r)=>{
                     if(r.ok) {
                         const d = await r.json();
-                        console.debug("activate", d.job);
+                        console.debug("activate", id);
 
-                        enqueueRefreshList();
+                        refreshList();
                     } else
                         console.error(await r.text());
                 }).catch((e)=>console.error(e.toString()));
             }
 
             function deactivate(id) {
-                console.debug(`run(${id})`);
+                console.debug(`deactivate(${id})`);
                 
                 fetch(`/scriptlet/schedule/deactivate?id=${id}`).then(async (r)=>{
                     if(r.ok) {
                         const d = await r.json();
-                        console.debug("deactivate", d.job);
+                        console.debug("deactivate", id);
 
-                        enqueueRefreshList();
+                        refreshList();
                     } else
                         console.error(await r.text());
                 }).catch((e)=>console.error(e.toString()));
@@ -176,10 +201,13 @@
 
             $(document).ready(() => {
                 refreshList();
+                setInterval(function() {
+                    refreshList();
+                }, 10000);
             });
         </script>
     </head>
-    <body class="bg-light">
+    <body class="bg-body">
         <nav class="navbar navbar-expand navbar-dark bg-dark pt-3">
             <ul class="navbar-nav w-100">
                 <li class="navbar-brand">
@@ -207,7 +235,7 @@
             <thead>
               <tr>
                 <th scope="col">ID</th>
-                <th scope="col">Group</th>
+                <th scope="col">Set</th>
                 <th scope="col">Name</th>
                 <th scope="col">Drops</th>
                 <th scope="col">Schedule</th>
@@ -231,8 +259,8 @@
                     </div>
                     <div class="modal-body">
                         <div class="mb-3">
-                            <label for="createModal-group" class="col-form-label">Group:</label>
-                            <input id="createModal-group" type="text" class="form-control">
+                            <label for="createModal-set" class="col-form-label">Set:</label>
+                            <input id="createModal-set" type="text" class="form-control">
                         </div>
                         <div class="mb-3">
                             <label for="createModal-name" class="col-form-label">Name:</label>

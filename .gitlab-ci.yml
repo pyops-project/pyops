@@ -1,0 +1,73 @@
+image: debian:trixie-slim
+
+variables:
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+  PYTHON_VERSION: "3.12"
+  NPM_CACHE_DIR: "$CI_PROJECT_DIR/.cache/npm"
+
+stages:
+  - test
+  - build
+
+test:
+  stage: test
+  before_script:
+    - apt-get update && apt-get install -y python3 python3-pip python3-venv git sqlite3
+    - git config --global user.email "ci@pyops.local"
+    - git config --global user.name "PyOps CI"
+    - python3 -m venv .venv
+    - source .venv/bin/activate
+    - pip install --upgrade pip
+    - pip install psutil fastapi uvicorn sqlalchemy pyzmq msgpack croniter jedi requests zipstream-ng gunicorn pytest httpx pytest-cov debugpy
+  script:
+    - source .venv/bin/activate
+    - ./test.sh
+    - tar -czf venv.tar.gz .venv
+  artifacts:
+    when: on_success
+    paths:
+      - venv.tar.gz
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"'
+      when: always
+    - when: manual
+
+test:vsix:
+  stage: test
+  cache:
+    paths:
+      - vsix/node_modules/
+  before_script:
+    - apt-get update
+    - apt-get install -y nodejs npm
+    - npm config set cache $NPM_CACHE_DIR
+  script:
+    - cd vsix
+    - npm ci
+    - npm run test
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"'
+      when: always
+    - when: manual
+
+build:
+  stage: build
+  needs: [test, test:vsix]
+  cache:
+    paths:
+      - vsix/node_modules/
+  before_script:
+    - apt-get update
+    - apt-get install -y nodejs npm
+    - npm config set cache $NPM_CACHE_DIR
+  script:
+    - vsix/build.sh
+  artifacts:
+    when: on_success
+    paths:
+      - vsix/*.vsix
+    expire_in: 1 week
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"'
+      when: always
+    - when: manual

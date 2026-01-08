@@ -4,10 +4,14 @@ from starlette.status import HTTP_200_OK, HTTP_500_INTERNAL_SERVER_ERROR
 from pydantic import BaseModel
 import json
 import time
-import jedi
 import re
+import jedi
+jedi.settings.fast_parser=False
 
-from lib import sites
+from app.lib import sites
+
+import logging
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -26,6 +30,7 @@ async def get():
     except HTTPException as ex:
         raise ex
     except Exception as ex:
+        logger.exception("Error in get editor_task: %s", ex)
         raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
 
 @router.get("/scriptlet/editor_library")
@@ -38,6 +43,7 @@ async def get():
     except HTTPException as ex:
         raise ex
     except Exception as ex:
+        logger.exception("Error in get editor_library: %s", ex)
         raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
 
 @router.get("/scriptlet/editor_view")
@@ -50,10 +56,25 @@ async def get():
     except HTTPException as ex:
         raise ex
     except Exception as ex:
+        logger.exception("Error in get editor_view: %s", ex)
+        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
+
+@router.get("/scriptlet/editor_md")
+async def editor_md_get():
+    """Serves Markdown editor for README."""
+    try:
+        return HTMLResponse(
+            content=sites.get("scriptlet/editor_md"),
+            status_code=HTTP_200_OK
+        )
+    except HTTPException as ex:
+        raise ex
+    except Exception as ex:
+        logger.exception("Error in editor_md_get: %s", ex)
         raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
 
 @router.post("/scriptlet/completion")
-async def pylint(co: CompletionArgument):
+async def completion(co: CompletionArgument):
     try:
         script = jedi.Script(code=co.code)
 
@@ -80,13 +101,5 @@ async def pylint(co: CompletionArgument):
         
         return completions
     except Exception as ex:
+        logger.exception("Error in completion: %s", ex)
         raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
-
-
-
-#{
-#        name: ea.word,
-#        value: ea.word,
-#        score: ea.score,
-#        meta: "rhyme"
-#      }
