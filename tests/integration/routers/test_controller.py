@@ -127,3 +127,21 @@ def test_controller_proxy_preserves_query_path(client, mock_git_ops, mock_db):
         params = mock_instance.request.call_args[0][0]
         assert params["path"] == "/custom"
         assert params["cmd"] == "foo"
+
+def test_controller_proxy_service_client_args(client, mock_git_ops, mock_db):
+    # Test that ServiceClient is called with correct arguments from controller globals
+    with patch("app.lib.runner.find", return_value=["mock_job_id"]) as mock_find, \
+         patch("zmq.Context") as mock_zmq_context, \
+         patch("msgpack.unpackb", return_value={"test": "response"}) as mock_unpackb:
+
+        mock_socket = MagicMock()
+        mock_context = MagicMock()
+        mock_context.socket.return_value = mock_socket
+        mock_zmq_context.return_value = mock_context
+
+        response = client.get("/controller/testset/testname/api/test", headers={"X-User": "testuser"})
+        assert response.status_code == 200
+
+        # Verify ServiceClient was instantiated with correct args: (user, glob["set"], glob["service"], debug)
+        # The mock controller code sets: set="test", service="test", debug=False (default)
+        mock_find.assert_called_once_with("testuser", "test", "test", "service", ["running"])

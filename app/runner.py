@@ -454,16 +454,22 @@ def setup_execution_environment(venv_path: str, pkg_path: str, workspace: str, l
 
     return stdout_file, stderr_file
 
-def setup_job_globals(userspace: str, setspace: str, workspace: str, web_bind: str, listener: Any) -> dict:
+def setup_job_globals(owner: str, userspace: str, setspace: str, workspace: str, web_bind: str, job_id: str, kind: str) -> dict:
     """Create the globals dict for job execution"""
+    if kind in ("service", "debug"):
+        listener = pyops.ServiceListener(owner, job_id)
+    else:
+        listener = None
+
     return {
+        "owner": owner,
         "userspace": userspace,
         "setspace": setspace,
         "workspace": workspace,
         "gitspace": os.path.join(files.project_root, files.conf_data()["git"]),
         "pkgspace": os.path.join(files.project_root, files.conf_runner()["pkg"]),
         "jobsspace": os.path.join(files.project_root, files.conf_data()["jobs"]),
-        "control": pyops.Control(web_bind),
+        "control": pyops.Control(owner, web_bind),
         "listener": listener,
         "__name__": "__main__"
     }
@@ -612,8 +618,7 @@ debugpy.wait_for_client()"""
                     with open(lib_file, 'r') as f:
                         compiled_libs.append(compile(f.read(), lib_file, 'exec'))
 
-                listener = pyops.ServiceListener(job_id, current_user=owner)
-                glob = setup_job_globals(userspace, setspace, workspace, web_bind, listener)
+                glob = setup_job_globals(owner, userspace, setspace, workspace, web_bind, job_id, "debug")
 
                 info_handler, warn_handler = setup_logging(logging.DEBUG)
 
@@ -667,7 +672,7 @@ def run_task_job(job_id: str, owner: str, set: str, name: str, param: str, code:
                     lib_filename = f"{set}/library/{lib_name}.py"
                     compiled_libs.append(compile(lib["code"], lib_filename, 'exec'))
 
-                glob = setup_job_globals(userspace, setspace, workspace, web_bind, None)
+                glob = setup_job_globals(owner, userspace, setspace, workspace, web_bind, job_id, "task")
 
                 info_handler, warn_handler = setup_logging(logging.INFO)
 
@@ -721,8 +726,7 @@ def run_service_job(job_id: str, owner: str, set: str, name: str, param: str, co
                     lib_filename = f"{set}/library/{lib_name}.py"
                     compiled_libs.append(compile(lib["code"], lib_filename, 'exec'))
 
-                listener = pyops.ServiceListener(job_id, current_user=owner)
-                glob = setup_job_globals(userspace, setspace, workspace, web_bind, listener)
+                glob = setup_job_globals(owner, userspace, setspace, workspace, web_bind, job_id, "service")
 
                 info_handler, warn_handler = setup_logging(logging.INFO)
 

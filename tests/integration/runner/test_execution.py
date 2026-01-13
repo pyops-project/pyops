@@ -87,7 +87,7 @@ class TestExecution:
 
         run("id", "owner", "set", "name", "service", "", "print('code executed')", [], q, data_base, "bind", "/venv", "/pkg")
 
-        mock_listener.assert_called_once_with("id", current_user="owner")
+        mock_listener.assert_called_once_with("owner", "id")
         q.put.assert_called_once_with({"id": "id", "state": "done", "detail": None})
 
     @patch('app.runner.pyops.ServiceListener')

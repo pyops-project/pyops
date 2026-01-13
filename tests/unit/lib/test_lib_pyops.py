@@ -19,7 +19,7 @@ def mock_control_request(mock_web_bind):
          patch('requests.delete') as mock_del, \
          patch('requests.post') as mock_post, \
          patch('requests.put') as mock_put:
-        yield pyops.ControlRequest(mock_web_bind)
+        yield pyops.ControlRequest("test_user", mock_web_bind)
         # Cleanup not needed as fixtures
 
 class TestControlRequest:
@@ -55,7 +55,7 @@ class TestControlRequest:
         mock_get.return_value = mock_response
         result = mock_control_request.get("test/path", params={"p": "v"})
         assert result == {"data": "value"}
-        mock_get.assert_called_once_with("http://127.0.0.1:8000/test/path", params={"p": "v"}, headers={})
+        mock_get.assert_called_once_with("http://127.0.0.1:8000/test/path", params={"p": "v"}, headers={"X-User": "test_user"})
 
     @patch('requests.delete')
     def test_delete_error(self, mock_del, mock_control_request):
@@ -65,7 +65,7 @@ class TestControlRequest:
         mock_del.return_value = mock_response
         with pytest.raises(Exception):
             mock_control_request.delete("test/path")
-        mock_del.assert_called_once_with("http://127.0.0.1:8000/test/path", params={}, headers={})
+        mock_del.assert_called_once_with("http://127.0.0.1:8000/test/path", params={}, headers={"X-User": "test_user"})
 
     @patch('requests.post')
     def test_post_success(self, mock_post, mock_control_request):
@@ -75,7 +75,7 @@ class TestControlRequest:
         mock_post.return_value = mock_response
         result = mock_control_request.post("test/path", json={"data": "value"})
         assert result == {"posted": True}
-        mock_post.assert_called_once_with("http://127.0.0.1:8000/test/path", headers={}, json={"data": "value"})
+        mock_post.assert_called_once_with("http://127.0.0.1:8000/test/path", headers={"X-User": "test_user"}, json={"data": "value"})
 
     @patch('requests.put')
     def test_put_error(self, mock_put, mock_control_request):
@@ -86,7 +86,7 @@ class TestControlRequest:
         mock_put.return_value = mock_response
         with pytest.raises(Exception, match=r"PUT test/path: 409 Conflict"):
             mock_control_request.put("test/path", json={"data": "value"})
-        mock_put.assert_called_once_with("http://127.0.0.1:8000/test/path", headers={}, json={"data": "value"})
+        mock_put.assert_called_once_with("http://127.0.0.1:8000/test/path", headers={"X-User": "test_user"}, json={"data": "value"})
 
 class TestJobControl:
     def test_list(self, mock_control_request):
@@ -101,14 +101,28 @@ class TestJobControl:
         mock_rq = Mock()
         mock_rq.put.return_value = {"job": {"id": "123"}}
         job_control = pyops.JobControl(mock_rq)
-        result = job_control.create("test_set", "test_name", True, "param", True)
+        result = job_control.create("test_set", "test_name", drop_done=True, param="param", debug=True)
         assert result == {"id": "123"}
-        mock_rq.put.assert_called_once_with("scriptlet/job/item", json={
+        mock_rq.put.assert_called_once_with("scriptlet/job/item", headers={}, json={
             "set": "test_set",
             "name": "test_name",
             "drop_done": True,
             "param": "param",
             "debug": True
+        })
+
+    def test_create_with_user(self, mock_control_request):
+        mock_rq = Mock()
+        mock_rq.put.return_value = {"job": {"id": "456"}}
+        job_control = pyops.JobControl(mock_rq)
+        result = job_control.create("test_set", "test_name", drop_done=False, param="user_param", debug=False, user="specific_user")
+        assert result == {"id": "456"}
+        mock_rq.put.assert_called_once_with("scriptlet/job/item", headers={"X-User": "specific_user"}, json={
+            "set": "test_set",
+            "name": "test_name",
+            "drop_done": False,
+            "param": "user_param",
+            "debug": False
         })
 
     def test_get(self, mock_control_request):
@@ -202,7 +216,7 @@ class TestControl:
     def test_get(self, mock_control_request):
         mock_rq = Mock()
         mock_rq.get.return_value = {"data": "value"}
-        control = pyops.Control("127.0.0.1:8000")
+        control = pyops.Control("test_user", "127.0.0.1:8000")
         control.rq = mock_rq  # Patch for test
         result = control.get("test_set", "test_name", params={"p": "v"})
         assert result == {"data": "value"}
@@ -211,7 +225,7 @@ class TestControl:
     def test_delete(self, mock_control_request):
         mock_rq = Mock()
         mock_rq.get.return_value = {"deleted": True}
-        control = pyops.Control("127.0.0.1:8000")
+        control = pyops.Control("test_user", "127.0.0.1:8000")
         control.rq = mock_rq
         result = control.delete("test_set", "test_name")
         assert result == {"deleted": True}
@@ -220,7 +234,7 @@ class TestControl:
     def test_put(self, mock_control_request):
         mock_rq = Mock()
         mock_rq.get.return_value = {"put": "success"}
-        control = pyops.Control("127.0.0.1:8000")
+        control = pyops.Control("test_user", "127.0.0.1:8000")
         control.rq = mock_rq
         result = control.put("test_set", "test_name", json={"data": "value"})
         assert result == {"put": "success"}
@@ -229,7 +243,7 @@ class TestControl:
     def test_post(self, mock_control_request):
         mock_rq = Mock()
         mock_rq.get.return_value = {"posted": True}
-        control = pyops.Control("127.0.0.1:8000")
+        control = pyops.Control("test_user", "127.0.0.1:8000")
         control.rq = mock_rq
         result = control.post("test_set", "test_name", json={"data": "value"})
         assert result == {"posted": True}
@@ -249,15 +263,15 @@ class TestServiceListener:
         mock_gettempdir.return_value = '/tmp'
         mock_socket = Mock()
         mock_context.return_value.socket.return_value = mock_socket
-        listener = pyops.ServiceListener("test_job")
+        listener = pyops.ServiceListener("test_job", "test_owner")
         mock_context.assert_called_once()
-        mock_socket.bind.assert_called_once_with("ipc:///tmp/pyops/test_job.sock")
+        mock_socket.bind.assert_called_once_with("ipc:///tmp/pyops/test_owner.sock")
         mock_poller.assert_called_once_with()
         mock_poller.return_value.register.assert_called_once_with(mock_socket, flags=zmq.POLLIN)
         mock_signal.assert_any_call(signal.SIGINT, ANY)
         mock_signal.assert_any_call(signal.SIGTERM, ANY)
         mock_makedirs.assert_called_once_with("/tmp/pyops", exist_ok=True)
-        assert listener.sockfile == "/tmp/pyops/test_job.sock"
+        assert listener.sockfile == "/tmp/pyops/test_owner.sock"
         assert listener.kill_now is False
 
     @patch('os.remove')
@@ -272,7 +286,7 @@ class TestServiceListener:
         mock_gettempdir.return_value = '/tmp'
         mock_socket = Mock()
         mock_context.return_value.socket.return_value = mock_socket
-        listener = pyops.ServiceListener("test_job")
+        listener = pyops.ServiceListener("test_job", "test_owner")
         mock_poller.return_value.poll.return_value = [(mock_socket, zmq.POLLIN)]  # Simulate input to exit loop
         mock_socket.recv.return_value = msgpack.packb({"cmd": "test"})
         mock_unpackb.return_value = {"cmd": "test"}
@@ -290,7 +304,7 @@ class TestServiceListener:
         mock_atexit.side_effect = lambda *args: None
         mock_remove.return_value = None
         mock_gettempdir.return_value = '/tmp'
-        listener = pyops.ServiceListener("test_job")
+        listener = pyops.ServiceListener("test_job", "test_owner")
         listener.kill_now = True
         mock_poller.return_value.poll.return_value = []
         result = listener.listen()
@@ -310,7 +324,7 @@ class TestServiceListener:
         mock_gettempdir.return_value = '/tmp'
         mock_socket = Mock()
         mock_context.return_value.socket.return_value = mock_socket
-        listener = pyops.ServiceListener("test_job")
+        listener = pyops.ServiceListener("test_job", "test_owner")
         mock_poller.return_value.poll.return_value = [(mock_socket, zmq.POLLIN)]
         mock_socket.recv.return_value = msgpack.packb({"cmd": "test"})
         mock_unpackb.return_value = {"cmd": "test"}
@@ -330,7 +344,7 @@ class TestServiceListener:
         mock_gettempdir.return_value = '/tmp'
         mock_socket = Mock()
         mock_context.return_value.socket.return_value = mock_socket
-        listener = pyops.ServiceListener("test_job")
+        listener = pyops.ServiceListener("test_job", "test_owner")
         test_msg = {"response": "data"}
         mock_packb.return_value = b'test_packed'
         listener.response(test_msg)
@@ -338,7 +352,7 @@ class TestServiceListener:
         mock_socket.send.assert_called_once_with(b'test_packed')
 
     def test_exit_gracefully(self):
-        listener = pyops.ServiceListener("test_job")
+        listener = pyops.ServiceListener("test_job", "test_owner")
         listener.exit_gracefully(None, None)
         assert listener.kill_now is True
 
@@ -353,7 +367,7 @@ class TestServiceListener:
         mock_gettempdir.return_value = '/tmp'
         mock_socket = Mock()
         mock_context.return_value.socket.return_value = mock_socket
-        listener = pyops.ServiceListener("test_job")
+        listener = pyops.ServiceListener("test_job", "test_owner")
         mock_poller.return_value.poll.return_value = []  # No events
         result = listener.poll()
         assert result is None
@@ -372,7 +386,7 @@ class TestServiceListener:
         mock_gettempdir.return_value = '/tmp'
         mock_socket = Mock()
         mock_context.return_value.socket.return_value = mock_socket
-        listener = pyops.ServiceListener("test_job")
+        listener = pyops.ServiceListener("test_job", "test_owner")
         mock_poller.return_value.poll.return_value = [(mock_socket, zmq.POLLIN)]
         test_msg = {"cmd": "test"}
         mock_socket.recv.return_value = msgpack.packb(test_msg)
@@ -391,7 +405,7 @@ class TestServiceListener:
         mock_atexit.side_effect = lambda *args: None
         mock_remove.return_value = None
         mock_gettempdir.return_value = '/tmp'
-        listener = pyops.ServiceListener("test_job")
+        listener = pyops.ServiceListener("test_job", "test_owner")
         listener.kill_now = True
         result = listener.poll()
         assert result == "TERM"
@@ -405,7 +419,7 @@ class TestServiceClient:
     def test_init_no_jobs(self, mock_join, mock_context, mock_find):
         mock_find.return_value = []
         with pytest.raises(Exception, match="No running service: test_set test_name"):
-            pyops.ServiceClient("test_set", "test_name")
+            pyops.ServiceClient("anonymous", "test_set", "test_name")
 
     @patch('app.lib.runner.find')
     @patch('zmq.Context')
@@ -414,7 +428,7 @@ class TestServiceClient:
         mock_job = "123"
         mock_find.return_value = [mock_job]
         mock_join.return_value = "/tmp/pyops/123.sock"
-        client = pyops.ServiceClient("test_set", "test_name", owner="user")
+        client = pyops.ServiceClient("user", "test_set", "test_name")
         assert client.job_id == mock_job
         mock_context.assert_called_once()
         client.socket.connect.assert_called_once_with("ipc:///tmp/pyops/123.sock")
@@ -427,7 +441,7 @@ class TestServiceClient:
     def test_request_success(self, mock_context, mock_packb, mock_unpackb, mock_find):
         mock_job = "123"
         mock_find.return_value = [mock_job]
-        client = pyops.ServiceClient("test_set", "test_name")
+        client = pyops.ServiceClient("anonymous", "test_set", "test_name")
         test_msg = {"cmd": "test"}
         mock_packb.return_value = b'test_packed'
         mock_socket = client.socket
@@ -446,7 +460,7 @@ class TestServiceClient:
     def test_request_recv_error(self, mock_context, mock_packb, mock_find):
         mock_job = "123"
         mock_find.return_value = [mock_job]
-        client = pyops.ServiceClient("test_set", "test_name")
+        client = pyops.ServiceClient("anonymous", "test_set", "test_name")
         mock_packb.return_value = b'test_packed'
         client.socket.recv.side_effect = zmq.ZMQError()
         with pytest.raises(zmq.ZMQError):

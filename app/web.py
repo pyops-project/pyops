@@ -240,12 +240,13 @@ async def controller_proxy(set: str, name: str, rest: str, request: Request):
         exec(code, glob)
 
         user = sanitize_owner(request.headers.get("X-User", "anonymous"))
-        s = pyops.ServiceClient(glob["set"], glob["service"], debug=glob.get("debug", False), owner=user)
+        s = pyops.ServiceClient(user, glob["set"], glob["service"], debug=glob.get("debug", False))
 
         params = dict(request.query_params)
         params["type"] = request.method
         if "path" not in params:
             params["path"] = f"/{rest}"
+        params["user"] = user
 
         body = await request.body()
         content_type = request.headers.get("content-type", "").lower()
