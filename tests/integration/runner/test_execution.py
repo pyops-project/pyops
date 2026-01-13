@@ -8,7 +8,6 @@ import logging
 import asyncio
 import json
 
-
 @pytest.fixture
 def mock_glob():
     return {
@@ -155,9 +154,8 @@ class TestExecution:
         from app.runner import process_imports
         mock_loadLib.side_effect = Exception("load fail")
         libs = []
-        result = process_imports("#!{::lib}\nrest", "current_set", False, libs)
-        assert result == "#!{::lib}\nrest"  # Kept original
-        assert len(libs) == 0
+        with pytest.raises(Exception, match="load fail"):
+            process_imports("#!{::lib}\nrest", "current_set", False, libs)
         mock_loadLib.assert_called_once_with("current_set", "lib", False)
 
     @patch('app.runner.loadLib')

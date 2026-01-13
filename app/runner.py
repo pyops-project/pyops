@@ -345,7 +345,8 @@ def process_imports(text: str, current_set: str, kind: str, libs: list[dict[str,
                 lib_code = process_imports(lib_code, g, kind, libs, overrides_dict, seen_libs, depth + 1)
                 libs.append({"code": lib_code, "filename": lib_key})
             except Exception as e:
-                logger.warning(f"Failed lib {lib_key}: {e}")
+                logger.error(f"Failed to load library {lib_key}: {e}")
+                raise
     return text
 
 def process_install_lines(lines, venv_path, pkg_path, id):
