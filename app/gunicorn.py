@@ -45,6 +45,9 @@ worker_class = "uvicorn.workers.UvicornWorker"
 if not os.path.exists(os.path.join(project_root, conf["data"]["jobs"])):
     os.makedirs(os.path.join(project_root, conf["data"]["jobs"]))
 
+if not os.path.exists(os.path.join(project_root, conf["data"]["git"])):
+    os.makedirs(os.path.join(project_root, conf["data"]["git"]))
+
 venv_path = os.path.abspath(os.path.join(project_root, conf["runner"]["venv"]))
 if not os.path.exists(os.path.join(venv_path, "pyvenv.cfg")):
     subprocess.check_call([sys.executable, '-m', 'venv', venv_path])
