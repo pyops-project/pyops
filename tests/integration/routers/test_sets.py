@@ -27,18 +27,33 @@ def test_list_sets(mock_conf_data, mock_sets):
     assert data["sets"][0]["name"] == "testset"
 
 def test_clone_set_success(mock_conf_data, mock_sets):
-    mock_sets.clone_set.return_value = None
-    data = {"name": "newset", "url": "https://github.com/example/repo.git"}
+    mock_sets.clone_set.return_value = "repo"
+    data = {"url": "https://github.com/example/repo.git"}
     response = client.post("/scriptlet/sets/clone", json=data)
     assert response.status_code == 200
     data_resp = response.json()
     assert data_resp["status"] == "ok"
-    assert "Cloned set 'newset'" in data_resp["message"]
+    assert "Cloned set 'repo'" in data_resp["message"]
 
 def test_clone_set_invalid(mock_conf_data, mock_sets):
     mock_sets.clone_set.side_effect = ValueError("Invalid")
-    data = {"name": "", "url": ""}
+    data = {"url": ""}
     response = client.post("/scriptlet/sets/clone", json=data)
+    assert response.status_code == 400
+
+def test_create_set_success(mock_conf_data, mock_sets):
+    mock_sets.create_set.return_value = True
+    data = {"name": "newset"}
+    response = client.post("/scriptlet/sets/create", json=data)
+    assert response.status_code == 200
+    data_resp = response.json()
+    assert data_resp["status"] == "ok"
+    assert "Created set 'newset'" in data_resp["message"]
+
+def test_create_set_invalid(mock_conf_data, mock_sets):
+    mock_sets.create_set.side_effect = ValueError("Already exists")
+    data = {"name": "existing"}
+    response = client.post("/scriptlet/sets/create", json=data)
     assert response.status_code == 400
 
 def test_remove_set(mock_conf_data, mock_sets):

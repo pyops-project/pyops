@@ -22,30 +22,30 @@ def test_post_clone_success():
     with patch('app.routers.scriptlet.sets.files.conf_data') as mock_conf, \
          patch('app.routers.scriptlet.sets.sets.clone_set') as mock_clone:
         mock_conf.return_value = {"git": "/tmp/mock_git"}
-        mock_clone.return_value = True
-        data = {"name": "newset", "url": "https://github.com/example/repo.git", "branch": "main"}
+        mock_clone.return_value = "repo"
+        data = {"url": "https://github.com/example/repo.git"}
         response = client.post("/scriptlet/sets/clone", json=data)
         assert response.status_code == 200
         data_resp = response.json()
         assert data_resp["status"] == "ok"
-        assert "Cloned set 'newset'" in data_resp["message"]
+        assert "Cloned set 'repo'" in data_resp["message"]
 
 def test_post_clone_value_error():
     with patch('app.routers.scriptlet.sets.files.conf_data') as mock_conf, \
          patch('app.routers.scriptlet.sets.sets.clone_set') as mock_clone:
         mock_conf.return_value = {"git": "/tmp/mock_git"}
-        mock_clone.side_effect = ValueError("Invalid name")
-        data = {"name": "", "url": "https://github.com/example/repo.git"}
+        mock_clone.side_effect = ValueError("Invalid repository URL")
+        data = {"url": "invalid-url"}
         response = client.post("/scriptlet/sets/clone", json=data)
         assert response.status_code == 400
-        assert "Invalid name" in response.json()["detail"]
+        assert "Invalid repository URL" in response.json()["detail"]
 
 def test_post_clone_exception():
     with patch('app.routers.scriptlet.sets.files.conf_data') as mock_conf, \
          patch('app.routers.scriptlet.sets.sets.clone_set') as mock_clone:
         mock_conf.return_value = {"git": "/tmp/mock_git"}
         mock_clone.side_effect = Exception("Clone failed")
-        data = {"name": "newset", "url": "https://github.com/example/repo.git"}
+        data = {"url": "https://github.com/example/repo.git"}
         response = client.post("/scriptlet/sets/clone", json=data)
         assert response.status_code == 500
         assert "Clone failed" in response.json()["detail"]
@@ -115,9 +115,10 @@ def test_post_switch_nonexistent_branch():
     with patch('app.routers.scriptlet.sets.files.conf_data') as mock_conf, \
          patch('app.lib.sets.switch_branch') as mock_switch:
         mock_conf.return_value = {"git": "/tmp/mock_git"}
-        # Mock to raise CalledProcessError for non-existent branch
-        mock_switch.side_effect = subprocess.CalledProcessError(1, ["git", "checkout", "nonexistent"])
+        mock_switch.return_value = True  # Now succeeds by creating the branch
         data = {"name": "testset", "branch": "nonexistent"}
         response = client.post("/scriptlet/sets/switch", json=data)
-        assert response.status_code == 500
-        assert "nonexistent" in response.json()["detail"]  # Or check for git error message
+        assert response.status_code == 200
+        data_resp = response.json()
+        assert data_resp["status"] == "ok"
+        assert "Switched 'testset' to 'nonexistent'" in data_resp["message"]

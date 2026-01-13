@@ -309,9 +309,8 @@ class TestProcessImports:
         from app.runner import process_imports
         text = "#!{set::lib}\npass"
         libs = []
-        result = process_imports(text, 'set', 'task', libs)
-        assert result == "#!{set::lib}\npass"
-        assert libs == []
+        with pytest.raises(Exception, match='load error'):
+            process_imports(text, 'set', 'task', libs)
 
 class TestProcessInstallLines:
     @patch('app.runner.subprocess.run')

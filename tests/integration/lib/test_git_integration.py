@@ -3,6 +3,7 @@ import subprocess
 import os
 from app.lib import git
 from app.lib import files
+from app.lib import sets
 
 @pytest.fixture
 def integration_repo(tmp_path, monkeypatch):
@@ -15,6 +16,7 @@ def integration_repo(tmp_path, monkeypatch):
 
     # Create local repo
     set_name = 'test_set'
+    sets.create_set(test_git_base, set_name)
     repo = git.get_repo_path(set_name)
     assert os.path.exists(os.path.join(repo, '.git'))
 
