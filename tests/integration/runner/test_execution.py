@@ -391,6 +391,37 @@ logging.error('ERROR message')
         assert "ERROR message" in stderr_content
         mock_queue.put.assert_called_once_with({"id": job_id, "state": "done", "detail": None})
 
+    @patch('app.runner.pyops.ServiceListener')
+    def test_run_service_closes_listener(self, mock_listener, tmp_path, mock_queue, mock_conf):
+        from app.runner import run
+        mock_listener_instance = Mock()
+        mock_listener.return_value = mock_listener_instance
+        data_base = str(tmp_path / "data")
+        owner = "owner"
+        set_name = "set"
+        job_id = "id"
+
+        run(job_id, owner, set_name, "name", "service", "", "pass", [], mock_queue, data_base, "bind", "/venv", "/pkg")
+
+        mock_listener.assert_called_once_with("owner", "id")
+        mock_listener_instance.close.assert_called_once()
+
+    @patch('app.runner.pyops.ServiceListener')
+    def test_run_service_closes_listener_on_error(self, mock_listener, tmp_path, mock_queue, mock_conf):
+        from app.runner import run
+        mock_listener_instance = Mock()
+        mock_listener.return_value = mock_listener_instance
+        data_base = str(tmp_path / "data")
+        owner = "owner"
+        set_name = "set"
+        job_id = "id"
+
+        with patch('builtins.exec', side_effect=Exception("error")):
+            run(job_id, owner, set_name, "name", "service", "", "raise Exception", [], mock_queue, data_base, "bind", "/venv", "/pkg")
+
+        mock_listener.assert_called_once_with("owner", "id")
+        mock_listener_instance.close.assert_called_once()
+
     @patch('builtins.compile')
     @patch('app.runner.terminate_debugpy_adapter')
     @patch('app.runner.pyops.ServiceListener')

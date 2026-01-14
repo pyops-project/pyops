@@ -273,6 +273,7 @@ class TestServiceListener:
         mock_makedirs.assert_called_once_with("/tmp/pyops", exist_ok=True)
         assert listener.sockfile == "/tmp/pyops/test_owner.sock"
         assert listener.kill_now is False
+        listener.close()
 
     @patch('os.remove')
     @patch('atexit.register')
@@ -294,6 +295,7 @@ class TestServiceListener:
         assert result == {"cmd": "test"}
         mock_poller.return_value.poll.assert_called_once_with(timeout=1000)
         mock_unpackb.assert_called_once()
+        listener.close()
 
     @patch('os.remove')
     @patch('atexit.register')
@@ -311,6 +313,7 @@ class TestServiceListener:
         assert result == "TERM"
         mock_poller.return_value.poll.assert_called_once_with(timeout=1000)
         listener.socket.recv.assert_not_called()
+        listener.close()
 
     @patch('os.remove')
     @patch('atexit.register')
@@ -332,6 +335,7 @@ class TestServiceListener:
         assert result == {"cmd": "test"}
         mock_poller.return_value.poll.assert_called_once_with(timeout=1000)
         mock_unpackb.assert_called_once()
+        listener.close()
 
     @patch('os.remove')
     @patch('atexit.register')
@@ -350,11 +354,13 @@ class TestServiceListener:
         listener.response(test_msg)
         mock_packb.assert_called_once_with(test_msg)
         mock_socket.send.assert_called_once_with(b'test_packed')
+        listener.close()
 
     def test_exit_gracefully(self):
         listener = pyops.ServiceListener("test_job", "test_owner")
         listener.exit_gracefully(None, None)
         assert listener.kill_now is True
+        listener.close()
 
     @patch('os.remove')
     @patch('atexit.register')
@@ -373,6 +379,7 @@ class TestServiceListener:
         assert result is None
         mock_poller.return_value.poll.assert_called_once_with(timeout=0)
         mock_socket.recv.assert_not_called()
+        listener.close()
 
     @patch('os.remove')
     @patch('atexit.register')
@@ -395,6 +402,7 @@ class TestServiceListener:
         assert result == test_msg
         mock_poller.return_value.poll.assert_called_once_with(timeout=0)
         mock_unpackb.assert_called_once_with(mock_socket.recv.return_value)
+        listener.close()
 
     @patch('os.remove')
     @patch('atexit.register')
@@ -411,6 +419,7 @@ class TestServiceListener:
         assert result == "TERM"
         mock_poller.return_value.poll.assert_not_called()
         listener.socket.recv.assert_not_called()
+        listener.close()
 
 class TestServiceClient:
     @patch('app.lib.runner.find')

@@ -133,11 +133,20 @@ class ServiceListener:
         self.socket.bind(f"ipc://{self.sockfile}")
         self.poller = zmq.Poller()
         self.poller.register(self.socket, flags=zmq.POLLIN)
-        atexit.register(self.close)
 
     def close(self):
+        if hasattr(self, 'poller'):
+            try:
+                self.poller.unregister(self.socket)
+            except zmq.ZMQError:
+                pass
+            self.poller = None
         if hasattr(self, 'socket'):
-            self.socket.close()
+            try:
+                self.socket.setsockopt(zmq.LINGER, 0)
+                self.socket.close()
+            except Exception:
+                pass
         if hasattr(self, 'context'):
             self.context.term()
         if os.path.exists(self.sockfile):

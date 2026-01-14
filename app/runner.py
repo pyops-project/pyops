@@ -58,35 +58,29 @@ def terminate_debugpy_adapter(owner: str):
     else:
         logger.warning("no debug_port configured for owner %s", owner)
 
-def terminate_job_processes(job_id: str, pid: int, is_debug: bool, owner: str, graceful_timeout: float = 5.0, cleanup: bool = False):
-    logger.info("ENTER terminate_job_processes job_id=%s pid=%s is_debug=%s owner=%s cleanup=%s", job_id, pid, is_debug, owner, cleanup)
+def get_process_tree(pid: int) -> list[psutil.Process]:
+    try:
+        parent = psutil.Process(pid)
+        tree = [parent]
+        tree.extend(parent.children(recursive=True))
+        return tree
+    except psutil.NoSuchProcess:
+        return []
+
+def terminate_job_processes(job_id: str, pid: int, is_debug: bool, owner: str, graceful_timeout: float = 15.0):
+    logger.info("ENTER terminate_job_processes job_id=%s pid=%s is_debug=%s owner=%s", job_id, pid, is_debug, owner)
     """
     Terminate a job's process tree, handling debugpy processes if needed, and update DB.
 
     Args:
-        job_id (str): Job ID.
-        pid (int): The PID of the job's main process.
+        job_id (str): The job ID.
+        pid (int): The process ID of the job.
         is_debug (bool): Whether this is a debug job.
-        owner (str): The job owner for debugpy port lookup.
+        owner (str): The job owner.
         graceful_timeout (float): Timeout in seconds for graceful termination.
-        cleanup (bool): If True, kill only child processes (cleanup mode for done jobs). If False, kill entire tree.
     """
-    # Get all process objects in the tree
-    tree_processes = []
-    try:
-        parent = psutil.Process(pid)
-        tree_processes.append(parent)
-        tree_processes.extend(parent.children(recursive=True))
-    except psutil.NoSuchProcess:
-        tree_processes = []  # Process already gone
-
-    # Determine which processes to terminate
-    if cleanup:
-        # Cleanup mode: kill only children, spare parent
-        target_processes = tree_processes[1:]  # Exclude parent
-    else:
-        # Full termination: kill entire tree
-        target_processes = tree_processes
+    # Get target processes to terminate
+    target_processes = get_process_tree(pid)
 
     # Send SIGTERM to targets
     kill_proc_tree(target_processes, signal.SIGTERM)
@@ -95,27 +89,21 @@ def terminate_job_processes(job_id: str, pid: int, is_debug: bool, owner: str, g
     import time
     start_time = time.time()
     while (time.time() - start_time) < graceful_timeout:
-        # Check if any target process is still running
-        alive = any(proc.is_running() for proc in target_processes)
+        # Recreate target processes and check if any are still running
+        target_processes = get_process_tree(pid)
+        alive = False
+        for proc in target_processes:
+            logger.debug(f"from {job_id} polling pid={pid} alive={proc.is_running()}")
+            if proc.is_running():
+                alive = True
         if not alive:
-            # Terminate debugpy adapter if debug job
-    #        if is_debug:
-    #            terminate_debugpy_adapter(owner)
-            killed = False
-            if not cleanup or killed:
-                postTerm(job_id, killed=killed)
+            postTerm(job_id)
             return
+        time.sleep(1.0)
 
     # Force kill if still running
     kill_proc_tree(target_processes, signal.SIGKILL)
-
-    # Terminate debugpy adapter if debug job
-    #if is_debug:
-    #    terminate_debugpy_adapter(owner)
-
-    killed = True
-    if not cleanup or killed:
-        postTerm(job_id, killed=killed)
+    postTerm(job_id, killed=True)
 
 def get_debug_port(owner: str) -> int:
     from app.lib import files
@@ -289,16 +277,19 @@ def finishJob(job_id: str, state: str, detail: str):
             old_state = job.state
             if job.state == "running" and state == "done" and job.drop_done and not job.kind == "debug":
                 new_state = "remove"
-            else:
+            elif job.state != "cancel" and job.state != "cancelling":
                 new_state = state
+            else:
+                new_state = job.state
+
             job.state = new_state
             job.end = datetime.now()
             job.detail = detail
 
             logger.debug(f"finishJob({job_id}): pid={job.pid} kind={job.kind}, calling terminate")
-            # Kill eventual leftovers
+
             if job.pid:
-                threading.Thread(target=terminate_job_processes, args=(job.id, job.pid, job.kind == "debug", job.owner, 5.0, True), daemon=True).start()
+                threading.Thread(target=terminate_job_processes, args=(job.id, job.pid, job.kind == "debug", job.owner), daemon=True).start()
 
             job.pid = None
             logger.debug(f"finishJob({job_id}): before commit, session ID {id(session)}, changing {job_id} from '{old_state}' to '{new_state}' at {datetime.now()}")
@@ -495,7 +486,7 @@ def execute_job_code(compiled_param, compiled_code, compiled_libs, glob: dict, j
     try:
         if job_type == "task":
             # Task jobs have retry logic
-            max_retries = 3
+            max_retries = 2
             for attempt in range(max_retries + 1):
                 try:
                     if compiled_param is not None:
@@ -530,6 +521,9 @@ def execute_job_code(compiled_param, compiled_code, compiled_libs, glob: dict, j
         sys.stdout.flush()
         sys.stderr.flush()
         q.put({"id": job_id, "state": "failed", "detail": error_msg})
+    finally:
+        if 'listener' in glob and glob['listener']:
+            glob['listener'].close()
 
 def run_debug_job(job_id: str, owner: str, set: str, name: str, param: str, code: str, libs: list[dict[str, str]], q: Queue, data_base: str, web_bind: str, venv_path: str, pkg_path: str, overrides: str | None, port: int):
     """Executes debug job in isolated workspace with file-based compilation."""
@@ -703,6 +697,7 @@ def run_service_job(job_id: str, owner: str, set: str, name: str, param: str, co
 
     stdout_file, stderr_file = setup_execution_environment(venv_path, pkg_path, workspace, logging.INFO)
     info_handler, warn_handler = None, None
+    glob = {}
     try:
         with redirect_stdout(stdout_file):
             with redirect_stderr(stderr_file):
@@ -748,7 +743,6 @@ def run_service_job(job_id: str, owner: str, set: str, name: str, param: str, co
             root.removeHandler(warn_handler)
         logger.debug(f"{current_process().pid:<10}end service job({job_id})")
 
-
 def run(job_id: str, owner: str, set: str, name: str, kind: str, param: str, code: str, libs: list[dict[str, str]], q: Queue, data_base: str, web_bind: str, venv_path: str, pkg_path: str, overrides: str | None = None, port: int | None = None):
     """Executes job in isolated workspace by dispatching to appropriate handler based on kind."""
     if kind == "debug":
@@ -780,8 +774,6 @@ def getNextToTerm():
         job = session.scalar(stmt)
         return {"id": job.id, "pid": job.pid} if job != None else None
 
-
-
 def postTerm(job_id: str, killed: bool = False):
     logger.debug(f"postTerm({job_id}, killed={killed})")
 
@@ -799,12 +791,8 @@ def postTerm(job_id: str, killed: bool = False):
                 job.end = datetime.now()
                 
                 job.pid = None
-                if killed:
-                    job.state = "killed"
-                    job.detail = "force killed after 5s timeout"
-                else:
+                if job.state != "done" and job.state != "failed":
                     job.state = "cancelled"
-                    job.detail = "terminated gracefully"
                 logger.debug(f"postTerm: before commit, session ID {id(session)}, setting {job_id} to '{job.state}' from '{old_state}' at {datetime.now()}")
             session.commit()
             logger.debug(f"postTerm: after commit, session ID {id(session)}, committed for {job_id} at {datetime.now()}")
@@ -920,9 +908,8 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
                         job_obj = session.get(Job, job["id"])
                         is_debug = job_obj.kind == "debug" if job_obj else False
                         owner = job_obj.owner if job_obj else None
-                    # Start fire-and-forget termination thread
-                    t = threading.Thread(target=terminate_job_processes, args=(job["id"], job["pid"], is_debug, owner), daemon=True)
-                    t.start()
+                        detail = job_obj.detail
+                    finishJob(job["id"], "cancelling", detail)
                 else:
                     postTerm(job["id"])
         except Exception as e:
@@ -980,7 +967,6 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
                         if not adapter_up:
                             if p.is_alive():
                                 logger.warning("Debugpy adapter did not appear within timeout for job %s - terminating broken debug job", job_id)
-                                threading.Thread(target=terminate_job_processes, args=(job_id, p.pid, True, owner), daemon=True).start()
                                 # Mark job as failed
                                 finishJob(job_id, "failed", "Debug adapter failed to start within timeout")
                                 continue
@@ -1035,8 +1021,7 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
                 owner = job.owner if job else None
 
             logger.debug(f"Terminating process tree {pid} on shutdown")
-            threading.Thread(target=terminate_job_processes, args=(job.id if job else None, pid, is_debug, owner), daemon=True).start()
-
+            finishJob(job_id, "cancelling", "shutdown")
             p.join(timeout=1.0)
 
     # handle finished or failed jobs

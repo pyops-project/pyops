@@ -215,8 +215,8 @@ class TestJobRouter:
         # Verify state after termination
         with Session(get_db_engine()) as session:
             updated_job = session.query(Job).filter_by(id=job_id).first()
-            assert updated_job.state == "killed"
-            assert updated_job.detail == "force killed after 5s timeout"
+            assert updated_job.state == "cancelled"
+            assert updated_job.detail is None
             assert updated_job.pid is None
             assert updated_job.end is not None
 
@@ -267,7 +267,7 @@ class TestJobRouter:
         with Session(get_db_engine()) as session:
             updated_job = session.query(Job).filter_by(id=job_id).first()
             assert updated_job.state == "cancelled"
-            assert updated_job.detail == "terminated gracefully"
+            assert updated_job.detail is None
             assert updated_job.pid is None
             assert updated_job.end is not None
 

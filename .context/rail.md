@@ -1,3 +1,4 @@
+- in sets view each set requires a pull button
 - vsix tests isolation
 - vsix route all API calls via API client
 - vsix clean up tests
