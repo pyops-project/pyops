@@ -99,6 +99,7 @@
                 $("#createModal-set").val("");
                 $("#createModal-name").val("");
                 $("#createModal-dropDone").prop( "checked", false);
+                $("#createModal-maxRetries").val("0");
                 $("#createModal-schedule").val("");
                 $("#createModal-param").val("");
             }
@@ -109,6 +110,7 @@
                 const set = $("#createModal-set").val();
                 const name = $("#createModal-name").val();
                 const drop_done = $("#createModal-dropDone").is(':checked');
+                const max_retries = parseInt($("#createModal-maxRetries").val()) || 0;
                 const schedule = $("#createModal-schedule").val();
                 const param = $("#createModal-param").val();
 
@@ -116,6 +118,7 @@
                     "set": set,
                     "name": name,
                     "drop_done": drop_done,
+                    "max_retries": max_retries,
                     "schedule": schedule,
                     "param": param
                 }
@@ -269,6 +272,10 @@
                         <div class="mb-3">
                             <label class="form-check-label" for="createModal-dropDone">Drop logs/data if successful:</label>
                             <input id="createModal-dropDone" class="form-check-input" type="checkbox" value="">
+                        </div>
+                        <div class="mb-3">
+                            <label for="createModal-maxRetries" class="col-form-label">Max Retries:</label>
+                            <input id="createModal-maxRetries" type="number" min="0" value="0" class="form-control">
                         </div>
                         <div class="mb-3">
                             <label for="createModal-schedule" class="col-form-label">Schedule:</label>

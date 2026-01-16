@@ -49,12 +49,13 @@ class JobControl:
     def list(self):
         return self.rq.get("scriptlet/job/list")
     
-    def create(self, set: str, name: str, drop_done: bool = False, param: str = None, debug: bool = False, user: str = None):
+    def create(self, set: str, name: str, drop_done: bool = False, max_retries: int = 0, param: str = None, debug: bool = False, user: str = None):
         headers = {"X-User": user} if user else {}
         return self.rq.put("scriptlet/job/item", headers=headers, json={
             "set": set,
             "name": name,
             "drop_done": drop_done,
+            "max_retries": max_retries,
             "param": param,
             "debug": debug
         })["job"]
@@ -78,13 +79,14 @@ class ScheduleControl:
     def list(self):
         return self.rq.get("scriptlet/schedule/list")
     
-    def create(self, set: str, name: str, drop_done: bool, schedule: str, param: str):
+    def create(self, set: str, name: str, drop_done: bool, schedule: str, param: str, max_retries: int = 0):
         return self.rq.put("scriptlet/schedule/item", json={
             "set": set,
             "name": name,
             "drop_done": drop_done,
             "schedule": schedule,
-            "param": param
+            "param": param,
+            "max_retries": max_retries
         })["schedule"]
 
     def get(self, id: int):

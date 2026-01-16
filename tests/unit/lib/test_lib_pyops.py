@@ -107,6 +107,7 @@ class TestJobControl:
             "set": "test_set",
             "name": "test_name",
             "drop_done": True,
+            "max_retries": 0,
             "param": "param",
             "debug": True
         })
@@ -121,6 +122,7 @@ class TestJobControl:
             "set": "test_set",
             "name": "test_name",
             "drop_done": False,
+            "max_retries": 0,
             "param": "user_param",
             "debug": False
         })
@@ -176,6 +178,7 @@ class TestScheduleControl:
             "set": "test_set",
             "name": "test_name",
             "drop_done": True,
+            "max_retries": 0,
             "schedule": "* * * * *",
             "param": "param"
         })

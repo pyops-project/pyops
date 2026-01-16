@@ -241,10 +241,12 @@ def loadJob(job_id: str):
         if job.overrides:
             try:
                 override_dict = json.loads(job.overrides)
-                if main_key in override_dict:
-                    override_code = override_dict[main_key]
+                if not isinstance(override_dict, dict):
+                    raise Exception("Overrides must be a valid JSON dict")
             except json.JSONDecodeError:
-                logger.warning(f"loadJob({job_id}): Invalid overrides JSON")
+                raise Exception("Invalid overrides JSON")
+            if main_key in override_dict:
+                override_code = override_dict[main_key]
         committed = job.kind != "debug"
         if override_code is not None:
             code = override_code
@@ -264,7 +266,7 @@ def loadJob(job_id: str):
         session.commit()
         logger.debug(f"loadJob: after commit, session ID {id(session)}, committed 'running' for {job_id} at {datetime.now()}")
 
-        return job.owner, job.set, job.name, job.kind, job.param, code, job.overrides
+        return job.owner, job.set, job.name, job.kind, job.param, code, job.overrides, job.max_retries
 
 def finishJob(job_id: str, state: str, detail: str):
     logger.debug(f"finishJob(job_id='{job_id}', state='{state}', detail='{detail}')")
@@ -481,12 +483,11 @@ def setup_logging(log_level: int):
 
     return info_handler, warn_handler
 
-def execute_job_code(compiled_param, compiled_code, compiled_libs, glob: dict, job_type: str, job_id: str, q: Queue):
+def execute_job_code(compiled_param, compiled_code, compiled_libs, glob: dict, job_type: str, job_id: str, q: Queue, max_retries: int = 0):
     """Execute code with appropriate retry/error handling based on job_type"""
     try:
         if job_type == "task":
             # Task jobs have retry logic
-            max_retries = 2
             for attempt in range(max_retries + 1):
                 try:
                     if compiled_param is not None:
@@ -497,14 +498,14 @@ def execute_job_code(compiled_param, compiled_code, compiled_libs, glob: dict, j
                     q.put({"id": job_id, "state": "done", "detail": None})
                     break
                 except Exception:
+                    error_msg = f"Failed after {max_retries} retries\n{traceback.format_exc()}"
+                    print(error_msg, file=sys.stderr)  # Write to stderr for logging
+                    sys.stdout.flush()
+                    sys.stderr.flush()
                     if attempt < max_retries:
                         logger.warning(f"Task job {job_id} attempt {attempt + 1}/{max_retries + 1} failed, retrying in 60s")
                         time.sleep(60)
                     else:
-                        error_msg = f"Failed after {max_retries} retries\n{traceback.format_exc()}"
-                        print(error_msg, file=sys.stderr)  # Write to stderr for logging
-                        sys.stdout.flush()
-                        sys.stderr.flush()
                         q.put({"id": job_id, "state": "failed", "detail": error_msg})
                         break
         else:
@@ -525,7 +526,7 @@ def execute_job_code(compiled_param, compiled_code, compiled_libs, glob: dict, j
         if 'listener' in glob and glob['listener']:
             glob['listener'].close()
 
-def run_debug_job(job_id: str, owner: str, set: str, name: str, param: str, code: str, libs: list[dict[str, str]], q: Queue, data_base: str, web_bind: str, venv_path: str, pkg_path: str, overrides: str | None, port: int):
+def run_debug_job(job_id: str, owner: str, set: str, name: str, param: str, code: str, libs: list[dict[str, str]], q: Queue, data_base: str, web_bind: str, venv_path: str, pkg_path: str, overrides: str | None = None, port: int | None = None):
     """Executes debug job in isolated workspace with file-based compilation."""
     userspace, setspace, workspace = setup_workspace(data_base, owner, set, job_id)
 
@@ -635,7 +636,7 @@ debugpy.wait_for_client()"""
         logger.debug(f"{current_process().pid:<10}end debug job({job_id})")
 
 
-def run_task_job(job_id: str, owner: str, set: str, name: str, param: str, code: str, libs: list[dict[str, str]], q: Queue, data_base: str, web_bind: str, venv_path: str, pkg_path: str):
+def run_task_job(job_id: str, owner: str, set: str, name: str, param: str, code: str, libs: list[dict[str, str]], q: Queue, data_base: str, web_bind: str, venv_path: str, pkg_path: str, max_retries: int = 0):
     """Executes task job in isolated workspace with in-memory compilation and retry logic."""
     userspace, setspace, workspace = setup_workspace(data_base, owner, set, job_id)
 
@@ -670,7 +671,7 @@ def run_task_job(job_id: str, owner: str, set: str, name: str, param: str, code:
 
                 info_handler, warn_handler = setup_logging(logging.INFO)
 
-                execute_job_code(compiled_param, compiled_code, compiled_libs, glob, "task", job_id, q)
+                execute_job_code(compiled_param, compiled_code, compiled_libs, glob, "task", job_id, q, max_retries)
     except Exception:
         error_msg = f"Error executing task job {job_id}\n{traceback.format_exc()}"
         stderr_file.write(error_msg)
@@ -743,14 +744,14 @@ def run_service_job(job_id: str, owner: str, set: str, name: str, param: str, co
             root.removeHandler(warn_handler)
         logger.debug(f"{current_process().pid:<10}end service job({job_id})")
 
-def run(job_id: str, owner: str, set: str, name: str, kind: str, param: str, code: str, libs: list[dict[str, str]], q: Queue, data_base: str, web_bind: str, venv_path: str, pkg_path: str, overrides: str | None = None, port: int | None = None):
+def run(job_id: str, owner: str, set: str, name: str, kind: str, param: str, code: str, libs: list[dict[str, str]], q: Queue, data_base: str, web_bind: str, venv_path: str, pkg_path: str, max_retries: int = 0, overrides: str | None = None, port: int | None = None):
     """Executes job in isolated workspace by dispatching to appropriate handler based on kind."""
     if kind == "debug":
         if port is None:
             raise ValueError("Port must be provided for debug jobs")
         run_debug_job(job_id, owner, set, name, param, code, libs, q, data_base, web_bind, venv_path, pkg_path, overrides, port)
     elif kind == "task":
-        run_task_job(job_id, owner, set, name, param, code, libs, q, data_base, web_bind, venv_path, pkg_path)
+        run_task_job(job_id, owner, set, name, param, code, libs, q, data_base, web_bind, venv_path, pkg_path, max_retries)
     elif kind == "service":
         run_service_job(job_id, owner, set, name, param, code, libs, q, data_base, web_bind, venv_path, pkg_path)
     else:
@@ -809,6 +810,7 @@ def schedule():
                       Schedule.owner,
                       Schedule.active,
                       Schedule.drop_done,
+                      Schedule.max_retries,
                       Schedule.schedule,
                       Schedule.param,
                       Schedule.last)
@@ -821,7 +823,7 @@ def schedule():
                     next_run = cron.get_next(datetime)
                     if next_run <= now and (s.last is None or next_run > s.last):
                         logger.debug(f"schedule: enqueuing task {s.set}::{s.name} (cron {s.schedule}) at {next_run}")
-                        lib_runner.enqueue(s.set, s.name, s.owner, "task", s.drop_done, s.param)
+                        lib_runner.enqueue(s.set, s.name, s.owner, "task", s.drop_done, s.param, s.max_retries, None)
 
                         schedule_obj = session.get(Schedule, s.id)
                         schedule_obj.last = next_run
@@ -831,7 +833,7 @@ def schedule():
                 elif not lib_runner.find(s.owner, s.set, s.name, "service", ["todo", "dequeued", "running", "cancel", "done"]) and \
                      len(lib_runner.find(s.owner, s.set, s.name, "service", ["failed"])) < 3:
                     logger.debug(f"schedule: enqueuing service {s.set}::{s.name} at {now}")
-                    lib_runner.enqueue(s.set, s.name, s.owner, "service", s.drop_done, s.param)
+                    lib_runner.enqueue(s.set, s.name, s.owner, "service", s.drop_done, s.param, s.max_retries, None)
                     schedule_obj = session.get(Schedule, s.id)
                     old_last = schedule_obj.last
                     schedule_obj.last = now
@@ -930,7 +932,7 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
             if job_id != None:
                 try:
                     logger.debug(f"main: loading job {job_id}")
-                    owner, set, name, kind, param, code, overrides = loadJob(job_id)
+                    owner, set, name, kind, param, code, overrides, max_retries = loadJob(job_id)
 
                     port = None
                     if kind == "debug":
@@ -949,7 +951,7 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
                     code = process_imports(code, set, kind, libs, override_dict)
 
                     logger.debug(f"Run job {job_id}")
-                    p = Process(target=run, name=f"{set}::{name}", kwargs={"job_id": job_id, "owner": owner, "set": set, "name": name, "kind": kind, "param": param, "code": code, "libs": libs, "overrides": overrides, "q": q, "data_base": data_base, "web_bind": web_bind, "venv_path": venv_path, "pkg_path": pkg_path, "port": port})
+                    p = Process(target=run, name=f"{set}::{name}", kwargs={"job_id": job_id, "owner": owner, "set": set, "name": name, "kind": kind, "param": param, "code": code, "libs": libs, "overrides": overrides, "q": q, "data_base": data_base, "web_bind": web_bind, "venv_path": venv_path, "pkg_path": pkg_path, "max_retries": max_retries, "port": port})
                     p.start()
 
                     if kind == "debug":

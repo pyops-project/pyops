@@ -106,7 +106,7 @@ class TestDaemon:
         mock_cron.get_next.return_value = mock_next
         mock_croniter.return_value = mock_cron
         schedule()
-        mock_enqueue.assert_called_once_with("test_set", "test_name", "test_owner", "task", False, None)
+        mock_enqueue.assert_called_once_with("test_set", "test_name", "test_owner", "task", False, None, 0, None)
         with Session(get_db_engine()) as test_session:
             sched = test_session.get(Schedule, sched_id)
             test_session.refresh(sched)
@@ -128,7 +128,7 @@ class TestDaemon:
             sched_id = sched.id
         mock_find.side_effect = [[], []]
         schedule()
-        mock_enqueue.assert_called_once_with("test_set", "test_name", "test_owner", "service", False, None)
+        mock_enqueue.assert_called_once_with("test_set", "test_name", "test_owner", "service", False, None, 0, None)
         with Session(get_db_engine()) as test_session:
             sched = test_session.get(Schedule, sched_id)
             test_session.refresh(sched)

@@ -29,6 +29,7 @@ class CreateArgument(BaseModel):
     set: str
     name: str
     drop_done: bool
+    max_retries: int = 0
     schedule: str
     param: str
 
@@ -84,7 +85,7 @@ async def run_get(id: int):
         if schedule == None:
             raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Schedule {} not existing".format(id))
 
-        job_id = runner.enqueue(schedule.set, schedule.name, schedule.owner, "task" if schedule.schedule else "service", False, schedule.param)
+        job_id = runner.enqueue(schedule.set, schedule.name, schedule.owner, "task" if schedule.schedule else "service", schedule.drop_done, schedule.param, schedule.max_retries, None)
 
         with Session(get_db_engine()) as session:
             updated_schedule = session.get(Schedule, id)
@@ -123,6 +124,7 @@ async def item_put(cr: CreateArgument, user: str = Depends(get_current_user)):
                 owner       = user,
                 active      = True,
                 drop_done   = cr.drop_done,
+                max_retries = cr.max_retries,
                 schedule    = cr.schedule,
                 param       = cr.param
             )

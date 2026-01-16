@@ -54,7 +54,7 @@ class TestExecution:
         # Mock exec to fail first 2 attempts, succeed on 3rd
         exec_mock = Mock()
         with patch('builtins.exec', side_effect=[Exception("fail1"), Exception("fail2"), None]):
-            run("id", "owner", "set", "name", "task", "", "print('success')", [], q, data_base, "bind", "/venv", "/pkg", overrides=None)
+            run("id", "owner", "set", "name", "task", "", "print('success')", [], q, data_base, "bind", "/venv", "/pkg", max_retries=3, overrides=None)
 
         assert mock_sleep.call_count == 2  # Sleeps after first two fails
         q.put.assert_called_once_with({"id": "id", "state": "done", "detail": None})
@@ -70,7 +70,7 @@ class TestExecution:
 
         # Mock exec to always fail
         with patch('builtins.exec', side_effect=Exception("fail")):
-            run("id", "owner", "set", "name", "task", "", "raise Exception", [], q, data_base, "bind", "/venv", "/pkg", overrides=None)
+            run("id", "owner", "set", "name", "task", "", "raise Exception", [], q, data_base, "bind", "/venv", "/pkg", max_retries=3, overrides=None)
 
         assert mock_sleep.call_count == 3  # Sleeps after each of 3 fails
         call_args = q.put.call_args[0][0]
@@ -131,7 +131,7 @@ class TestExecution:
         data_base = str(tmp_path / "data")
         mock_sleep.return_value = None
 
-        run("id", "owner", "set", "name", "task", "", "raise Exception('exec error')", [], q, data_base, "bind", "/venv", "/pkg")
+        run("id", "owner", "set", "name", "task", "", "raise Exception('exec error')", [], q, data_base, "bind", "/venv", "/pkg", max_retries=3)
 
         assert mock_sleep.call_count == 3
         call_args = q.put.call_args[0][0]
@@ -308,7 +308,7 @@ class TestExecution:
             call("owner", "set", "name", "service", ["failed"])
         ])
         # Verify enqueue
-        mock_enqueue.assert_called_once_with("set", "name", "owner", "service", True, "param")
+        mock_enqueue.assert_called_once_with("set", "name", "owner", "service", True, "param", 0, None)
         # Check last updated
         with Session(engine) as session:
             result = session.get(Schedule, 1)
@@ -525,7 +525,7 @@ logging.error('ERROR message')
         job_id = "id"
         mock_sleep.return_value = None
 
-        run(job_id, owner, set_name, "name", "task", "", sample_fail_code, [], mock_queue, data_base, "bind", "/venv", "/pkg")
+        run(job_id, owner, set_name, "name", "task", "", sample_fail_code, [], mock_queue, data_base, "bind", "/venv", "/pkg", max_retries=3)
 
         stdout_content, stderr_content = self.get_log_contents(data_base, owner, set_name, job_id)
 
@@ -626,7 +626,7 @@ print("jobsspace: " + globals()['jobsspace'])
         name = "myname"
         param = "raise ValueError('param err')"
         q = Queue()
-        run("id", "owner", set_, name, "task", param, "pass", [], q, data_base, "bind", "/venv", "/pkg")
+        run("id", "owner", set_, name, "task", param, "pass", [], q, data_base, "bind", "/venv", "/pkg", max_retries=3)
         msg = q.get()
         assert msg["state"] == "failed"
         assert "param err" in msg["detail"]
@@ -645,7 +645,7 @@ print("jobsspace: " + globals()['jobsspace'])
         name = "myname"
         code = "raise ValueError('code err')"
         q = Queue()
-        run("id", "owner", set_, name, "task", "", code, [], q, data_base, "bind", "/venv", "/pkg")
+        run("id", "owner", set_, name, "task", "", code, [], q, data_base, "bind", "/venv", "/pkg", max_retries=3)
         msg = q.get()
         assert msg["state"] == "failed"
         assert "code err" in msg["detail"]
@@ -666,7 +666,7 @@ print("jobsspace: " + globals()['jobsspace'])
         lib_filename = f"{set_}::mylib"
         libs = [{"code": lib_code, "filename": lib_filename}]
         q = Queue()
-        run("id", "owner", set_, name, "task", "", "pass", libs, q, data_base, "bind", "/venv", "/pkg")
+        run("id", "owner", set_, name, "task", "", "pass", libs, q, data_base, "bind", "/venv", "/pkg", max_retries=3)
         msg = q.get()
         assert msg["state"] == "failed"
         assert "lib err" in msg["detail"]

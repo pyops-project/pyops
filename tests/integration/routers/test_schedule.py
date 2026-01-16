@@ -116,7 +116,7 @@ class TestScheduleRouter:
             mock_enqueue.return_value = 2  # New job id
             response = mock_client.get(f"/scriptlet/schedule/run?id={schedule_id}", headers={"X-User": "testuser"})
             assert response.status_code == 200
-            mock_enqueue.assert_called_once_with("default", "test_job", "testuser", "task", False, "{}")
+            mock_enqueue.assert_called_once_with("default", "test_job", "testuser", "task", False, "{}", 0, None)
             assert response.json()["job"] == 2
             with Session(get_db_engine()) as session:
                 updated_schedule = session.query(Schedule).filter_by(id=schedule_id).first()

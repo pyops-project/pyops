@@ -671,3 +671,12 @@ pyops.attachDebugJob simplified: removed buildOverrides/pathMappings (only for n
 ; pure {type:'python', request:'attach', connect:localhost:{port}, justMyCode:false}
 ; no local file dependency/crash on undefined job.set
 ; extension.test.ts: success/single-job, missing-set/name no-crash, no-job, multiple-jobs.
+
+Job-MaxRetries:
+Job & Schedule models add max_retries Column(Integer, default=0, nullable=False).
+Runner-Retries:
+app/runner.py execute_job_code accepts max_retries: int = 0; if job_type=="task" for attempt in range(max_retries + 1): exec param/libs/code; except: if attempt < max_retries logger.warning retry sleep 60s else q.put failed "Failed after {max_retries} retries\n{traceback}".
+JobControl.create:
+app/lib/pyops.py JobControl.create sig adds max_retries: int = 0; json adds "max_retries": max_retries.
+UI-Scheduler:
+app/sites/scriptlet/scheduler.html createModal adds #createModal-maxRetries input type=number min=0 value=0 after drop_done; clearCreateModal val("0"); onCreate parseInt || 0 sends PUT /scriptlet/schedule/item.

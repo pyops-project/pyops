@@ -166,7 +166,7 @@ class TestLoadUtils:
                 fetched = test_session.get(Job, "123")
                 assert fetched.state == "loading"  # State set to loading by loadJob
             mock_read_content.assert_called_once_with('data/git/set', 'name', 'task', committed=True)
-            assert result == ("owner", "set", "name", "task", "param", 'code', None)
+            assert result == ("owner", "set", "name", "task", "param", 'code', None, 0)
 
     def test_load_job_debug_unstaged(self, mock_db, mock_git_ops):
         from app import runner
@@ -190,7 +190,7 @@ class TestLoadUtils:
                 fetched = test_session.get(Job, "123")
                 assert fetched.state == "loading"  # State set to loading by loadJob
             mock_read_content.assert_called_once_with('data/git/set', 'name', 'task', committed=False)
-            assert result == ("owner", "set", "name", "debug", "param", 'debug unstaged code', None)
+            assert result == ("owner", "set", "name", "debug", "param", 'debug unstaged code', None, 0)
 
     def test_load_job_debug(self, mock_db, mock_git_ops):
         from app import runner
@@ -217,7 +217,7 @@ class TestLoadUtils:
                 assert fetched.state == "loading"  # State set to loading by loadJob
             # Since overrides has set::name, read_content should not be called
             mock_read_content.assert_not_called()
-            assert result == ("owner", "set", "name", "debug", "param", "override", '{"set::name": "override"}')
+            assert result == ("owner", "set", "name", "debug", "param", "override", '{"set::name": "override"}', 0)
 
     def test_load_lib(self, mock_git_ops):
         from app import runner
@@ -447,7 +447,7 @@ class TestKillProcTree:
         from app.orm.database import get_db_engine
         from app.orm.job import Job
         overrides = '{"key": "value"}'
-        result_id = runner.enqueue("set", "name", "owner", "debug", True, "param", overrides)
+        result_id = runner.enqueue("set", "name", "owner", "debug", True, "param", 0, overrides)
         with Session(get_db_engine()) as test_session:
             fetched = test_session.query(Job).filter_by(id=result_id).first()
             assert fetched.overrides == overrides

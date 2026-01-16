@@ -460,7 +460,8 @@ class TestJobRouter:
                 session.commit()
 
             from app.runner import loadJob
-            owner, set_, name, kind, param, code, overrides_str = loadJob(job_id)
+            owner, set_, name, kind, param, code, overrides_str, max_retries = loadJob(job_id)
             assert kind == "debug"
             assert code == "# overridden code"
             assert overrides_str is not None
+            assert max_retries == 0
