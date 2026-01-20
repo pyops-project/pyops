@@ -318,18 +318,14 @@ class TestProcessInstallLines:
     @patch('app.runner.os.path.join', side_effect=lambda *args: '/'.join(args))
     def test_process_install_lines_pip_install(self, mock_join, mock_run):
         from app.runner import process_install_lines
-        # Mock pip list returns empty (module not installed), then install succeeds
-        mock_result_list = Mock()
-        mock_result_list.returncode = 0
-        mock_result_list.stdout = ""
-        mock_result_install = Mock()
-        mock_result_install.returncode = 0
-        mock_run.side_effect = [mock_result_list, mock_result_install]
+        # Mock pip install succeeds
+        mock_result = Mock()
+        mock_result.returncode = 0
+        mock_run.return_value = mock_result
         lines = ['#!pip_module']
         process_install_lines(lines, '/venv', '/pkg', 'job_id')
-        assert mock_run.call_count == 2
-        mock_run.assert_any_call(['/venv/bin/pip', 'list', '--format=freeze'], capture_output=True, text=True, cwd='/venv')
-        mock_run.assert_any_call(['/venv/bin/pip', 'install', '-q', 'pip_module'], capture_output=True, text=True)
+        assert mock_run.call_count == 1
+        mock_run.assert_called_once_with(['/venv/bin/pip', 'install', '-q', 'pip_module'], capture_output=True, text=True)
 
     @patch('app.runner.subprocess.run')
     @patch('app.runner.os.path.join', side_effect=lambda *args: '/'.join(args))

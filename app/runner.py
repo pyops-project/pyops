@@ -379,15 +379,10 @@ def process_install_lines(lines, venv_path, pkg_path, id):
                 # Skip if it looks like a library directive (starts with { or contains ::)
                 if arg1.startswith('{') or '::' in arg1:
                     continue
-                module = arg1
-                result = subprocess.run([pip_path, 'list', '--format=freeze'], capture_output=True, text=True, cwd=venv_path)
-                if result.returncode != 0:
-                    raise Exception(f"pip list failed: {result.stderr}")
-                installed = any(pkg.split('==')[0] == module for pkg in result.stdout.splitlines() if '==' in pkg)
-                if not installed:
-                    install_result = subprocess.run([pip_path, 'install', '-q', module], capture_output=True, text=True)
-                    if install_result.returncode != 0:
-                        raise Exception(f"pip install {module} failed: {install_result.stderr}")
+                package_spec = arg1
+                install_result = subprocess.run([pip_path, 'install', '-q', package_spec], capture_output=True, text=True)
+                if install_result.returncode != 0:
+                    raise Exception(f"pip install {package_spec} failed: {install_result.stderr}")
     return lines
 
 def process_code_installs(param: str, code: str, libs: list[dict], venv_path: str, pkg_path: str, job_id: str) -> tuple[str, str, list[dict]]:

@@ -171,10 +171,7 @@ class TestExecution:
     @patch('os.path.exists')
     def test_process_install_lines_pip(self, mock_exists, mock_run, mock_conf, tmp_path):
         from app.runner import process_install_lines
-        mock_run.side_effect = [
-            Mock(returncode=0, stdout=""),  # list no requests
-            Mock(returncode=0)  # install
-        ]
+        mock_run.return_value = Mock(returncode=0)  # install succeeds
         mock_exists.return_value = True  # venv exists
         lines = ["#!requests"]
         venv_path = "/venv"
@@ -182,10 +179,10 @@ class TestExecution:
         id = "id"
         process_install_lines(lines, venv_path, pkg_path, id)
         pip_path = os.path.join(venv_path, 'bin', 'pip')
-        mock_run.assert_has_calls([
-            call([pip_path, 'list', '--format=freeze'], capture_output=True, text=True, cwd=venv_path),
-            call([pip_path, 'install', '-q', 'requests'], capture_output=True, text=True)
-        ])
+        # Check that pip install was called
+        pip_calls = [call for call in mock_run.call_args_list if pip_path in str(call)]
+        assert len(pip_calls) == 1
+        assert pip_calls[0] == call([pip_path, 'install', '-q', 'requests'], capture_output=True, text=True)
 
     @patch('subprocess.run')
     @patch('os.path.exists')
