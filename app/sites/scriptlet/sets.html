@@ -127,25 +127,60 @@
                 `;
             }
 
-            function genSetItem(name, branch) {
+            function genSetRowContent(name, branch) {
                 return `
-                    <tr>
-                        <th scope="row">${name}</th>
-                        <th scope="row">${branch}</th>
-                        <td>${genActions(name, branch)}</td>
-                    </tr>
+                    <th scope="row">${name}</th>
+                    <th scope="row">${branch}</th>
+                    <td>${genActions(name, branch)}</td>
                 `;
             }
 
+            function getRowKey(row) {
+                return $(row).data("name");
+            }
+
+            function genSetItem(name, branch) {
+                return `<tr data-name="${name}">${genSetRowContent(name, branch)}</tr>`;
+            }
+
             function refreshList() {
-                $("#sets").empty();
+                const scrollY = window.scrollY;
                 fetch("/scriptlet/sets/list").then(async (r)=>{
                     console.debug("GET", "/scriptlet/sets/list", r)
                     if(r.ok) {
                         const d = await r.json();
                         console.debug("sets", d);
-                        for(const i of d.sets)
-                            $("#sets").append(genSetItem(i.name, i.branch));
+                        const tbody = $("#sets");
+                        const existingRows = {};
+                        tbody.find("tr").each(function() {
+                            const name = $(this).data("name");
+                            if(name) existingRows[name] = this;
+                        });
+                        const newKeys = new Set();
+                        for(const i of d.sets) {
+                            const key = i.name;
+                            newKeys.add(key);
+                            if(existingRows[key]) {
+                                $(existingRows[key]).html(genSetRowContent(i.name, i.branch));
+                            } else {
+                                const newRowHtml = genSetItem(i.name, i.branch);
+                                let inserted = false;
+                                tbody.find("tr").each(function() {
+                                    const existingKey = getRowKey(this);
+                                    if (!inserted && key < existingKey) {
+                                        $(this).before(newRowHtml);
+                                        inserted = true;
+                                        return false;
+                                    }
+                                });
+                                if (!inserted) tbody.append(newRowHtml);
+                            }
+                        }
+                        tbody.find("tr").each(function() {
+                            const name = $(this).data("name");
+                            if(name && !newKeys.has(name)) $(this).remove();
+                        });
+                        window.scrollTo(0, scrollY);
                     } else
                         console.error("GET", "/scriptlet/sets/list", r.statusText);
                 }).catch((e)=>console.error("GET", "/scriptlet/sets/list", e.toString()));

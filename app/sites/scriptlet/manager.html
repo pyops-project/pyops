@@ -104,27 +104,69 @@
                 `;
             }
 
-            function genScriptletItem(set, name, type) {
+            function genScriptletRowContent(set, name, type) {
                 return `
-                    <tr>
-                        <th scope="row">${set}</th>
-                        <th scope="row">${name}</th>
-                        <td>${type}</td>
-                        <td>${genActions(set, name, type)}</td>
-                    </tr>
+                    <th scope="row">${set}</th>
+                    <th scope="row">${name}</th>
+                    <td>${type}</td>
+                    <td>${genActions(set, name, type)}</td>
                 `;
             }
 
+            function getRowKey(row) {
+                const set = $(row).data("set");
+                const name = $(row).data("name");
+                return `${set}::${name}`;
+            }
+
+            function genScriptletItem(set, name, type) {
+                return `<tr data-set="${set}" data-name="${name}">${genScriptletRowContent(set, name, type)}</tr>`;
+            }
+
             function refreshList() {
-                $("#scriptlets").empty();
+                const scrollY = window.scrollY;
                 fetch("/scriptlet/inventory/list").then(async (r)=>{
                     console.debug("GET", "/scriptlet/inventory/list", r)
                     if(r.ok) {
                         const d = await r.json();
                         console.debug("scriptlets", d);
-                        for(const i of d)
-                            $("#scriptlets").append(genScriptletItem(i.set, i.name, i.type));
+                        const tbody = $("#scriptlets");
+                        const existingRows = {};
+                        tbody.find("tr").each(function() {
+                            const set = $(this).data("set");
+                            const name = $(this).data("name");
+                            if(set && name) existingRows[`${set}::${name}`] = this;
+                        });
+                        const newKeys = new Set();
+                        for(const i of d) {
+                            const key = `${i.set}::${i.name}`;
+                            newKeys.add(key);
+                            if(existingRows[key]) {
+                                $(existingRows[key]).html(genScriptletRowContent(i.set, i.name, i.type));
+                            } else {
+                                const newRowHtml = genScriptletItem(i.set, i.name, i.type);
+                                let inserted = false;
+                                tbody.find("tr").each(function() {
+                                    const existingKey = getRowKey(this);
+                                    if (!inserted && key < existingKey) {
+                                        $(this).before(newRowHtml);
+                                        inserted = true;
+                                        return false;
+                                    }
+                                });
+                                if (!inserted) tbody.append(newRowHtml);
+                            }
+                        }
+                        tbody.find("tr").each(function() {
+                            const set = $(this).data("set");
+                            const name = $(this).data("name");
+                            if(set && name) {
+                                const key = `${set}::${name}`;
+                                if(!newKeys.has(key)) $(this).remove();
+                            }
+                        });
                         checkStatuses();
+                        window.scrollTo(0, scrollY);
                     } else
                         console.error("GET", "/scriptlet/inventory/list", r.statusText);
                 }).catch((e)=>console.error("GET", "/scriptlet/inventory/list", e.toString()));

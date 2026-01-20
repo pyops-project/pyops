@@ -60,19 +60,25 @@
                 `
             }
 
-            function genScheduleItem(s) {
+            function genScheduleRowContent(s) {
                 return `
-                    <tr>
-                        <th scope="row">${s.id}</th>
-                        <th scope="row">${s.set}</th>
-                        <th scope="row">${s.name}</th>
-                        <th scope="row">${s.drop_done}</th>
-                        <td>${s.schedule}</td>
-                        <td>${s.last}</td>
-                        <td>${genActions(s)}</td>
-                        <td id="param_${s.id}" style="display:none;">${s.param}</td>
-                    </tr>
+                    <th scope="row">${s.id}</th>
+                    <th scope="row">${s.set}</th>
+                    <th scope="row">${s.name}</th>
+                    <th scope="row">${s.drop_done}</th>
+                    <td>${s.schedule}</td>
+                    <td>${s.last}</td>
+                    <td>${genActions(s)}</td>
+                    <td id="param_${s.id}" style="display:none;">${s.param}</td>
                 `;
+            }
+
+            function getRowKey(row) {
+                return $(row).data("id");
+            }
+
+            function genScheduleItem(s) {
+                return `<tr data-id="${s.id}">${genScheduleRowContent(s)}</tr>`;
             }
 
             function copyParam(id) {
@@ -81,14 +87,43 @@
             }
 
             function refreshList() {
-                $("#schedules").empty();
+                const scrollY = window.scrollY;
                 fetch("/scriptlet/schedule/list").then(async (r)=>{
                     console.debug("GET", "/scriptlet/schedule/list", r)
                     if(r.ok) {
                         const d = await r.json();
                         console.debug("schedules", d);
-                        for(const i of d)
-                            $("#schedules").append(genScheduleItem(i));
+                        const tbody = $("#schedules");
+                        const existingRows = {};
+                        tbody.find("tr").each(function() {
+                            const id = $(this).data("id");
+                            if(id) existingRows[id] = this;
+                        });
+                        const newKeys = new Set();
+                        for(const i of d) {
+                            const key = i.id;
+                            newKeys.add(key);
+                            if(existingRows[key]) {
+                                $(existingRows[key]).html(genScheduleRowContent(i));
+                            } else {
+                                const newRowHtml = genScheduleItem(i);
+                                let inserted = false;
+                                tbody.find("tr").each(function() {
+                                    const existingKey = getRowKey(this);
+                                    if (!inserted && key < existingKey) {
+                                        $(this).before(newRowHtml);
+                                        inserted = true;
+                                        return false;
+                                    }
+                                });
+                                if (!inserted) tbody.append(newRowHtml);
+                            }
+                        }
+                        tbody.find("tr").each(function() {
+                            const id = $(this).data("id");
+                            if(id && !newKeys.has(id)) $(this).remove();
+                        });
+                        window.scrollTo(0, scrollY);
                     } else
                         console.error("GET", "/scriptlet/schedule/list", r.statusText);
                 }).catch((e)=>console.error("GET", "/scriptlet/schedule/list", e.toString()));
