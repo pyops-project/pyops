@@ -3,7 +3,7 @@ import traceback
 import croniter
 import subprocess
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from io import TextIOWrapper
 from multiprocessing import Process, current_process, Queue
 import threading
@@ -269,6 +269,33 @@ def loadJob(job_id: str):
 
         return job.owner, job.set, job.name, job.kind, job.param, code, job.overrides, job.max_retries
 
+def cleanup_drop_done_jobs():
+    logger.debug("cleanup_drop_done_jobs: starting")
+    now = datetime.now()
+    delay_seconds = files.conf_runner()["drop_done_delay_seconds"]
+    cutoff = now - timedelta(seconds=delay_seconds)
+
+    with Session(get_db_engine()) as session:
+        logger.debug(f"cleanup_drop_done_jobs: session ID {id(session)} at {now}, delay={delay_seconds}s")
+        stmt = select(Job).where(
+            Job.state == "done",
+            Job.drop_done == True,
+            Job.end < cutoff
+        )
+
+        jobs_to_remove = session.scalars(stmt).all()
+        logger.debug(f"cleanup_drop_done_jobs: found {len(jobs_to_remove)} jobs to mark for removal")
+
+        for job in jobs_to_remove:
+            logger.debug(f"cleanup_drop_done_jobs: marking job {job.id} for removal")
+            job.state = "remove"
+
+        if jobs_to_remove:
+            session.commit()
+            logger.debug("cleanup_drop_done_jobs: committed changes")
+        else:
+            logger.debug("cleanup_drop_done_jobs: no jobs to clean up")
+
 def finishJob(job_id: str, state: str, detail: str):
     logger.debug(f"finishJob(job_id='{job_id}', state='{state}', detail='{detail}')")
 
@@ -279,7 +306,7 @@ def finishJob(job_id: str, state: str, detail: str):
         if job != None:
             old_state = job.state
             if job.state == "running" and state == "done" and job.drop_done and not job.kind == "debug":
-                new_state = "remove"
+                new_state = state  # Keep as "done" for delayed removal
             elif job.state != "cancel" and job.state != "cancelling":
                 new_state = state
             else:
@@ -874,6 +901,9 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
     # restore jobs which were taken out of queue but not executed due to crash
     handleOddJobs()
 
+    # clean up drop_done jobs that have been done for 60+ seconds
+    cleanup_drop_done_jobs()
+
     processes: dict[int, Process] = {}
 
     last_pull_time = 0
@@ -921,6 +951,9 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
             msg = q.get()
             logger.debug(f"main: processing queue msg {msg}")
             finishJob(msg["id"], msg["state"], msg["detail"])
+
+        # clean up drop_done jobs that have been done for delay+ seconds
+        cleanup_drop_done_jobs()
 
         try:
             logger.debug("main: calling getNextToDo")

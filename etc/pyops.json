@@ -12,7 +12,8 @@
     "runner": {
         "venv": "data/venv",
         "pkg": "data/pkg",
-        "git_pull_interval": 60
+        "git_pull_interval": 60,
+        "drop_done_delay_seconds": 60
     },
     "log": {
         "loglevel": "debug"

@@ -68,10 +68,52 @@ class TestDaemon:
         finishJob("id", "done", None)
         with Session(get_db_engine()) as test_session:
             job = test_session.get(Job, "id")
-            assert job.state == "remove"
+            assert job.state == "done"
             assert job.end is not None
             assert job.detail is None
             assert job.pid is None
+
+    @patch('app.runner.files.conf_runner')
+    @patch('app.runner.datetime')
+    def test_cleanup_drop_done_jobs_delayed_removal(self, mock_dt, mock_conf_runner, mock_db):
+        from app.runner import finishJob, cleanup_drop_done_jobs
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        from datetime import datetime, timedelta
+
+        # Mock config to return 3 second delay
+        mock_conf_runner.return_value = {"drop_done_delay_seconds": 3}
+
+        # Create and finish job
+        with Session(get_db_engine()) as test_session:
+            job = Job(id="id", set="test_set", name="test_name", owner="test_owner", kind="task", state="running", param=None, detail=None, pid=None, drop_done=True)
+            test_session.add(job)
+            test_session.commit()
+
+        # Mock initial time
+        initial_time = datetime(2023, 1, 1, 12, 0, 0)
+        mock_dt.now.return_value = initial_time
+
+        finishJob("id", "done", None)
+
+        # Verify job is done but not removed yet
+        with Session(get_db_engine()) as test_session:
+            job = test_session.get(Job, "id")
+            assert job.state == "done"
+            assert job.end == initial_time
+
+        # Mock time 4 seconds later (past cutoff)
+        mock_dt.now.return_value = initial_time + timedelta(seconds=4)
+
+        cleanup_drop_done_jobs()
+
+        # Verify job is now marked for removal
+        with Session(get_db_engine()) as test_session:
+            job = test_session.get(Job, "id")
+            assert job.state == "remove"
+
+        # Verify cleanup was called with correct config
+        mock_conf_runner.assert_called_once()
 
     def test_finishJob_failed_no_drop(self, mock_db):
         from app.runner import finishJob

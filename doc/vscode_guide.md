@@ -72,8 +72,8 @@ Cline outputs full file content; paste/replace in editor, then save via VSIX. It
   - Post-process: Commented out (e.g., `# #!requests`); errors fail job.
 - **Param**: Optional pre-exec code string (enqueue via UI/API; supports directives). Vars/functions available in main.
 - **Debug Mode**: Enqueue as "debug" (uses draft files, no auto-cleanup).
-- **Enqueue/Run**: Via web UI (e.g., /scriptlet/manager.html) or API (POST /scriptlet/job/item {set, name, kind="task"/"service"/"debug", param, drop_done}); manage jobs in VSIX pyops-monitor.
-- **Scheduling**: POST /scriptlet/schedule/item {set, name, kind="task", schedule="cron_expr" (e.g., "* * * * *"), param, drop_done}.
+- **Enqueue/Run**: Via web UI (e.g., /scriptlet/manager.html) or API (PUT /scriptlet/job/item {set, name, kind="task"/"service"/"debug", param, drop_done, max_retries}); manage jobs in VSIX pyops-monitor.
+- **Scheduling**: PUT /scriptlet/schedule/item {set, name, kind="task", schedule="cron_expr" (e.g., "* * * * *"), param, drop_done, max_retries}.
 - **Monitoring**: VSIX pyops-monitor or /scriptlet/monitor for jobs/schedules by state. Download logs/files.
 - **API Access**: HTTP to `/controller/{set}/{name}/{rest:path}` proxies (via controller globals service name) to service listener with ZMQ msg dict: `{"type": METHOD, "path": "/{rest:path}", **all query_params (e.g. ?cmd=run → "cmd": "run"), "data": body (parsed to dict if application/json, str if text/*, bytes otherwise), "data_type": "json"/"text"/"binary"/"none"}`. Convention: `/q?cmd=...` GET or POST `/q` body.
 
@@ -500,7 +500,7 @@ PyOps UI: http://{pyops.serverUrl}/scriptlet/sets.html
 
 - List sets/branch; auto-refresh.
 - Add: clone (name, Git URL/branch, git name/email, username/password).
-- Actions: switch (local branches), remove (confirm).
+- Actions: pull (sync repos), switch (local branches), remove (confirm).
 
 Safe Git ops with per-set locks; errors in UI.
 
