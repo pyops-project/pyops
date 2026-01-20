@@ -115,11 +115,14 @@
 
             function genActions(name, branch) {
                 return `
-                    <button type="button" onclick="onRemove('${name}')" class="btn btn-danger p-0">
-                        <span class="material-icons-round">delete</span>
+                    <button type="button" onclick="onPull('${name}')" class="btn btn-primary p-0">
+                        <span class="material-icons-round">sync</span>
                     </button>
                     <button type="button" onclick="onSwitchBranch('${name}')" class="btn btn-warning p-0">
                         <span class="material-icons-round">swap_horiz</span>
+                    </button>
+                    <button type="button" onclick="onRemove('${name}')" class="btn btn-danger p-0">
+                        <span class="material-icons-round">delete</span>
                     </button>
                 `;
             }
@@ -309,6 +312,19 @@
                         $("#switchModal-error").text(d.detail);
                     }
                 }).catch((e)=>$("#switchModal-error").text(e.toString()));
+            }
+
+            function onPull(name) {
+                console.debug("onPull", name);
+
+                fetch(`/scriptlet/sets/pull/${name}`, {
+                    method: "POST"
+                }).then(async (r)=>{
+                    if(r.ok)
+                        enqueueRefreshList();
+                    else
+                        console.error("POST", `/scriptlet/sets/pull/${name}`, r.statusText);
+                }).catch((e)=>console.error("POST", `/scriptlet/sets/pull/${name}`, e.toString()));
             }
 
             function onRemove(name) {

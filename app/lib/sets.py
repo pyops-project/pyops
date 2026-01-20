@@ -1,10 +1,41 @@
 import os
+import sys
 import subprocess
 from pathlib import Path
 import shutil
 from urllib.parse import urlparse
 
 from .git import repo_lock, _call, _check
+from .files import conf_runner, project_root
+
+def ensure_set_environment(name):
+    """
+    Ensure per-set venv and pkg directories exist and venv is initialized.
+    Creates directories and initializes venv if not present.
+    """
+    runner_conf = conf_runner()
+    venv_base = runner_conf.get("venv", "data/venv")
+    pkg_base = runner_conf.get("pkg", "data/pkg")
+    venv_path = os.path.join(project_root, venv_base, name)
+    pkg_path = os.path.join(project_root, pkg_base, name)
+    os.makedirs(venv_path, exist_ok=True)
+    if not os.path.exists(os.path.join(venv_path, 'bin', 'python')):
+        subprocess.check_call([sys.executable, '-m', 'venv', venv_path])
+    os.makedirs(pkg_path, exist_ok=True)
+
+def remove_set_environment(name):
+    """
+    Remove per-set venv and pkg directories.
+    """
+    runner_conf = conf_runner()
+    venv_base = runner_conf.get("venv", "data/venv")
+    pkg_base = runner_conf.get("pkg", "data/pkg")
+    venv_path = os.path.join(project_root, venv_base, name)
+    pkg_path = os.path.join(project_root, pkg_base, name)
+    if os.path.exists(venv_path):
+        shutil.rmtree(venv_path)
+    if os.path.exists(pkg_path):
+        shutil.rmtree(pkg_path)
 
 def list_sets(git_dir):
     """
@@ -78,6 +109,8 @@ def clone_set(git_dir, url, username=None, password=None, git_name=None, git_ema
         if git_email:
             _call(["git", "config", "user.email", git_email], str(sets_dir))
 
+        ensure_set_environment(name)
+
     return name
 
 def remove_set(git_dir, name):
@@ -88,8 +121,9 @@ def remove_set(git_dir, name):
     sets_dir = Path(git_dir) / name
     if not sets_dir.exists():
         raise ValueError(f"Set '{name}' not found.")
-    
+
     with repo_lock(git_dir, name):
+        remove_set_environment(name)
         shutil.rmtree(sets_dir)
     return True
 
@@ -107,6 +141,9 @@ def create_set(git_dir, name):
     # Initialize git repo
     from . import git
     git.get_repo_path(name)
+
+    ensure_set_environment(name)
+
     return True
 
 def switch_branch(git_dir, name, branch):
@@ -152,4 +189,18 @@ def switch_branch(git_dir, name, branch):
             _call(["git", "push", "-u", "origin", branch], str(sets_dir))
         except subprocess.CalledProcessError:
             pass  # No remote or push failed, continue
+    return True
+
+def pull_set(git_dir, name):
+    """
+    Pull the latest changes from the remote repository for the set.
+    Raises ValueError if set not found.
+    """
+    sets_dir = Path(git_dir) / name
+    if not sets_dir.exists():
+        raise ValueError(f"Set '{name}' not found.")
+
+    from . import git
+    repo = git.get_repo_path(name)
+    git.pull_if_needed(repo)
     return True

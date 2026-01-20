@@ -87,3 +87,15 @@ def test_get_sets_exception():
         response = client.get("/scriptlet/sets")
         assert response.status_code == 500
         assert "site error" in response.json()["detail"]
+
+def test_pull_set(mock_conf_data, mock_sets):
+    mock_sets.pull_set.return_value = None
+    response = client.post("/scriptlet/sets/pull/testset")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "ok"
+
+def test_pull_set_not_found(mock_conf_data, mock_sets):
+    mock_sets.pull_set.side_effect = ValueError("Not found")
+    response = client.post("/scriptlet/sets/pull/missing")
+    assert response.status_code == 404

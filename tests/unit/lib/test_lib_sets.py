@@ -54,16 +54,24 @@ class TestSets:
             sets.clone_set(str(self.git_dir), "https://example.com/testset.git")
 
     def test_clone_set_success(self):
-        with patch('app.lib.sets._call') as mock_call:
+        with patch('app.lib.sets._call') as mock_call, \
+             patch('app.lib.sets.conf_runner') as mock_conf_runner, \
+             patch('os.makedirs') as mock_makedirs, \
+             patch('subprocess.check_call') as mock_check_call:
             mock_call.return_value = None
+            mock_conf_runner.return_value = {"venv": "/venv", "pkg": "/pkg"}
             result = sets.clone_set(str(self.git_dir), "https://example.com/newset.git")
         assert result == "newset"
         mock_call.assert_called_once_with(["git", "clone", "https://example.com/newset.git", "newset"], str(self.git_dir))
 
 
     def test_clone_set_with_git_config(self):
-        with patch('app.lib.sets._call') as mock_call:
+        with patch('app.lib.sets._call') as mock_call, \
+             patch('app.lib.sets.conf_runner') as mock_conf_runner, \
+             patch('os.makedirs') as mock_makedirs, \
+             patch('subprocess.check_call') as mock_check_call:
             mock_call.return_value = None
+            mock_conf_runner.return_value = {"venv": "/venv", "pkg": "/pkg"}
             result = sets.clone_set(str(self.git_dir), "https://example.com/newset.git", git_name="User", git_email="user@example.com")
         assert result == "newset"
         mock_call.assert_has_calls([
@@ -79,8 +87,12 @@ class TestSets:
             yield
         with patch('app.lib.sets.repo_lock', mock_repo_lock), \
              patch('app.lib.sets._call') as mock_call, \
-             patch('builtins.open', mock_open()) as mock_file:
+             patch('builtins.open', mock_open()) as mock_file, \
+             patch('app.lib.sets.conf_runner') as mock_conf_runner, \
+             patch('os.makedirs') as mock_makedirs, \
+             patch('subprocess.check_call') as mock_check_call:
             mock_call.return_value = None
+            mock_conf_runner.return_value = {"venv": "/venv", "pkg": "/pkg"}
             result = sets.clone_set(str(self.git_dir), "https://example.com/repo.git", username="user", password="pass")
         assert result == "repo"
         # Check clone URL has credentials
@@ -99,7 +111,9 @@ class TestSets:
     def test_remove_set_success(self):
         testset_dir = self.git_dir / "testset"
         testset_dir.mkdir()
-        with patch('shutil.rmtree'):
+        with patch('shutil.rmtree'), \
+             patch('app.lib.sets.conf_runner') as mock_conf_runner:
+            mock_conf_runner.return_value = {"venv": "/venv", "pkg": "/pkg"}
             result = sets.remove_set(str(self.git_dir), "testset")
         assert result is True
 
@@ -210,10 +224,31 @@ class TestSets:
             sets.create_set(str(self.git_dir), "testset")
 
     def test_create_set_success(self):
-        with patch('app.lib.git.get_repo_path') as mock_get_repo_path:
+        with patch('app.lib.git.get_repo_path') as mock_get_repo_path, \
+             patch('app.lib.sets.conf_runner') as mock_conf_runner, \
+             patch('os.makedirs') as mock_makedirs, \
+             patch('subprocess.check_call') as mock_check_call:
             mock_get_repo_path.return_value = None
+            mock_conf_runner.return_value = {"venv": "/venv", "pkg": "/pkg"}
             result = sets.create_set(str(self.git_dir), "newset")
         assert result is True
         newset_dir = self.git_dir / "newset"
         assert newset_dir.exists()
         mock_get_repo_path.assert_called_once_with("newset")
+
+    def test_pull_set_not_found(self):
+        with pytest.raises(ValueError, match="not found"):
+            sets.pull_set(str(self.git_dir), "missing")
+
+    def test_pull_set_success(self):
+        testset_dir = self.git_dir / "testset"
+        testset_dir.mkdir()
+        (testset_dir / ".git").mkdir()
+        with patch('app.lib.git.get_repo_path') as mock_get_repo_path, \
+             patch('app.lib.git.pull_if_needed') as mock_pull_if_needed:
+            mock_get_repo_path.return_value = str(testset_dir)
+            mock_pull_if_needed.return_value = True
+            result = sets.pull_set(str(self.git_dir), "testset")
+        assert result is True
+        mock_get_repo_path.assert_called_once_with("testset")
+        mock_pull_if_needed.assert_called_once_with(str(testset_dir))

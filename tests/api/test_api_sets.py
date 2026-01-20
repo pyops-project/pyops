@@ -122,3 +122,32 @@ def test_post_switch_nonexistent_branch():
         data_resp = response.json()
         assert data_resp["status"] == "ok"
         assert "Switched 'testset' to 'nonexistent'" in data_resp["message"]
+
+def test_post_pull_success():
+    with patch('app.routers.scriptlet.sets.files.conf_data') as mock_conf, \
+         patch('app.routers.scriptlet.sets.sets.pull_set') as mock_pull:
+        mock_conf.return_value = {"git": "/tmp/mock_git"}
+        mock_pull.return_value = True
+        response = client.post("/scriptlet/sets/pull/testset")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "ok"
+        assert "Pulled set 'testset'" in data["message"]
+
+def test_post_pull_value_error():
+    with patch('app.routers.scriptlet.sets.files.conf_data') as mock_conf, \
+         patch('app.routers.scriptlet.sets.sets.pull_set') as mock_pull:
+        mock_conf.return_value = {"git": "/tmp/mock_git"}
+        mock_pull.side_effect = ValueError("Set not found")
+        response = client.post("/scriptlet/sets/pull/missing")
+        assert response.status_code == 404
+        assert "Set not found" in response.json()["detail"]
+
+def test_post_pull_exception():
+    with patch('app.routers.scriptlet.sets.files.conf_data') as mock_conf, \
+         patch('app.routers.scriptlet.sets.sets.pull_set') as mock_pull:
+        mock_conf.return_value = {"git": "/tmp/mock_git"}
+        mock_pull.side_effect = Exception("Pull failed")
+        response = client.post("/scriptlet/sets/pull/testset")
+        assert response.status_code == 500
+        assert "Pull failed" in response.json()["detail"]

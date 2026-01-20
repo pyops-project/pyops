@@ -314,47 +314,56 @@ class TestProcessImports:
             process_imports(text, 'set', 'task', libs)
 
 class TestProcessInstallLines:
+    @patch('app.runner.ensure_set_environment')
+    @patch('os.makedirs')
     @patch('app.runner.subprocess.run')
     @patch('app.runner.os.path.join', side_effect=lambda *args: '/'.join(args))
-    def test_process_install_lines_pip_install(self, mock_join, mock_run):
+    def test_process_install_lines_pip_install(self, mock_join, mock_run, mock_makedirs, mock_ensure):
         from app.runner import process_install_lines
         # Mock pip install succeeds
         mock_result = Mock()
         mock_result.returncode = 0
         mock_run.return_value = mock_result
         lines = ['#!pip_module']
-        process_install_lines(lines, '/venv', '/pkg', 'job_id')
+        process_install_lines(lines, '/venv', '/pkg', 'testset', 'job_id')
         assert mock_run.call_count == 1
-        mock_run.assert_called_once_with(['/venv/bin/pip', 'install', '-q', 'pip_module'], capture_output=True, text=True)
+        mock_run.assert_called_once_with(['/venv/testset/bin/pip', 'install', '-q', 'pip_module'], capture_output=True, text=True)
 
+    @patch('app.runner.ensure_set_environment')
+    @patch('os.makedirs')
     @patch('app.runner.subprocess.run')
     @patch('app.runner.os.path.join', side_effect=lambda *args: '/'.join(args))
     @patch('app.runner.os.path.exists', return_value=False)
-    def test_process_install_lines_git_clone(self, mock_exists, mock_join, mock_run):
+    def test_process_install_lines_git_clone(self, mock_exists, mock_join, mock_run, mock_makedirs, mock_ensure):
         from app.runner import process_install_lines
         # Mock git clone succeeds
         mock_result = Mock()
         mock_result.returncode = 0
         mock_run.return_value = mock_result
         lines = ['#!https://github.com/user/repo.git']
-        process_install_lines(lines, '/venv', '/pkg', 'job_id')
-        mock_run.assert_called_once_with(['git', 'clone', 'https://github.com/user/repo.git', '/pkg/repo'], capture_output=True, text=True, cwd='/pkg')
+        process_install_lines(lines, '/venv', '/pkg', 'testset', 'job_id')
+        # Check that git clone was called with correct args
+        mock_run.assert_any_call(['git', 'clone', 'https://github.com/user/repo.git', '/pkg/testset/repo'], capture_output=True, text=True, cwd='/pkg/testset')
 
+    @patch('app.runner.ensure_set_environment')
+    @patch('os.makedirs')
     @patch('app.runner.subprocess.run')
     @patch('app.runner.os.path.join', side_effect=lambda *args: '/'.join(args))
-    def test_process_install_lines_no_bang(self, mock_join, mock_run):
+    def test_process_install_lines_no_bang(self, mock_join, mock_run, mock_makedirs, mock_ensure):
         from app.runner import process_install_lines
         lines = ['pass']
-        result = process_install_lines(lines, '/venv', '/pkg', 'job_id')
+        result = process_install_lines(lines, '/venv', '/pkg', 'testset', 'job_id')
         assert result == ['pass']
         mock_run.assert_not_called()
 
+    @patch('app.runner.ensure_set_environment')
+    @patch('os.makedirs')
     @patch('app.runner.subprocess.run')
     @patch('app.runner.os.path.join', side_effect=lambda *args: '/'.join(args))
-    def test_process_install_lines_empty(self, mock_join, mock_run):
+    def test_process_install_lines_empty(self, mock_join, mock_run, mock_makedirs, mock_ensure):
         from app.runner import process_install_lines
         lines = ['!']
-        result = process_install_lines(lines, '/venv', '/pkg', 'job_id')
+        result = process_install_lines(lines, '/venv', '/pkg', 'testset', 'job_id')
         assert result == ['!']
         mock_run.assert_not_called()
 

@@ -22,6 +22,7 @@ from app.lib import runner as lib_runner, files
 # Import Git helpers for code loading.
 from app.lib import git
 from app.lib import pyops
+from app.lib.sets import ensure_set_environment
 
 import logging
 from contextlib import redirect_stdout, redirect_stderr
@@ -342,9 +343,11 @@ def process_imports(text: str, current_set: str, kind: str, libs: list[dict[str,
                 raise
     return text
 
-def process_install_lines(lines, venv_path, pkg_path, id):
+def process_install_lines(lines, venv_path, pkg_path, set, id):
     """Process #! lines for installs; uses env prop + CWD for shebang/path resolution."""
-    pip_path = os.path.join(venv_path, 'bin', 'pip')
+    # Ensure per-set directories and venv exist for migration scenarios
+    ensure_set_environment(set)
+    pip_path = os.path.join(venv_path, set, 'bin', 'pip')
     for line in lines:
         stripped = line.lstrip()
         if stripped.startswith('#!'):
@@ -358,13 +361,13 @@ def process_install_lines(lines, venv_path, pkg_path, id):
                 repo_name = os.path.splitext(os.path.basename(arg1))[0]
                 # Sanitize for Python import (e.g., 'my-lib-1.0' -> 'my_lib_1_0')
                 repo_name = re.sub(r'[^\w]', '_', repo_name)
-                repo_dir = os.path.join(pkg_path, repo_name)
+                repo_dir = os.path.join(pkg_path, set, repo_name)
                 if not os.path.exists(repo_dir):
                     clone_args = ['clone', arg1, repo_dir]
                     if arg2:
                         clone_args.insert(1, '-b')
                         clone_args.insert(2, arg2)
-                    result = subprocess.run(['git'] + clone_args, capture_output=True, text=True, cwd=pkg_path)
+                    result = subprocess.run(['git'] + clone_args, capture_output=True, text=True, cwd=os.path.join(pkg_path, set))
                     if result.returncode != 0:
                         raise Exception(f"git clone {arg1} failed: {result.stderr}")
                 else:
@@ -385,12 +388,12 @@ def process_install_lines(lines, venv_path, pkg_path, id):
                     raise Exception(f"pip install {package_spec} failed: {install_result.stderr}")
     return lines
 
-def process_code_installs(param: str, code: str, libs: list[dict], venv_path: str, pkg_path: str, job_id: str) -> tuple[str, str, list[dict]]:
+def process_code_installs(param: str, code: str, libs: list[dict], venv_path: str, pkg_path: str, set: str, job_id: str) -> tuple[str, str, list[dict]]:
     """Process #!pip/#!git installs in param, code, and libs"""
     # Process param
     if param:
         param_lines = param.splitlines(keepends=True)
-        new_param_lines = process_install_lines(param_lines, venv_path, pkg_path, job_id)
+        new_param_lines = process_install_lines(param_lines, venv_path, pkg_path, set, job_id)
         param = ''.join(new_param_lines)
 
     # Process libs
@@ -398,14 +401,14 @@ def process_code_installs(param: str, code: str, libs: list[dict], venv_path: st
     for lib in libs:
         l_code = lib["code"]
         l_lines = l_code.splitlines(keepends=True)
-        new_l_lines = process_install_lines(l_lines, venv_path, pkg_path, job_id)
+        new_l_lines = process_install_lines(l_lines, venv_path, pkg_path, set, job_id)
         new_lib = {"code": ''.join(new_l_lines), "filename": lib["filename"]}
         new_libs.append(new_lib)
     libs = new_libs
 
     # Process code
     code_lines = code.splitlines(keepends=True)
-    new_code_lines = process_install_lines(code_lines, venv_path, pkg_path, job_id)
+    new_code_lines = process_install_lines(code_lines, venv_path, pkg_path, set, job_id)
     code = ''.join(new_code_lines)
 
     return param, code, libs
@@ -427,12 +430,12 @@ def setup_workspace(data_base: str, owner: str, set: str, job_id: str) -> tuple[
 
     return userspace, setspace, workspace
 
-def setup_execution_environment(venv_path: str, pkg_path: str, workspace: str, log_level: int) -> tuple[TextIOWrapper, TextIOWrapper]:
+def setup_execution_environment(venv_path: str, pkg_path: str, set: str, workspace: str, log_level: int) -> tuple[TextIOWrapper, TextIOWrapper]:
     """Setup sys.path, change to workspace directory, and return stdout/stderr files"""
     import sys
-    site_packages = os.path.join(venv_path, 'lib', f'python{sys.version_info.major}.{sys.version_info.minor}', 'site-packages')
+    site_packages = os.path.join(venv_path, set, 'lib', f'python{sys.version_info.major}.{sys.version_info.minor}', 'site-packages')
 
-    sys.path.insert(0, pkg_path)
+    sys.path.insert(0, os.path.join(pkg_path, set))
     sys.path.insert(1, site_packages)
 
     os.chdir(workspace)
@@ -442,7 +445,7 @@ def setup_execution_environment(venv_path: str, pkg_path: str, workspace: str, l
 
     return stdout_file, stderr_file
 
-def setup_job_globals(owner: str, userspace: str, setspace: str, workspace: str, web_bind: str, job_id: str, kind: str) -> dict:
+def setup_job_globals(owner: str, userspace: str, setspace: str, workspace: str, web_bind: str, job_id: str, kind: str, set: str) -> dict:
     """Create the globals dict for job execution"""
     if kind in ("service", "debug"):
         listener = pyops.ServiceListener(owner, job_id)
@@ -455,7 +458,7 @@ def setup_job_globals(owner: str, userspace: str, setspace: str, workspace: str,
         "setspace": setspace,
         "workspace": workspace,
         "gitspace": os.path.join(files.project_root, files.conf_data()["git"]),
-        "pkgspace": os.path.join(files.project_root, files.conf_runner()["pkg"]),
+        "pkgspace": os.path.join(files.project_root, files.conf_runner()["pkg"], set),
         "jobsspace": os.path.join(files.project_root, files.conf_data()["jobs"]),
         "control": pyops.Control(owner, web_bind),
         "listener": listener,
@@ -527,7 +530,7 @@ def run_debug_job(job_id: str, owner: str, set: str, name: str, param: str, code
 
     logger.debug(f"{current_process().pid:<10}start debug job({job_id})")
 
-    stdout_file, stderr_file = setup_execution_environment(venv_path, pkg_path, workspace, logging.DEBUG)
+    stdout_file, stderr_file = setup_execution_environment(venv_path, pkg_path, set, workspace, logging.DEBUG)
     info_handler, warn_handler = None, None
     try:
         with redirect_stdout(stdout_file):
@@ -560,7 +563,7 @@ debugpy.wait_for_client()"""
                             lib["code"] = override_dict[lib["filename"]]
 
                 # Process installs w/ env prop.
-                param, code, libs = process_code_installs(param, code, libs, venv_path, pkg_path, job_id)
+                param, code, libs = process_code_installs(param, code, libs, venv_path, pkg_path, set, job_id)
 
                 # Create scriptlet files for debug jobs to enable breakpoint verification in .debug/src/ subdirectories
                 debug_src_dir = os.path.join(workspace, ".debug", "src")
@@ -608,7 +611,7 @@ debugpy.wait_for_client()"""
                     with open(lib_file, 'r') as f:
                         compiled_libs.append(compile(f.read(), lib_file, 'exec'))
 
-                glob = setup_job_globals(owner, userspace, setspace, workspace, web_bind, job_id, "debug")
+                glob = setup_job_globals(owner, userspace, setspace, workspace, web_bind, job_id, "debug", set)
 
                 info_handler, warn_handler = setup_logging(logging.DEBUG)
 
@@ -637,13 +640,13 @@ def run_task_job(job_id: str, owner: str, set: str, name: str, param: str, code:
 
     logger.debug(f"{current_process().pid:<10}start task job({job_id})")
 
-    stdout_file, stderr_file = setup_execution_environment(venv_path, pkg_path, workspace, logging.INFO)
+    stdout_file, stderr_file = setup_execution_environment(venv_path, pkg_path, set, workspace, logging.INFO)
     info_handler, warn_handler = None, None
     try:
         with redirect_stdout(stdout_file):
             with redirect_stderr(stderr_file):
                 # Process installs w/ env prop.
-                param, code, libs = process_code_installs(param, code, libs, venv_path, pkg_path, job_id)
+                param, code, libs = process_code_installs(param, code, libs, venv_path, pkg_path, set, job_id)
 
                 # Compile code objects with custom filenames for accurate tracebacks
                 if param:
@@ -662,7 +665,7 @@ def run_task_job(job_id: str, owner: str, set: str, name: str, param: str, code:
                     lib_filename = f"{set}/library/{lib_name}.py"
                     compiled_libs.append(compile(lib["code"], lib_filename, 'exec'))
 
-                glob = setup_job_globals(owner, userspace, setspace, workspace, web_bind, job_id, "task")
+                glob = setup_job_globals(owner, userspace, setspace, workspace, web_bind, job_id, "task", set)
 
                 info_handler, warn_handler = setup_logging(logging.INFO)
 
@@ -691,14 +694,14 @@ def run_service_job(job_id: str, owner: str, set: str, name: str, param: str, co
 
     logger.debug(f"{current_process().pid:<10}start service job({job_id})")
 
-    stdout_file, stderr_file = setup_execution_environment(venv_path, pkg_path, workspace, logging.INFO)
+    stdout_file, stderr_file = setup_execution_environment(venv_path, pkg_path, set, workspace, logging.INFO)
     info_handler, warn_handler = None, None
     glob = {}
     try:
         with redirect_stdout(stdout_file):
             with redirect_stderr(stderr_file):
                 # Process installs w/ env prop.
-                param, code, libs = process_code_installs(param, code, libs, venv_path, pkg_path, job_id)
+                param, code, libs = process_code_installs(param, code, libs, venv_path, pkg_path, set, job_id)
 
                 # Compile code objects with custom filenames for accurate tracebacks
                 if param:
@@ -717,7 +720,7 @@ def run_service_job(job_id: str, owner: str, set: str, name: str, param: str, co
                     lib_filename = f"{set}/library/{lib_name}.py"
                     compiled_libs.append(compile(lib["code"], lib_filename, 'exec'))
 
-                glob = setup_job_globals(owner, userspace, setspace, workspace, web_bind, job_id, "service")
+                glob = setup_job_globals(owner, userspace, setspace, workspace, web_bind, job_id, "service", set)
 
                 info_handler, warn_handler = setup_logging(logging.INFO)
 

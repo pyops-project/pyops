@@ -90,3 +90,14 @@ async def switch_branch_endpoint(request: SwitchRequest):
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/scriptlet/sets/pull/{name}")
+async def pull_set_endpoint(name: str):
+    try:
+        git_base = files.conf_data()["git"]
+        sets.pull_set(git_base, name)
+        return {"status": "ok", "message": f"Pulled set '{name}'"}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
