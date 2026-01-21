@@ -45,6 +45,9 @@
 
             function genActions(s) {
                 return `
+                    <button type="button" onclick="edit('${s.id}')" class="btn btn-warning p-0">
+                        <span class="material-icons-round">edit</span>
+                    </button>
                     <button type="button" onclick="del('${s.id}')" class="btn btn-danger p-0">
                         <span class="material-icons-round">delete</span>
                     </button>
@@ -66,6 +69,7 @@
                     <th scope="row">${s.set}</th>
                     <th scope="row">${s.name}</th>
                     <th scope="row">${s.drop_done}</th>
+                    <td>${s.max_retries}</td>
                     <td>${s.schedule}</td>
                     <td>${s.last}</td>
                     <td>${genActions(s)}</td>
@@ -225,7 +229,7 @@
 
             function deactivate(id) {
                 console.debug(`deactivate(${id})`);
-                
+
                 fetch(`/scriptlet/schedule/deactivate?id=${id}`).then(async (r)=>{
                     if(r.ok) {
                         const d = await r.json();
@@ -235,6 +239,80 @@
                     } else
                         console.error(await r.text());
                 }).catch((e)=>console.error(e.toString()));
+            }
+
+            function edit(id) {
+                console.debug(`edit(${id})`);
+
+                fetch(`/scriptlet/schedule/item?id=${id}`).then(async (r)=>{
+                    if(r.ok) {
+                        const s = await r.json();
+                        console.debug("edit schedule", s);
+
+                        $("#editModal-id").val(s.id);
+                        $("#editModal-set").val(s.set);
+                        $("#editModal-name").val(s.name);
+                        $("#editModal-dropDone").prop("checked", s.drop_done);
+                        $("#editModal-maxRetries").val(s.max_retries);
+                        $("#editModal-schedule").val(s.schedule);
+                        $("#editModal-param").val(s.param);
+
+                        $("#editModal").modal('show');
+                    } else
+                        console.error(await r.text());
+                }).catch((e)=>console.error(e.toString()));
+            }
+
+            function clearEditModal() {
+                $("#editModal-error").text("");
+                $("#editModal-id").val("");
+                $("#editModal-set").val("");
+                $("#editModal-name").val("");
+                $("#editModal-dropDone").prop("checked", false);
+                $("#editModal-maxRetries").val("0");
+                $("#editModal-schedule").val("");
+                $("#editModal-param").val("");
+            }
+
+            function onUpdate() {
+                console.debug("onUpdate");
+
+                const id = parseInt($("#editModal-id").val());
+                const set = $("#editModal-set").val();
+                const name = $("#editModal-name").val();
+                const drop_done = $("#editModal-dropDone").is(':checked');
+                const max_retries = parseInt($("#editModal-maxRetries").val()) || 0;
+                const schedule = $("#editModal-schedule").val();
+                const param = $("#editModal-param").val();
+
+                const data = {
+                    "id": id,
+                    "set": set,
+                    "name": name,
+                    "drop_done": drop_done,
+                    "max_retries": max_retries,
+                    "schedule": schedule,
+                    "param": param
+                }
+
+                console.debug("PUT", "/scriptlet/schedule/item", data);
+
+                fetch("/scriptlet/schedule/item", {
+                    method: "PUT",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify(data)
+                }).then(async (r)=>{
+                    if(r.ok) {
+                        $("#editModal").modal('hide');
+                        clearEditModal();
+                        refreshList();
+                    } else {
+                        const d = await r.json();
+                        $("#editModal-error").text(d.detail);
+                    }
+                }).catch((e)=>$("#editModal-error").text(e.toString()));
             }
 
             $(document).ready(() => {
@@ -276,6 +354,7 @@
                 <th scope="col">Set</th>
                 <th scope="col">Name</th>
                 <th scope="col">Drops</th>
+                <th scope="col">Retries</th>
                 <th scope="col">Schedule</th>
                 <th scope="col">Last</th>
                 <th scope="col">Actions</th>
@@ -291,7 +370,7 @@
             <div class="modal-dialog">
                 <div class="modal-content">
                     <div class="modal-header">
-                        <h5 class="modal-title" id="createModalLabel">Create Scriptlet</h5>
+                        <h5 class="modal-title" id="createModalLabel">Create Schedule</h5>
                         <!--<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>-->
                         <p id="createModal-error" class="text-danger"></p>
                     </div>
@@ -324,6 +403,49 @@
                     <div class="modal-footer">
                         <button type="button" class="btn btn-danger" data-bs-dismiss="modal">Cancel</button>
                         <button type="button" class="btn btn-primary" onclick="onCreate()" data-bs-target="#createModal">Create</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="modal fade" data-bs-backdrop="static" id="editModal" tabindex="-1" aria-labelledby="editModalLabel" aria-hidden="true">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="editModalLabel">Edit Schedule</h5>
+                        <!--<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>-->
+                        <p id="editModal-error" class="text-danger"></p>
+                    </div>
+                    <div class="modal-body">
+                        <input id="editModal-id" type="hidden">
+                        <div class="mb-3">
+                            <label for="editModal-set" class="col-form-label">Set:</label>
+                            <input id="editModal-set" type="text" class="form-control">
+                        </div>
+                        <div class="mb-3">
+                            <label for="editModal-name" class="col-form-label">Name:</label>
+                            <input id="editModal-name" type="text" class="form-control">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-check-label" for="editModal-dropDone">Drop logs/data if successful:</label>
+                            <input id="editModal-dropDone" class="form-check-input" type="checkbox" value="">
+                        </div>
+                        <div class="mb-3">
+                            <label for="editModal-maxRetries" class="col-form-label">Max Retries:</label>
+                            <input id="editModal-maxRetries" type="number" min="0" value="0" class="form-control">
+                        </div>
+                        <div class="mb-3">
+                            <label for="editModal-schedule" class="col-form-label">Schedule:</label>
+                            <input id="editModal-schedule" type="text" class="form-control">
+                        </div>
+                        <div class="mb-3">
+                            <label for="editModal-param" class="col-form-label">Param:</label>
+                            <textarea id="editModal-param" cols="40" rows="5" class="form-control"></textarea>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-danger" data-bs-dismiss="modal">Cancel</button>
+                        <button type="button" class="btn btn-primary" onclick="onUpdate()" data-bs-target="#editModal">Update</button>
                     </div>
                 </div>
             </div>

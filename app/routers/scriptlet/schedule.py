@@ -6,6 +6,7 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, Depends, Header
 from starlette.status import HTTP_404_NOT_FOUND, HTTP_400_BAD_REQUEST, HTTP_500_INTERNAL_SERVER_ERROR
 from pydantic import BaseModel
+from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -25,7 +26,8 @@ async def get_current_user(x_user: str = Header(default=None, alias="X-User")):
 
 router = APIRouter()
 
-class CreateArgument(BaseModel):
+class ScheduleArgument(BaseModel):
+    id: Optional[int] = None
     set: str
     name: str
     drop_done: bool
@@ -45,11 +47,12 @@ async def list_get():
                           Schedule.name,
                           Schedule.active,
                           Schedule.drop_done,
+                          Schedule.max_retries,
                           Schedule.schedule,
                           Schedule.last,
                           Schedule.param)
             schedules = session.execute(stmt)
-            
+
             return [dict(r._mapping) for r in schedules]
     except Exception as ex:
         logger.exception("Error in list_get: %s", ex)
@@ -101,9 +104,9 @@ async def run_get(id: int):
         raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
     
 @router.put("/scriptlet/schedule/item", tags=["schedule"])
-async def item_put(cr: CreateArgument, user: str = Depends(get_current_user)):
+async def item_put(cr: ScheduleArgument, user: str = Depends(get_current_user)):
     """
-    Creates a new Schedule
+    Creates or updates a Schedule
     """
     try:
         repo = git.get_repo_path(cr.set)
@@ -118,19 +121,33 @@ async def item_put(cr: CreateArgument, user: str = Depends(get_current_user)):
             croniter.croniter(cr.schedule, now)
 
         with Session(get_db_engine()) as session:
-            schedule = Schedule(
-                set       = cr.set,
-                name        = cr.name,
-                owner       = user,
-                active      = True,
-                drop_done   = cr.drop_done,
-                max_retries = cr.max_retries,
-                schedule    = cr.schedule,
-                param       = cr.param,
-                last        = datetime.now()
-            )
+            if cr.id is not None:
+                # Update existing
+                schedule = session.get(Schedule, cr.id)
+                if schedule == None:
+                    raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Schedule {} not existing".format(cr.id))
+                schedule.set = cr.set
+                schedule.name = cr.name
+                schedule.drop_done = cr.drop_done
+                schedule.max_retries = cr.max_retries
+                schedule.schedule = cr.schedule
+                schedule.param = cr.param
+                # Do not update owner, active, last
+            else:
+                # Create new
+                schedule = Schedule(
+                    set       = cr.set,
+                    name        = cr.name,
+                    owner       = user,
+                    active      = True,
+                    drop_done   = cr.drop_done,
+                    max_retries = cr.max_retries,
+                    schedule    = cr.schedule,
+                    param       = cr.param,
+                    last        = datetime.now()
+                )
+                session.add(schedule)
 
-            session.add(schedule)
             session.commit()
 
             return {"schedule": schedule.id}
