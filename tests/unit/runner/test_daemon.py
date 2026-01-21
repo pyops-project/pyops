@@ -129,30 +129,103 @@ class TestDaemon:
             assert job.state == "failed"
             assert job.detail == "error"
 
+    @patch('app.runner.lib_runner.find')
     @patch('app.runner.lib_runner.enqueue')
     @patch('croniter.croniter')
     @patch('app.runner.datetime')
-    def test_schedule_cron_enqueue(self, mock_dt, mock_croniter, mock_enqueue, mock_db):
+    def test_schedule_cron_enqueue_new_schedule(self, mock_dt, mock_croniter, mock_enqueue, mock_find, mock_db):
         from app.runner import schedule
         from app.orm.database import get_db_engine
         from app.orm.schedule import Schedule
         from datetime import datetime
         with Session(get_db_engine()) as test_session:
             mock_dt.now.return_value = datetime(2023, 1, 1, 12, 0)
-            sched = Schedule(set="test_set", name="test_name", owner="test_owner", schedule="* * * * *", active=True, drop_done=False, param=None, last=None)
+            sched = Schedule(set="test_set", name="test_name", owner="test_owner", schedule="* * * * *", active=True, drop_done=False, param=None, last=datetime(2023, 1, 1, 11, 59))  # Creation time
             test_session.add(sched)
             test_session.commit()
             sched_id = sched.id
         mock_cron = Mock()
-        mock_next = datetime(2023, 1, 1, 11, 59)
+        mock_next = datetime(2023, 1, 1, 12, 0)  # Next run at now
         mock_cron.get_next.return_value = mock_next
         mock_croniter.return_value = mock_cron
+        mock_find.return_value = []  # No running jobs
         schedule()
         mock_enqueue.assert_called_once_with("test_set", "test_name", "test_owner", "task", False, None, 0, None)
         with Session(get_db_engine()) as test_session:
             sched = test_session.get(Schedule, sched_id)
             test_session.refresh(sched)
-            assert sched.last == mock_next
+            assert sched.last == datetime(2023, 1, 1, 12, 0)
+
+    @patch('app.runner.lib_runner.find')
+    @patch('app.runner.lib_runner.enqueue')
+    @patch('croniter.croniter')
+    @patch('app.runner.datetime')
+    def test_schedule_cron_no_enqueue_future_run(self, mock_dt, mock_croniter, mock_enqueue, mock_find, mock_db):
+        from app.runner import schedule
+        from app.orm.database import get_db_engine
+        from app.orm.schedule import Schedule
+        from datetime import datetime
+        with Session(get_db_engine()) as test_session:
+            mock_dt.now.return_value = datetime(2023, 1, 1, 12, 0)
+            sched = Schedule(set="test_set", name="test_name", owner="test_owner", schedule="* * * * *", active=True, drop_done=False, param=None, last=datetime(2023, 1, 1, 11, 59))
+            test_session.add(sched)
+            test_session.commit()
+        mock_cron = Mock()
+        mock_next = datetime(2023, 1, 1, 12, 1)  # Next run in future
+        mock_cron.get_next.return_value = mock_next
+        mock_croniter.return_value = mock_cron
+        mock_find.return_value = []  # No running jobs
+        schedule()
+        mock_enqueue.assert_not_called()  # Should not enqueue future runs
+
+    @patch('app.runner.lib_runner.find')
+    @patch('app.runner.lib_runner.enqueue')
+    @patch('croniter.croniter')
+    @patch('app.runner.datetime')
+    def test_schedule_cron_no_enqueue_running_job(self, mock_dt, mock_croniter, mock_enqueue, mock_find, mock_db):
+        from app.runner import schedule
+        from app.orm.database import get_db_engine
+        from app.orm.schedule import Schedule
+        from datetime import datetime
+        with Session(get_db_engine()) as test_session:
+            mock_dt.now.return_value = datetime(2023, 1, 1, 12, 0)
+            sched = Schedule(set="test_set", name="test_name", owner="test_owner", schedule="* * * * *", active=True, drop_done=False, param=None, last=datetime(2023, 1, 1, 11, 59))
+            test_session.add(sched)
+            test_session.commit()
+        mock_cron = Mock()
+        mock_next = datetime(2023, 1, 1, 12, 0)
+        mock_cron.get_next.return_value = mock_next
+        mock_croniter.return_value = mock_cron
+        mock_find.return_value = ["running_job"]  # Has running job
+        schedule()
+        mock_enqueue.assert_not_called()
+
+    @patch('app.runner.lib_runner.find')
+    @patch('app.runner.lib_runner.enqueue')
+    @patch('croniter.croniter')
+    @patch('app.runner.datetime')
+    def test_schedule_cron_catch_up_missed_runs(self, mock_dt, mock_croniter, mock_enqueue, mock_find, mock_db):
+        from app.runner import schedule
+        from app.orm.database import get_db_engine
+        from app.orm.schedule import Schedule
+        from datetime import datetime
+        with Session(get_db_engine()) as test_session:
+            mock_dt.now.return_value = datetime(2023, 1, 1, 12, 2)  # 2 minutes later
+            sched = Schedule(set="test_set", name="test_name", owner="test_owner", schedule="* * * * *", active=True, drop_done=False, param=None, last=datetime(2023, 1, 1, 11, 59))
+            test_session.add(sched)
+            test_session.commit()
+            sched_id = sched.id
+        mock_cron = Mock()
+        mock_next = datetime(2023, 1, 1, 12, 0)  # Missed run at 12:00
+        mock_cron.get_next.return_value = mock_next
+        mock_croniter.return_value = mock_cron
+        mock_find.return_value = []  # No running jobs
+        schedule()
+        mock_enqueue.assert_called_once_with("test_set", "test_name", "test_owner", "task", False, None, 0, None)
+        with Session(get_db_engine()) as test_session:
+            sched = test_session.get(Schedule, sched_id)
+            test_session.refresh(sched)
+            assert sched.last == datetime(2023, 1, 1, 12, 2)
 
     @patch('app.runner.lib_runner.enqueue')
     @patch('app.runner.lib_runner.find')

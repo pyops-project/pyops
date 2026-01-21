@@ -844,17 +844,21 @@ def schedule():
         for s in schedules:
             if s.active:
                 if s.schedule:
-                    cron = croniter.croniter(s.schedule, now)
+                    # Check if there was a scheduled run between s.last and now
+                    cron = croniter.croniter(s.schedule, s.last or datetime.min)
                     next_run = cron.get_next(datetime)
-                    if next_run <= now and (s.last is None or next_run > s.last):
-                        logger.debug(f"schedule: enqueuing task {s.set}::{s.name} (cron {s.schedule}) at {next_run}")
-                        lib_runner.enqueue(s.set, s.name, s.owner, "task", s.drop_done, s.param, s.max_retries, None)
+                    if next_run <= now:
+                        # Check if not still running
+                        running_jobs = lib_runner.find(s.owner, s.set, s.name, "task", ["todo", "dequeued", "running"])
+                        if not running_jobs:
+                            logger.debug(f"schedule: enqueuing task {s.set}::{s.name} (cron {s.schedule}) at {next_run}")
+                            lib_runner.enqueue(s.set, s.name, s.owner, "task", s.drop_done, s.param, s.max_retries, None)
 
-                        schedule_obj = session.get(Schedule, s.id)
-                        schedule_obj.last = next_run
-                        logger.debug(f"schedule: before commit, session ID {id(session)}, last {s.last} to {next_run} for {s.id} at {datetime.now()}")
-                        session.commit()
-                        logger.debug(f"schedule: after commit, session ID {id(session)}, committed last={next_run} for {s.id} at {datetime.now()}")
+                            schedule_obj = session.get(Schedule, s.id)
+                            schedule_obj.last = now
+                            logger.debug(f"schedule: before commit, session ID {id(session)}, last {s.last} to {next_run} for {s.id} at {datetime.now()}")
+                            session.commit()
+                            logger.debug(f"schedule: after commit, session ID {id(session)}, committed last={next_run} for {s.id} at {datetime.now()}")
                 elif not lib_runner.find(s.owner, s.set, s.name, "service", ["todo", "dequeued", "running", "cancel", "done"]) and \
                      len(lib_runner.find(s.owner, s.set, s.name, "service", ["failed"])) < 3:
                     logger.debug(f"schedule: enqueuing service {s.set}::{s.name} at {now}")

@@ -126,7 +126,8 @@ async def item_put(cr: CreateArgument, user: str = Depends(get_current_user)):
                 drop_done   = cr.drop_done,
                 max_retries = cr.max_retries,
                 schedule    = cr.schedule,
-                param       = cr.param
+                param       = cr.param,
+                last        = datetime.now()
             )
 
             session.add(schedule)

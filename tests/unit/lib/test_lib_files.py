@@ -68,6 +68,7 @@ def test_conf_runner_no_init_when_loaded(mock_conf, tmp_path):
         mock_init.assert_not_called()
         expected = {
             "git_pull_interval": 60,
+            "drop_done_delay_seconds": 60,
             "venv": str(tmp_path / "data" / "venv"),
             "pkg": str(tmp_path / "data" / "pkg")
         }
@@ -85,7 +86,7 @@ def test_conf_runner_init_on_empty(tmp_path):
         f.write(mock_content)
     Config.init(str(conf_path))
     result = files.conf_runner()
-    expected = {"git_pull_interval": 30}
+    expected = {"git_pull_interval": 30, "drop_done_delay_seconds": 60}
     assert result == expected
 
 def test_get_file_not_found():
