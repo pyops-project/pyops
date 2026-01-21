@@ -145,3 +145,40 @@ def test_controller_proxy_service_client_args(client, mock_git_ops, mock_db):
         # Verify ServiceClient was instantiated with correct args: (user, glob["set"], glob["service"], debug)
         # The mock controller code sets: set="test", service="test", debug=False (default)
         mock_find.assert_called_once_with("testuser", "test", "test", "service", ["running"])
+
+def test_controller_html_output(client, mock_git_ops, mock_db):
+    # Test that controller endpoint returns HTML with sticky navbar
+    with patch("builtins.exec") as mock_exec, \
+         patch("app.web.get_view_content") as mock_get_view:
+
+        # Mock controller globals
+        mock_glob = {
+            "set": "testset",
+            "service": "testservice",
+            "name": "Test Controller",
+            "head": "head_view",
+            "menu": "menu_view",
+            "body": "body_view",
+            "debug": False
+        }
+        def exec_side_effect(code, glob):
+            glob.update(mock_glob)
+        mock_exec.side_effect = exec_side_effect
+
+        # Mock view content
+        mock_get_view.side_effect = lambda set, name, debug=False: f"<div>{name} content</div>"
+
+        response = client.get("/controller/testset/testname", headers={"X-User": "testuser"})
+        assert response.status_code == 200
+        html = response.text
+
+        # Check HTML structure
+        assert "<html>" in html
+        assert "<head>" in html
+        assert "<body class=\"bg-light\">" in html
+        assert "sticky-top" in html  # The navbar should have sticky-top class
+        assert "navbar navbar-expand navbar-dark bg-dark text-light pt-3 sticky-top" in html
+        assert "testset::Test Controller" in html
+        assert "<div>head_view content</div>" in html
+        assert "<div>menu_view content</div>" in html
+        assert "<div>body_view content</div>" in html

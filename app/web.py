@@ -181,7 +181,7 @@ def controller(set: str, name: str):
         {{HEAD}}
     </head>
     <body class="bg-light">
-        <nav class="navbar navbar-expand navbar-dark bg-dark text-light pt-3">
+        <nav class="navbar navbar-expand navbar-dark bg-dark text-light pt-3 sticky-top">
             <ul class="navbar-nav w-100">
                 <li class="navbar-brand">
                     <span class="material-icons-round">description</span>
