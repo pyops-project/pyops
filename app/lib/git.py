@@ -153,7 +153,7 @@ def pull_if_needed(repo: str) -> bool:
             raise
 
 def get_repo_path(set: str) -> str:
-    """Ensures repo exists, initializes if needed, sets up .gitignore and README.md.
+    """Ensures repo exists and is initialized, sets up .gitignore and README.md.
     
     Args:
         set (str): Repo directory name.
@@ -162,11 +162,12 @@ def get_repo_path(set: str) -> str:
         str: Absolute path to repo directory.
     
     Raises:
-        HTTPException: If directory creation fails (500).
+        HTTPException: 404 if set directory does not exist.
     """
     git_base = get_git_base()
     repo = os.path.abspath(os.path.join(git_base, set))
-    os.makedirs(repo, exist_ok=True)
+    if not os.path.exists(repo):
+        raise HTTPException(404, f"Set '{set}' does not exist")
     
     with repo_lock(git_base, set):
         git_dir = os.path.join(repo, ".git")

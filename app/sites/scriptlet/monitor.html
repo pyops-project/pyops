@@ -88,22 +88,28 @@
                 `
             }
 
-            function genJobItem(j) {
+            function genJobRowContent(j) {
                 return `
-                    <tr>
-                        <th scope="row">${j.id}</th>
-                        <td>${j.start}</td>
-                        <td>${j.end}</td>
-                        <td>${j.kind}</td>
-                        <td>
-                            <span class="d-inline-block" tabindex="0" data-toggle="tooltip" title='${j.detail ? j.detail.replace(/'/g, "&#39;") : ""}'>
-                                ${j.state}
-                            </span>
-                        </td>
-                        <td>${genActions(j)}</td>
-                        <td id="param_${j.id}" style="display:none;">${j.param}</td>
-                    </tr>
+                    <th scope="row">${j.id}</th>
+                    <td>${j.start}</td>
+                    <td>${j.end}</td>
+                    <td>${j.kind}</td>
+                    <td>
+                        <span class="d-inline-block" tabindex="0" data-toggle="tooltip" title='${j.detail ? j.detail.replace(/'/g, "&#39;") : ""}'>
+                            ${j.state}
+                        </span>
+                    </td>
+                    <td>${genActions(j)}</td>
+                    <td id="param_${j.id}" style="display:none;">${j.param}</td>
                 `;
+            }
+
+            function getRowKey(row) {
+                return $(row).data("id");
+            }
+
+            function genJobItem(j) {
+                return `<tr data-id="${j.id}">${genJobRowContent(j)}</tr>`;
             }
 
             function copyParam(id) {
@@ -112,14 +118,43 @@
             }
 
             function refreshList() {
-                $("#jobs").empty();
+                const scrollY = window.scrollY;
                 fetch("/scriptlet/job/list").then(async (r)=>{
                     console.debug("GET", "/scriptlet/job/list", r)
                     if(r.ok) {
                         const d = await r.json();
                         console.debug("jobs", d);
-                        for(const i of d)
-                            $("#jobs").append(genJobItem(i));
+                        const tbody = $("#jobs");
+                        const existingRows = {};
+                        tbody.find("tr").each(function() {
+                            const id = $(this).data("id");
+                            if(id) existingRows[id] = this;
+                        });
+                        const newKeys = new Set();
+                        for(const i of d) {
+                            const key = i.id;
+                            newKeys.add(key);
+                            if(existingRows[key]) {
+                                $(existingRows[key]).html(genJobRowContent(i));
+                            } else {
+                                const newRowHtml = genJobItem(i);
+                                let inserted = false;
+                                tbody.find("tr").each(function() {
+                                    const existingKey = getRowKey(this);
+                                    if (!inserted && key < existingKey) {
+                                        $(this).before(newRowHtml);
+                                        inserted = true;
+                                        return false;
+                                    }
+                                });
+                                if (!inserted) tbody.append(newRowHtml);
+                            }
+                        }
+                        tbody.find("tr").each(function() {
+                            const id = $(this).data("id");
+                            if(id && !newKeys.has(id)) $(this).remove();
+                        });
+                        window.scrollTo(0, scrollY);
                     } else
                         console.error("GET", "/scriptlet/job/list", r.statusText);
                 }).catch((e)=>console.error("GET", "/scriptlet/job/list", e.toString()));
@@ -264,7 +299,7 @@
         </script>
     </head>
     <body class="bg-body">
-        <nav class="navbar navbar-expand navbar-dark bg-dark pt-3">
+        <nav class="navbar navbar-expand navbar-dark bg-dark pt-3 sticky-top">
             <ul class="navbar-nav w-100">
                 <li class="navbar-brand">
                     <span class="material-icons-round">description</span>

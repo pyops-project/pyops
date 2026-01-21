@@ -2,7 +2,7 @@ import pytest
 import json
 from fastapi.testclient import TestClient
 from app.web import app
-from app.routers.scriptlet.schedule import CreateArgument
+from app.routers.scriptlet.schedule import ScheduleArgument
 # from app.orm.job import Job  # Not needed for schedule tests
 from app.orm.schedule import Schedule
 from sqlalchemy.orm import Session
@@ -63,11 +63,11 @@ class TestScheduleRouter:
 
     def test_get_schedule_list(self, mock_client, mock_db):
         with Session(get_db_engine()) as session:
-            schedule1 = Schedule(set="default", name="test_job", owner="testuser", schedule="* * * * *", active=True, param="{}", last=None, drop_done=False)
-            schedule2 = Schedule(set="default", name="test_job2", owner="testuser", schedule="0 0 * * *", active=False, param="{}", last=None, drop_done=False)
+            schedule1 = Schedule(set="default", name="test_job", owner="testuser", schedule="* * * * *", active=True, param="{}", last=None, drop_done=False, max_retries=1)
+            schedule2 = Schedule(set="default", name="test_job2", owner="testuser", schedule="0 0 * * *", active=False, param="{}", last=None, drop_done=False, max_retries=2)
             session.add_all([schedule1, schedule2])
             session.commit()
-        
+
         response = mock_client.get("/scriptlet/schedule/list", headers={"X-User": "testuser"})
         assert response.status_code == 200
         data = response.json()
@@ -77,6 +77,8 @@ class TestScheduleRouter:
         assert all(s["set"] == "default" for s in data)
         assert any(s["name"] == "test_job" for s in data)
         assert any(s["name"] == "test_job2" for s in data)
+        assert any(s["max_retries"] == 1 for s in data)
+        assert any(s["max_retries"] == 2 for s in data)
 
     def test_post_schedule_activate(self, mock_client, mock_db):
         with Session(get_db_engine()) as session:
@@ -116,7 +118,7 @@ class TestScheduleRouter:
             mock_enqueue.return_value = 2  # New job id
             response = mock_client.get(f"/scriptlet/schedule/run?id={schedule_id}", headers={"X-User": "testuser"})
             assert response.status_code == 200
-            mock_enqueue.assert_called_once_with("default", "test_job", "testuser", "task", False, "{}")
+            mock_enqueue.assert_called_once_with("default", "test_job", "testuser", "task", False, "{}", 0, None)
             assert response.json()["job"] == 2
             with Session(get_db_engine()) as session:
                 updated_schedule = session.query(Schedule).filter_by(id=schedule_id).first()

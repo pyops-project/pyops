@@ -53,10 +53,6 @@
                                 </div>
                                 <div class="modal-body">
                                     <div class="mb-3">
-                                        <label for="cloneModal-name" class="col-form-label">Name:</label>
-                                        <input id="cloneModal-name" type="text" class="form-control">
-                                    </div>
-                                    <div class="mb-3">
                                         <label for="cloneModal-url" class="col-form-label">URL:</label>
                                         <input id="cloneModal-url" type="text" class="form-control">
                                     </div>
@@ -119,34 +115,72 @@
 
             function genActions(name, branch) {
                 return `
-                    <button type="button" onclick="onRemove('${name}')" class="btn btn-danger p-0">
-                        <span class="material-icons-round">delete</span>
+                    <button type="button" onclick="onPull('${name}')" class="btn btn-primary p-0">
+                        <span class="material-icons-round">sync</span>
                     </button>
                     <button type="button" onclick="onSwitchBranch('${name}')" class="btn btn-warning p-0">
                         <span class="material-icons-round">swap_horiz</span>
                     </button>
+                    <button type="button" onclick="onRemove('${name}')" class="btn btn-danger p-0">
+                        <span class="material-icons-round">delete</span>
+                    </button>
                 `;
+            }
+
+            function genSetRowContent(name, branch) {
+                return `
+                    <th scope="row">${name}</th>
+                    <th scope="row">${branch}</th>
+                    <td>${genActions(name, branch)}</td>
+                `;
+            }
+
+            function getRowKey(row) {
+                return $(row).data("name");
             }
 
             function genSetItem(name, branch) {
-                return `
-                    <tr>
-                        <th scope="row">${name}</th>
-                        <th scope="row">${branch}</th>
-                        <td>${genActions(name, branch)}</td>
-                    </tr>
-                `;
+                return `<tr data-name="${name}">${genSetRowContent(name, branch)}</tr>`;
             }
 
             function refreshList() {
-                $("#sets").empty();
+                const scrollY = window.scrollY;
                 fetch("/scriptlet/sets/list").then(async (r)=>{
                     console.debug("GET", "/scriptlet/sets/list", r)
                     if(r.ok) {
                         const d = await r.json();
                         console.debug("sets", d);
-                        for(const i of d.sets)
-                            $("#sets").append(genSetItem(i.name, i.branch));
+                        const tbody = $("#sets");
+                        const existingRows = {};
+                        tbody.find("tr").each(function() {
+                            const name = $(this).data("name");
+                            if(name) existingRows[name] = this;
+                        });
+                        const newKeys = new Set();
+                        for(const i of d.sets) {
+                            const key = i.name;
+                            newKeys.add(key);
+                            if(existingRows[key]) {
+                                $(existingRows[key]).html(genSetRowContent(i.name, i.branch));
+                            } else {
+                                const newRowHtml = genSetItem(i.name, i.branch);
+                                let inserted = false;
+                                tbody.find("tr").each(function() {
+                                    const existingKey = getRowKey(this);
+                                    if (!inserted && key < existingKey) {
+                                        $(this).before(newRowHtml);
+                                        inserted = true;
+                                        return false;
+                                    }
+                                });
+                                if (!inserted) tbody.append(newRowHtml);
+                            }
+                        }
+                        tbody.find("tr").each(function() {
+                            const name = $(this).data("name");
+                            if(name && !newKeys.has(name)) $(this).remove();
+                        });
+                        window.scrollTo(0, scrollY);
                     } else
                         console.error("GET", "/scriptlet/sets/list", r.statusText);
                 }).catch((e)=>console.error("GET", "/scriptlet/sets/list", e.toString()));
@@ -156,9 +190,33 @@
                 setTimeout(function() { refreshList(); }, 500);
             }
 
+            function genCreateModal() {
+                return `
+                    <div class="modal fade" data-bs-backdrop="static" id="createModal" tabindex="-1" aria-labelledby="createModalLabel" aria-hidden="true">
+                        <div class="modal-dialog">
+                            <div class="modal-content">
+                                <div class="modal-header">
+                                    <h5 class="modal-title" id="createModalLabel">Create Set</h5>
+                                    <p id="createModal-error" class="text-danger"></p>
+                                </div>
+                                <div class="modal-body">
+                                    <div class="mb-3">
+                                        <label for="createModal-name" class="col-form-label">Name:</label>
+                                        <input id="createModal-name" type="text" class="form-control">
+                                    </div>
+                                </div>
+                                <div class="modal-footer">
+                                    <button type="button" class="btn btn-danger" data-bs-dismiss="modal">Cancel</button>
+                                    <button type="button" class="btn btn-primary" onclick="onCreate()">Create</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+
             function clearCloneModal() {
                 $("#cloneModal-error").text("");
-                $("#cloneModal-name").val("");
                 $("#cloneModal-url").val("");
                 $("#cloneModal-username").val("");
                 $("#cloneModal-password").val("");
@@ -166,21 +224,24 @@
                 $("#cloneModal-git_email").val("");
             }
 
+            function clearCreateModal() {
+                $("#createModal-error").text("");
+                $("#createModal-name").val("");
+            }
+
             function onClone() {
-                const name = $("#cloneModal-name").val();
                 const url = $("#cloneModal-url").val();
                 const username = $("#cloneModal-username").val();
                 const password = $("#cloneModal-password").val();
                 const git_name = $("#cloneModal-git_name").val();
                 const git_email = $("#cloneModal-git_email").val();
 
-                if (!name || !url) {
-                    $("#cloneModal-error").text("Please provide name and URL");
+                if (!url) {
+                    $("#cloneModal-error").text("Please provide URL");
                     return;
                 }
 
                 const data = {
-                    "name": name,
                     "url": url,
                     "username": username,
                     "password": password,
@@ -206,6 +267,38 @@
                         $("#cloneModal-error").text(d.detail);
                     }
                 }).catch((e)=>$("#cloneModal-error").text(e.toString()));
+            }
+
+            function onCreate() {
+                const name = $("#createModal-name").val();
+
+                if (!name) {
+                    $("#createModal-error").text("Please provide name");
+                    return;
+                }
+
+                const data = {
+                    "name": name
+                };
+
+                console.debug("POST", "/scriptlet/sets/create", data);
+
+                fetch("/scriptlet/sets/create", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify(data)
+                }).then(async (r)=>{
+                    if(r.ok) {
+                        $("#createModal").modal('hide');
+                        clearCreateModal();
+                        enqueueRefreshList();
+                    } else {
+                        const d = await r.json();
+                        $("#createModal-error").text(d.detail);
+                    }
+                }).catch((e)=>$("#createModal-error").text(e.toString()));
             }
 
             function populateSwitchBranches(name) {
@@ -256,6 +349,19 @@
                 }).catch((e)=>$("#switchModal-error").text(e.toString()));
             }
 
+            function onPull(name) {
+                console.debug("onPull", name);
+
+                fetch(`/scriptlet/sets/pull/${name}`, {
+                    method: "POST"
+                }).then(async (r)=>{
+                    if(r.ok)
+                        enqueueRefreshList();
+                    else
+                        console.error("POST", `/scriptlet/sets/pull/${name}`, r.statusText);
+                }).catch((e)=>console.error("POST", `/scriptlet/sets/pull/${name}`, e.toString()));
+            }
+
             function onRemove(name) {
                 console.debug("onRemove", name);
 
@@ -281,18 +387,25 @@
 
                 // Modals
                 $("body").append(genCloneModal());
+                $("body").append(genCreateModal());
                 $("body").append(genSwitchModal());
 
-                // Show clone modal on add button
-                $("#addButton").on('click', function () {
+                // Show clone modal on clone button
+                $("#cloneButton").on('click', function () {
                     clearCloneModal();
                     $("#cloneModal").modal('show');
+                });
+
+                // Show create modal on create button
+                $("#createButton").on('click', function () {
+                    clearCreateModal();
+                    $("#createModal").modal('show');
                 });
             });
         </script>
     </head>
     <body class="bg-body">
-        <nav class="navbar navbar-expand navbar-dark bg-dark pt-3">
+        <nav class="navbar navbar-expand navbar-dark bg-dark pt-3 sticky-top">
             <ul class="navbar-nav w-100">
                 <li class="navbar-brand">
                     <span class="material-icons-round">folder</span>
@@ -300,7 +413,12 @@
                 </li>
                 
                 <li class="nav-item m-1">
-                    <button type="button" id="addButton" class="btn btn-success">
+                    <button type="button" id="cloneButton" class="btn btn-success">
+                        <span class="material-icons-round">content_copy</span>
+                    </button>
+                </li>
+                <li class="nav-item m-1">
+                    <button type="button" id="createButton" class="btn btn-success">
                         <span class="material-icons-round">add</span>
                     </button>
                 </li>

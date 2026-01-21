@@ -11,6 +11,7 @@ class Job(Base):
     kind = Column(String, index=True, nullable=False)
     state = Column(String, index=True, nullable=False)
     drop_done = Column(Boolean, default=False, nullable=False)
+    max_retries = Column(Integer, default=0, nullable=False)
     param = Column(String)
     pid = Column(Integer, index=True)
     debugpy_pid = Column(Integer, index=True)

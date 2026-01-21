@@ -8,7 +8,6 @@ import logging
 import asyncio
 import json
 
-
 @pytest.fixture
 def mock_glob():
     return {
@@ -32,14 +31,17 @@ def sample_libs():
     return ["lib code"]
 
 class TestExecution:
+
     @patch('app.runner.pyops.ServiceListener')
     def test_run_task_success(self, mock_listener, tmp_path, mock_conf):
         from app.runner import run
         q = Mock()
         mock_listener.return_value = None  # For non-service
         data_base = str(tmp_path / "data")
+        venv_path = str(tmp_path / "venv")
+        pkg_path = str(tmp_path / "pkg")
 
-        run("id", "owner", "set", "name", "task", "print('param executed')", "print('code executed')", [], q, data_base, "bind", "/venv", "/pkg", overrides=None)
+        run("id", "owner", "set", "name", "task", "print('param executed')", "print('code executed')", [], q, data_base, "bind", venv_path, pkg_path, overrides=None)
 
         q.put.assert_called_once_with({"id": "id", "state": "done", "detail": None})
 
@@ -50,12 +52,14 @@ class TestExecution:
         q = Mock()
         mock_listener.return_value = None
         data_base = str(tmp_path / "data")
+        venv_path = str(tmp_path / "venv")
+        pkg_path = str(tmp_path / "pkg")
         mock_sleep.return_value = None  # No real delay
 
         # Mock exec to fail first 2 attempts, succeed on 3rd
         exec_mock = Mock()
         with patch('builtins.exec', side_effect=[Exception("fail1"), Exception("fail2"), None]):
-            run("id", "owner", "set", "name", "task", "", "print('success')", [], q, data_base, "bind", "/venv", "/pkg", overrides=None)
+            run("id", "owner", "set", "name", "task", "", "print('success')", [], q, data_base, "bind", venv_path, pkg_path, max_retries=3, overrides=None)
 
         assert mock_sleep.call_count == 2  # Sleeps after first two fails
         q.put.assert_called_once_with({"id": "id", "state": "done", "detail": None})
@@ -70,8 +74,10 @@ class TestExecution:
         mock_sleep.return_value = None
 
         # Mock exec to always fail
+        venv_path = str(tmp_path / "venv")
+        pkg_path = str(tmp_path / "pkg")
         with patch('builtins.exec', side_effect=Exception("fail")):
-            run("id", "owner", "set", "name", "task", "", "raise Exception", [], q, data_base, "bind", "/venv", "/pkg", overrides=None)
+            run("id", "owner", "set", "name", "task", "", "raise Exception", [], q, data_base, "bind", venv_path, pkg_path, max_retries=3, overrides=None)
 
         assert mock_sleep.call_count == 3  # Sleeps after each of 3 fails
         call_args = q.put.call_args[0][0]
@@ -85,10 +91,12 @@ class TestExecution:
         mock_listener_instance = Mock()
         mock_listener.return_value = mock_listener_instance
         data_base = str(tmp_path / "data")
+        venv_path = str(tmp_path / "venv")
+        pkg_path = str(tmp_path / "pkg")
 
-        run("id", "owner", "set", "name", "service", "", "print('code executed')", [], q, data_base, "bind", "/venv", "/pkg")
+        run("id", "owner", "set", "name", "service", "", "print('code executed')", [], q, data_base, "bind", venv_path, pkg_path)
 
-        mock_listener.assert_called_once_with("id", current_user="owner")
+        mock_listener.assert_called_once_with("owner", "id")
         q.put.assert_called_once_with({"id": "id", "state": "done", "detail": None})
 
     @patch('app.runner.pyops.ServiceListener')
@@ -98,10 +106,12 @@ class TestExecution:
         q = Mock()
         mock_listener.return_value = Mock()
         data_base = str(tmp_path / "data")
+        venv_path = str(tmp_path / "venv")
+        pkg_path = str(tmp_path / "pkg")
         mock_sleep.return_value = None
 
         with patch('builtins.exec', side_effect=Exception("service fail")):
-            run("id", "owner", "set", "name", "service", "", "raise Exception", [], q, data_base, "bind", "/venv", "/pkg")
+            run("id", "owner", "set", "name", "service", "", "raise Exception", [], q, data_base, "bind", venv_path, pkg_path)
 
         assert mock_sleep.call_count == 0  # No retries for service
         q.put.assert_called_once_with({"id": "id", "state": "failed", "detail": ANY})
@@ -115,10 +125,12 @@ class TestExecution:
         q = Mock()
         mock_listener.return_value = Mock()
         data_base = str(tmp_path / "data")
+        venv_path = str(tmp_path / "venv")
+        pkg_path = str(tmp_path / "pkg")
         mock_sleep.return_value = None
 
         with patch('builtins.exec', side_effect=Exception("debug fail")):
-            run("id", "owner", "set", "name", "debug", "", "raise Exception", [], q, data_base, "bind", "/venv", "/pkg", port=5678)
+            run("id", "owner", "set", "name", "debug", "", "raise Exception", [], q, data_base, "bind", venv_path, pkg_path, port=5678)
 
         assert mock_sleep.call_count == 0  # No retries for debug
         q.put.assert_called_once_with({"id": "id", "state": "failed", "detail": ANY})
@@ -130,9 +142,11 @@ class TestExecution:
         q = Mock()
         mock_listener.return_value = None
         data_base = str(tmp_path / "data")
+        venv_path = str(tmp_path / "venv")
+        pkg_path = str(tmp_path / "pkg")
         mock_sleep.return_value = None
 
-        run("id", "owner", "set", "name", "task", "", "raise Exception('exec error')", [], q, data_base, "bind", "/venv", "/pkg")
+        run("id", "owner", "set", "name", "task", "", "raise Exception('exec error')", [], q, data_base, "bind", venv_path, pkg_path, max_retries=3)
 
         assert mock_sleep.call_count == 3
         call_args = q.put.call_args[0][0]
@@ -155,9 +169,8 @@ class TestExecution:
         from app.runner import process_imports
         mock_loadLib.side_effect = Exception("load fail")
         libs = []
-        result = process_imports("#!{::lib}\nrest", "current_set", False, libs)
-        assert result == "#!{::lib}\nrest"  # Kept original
-        assert len(libs) == 0
+        with pytest.raises(Exception, match="load fail"):
+            process_imports("#!{::lib}\nrest", "current_set", False, libs)
         mock_loadLib.assert_called_once_with("current_set", "lib", False)
 
     @patch('app.runner.loadLib')
@@ -169,36 +182,37 @@ class TestExecution:
         assert len(libs) == 0
         mock_loadLib.assert_not_called()
 
+    @patch('os.makedirs')
     @patch('subprocess.run')
     @patch('os.path.exists')
-    def test_process_install_lines_pip(self, mock_exists, mock_run, mock_conf, tmp_path):
+    def test_process_install_lines_pip(self, mock_exists, mock_run, mock_makedirs, mock_conf, tmp_path):
         from app.runner import process_install_lines
-        mock_run.side_effect = [
-            Mock(returncode=0, stdout=""),  # list no requests
-            Mock(returncode=0)  # install
-        ]
+        mock_run.return_value = Mock(returncode=0)  # install succeeds
         mock_exists.return_value = True  # venv exists
         lines = ["#!requests"]
         venv_path = "/venv"
         pkg_path = "/pkg"
+        set = "testset"
         id = "id"
-        process_install_lines(lines, venv_path, pkg_path, id)
-        pip_path = os.path.join(venv_path, 'bin', 'pip')
-        mock_run.assert_has_calls([
-            call([pip_path, 'list', '--format=freeze'], capture_output=True, text=True, cwd=venv_path),
-            call([pip_path, 'install', '-q', 'requests'], capture_output=True, text=True)
-        ])
+        process_install_lines(lines, venv_path, pkg_path, set, id)
+        pip_path = os.path.join(venv_path, set, 'bin', 'pip')
+        # Check that pip install was called
+        pip_calls = [call for call in mock_run.call_args_list if pip_path in str(call)]
+        assert len(pip_calls) == 1
+        assert pip_calls[0] == call([pip_path, 'install', '-q', 'requests'], capture_output=True, text=True)
 
+    @patch('os.makedirs')
     @patch('subprocess.run')
     @patch('os.path.exists')
-    def test_process_install_lines_skip_lib_directive(self, mock_exists, mock_run, mock_conf, tmp_path):
+    def test_process_install_lines_skip_lib_directive(self, mock_exists, mock_run, mock_makedirs, mock_conf, tmp_path):
         from app.runner import process_install_lines
         mock_exists.return_value = True  # venv exists
         lines = ["#!{test::lib}"]
         venv_path = "/venv"
         pkg_path = "/pkg"
+        set = "testset"
         id = "id"
-        process_install_lines(lines, venv_path, pkg_path, id)
+        process_install_lines(lines, venv_path, pkg_path, set, id)
         # Should not call pip commands for lib directives
         pip_calls = [call for call in mock_run.call_args_list if 'pip' in str(call)]
         assert len(pip_calls) == 0
@@ -210,25 +224,29 @@ class TestExecution:
         mock_run.return_value = Mock(returncode=0)  # clone success
         mock_exists.return_value = False  # repo_dir not exist
         lines = ["#! https://repo.git"]
-        venv_path = "/venv"
-        pkg_path = "/pkg"
+        venv_path = ".cache/test_venv"
+        pkg_path = ".cache/test_pkg"
+        set = "testset"
         id = "id"
-        process_install_lines(lines, venv_path, pkg_path, id)
-        mock_run.assert_called_once_with(['git', 'clone', 'https://repo.git', '/pkg/repo'], capture_output=True, text=True, cwd='/pkg')
+        process_install_lines(lines, venv_path, pkg_path, set, id)
+        # Check that git clone was called with correct args
+        mock_run.assert_any_call(['git', 'clone', 'https://repo.git', '.cache/test_pkg/testset/repo'], capture_output=True, text=True, cwd='.cache/test_pkg/testset')
 
+    @patch('os.makedirs')
     @patch('subprocess.run')
-    def test_process_install_lines_git_error(self, mock_run, mock_conf):
+    def test_process_install_lines_git_error(self, mock_run, mock_makedirs, mock_conf):
         from app.runner import process_install_lines
         mock_run.return_value = Mock(returncode=1, stderr="clone fail")
         lines = ["#! https://fail.git"]
         with pytest.raises(Exception, match="git clone https://fail.git failed: clone fail"):
-            process_install_lines(lines, "/venv", "/pkg", "id")
+            process_install_lines(lines, "/venv", "/pkg", "testset", "id")
 
+    @patch('os.makedirs')
     @patch('subprocess.run')
-    def test_process_install_lines_no_bang(self, mock_run, mock_conf):
+    def test_process_install_lines_no_bang(self, mock_run, mock_makedirs, mock_conf):
         from app.runner import process_install_lines
         lines = ["normal line"]
-        result = process_install_lines(lines, "/venv", "/pkg", "id")
+        result = process_install_lines(lines, "/venv", "/pkg", "testset", "id")
         assert result[0] == "normal line"
         mock_run.assert_not_called()
 
@@ -310,7 +328,7 @@ class TestExecution:
             call("owner", "set", "name", "service", ["failed"])
         ])
         # Verify enqueue
-        mock_enqueue.assert_called_once_with("set", "name", "owner", "service", True, "param")
+        mock_enqueue.assert_called_once_with("set", "name", "owner", "service", True, "param", 0, None)
         # Check last updated
         with Session(engine) as session:
             result = session.get(Schedule, 1)
@@ -363,8 +381,10 @@ logging.error('ERROR message')
         owner = "owner"
         set_name = "set"
         job_id = "id"
+        venv_path = str(tmp_path / "venv")
+        pkg_path = str(tmp_path / "pkg")
 
-        run(job_id, owner, set_name, "name", "task", "", sample_logging_code, [], mock_queue, data_base, "bind", "/venv", "/pkg")
+        run(job_id, owner, set_name, "name", "task", "", sample_logging_code, [], mock_queue, data_base, "bind", venv_path, pkg_path)
 
         stdout_content, stderr_content = self.get_log_contents(data_base, owner, set_name, job_id)
 
@@ -383,7 +403,9 @@ logging.error('ERROR message')
         set_name = "set"
         job_id = "id"
 
-        run(job_id, owner, set_name, "name", "service", "", sample_logging_code, [], mock_queue, data_base, "bind", "/venv", "/pkg")
+        venv_path = str(tmp_path / "venv")
+        pkg_path = str(tmp_path / "pkg")
+        run(job_id, owner, set_name, "name", "service", "", sample_logging_code, [], mock_queue, data_base, "bind", venv_path, pkg_path)
 
         stdout_content, stderr_content = self.get_log_contents(data_base, owner, set_name, job_id)
 
@@ -393,13 +415,49 @@ logging.error('ERROR message')
         assert "ERROR message" in stderr_content
         mock_queue.put.assert_called_once_with({"id": job_id, "state": "done", "detail": None})
 
+    @patch('app.runner.pyops.ServiceListener')
+    def test_run_service_closes_listener(self, mock_listener, tmp_path, mock_queue, mock_conf):
+        from app.runner import run
+        mock_listener_instance = Mock()
+        mock_listener.return_value = mock_listener_instance
+        data_base = str(tmp_path / "data")
+        owner = "owner"
+        set_name = "set"
+        job_id = "id"
+
+        venv_path = str(tmp_path / "venv")
+        pkg_path = str(tmp_path / "pkg")
+        run(job_id, owner, set_name, "name", "service", "", "pass", [], mock_queue, data_base, "bind", venv_path, pkg_path)
+
+        mock_listener.assert_called_once_with("owner", "id")
+        mock_listener_instance.close.assert_called_once()
+
+    @patch('app.runner.pyops.ServiceListener')
+    def test_run_service_closes_listener_on_error(self, mock_listener, tmp_path, mock_queue, mock_conf):
+        from app.runner import run
+        mock_listener_instance = Mock()
+        mock_listener.return_value = mock_listener_instance
+        data_base = str(tmp_path / "data")
+        owner = "owner"
+        set_name = "set"
+        job_id = "id"
+
+        venv_path = str(tmp_path / "venv")
+        pkg_path = str(tmp_path / "pkg")
+        with patch('builtins.exec', side_effect=Exception("error")):
+            run(job_id, owner, set_name, "name", "service", "", "raise Exception", [], mock_queue, data_base, "bind", venv_path, pkg_path)
+
+        mock_listener.assert_called_once_with("owner", "id")
+        mock_listener_instance.close.assert_called_once()
+
+    @patch('subprocess.check_call')
     @patch('builtins.compile')
     @patch('app.runner.terminate_debugpy_adapter')
     @patch('app.runner.pyops.ServiceListener')
     @patch('debugpy.listen')
     @patch('debugpy.wait_for_client')
     @patch('subprocess.run')
-    def test_run_debug_inject(self, mock_run, mock_wait, mock_listen, mock_listener, mock_terminate, mock_compile, tmp_path, mock_queue):
+    def test_run_debug_inject(self, mock_run, mock_wait, mock_listen, mock_listener, mock_terminate, mock_compile, mock_check_call, tmp_path, mock_queue):
         mock_run.side_effect = [Mock(returncode=0, stdout=""), Mock(returncode=0)]
         from app.runner import run
         mock_listener.return_value = Mock()  # For debug
@@ -412,7 +470,9 @@ logging.error('ERROR message')
         job_id = "id"
         code = "print('test')"
 
-        run(job_id, owner, set_name, "name", "debug", "#>AWAIT_DEBUG", code, [], mock_queue, data_base, "bind", "/venv", "/pkg", port=5678)
+        venv_path = str(tmp_path / "venv")
+        pkg_path = str(tmp_path / "pkg")
+        run(job_id, owner, set_name, "name", "debug", "#>AWAIT_DEBUG", code, [], mock_queue, data_base, "bind", venv_path, pkg_path, port=5678)
 
         # Check compile called for debug bridge lib, debugpy_install lib, and code
         assert mock_compile.call_count >= 3
@@ -435,11 +495,12 @@ logging.error('ERROR message')
         ("#>AWAIT_DEBUG", True),
         ("", False),
     ])
+    @patch('subprocess.check_call')
     @patch('subprocess.run')
     @patch('app.runner.pyops.ServiceListener')
     @patch('app.runner.terminate_debugpy_adapter')
     @patch('builtins.compile')
-    def test_run_debug_await_directive(self, mock_compile, mock_terminate, mock_listener, mock_run, param, expect_wait, tmp_path, mock_queue):
+    def test_run_debug_await_directive(self, mock_compile, mock_terminate, mock_listener, mock_run, mock_check_call, param, expect_wait, tmp_path, mock_queue):
         mock_compile.return_value = compile("pass", "dummy", "exec")
         mock_run.side_effect = [Mock(returncode=0, stdout=""), Mock(returncode=0)]
         mock_listener.return_value = Mock()
@@ -449,7 +510,9 @@ logging.error('ERROR message')
         set_name = "set"
         job_id = "id"
         code = "print('test')"
-        run(job_id, owner, set_name, "name", "debug", param, code, [], mock_queue, data_base, "bind", "/venv", "/pkg", port=5678)
+        venv_path = str(tmp_path / "venv")
+        pkg_path = str(tmp_path / "pkg")
+        run(job_id, owner, set_name, "name", "debug", param, code, [], mock_queue, data_base, "bind", venv_path, pkg_path, port=5678)
         # Find debugpy bridge compile call
         bridge_calls = [call for call in mock_compile.call_args_list if ".debug/src/system/library/debugpy.py" in call[0][1]]
         assert len(bridge_calls) == 1
@@ -465,8 +528,9 @@ logging.error('ERROR message')
     @patch('app.runner.pyops.ServiceListener')
     @patch('debugpy.listen')
     @patch('debugpy.wait_for_client')
+    @patch('subprocess.check_call')
     @patch('subprocess.run')
-    def test_run_debug_logging(self, mock_run, mock_wait, mock_listen, mock_listener, tmp_path, sample_logging_code, mock_queue, mock_conf):
+    def test_run_debug_logging(self, mock_run, mock_check_call, mock_wait, mock_listen, mock_listener, tmp_path, sample_logging_code, mock_queue, mock_conf):
         mock_run.side_effect = [Mock(returncode=0, stdout=""), Mock(returncode=0)]
         from app.runner import run
         mock_listener.return_value = Mock()  # For debug
@@ -475,7 +539,9 @@ logging.error('ERROR message')
         set_name = "set"
         job_id = "id"
 
-        run(job_id, owner, set_name, "name", "debug", "", sample_logging_code, [], mock_queue, data_base, "bind", "/venv", "/pkg", port=5678)
+        venv_path = str(tmp_path / "venv")
+        pkg_path = str(tmp_path / "pkg")
+        run(job_id, owner, set_name, "name", "debug", "", sample_logging_code, [], mock_queue, data_base, "bind", venv_path, pkg_path, port=5678)
 
         stdout_content, stderr_content = self.get_log_contents(data_base, owner, set_name, job_id)
 
@@ -496,7 +562,9 @@ logging.error('ERROR message')
         job_id = "id"
         mock_sleep.return_value = None
 
-        run(job_id, owner, set_name, "name", "task", "", sample_fail_code, [], mock_queue, data_base, "bind", "/venv", "/pkg")
+        venv_path = str(tmp_path / "venv")
+        pkg_path = str(tmp_path / "pkg")
+        run(job_id, owner, set_name, "name", "task", "", sample_fail_code, [], mock_queue, data_base, "bind", venv_path, pkg_path, max_retries=3)
 
         stdout_content, stderr_content = self.get_log_contents(data_base, owner, set_name, job_id)
 
@@ -517,7 +585,9 @@ logging.error('ERROR message')
         set_name = "set"
         job_id = "id"
 
-        run(job_id, owner, set_name, "name", "task", "", sample_empty_code, [], mock_queue, data_base, "bind", "/venv", "/pkg")
+        venv_path = str(tmp_path / "venv")
+        pkg_path = str(tmp_path / "pkg")
+        run(job_id, owner, set_name, "name", "task", "", sample_empty_code, [], mock_queue, data_base, "bind", venv_path, pkg_path)
 
         stdout_content, stderr_content = self.get_log_contents(data_base, owner, set_name, job_id)
 
@@ -537,8 +607,10 @@ logging.error('ERROR message')
         job_id = "id"
         workspace = os.path.join(data_base, owner, set_name, job_id)
 
+        venv_path = str(tmp_path / "venv")
+        pkg_path = str(tmp_path / "pkg")
         q = Mock()
-        run(job_id, owner, set_name, "name", "task", "", "print('code')", [], q, data_base, "bind", "/venv", "/pkg")
+        run(job_id, owner, set_name, "name", "task", "", "print('code')", [], q, data_base, "bind", venv_path, pkg_path)
 
         mock_chdir.assert_called_once_with(workspace)
         q.put.assert_called_once_with({"id": job_id, "state": "done", "detail": None})
@@ -574,8 +646,10 @@ print("gitspace: " + globals()['gitspace'])
 print("pkgspace: " + globals()['pkgspace'])
 print("jobsspace: " + globals()['jobsspace'])
 """
+            venv_path = str(tmp_path / "venv")
+            pkg_path = str(tmp_path / "pkg")
             q = Queue()
-            run(job_id, owner, set_name, "name", "task", "", code, [], q, data_base, "bind", "/venv", "/pkg")
+            run(job_id, owner, set_name, "name", "task", "", code, [], q, data_base, "bind", venv_path, pkg_path)
 
             # Read stdout
             stdout_content, _ = self.get_log_contents(data_base, owner, set_name, job_id)
@@ -597,7 +671,9 @@ print("jobsspace: " + globals()['jobsspace'])
         name = "myname"
         param = "raise ValueError('param err')"
         q = Queue()
-        run("id", "owner", set_, name, "task", param, "pass", [], q, data_base, "bind", "/venv", "/pkg")
+        venv_path = str(tmp_path / "venv")
+        pkg_path = str(tmp_path / "pkg")
+        run("id", "owner", set_, name, "task", param, "pass", [], q, data_base, "bind", venv_path, pkg_path, max_retries=3)
         msg = q.get()
         assert msg["state"] == "failed"
         assert "param err" in msg["detail"]
@@ -616,7 +692,9 @@ print("jobsspace: " + globals()['jobsspace'])
         name = "myname"
         code = "raise ValueError('code err')"
         q = Queue()
-        run("id", "owner", set_, name, "task", "", code, [], q, data_base, "bind", "/venv", "/pkg")
+        venv_path = str(tmp_path / "venv")
+        pkg_path = str(tmp_path / "pkg")
+        run("id", "owner", set_, name, "task", "", code, [], q, data_base, "bind", venv_path, pkg_path, max_retries=3)
         msg = q.get()
         assert msg["state"] == "failed"
         assert "code err" in msg["detail"]
@@ -637,7 +715,9 @@ print("jobsspace: " + globals()['jobsspace'])
         lib_filename = f"{set_}::mylib"
         libs = [{"code": lib_code, "filename": lib_filename}]
         q = Queue()
-        run("id", "owner", set_, name, "task", "", "pass", libs, q, data_base, "bind", "/venv", "/pkg")
+        venv_path = str(tmp_path / "venv")
+        pkg_path = str(tmp_path / "pkg")
+        run("id", "owner", set_, name, "task", "", "pass", libs, q, data_base, "bind", venv_path, pkg_path, max_retries=3)
         msg = q.get()
         assert msg["state"] == "failed"
         assert "lib err" in msg["detail"]
@@ -656,18 +736,21 @@ print("jobsspace: " + globals()['jobsspace'])
         lib_filename = f"{set_}::mylib"
         libs = [{"code": lib_code, "filename": lib_filename}]
         q = Queue()
-        run("id", "owner", set_, name, "service", "", "pass", libs, q, data_base, "bind", "/venv", "/pkg")
+        venv_path = str(tmp_path / "venv")
+        pkg_path = str(tmp_path / "pkg")
+        run("id", "owner", set_, name, "service", "", "pass", libs, q, data_base, "bind", venv_path, pkg_path)
         msg = q.get()
         assert msg["state"] == "failed"
         assert "lib err service" in msg["detail"]
         assert f"{set_}/library/mylib.py" in msg["detail"]
 
+    @patch('subprocess.check_call')
     @patch('subprocess.run')
     @patch('debugpy.wait_for_client')
     @patch('debugpy.listen')
     @patch('app.runner.pyops.ServiceListener')
     @patch('app.lib.files.conf_users')
-    def test_run_debug_creates_files(self, mock_conf_users, mock_listener, mock_listen, mock_wait, mock_run, tmp_path, mock_conf):
+    def test_run_debug_creates_files(self, mock_conf_users, mock_listener, mock_listen, mock_wait, mock_run, mock_check_call, tmp_path, mock_conf):
         from app.runner import run
         from multiprocessing import Queue
         mock_listener.return_value = Mock()
@@ -684,7 +767,9 @@ print("jobsspace: " + globals()['jobsspace'])
         libs = [{"code": "print('lib code')", "filename": "set::mylib"}]
 
         q = Queue()
-        run(job_id, owner, set_name, "name", "debug", param, code, libs, q, data_base, "bind", "/venv", "/pkg", port=5678)
+        venv_path = str(tmp_path / "venv")
+        pkg_path = str(tmp_path / "pkg")
+        run(job_id, owner, set_name, "name", "debug", param, code, libs, q, data_base, "bind", venv_path, pkg_path, port=5678)
 
         msg = q.get()
         assert msg["state"] == "done"
@@ -711,12 +796,13 @@ print("jobsspace: " + globals()['jobsspace'])
         with open(lib_file, 'r') as f:
             assert "print('lib code')" in f.read()
 
+    @patch('subprocess.check_call')
     @patch('subprocess.run')
     @patch('debugpy.wait_for_client')
     @patch('debugpy.listen')
     @patch('app.runner.pyops.ServiceListener')
     @patch('app.lib.files.conf_users')
-    def test_run_debug_overrides_with_pip_install(self, mock_conf_users, mock_listener, mock_listen, mock_wait, mock_run, tmp_path, mock_conf):
+    def test_run_debug_overrides_with_pip_install(self, mock_conf_users, mock_listener, mock_listen, mock_wait, mock_run, mock_check_call, tmp_path, mock_conf):
         """Regression test: Ensure !pip directives in override code are processed."""
         from app.runner import run
         from multiprocessing import Queue
@@ -736,8 +822,10 @@ print("jobsspace: " + globals()['jobsspace'])
         overrides = {"set::name": "#!pip install requests\nprint('overridden code')"}
         overrides_json = json.dumps(overrides)
 
+        venv_path = str(tmp_path / "venv")
+        pkg_path = str(tmp_path / "pkg")
         q = Queue()
-        run(job_id, owner, set_name, "name", "debug", "", "print('original code')", [], q, data_base, "bind", "/venv", "/pkg", overrides=overrides_json, port=5678)
+        run(job_id, owner, set_name, "name", "debug", "", "print('original code')", [], q, data_base, "bind", venv_path, pkg_path, overrides=overrides_json, port=5678)
 
         msg = q.get()
         assert msg["state"] == "done"
@@ -755,12 +843,13 @@ print("jobsspace: " + globals()['jobsspace'])
             assert "#!pip install requests" in content
             assert "print('overridden code')" in content
 
+    @patch('subprocess.check_call')
     @patch('subprocess.run')
     @patch('debugpy.wait_for_client')
     @patch('debugpy.listen')
     @patch('app.runner.pyops.ServiceListener')
     @patch('app.lib.files.conf_users')
-    def test_debug_overrides_ignore_unreferenced(self, mock_conf_users, mock_listener, mock_listen, mock_wait, mock_run, tmp_path, mock_conf):
+    def test_debug_overrides_ignore_unreferenced(self, mock_conf_users, mock_listener, mock_listen, mock_wait, mock_run, mock_check_call, tmp_path, mock_conf):
         """Post-fix regression: Unreferenced overrides ignored (no exec/file)."""
         from app.runner import run
         from multiprocessing import Queue
@@ -782,8 +871,10 @@ print("jobsspace: " + globals()['jobsspace'])
         }
         overrides_json = json.dumps(overrides)
 
+        venv_path = str(tmp_path / "venv")
+        pkg_path = str(tmp_path / "pkg")
         q = Queue()
-        run(job_id, owner, set_name, "name", "debug", "", "print('task')", [], q, data_base, "bind", "/venv", "/pkg", overrides=overrides_json, port=5678)
+        run(job_id, owner, set_name, "name", "debug", "", "print('task')", [], q, data_base, "bind", venv_path, pkg_path, overrides=overrides_json, port=5678)
 
         msg = q.get()
         assert msg["state"] == "done"
@@ -1098,13 +1189,14 @@ class TestMainLoopDebugIntegration:
 class TestDebugOverridesResolution(TestLoggingCapture):
     """New regression tests for override resolution (post-fix)."""
 
+    @patch('subprocess.check_call')
     @patch('subprocess.run')
     @patch('debugpy.wait_for_client')
     @patch('debugpy.listen')
     @patch('app.runner.pyops.ServiceListener')
     @patch('app.lib.files.conf_users')
     @patch('app.runner.loadLib', side_effect=Exception("git not found"))
-    def test_debug_directive_new_override(self, mock_loadLib, mock_conf_users, mock_listener, mock_listen, mock_wait, mock_run, tmp_path, mock_conf):
+    def test_debug_directive_new_override(self, mock_loadLib, mock_conf_users, mock_listener, mock_listen, mock_wait, mock_run, mock_check_call, tmp_path, mock_conf):
         """Directive references new override lib (no git)."""
         from app.runner import run, process_imports
         from multiprocessing import Queue
@@ -1125,8 +1217,10 @@ class TestDebugOverridesResolution(TestLoggingCapture):
         libs = []
         code = process_imports(code, set_name, "debug", libs, override_dict)
 
+        venv_path = str(tmp_path / "venv")
+        pkg_path = str(tmp_path / "pkg")
         q = Queue()
-        run(job_id, owner, set_name, "task", "debug", "", code, libs, q, data_base, "bind", "/venv", "/pkg", overrides=overrides_json, port=5678)
+        run(job_id, owner, set_name, "task", "debug", "", code, libs, q, data_base, "bind", venv_path, pkg_path, overrides=overrides_json, port=5678)
 
         msg = q.get()
         assert msg["state"] == "done"
@@ -1146,12 +1240,13 @@ class TestDebugOverridesResolution(TestLoggingCapture):
         with open(new_lib_file, 'r') as f:
             assert "print('overridden newlib')" in f.read()
 
+    @patch('subprocess.check_call')
     @patch('subprocess.run')
     @patch('debugpy.wait_for_client')
     @patch('debugpy.listen')
     @patch('app.runner.pyops.ServiceListener')
     @patch('app.lib.files.conf_users')
-    def test_debug_recursive_directive(self, mock_conf_users, mock_listener, mock_listen, mock_wait, mock_run, tmp_path, mock_conf):
+    def test_debug_recursive_directive(self, mock_conf_users, mock_listener, mock_listen, mock_wait, mock_run, mock_check_call, tmp_path, mock_conf):
         """Lib directive resolves sub-lib."""
         from app.runner import run, process_imports
         from multiprocessing import Queue
@@ -1175,8 +1270,10 @@ class TestDebugOverridesResolution(TestLoggingCapture):
         libs = []
         code = process_imports(code, set_name, "debug", libs, override_dict)
 
+        venv_path = str(tmp_path / "venv")
+        pkg_path = str(tmp_path / "pkg")
         q = Queue()
-        run(job_id, owner, set_name, "task", "debug", "", code, libs, q, data_base, "bind", "/venv", "/pkg", overrides=overrides_json, port=5678)
+        run(job_id, owner, set_name, "task", "debug", "", code, libs, q, data_base, "bind", venv_path, pkg_path, overrides=overrides_json, port=5678)
 
         msg = q.get()
         assert msg["state"] == "done"

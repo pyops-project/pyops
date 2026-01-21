@@ -45,6 +45,9 @@
 
             function genActions(s) {
                 return `
+                    <button type="button" onclick="edit('${s.id}')" class="btn btn-warning p-0">
+                        <span class="material-icons-round">edit</span>
+                    </button>
                     <button type="button" onclick="del('${s.id}')" class="btn btn-danger p-0">
                         <span class="material-icons-round">delete</span>
                     </button>
@@ -60,19 +63,26 @@
                 `
             }
 
-            function genScheduleItem(s) {
+            function genScheduleRowContent(s) {
                 return `
-                    <tr>
-                        <th scope="row">${s.id}</th>
-                        <th scope="row">${s.set}</th>
-                        <th scope="row">${s.name}</th>
-                        <th scope="row">${s.drop_done}</th>
-                        <td>${s.schedule}</td>
-                        <td>${s.last}</td>
-                        <td>${genActions(s)}</td>
-                        <td id="param_${s.id}" style="display:none;">${s.param}</td>
-                    </tr>
+                    <th scope="row">${s.id}</th>
+                    <th scope="row">${s.set}</th>
+                    <th scope="row">${s.name}</th>
+                    <th scope="row">${s.drop_done}</th>
+                    <td>${s.max_retries}</td>
+                    <td>${s.schedule}</td>
+                    <td>${s.last}</td>
+                    <td>${genActions(s)}</td>
+                    <td id="param_${s.id}" style="display:none;">${s.param}</td>
                 `;
+            }
+
+            function getRowKey(row) {
+                return $(row).data("id");
+            }
+
+            function genScheduleItem(s) {
+                return `<tr data-id="${s.id}">${genScheduleRowContent(s)}</tr>`;
             }
 
             function copyParam(id) {
@@ -81,14 +91,43 @@
             }
 
             function refreshList() {
-                $("#schedules").empty();
+                const scrollY = window.scrollY;
                 fetch("/scriptlet/schedule/list").then(async (r)=>{
                     console.debug("GET", "/scriptlet/schedule/list", r)
                     if(r.ok) {
                         const d = await r.json();
                         console.debug("schedules", d);
-                        for(const i of d)
-                            $("#schedules").append(genScheduleItem(i));
+                        const tbody = $("#schedules");
+                        const existingRows = {};
+                        tbody.find("tr").each(function() {
+                            const id = $(this).data("id");
+                            if(id) existingRows[id] = this;
+                        });
+                        const newKeys = new Set();
+                        for(const i of d) {
+                            const key = i.id;
+                            newKeys.add(key);
+                            if(existingRows[key]) {
+                                $(existingRows[key]).html(genScheduleRowContent(i));
+                            } else {
+                                const newRowHtml = genScheduleItem(i);
+                                let inserted = false;
+                                tbody.find("tr").each(function() {
+                                    const existingKey = getRowKey(this);
+                                    if (!inserted && key < existingKey) {
+                                        $(this).before(newRowHtml);
+                                        inserted = true;
+                                        return false;
+                                    }
+                                });
+                                if (!inserted) tbody.append(newRowHtml);
+                            }
+                        }
+                        tbody.find("tr").each(function() {
+                            const id = $(this).data("id");
+                            if(id && !newKeys.has(id)) $(this).remove();
+                        });
+                        window.scrollTo(0, scrollY);
                     } else
                         console.error("GET", "/scriptlet/schedule/list", r.statusText);
                 }).catch((e)=>console.error("GET", "/scriptlet/schedule/list", e.toString()));
@@ -99,6 +138,7 @@
                 $("#createModal-set").val("");
                 $("#createModal-name").val("");
                 $("#createModal-dropDone").prop( "checked", false);
+                $("#createModal-maxRetries").val("0");
                 $("#createModal-schedule").val("");
                 $("#createModal-param").val("");
             }
@@ -109,6 +149,7 @@
                 const set = $("#createModal-set").val();
                 const name = $("#createModal-name").val();
                 const drop_done = $("#createModal-dropDone").is(':checked');
+                const max_retries = parseInt($("#createModal-maxRetries").val()) || 0;
                 const schedule = $("#createModal-schedule").val();
                 const param = $("#createModal-param").val();
 
@@ -116,6 +157,7 @@
                     "set": set,
                     "name": name,
                     "drop_done": drop_done,
+                    "max_retries": max_retries,
                     "schedule": schedule,
                     "param": param
                 }
@@ -187,7 +229,7 @@
 
             function deactivate(id) {
                 console.debug(`deactivate(${id})`);
-                
+
                 fetch(`/scriptlet/schedule/deactivate?id=${id}`).then(async (r)=>{
                     if(r.ok) {
                         const d = await r.json();
@@ -199,6 +241,80 @@
                 }).catch((e)=>console.error(e.toString()));
             }
 
+            function edit(id) {
+                console.debug(`edit(${id})`);
+
+                fetch(`/scriptlet/schedule/item?id=${id}`).then(async (r)=>{
+                    if(r.ok) {
+                        const s = await r.json();
+                        console.debug("edit schedule", s);
+
+                        $("#editModal-id").val(s.id);
+                        $("#editModal-set").val(s.set);
+                        $("#editModal-name").val(s.name);
+                        $("#editModal-dropDone").prop("checked", s.drop_done);
+                        $("#editModal-maxRetries").val(s.max_retries);
+                        $("#editModal-schedule").val(s.schedule);
+                        $("#editModal-param").val(s.param);
+
+                        $("#editModal").modal('show');
+                    } else
+                        console.error(await r.text());
+                }).catch((e)=>console.error(e.toString()));
+            }
+
+            function clearEditModal() {
+                $("#editModal-error").text("");
+                $("#editModal-id").val("");
+                $("#editModal-set").val("");
+                $("#editModal-name").val("");
+                $("#editModal-dropDone").prop("checked", false);
+                $("#editModal-maxRetries").val("0");
+                $("#editModal-schedule").val("");
+                $("#editModal-param").val("");
+            }
+
+            function onUpdate() {
+                console.debug("onUpdate");
+
+                const id = parseInt($("#editModal-id").val());
+                const set = $("#editModal-set").val();
+                const name = $("#editModal-name").val();
+                const drop_done = $("#editModal-dropDone").is(':checked');
+                const max_retries = parseInt($("#editModal-maxRetries").val()) || 0;
+                const schedule = $("#editModal-schedule").val();
+                const param = $("#editModal-param").val();
+
+                const data = {
+                    "id": id,
+                    "set": set,
+                    "name": name,
+                    "drop_done": drop_done,
+                    "max_retries": max_retries,
+                    "schedule": schedule,
+                    "param": param
+                }
+
+                console.debug("PUT", "/scriptlet/schedule/item", data);
+
+                fetch("/scriptlet/schedule/item", {
+                    method: "PUT",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify(data)
+                }).then(async (r)=>{
+                    if(r.ok) {
+                        $("#editModal").modal('hide');
+                        clearEditModal();
+                        refreshList();
+                    } else {
+                        const d = await r.json();
+                        $("#editModal-error").text(d.detail);
+                    }
+                }).catch((e)=>$("#editModal-error").text(e.toString()));
+            }
+
             $(document).ready(() => {
                 refreshList();
                 setInterval(function() {
@@ -208,7 +324,7 @@
         </script>
     </head>
     <body class="bg-body">
-        <nav class="navbar navbar-expand navbar-dark bg-dark pt-3">
+        <nav class="navbar navbar-expand navbar-dark bg-dark pt-3 sticky-top">
             <ul class="navbar-nav w-100">
                 <li class="navbar-brand">
                     <span class="material-icons-round">description</span>
@@ -238,6 +354,7 @@
                 <th scope="col">Set</th>
                 <th scope="col">Name</th>
                 <th scope="col">Drops</th>
+                <th scope="col">Retries</th>
                 <th scope="col">Schedule</th>
                 <th scope="col">Last</th>
                 <th scope="col">Actions</th>
@@ -253,7 +370,7 @@
             <div class="modal-dialog">
                 <div class="modal-content">
                     <div class="modal-header">
-                        <h5 class="modal-title" id="createModalLabel">Create Scriptlet</h5>
+                        <h5 class="modal-title" id="createModalLabel">Create Schedule</h5>
                         <!--<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>-->
                         <p id="createModal-error" class="text-danger"></p>
                     </div>
@@ -271,6 +388,10 @@
                             <input id="createModal-dropDone" class="form-check-input" type="checkbox" value="">
                         </div>
                         <div class="mb-3">
+                            <label for="createModal-maxRetries" class="col-form-label">Max Retries:</label>
+                            <input id="createModal-maxRetries" type="number" min="0" value="0" class="form-control">
+                        </div>
+                        <div class="mb-3">
                             <label for="createModal-schedule" class="col-form-label">Schedule:</label>
                             <input id="createModal-schedule" type="text" class="form-control">
                         </div>
@@ -282,6 +403,49 @@
                     <div class="modal-footer">
                         <button type="button" class="btn btn-danger" data-bs-dismiss="modal">Cancel</button>
                         <button type="button" class="btn btn-primary" onclick="onCreate()" data-bs-target="#createModal">Create</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="modal fade" data-bs-backdrop="static" id="editModal" tabindex="-1" aria-labelledby="editModalLabel" aria-hidden="true">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="editModalLabel">Edit Schedule</h5>
+                        <!--<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>-->
+                        <p id="editModal-error" class="text-danger"></p>
+                    </div>
+                    <div class="modal-body">
+                        <input id="editModal-id" type="hidden">
+                        <div class="mb-3">
+                            <label for="editModal-set" class="col-form-label">Set:</label>
+                            <input id="editModal-set" type="text" class="form-control">
+                        </div>
+                        <div class="mb-3">
+                            <label for="editModal-name" class="col-form-label">Name:</label>
+                            <input id="editModal-name" type="text" class="form-control">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-check-label" for="editModal-dropDone">Drop logs/data if successful:</label>
+                            <input id="editModal-dropDone" class="form-check-input" type="checkbox" value="">
+                        </div>
+                        <div class="mb-3">
+                            <label for="editModal-maxRetries" class="col-form-label">Max Retries:</label>
+                            <input id="editModal-maxRetries" type="number" min="0" value="0" class="form-control">
+                        </div>
+                        <div class="mb-3">
+                            <label for="editModal-schedule" class="col-form-label">Schedule:</label>
+                            <input id="editModal-schedule" type="text" class="form-control">
+                        </div>
+                        <div class="mb-3">
+                            <label for="editModal-param" class="col-form-label">Param:</label>
+                            <textarea id="editModal-param" cols="40" rows="5" class="form-control"></textarea>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-danger" data-bs-dismiss="modal">Cancel</button>
+                        <button type="button" class="btn btn-primary" onclick="onUpdate()" data-bs-target="#editModal">Update</button>
                     </div>
                 </div>
             </div>

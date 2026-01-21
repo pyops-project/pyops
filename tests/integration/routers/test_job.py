@@ -171,7 +171,7 @@ class TestJobRouter:
 
     @patch("app.lib.git.read_content")
     @patch('app.runner.terminate_job_processes')
-    def test_post_job_cancel_killed_path(self, mock_terminate, mock_read_content, mock_client, mock_db, test_temp_dir, patch_tempfile, mock_datetime):
+    def test_post_job_cancel_killed_path(self, mock_terminate, mock_read_content, mock_client, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
         from app.runner import postTerm
         # Mock git.read_content to return dummy code for enqueue
         mock_read_content.return_value = "print('dummy task code')"
@@ -215,14 +215,14 @@ class TestJobRouter:
         # Verify state after termination
         with Session(get_db_engine()) as session:
             updated_job = session.query(Job).filter_by(id=job_id).first()
-            assert updated_job.state == "killed"
-            assert updated_job.detail == "force killed after 5s timeout"
+            assert updated_job.state == "cancelled"
+            assert updated_job.detail is None
             assert updated_job.pid is None
             assert updated_job.end is not None
 
     @patch("app.lib.git.read_content")
     @patch('app.runner.terminate_job_processes')
-    def test_post_job_cancel_graceful_path(self, mock_terminate, mock_read_content, mock_client, mock_db, test_temp_dir, patch_tempfile, mock_datetime):
+    def test_post_job_cancel_graceful_path(self, mock_terminate, mock_read_content, mock_client, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
         from app.runner import postTerm
         # Mock git.read_content to return dummy code for enqueue
         mock_read_content.return_value = "print('dummy task code')"
@@ -267,7 +267,7 @@ class TestJobRouter:
         with Session(get_db_engine()) as session:
             updated_job = session.query(Job).filter_by(id=job_id).first()
             assert updated_job.state == "cancelled"
-            assert updated_job.detail == "terminated gracefully"
+            assert updated_job.detail is None
             assert updated_job.pid is None
             assert updated_job.end is not None
 
@@ -296,7 +296,7 @@ class TestJobRouter:
             assert response.status_code == 404
             assert "not existing" in response.json()["detail"]
 
-    def test_put_job_item_debug_scriptlet_not_existing_with_override(self, mock_client, mock_db, test_temp_dir, patch_tempfile, mock_datetime):
+    def test_put_job_item_debug_scriptlet_not_existing_with_override(self, mock_client, mock_db, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
         """Regression: debug enqueue succeeds if override provided despite no remote scriptlet."""
         with patch("app.lib.git.read_content", side_effect=FileNotFoundError):
             response = mock_client.put(
@@ -460,7 +460,8 @@ class TestJobRouter:
                 session.commit()
 
             from app.runner import loadJob
-            owner, set_, name, kind, param, code, overrides_str = loadJob(job_id)
+            owner, set_, name, kind, param, code, overrides_str, max_retries = loadJob(job_id)
             assert kind == "debug"
             assert code == "# overridden code"
             assert overrides_str is not None
+            assert max_retries == 0

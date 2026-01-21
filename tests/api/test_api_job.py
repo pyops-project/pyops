@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 @pytest.fixture
 def mock_enqueue(mock_db):
     with patch('app.lib.runner.enqueue') as mock:
-        def enqueue_side_effect(set_, name, owner, kind, drop_done, param, overrides=None):
+        def enqueue_side_effect(set_, name, owner, kind, drop_done, param, max_retries=0, overrides=None):
             # Mock DB insert and return ID
             from app.orm.job import Job
             job = Job(
@@ -20,6 +20,7 @@ def mock_enqueue(mock_db):
                 state="todo",
                 drop_done=drop_done,
                 param=param,
+                max_retries=max_retries,
                 overrides=overrides
             )
             job_id = job.id = f"{owner}_{set_}_{name}_{int(datetime.now().timestamp())}"
@@ -80,7 +81,7 @@ def test_put_job_item_enqueue_debug(mock_client, mock_db, mock_git_ops, mock_enq
         assert mock_enqueue.called
         # Verify overrides_json passed
         args, kwargs = mock_enqueue.call_args
-        assert kwargs['overrides'] == '{"testset::override": "def override(): pass"}'
+        assert args[7] == '{"testset::override": "def override(): pass"}'
 
 def test_put_job_item_enqueue_debug_invalid_overrides(mock_client, mock_db, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
     # Test PUT /scriptlet/job/item debug with invalid override key

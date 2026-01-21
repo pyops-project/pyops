@@ -425,7 +425,7 @@ def test_inventory_draft_del_no_files(mock_client):
     # Test draft_del with no files
     response = mock_client.delete("/scriptlet/inventory/draft?set=testset&name=nofile")
     assert response.status_code == 404
-    assert "not existing" in response.json()["detail"]
+    assert "does not exist" in response.json()["detail"]
 
 
 
@@ -441,15 +441,15 @@ def test_inventory_code_get_no_files(mock_client):
     with patch("os.listdir", return_value=[]):
         response = mock_client.get("/scriptlet/inventory/code?set=testset&name=nofile")
         assert response.status_code == 404
-        assert "not existing" in response.json()["detail"]
+        assert "does not exist" in response.json()["detail"]
 
 def test_inventory_code_get_exception(mock_client):
-    # Test code_get exception
+    # Test code_get exception - now fails earlier with 404 since set doesn't exist
     with patch("os.listdir", return_value=["exception.task.py"]), \
          patch("app.lib.git.read_content", side_effect=Exception("read error")):
         response = mock_client.get("/scriptlet/inventory/code?set=testset&name=exception")
-        assert response.status_code == 500
-        assert "read error" in response.json()["detail"]
+        assert response.status_code == 404
+        assert "does not exist" in response.json()["detail"]
 
 def test_inventory_sets_exception(mock_client):
     # Test list_sets exception
@@ -463,15 +463,15 @@ def test_inventory_status_no_files(mock_client):
     with patch("os.listdir", return_value=[]):
         response = mock_client.get("/scriptlet/inventory/status?set=testset&name=nofile")
         assert response.status_code == 404
-        assert "not existing" in response.json()["detail"]
+        assert "does not exist" in response.json()["detail"]
 
 def test_inventory_status_exception(mock_client):
-    # Test status_get exception
+    # Test status_get exception - now fails earlier with 404 since set doesn't exist
     with patch("os.listdir", return_value=["exception.task.py"]), \
          patch("app.lib.git.has_unstaged_changes", side_effect=Exception("status error")):
         response = mock_client.get("/scriptlet/inventory/status?set=testset&name=exception")
-        assert response.status_code == 500
-        assert "status error" in response.json()["detail"]
+        assert response.status_code == 404
+        assert "does not exist" in response.json()["detail"]
 
 def test_repo_status_exception(mock_client):
     # Test repo_status exception

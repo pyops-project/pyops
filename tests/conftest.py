@@ -100,12 +100,13 @@ def mock_git_dir(tmp_path):
         # Add sample files for list_scriptlets
         (set_dir / "sample_task.py").touch()
         (set_dir / "sample_view.html").touch()
-        (set_dir / "README.md").touch()
+        (set_dir / "README.md").write_text(f"# {set_name}\n")
+        (set_dir / ".gitignore").write_text("*.bck\n")
         # Dummy for test_set post etc.
         (set_dir / "dummy.py").touch()
         # Controller for menu failures test
         (set_dir / "sample.controller.py").touch()
-    
+
     create_mock_set("default")
     create_mock_set("test_set")
     
@@ -118,13 +119,14 @@ def mock_git_dir(tmp_path):
         if path_str == str(mock_data_dir):
             return ["default", "test_set"]
         elif path_str == str(mock_data_dir / "default"):
-            return ["sample_task.py", "sample_view.html", "README.md", "dummy.py"]
+            return ["sample_task.py", "sample_view.html", "README.md", ".gitignore", "dummy.py", "sample.controller.py"]
         elif path_str == str(mock_data_dir / "test_set"):
-            return ["dummy.py"]
+            return ["dummy.py", "README.md", ".gitignore", "sample.controller.py"]
         return []
     
     def mock_exists(p):
-        return str(p).endswith('.git')
+        p_str = str(p)
+        return p_str.endswith('.git') or any(p_str.endswith(f'/data/git/{set}') for set in ['default', 'test_set'])
     
     with patch("os.listdir", side_effect=mock_os_listdir), \
          patch("os.path.exists", side_effect=mock_exists):

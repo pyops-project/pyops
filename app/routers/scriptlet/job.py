@@ -32,6 +32,7 @@ class RunArgument(BaseModel):
     set: str
     name: str
     drop_done: bool
+    max_retries: int = 0
     param: str
     kind: Literal["task", "debug"] = "task"
     overrides: dict[str, str] | None = None
@@ -88,7 +89,7 @@ async def job_put(ru: RunArgument, user: str = Depends(get_current_user)):
             overrides_json = json.dumps(ru.overrides)
 
         # "debug" kind skeleton for future VSIX integration (e.g., special execution mode)
-        job = runner.enqueue(ru.set, ru.name, user, ru.kind, ru.drop_done, ru.param, overrides=overrides_json)
+        job = runner.enqueue(ru.set, ru.name, user, ru.kind, ru.drop_done, ru.param, ru.max_retries, overrides_json)
 
         return {"job": job}
 

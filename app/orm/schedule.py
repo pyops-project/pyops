@@ -11,5 +11,6 @@ class Schedule(Base):
     owner = Column(String, index=True, nullable=False)
     active = Column(Boolean, index=True, nullable=False)
     drop_done = Column(Boolean, default=True, nullable=False)
+    max_retries = Column(Integer, default=0, nullable=False)
     param = Column(String)
     last = Column(DateTime, index=True)

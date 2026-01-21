@@ -1,10 +1,11 @@
 import pytest
-from unittest.mock import Mock, patch, MagicMock, call
+from unittest.mock import Mock, patch, MagicMock, call, ANY
 from sqlalchemy.orm import Session
 from datetime import datetime
 import os
 import shutil
 import signal
+import psutil
 
 class TestDBUtils:
     def test_enqueue(self, mock_db):
@@ -165,7 +166,7 @@ class TestLoadUtils:
                 fetched = test_session.get(Job, "123")
                 assert fetched.state == "loading"  # State set to loading by loadJob
             mock_read_content.assert_called_once_with('data/git/set', 'name', 'task', committed=True)
-            assert result == ("owner", "set", "name", "task", "param", 'code', None)
+            assert result == ("owner", "set", "name", "task", "param", 'code', None, 0)
 
     def test_load_job_debug_unstaged(self, mock_db, mock_git_ops):
         from app import runner
@@ -189,7 +190,7 @@ class TestLoadUtils:
                 fetched = test_session.get(Job, "123")
                 assert fetched.state == "loading"  # State set to loading by loadJob
             mock_read_content.assert_called_once_with('data/git/set', 'name', 'task', committed=False)
-            assert result == ("owner", "set", "name", "debug", "param", 'debug unstaged code', None)
+            assert result == ("owner", "set", "name", "debug", "param", 'debug unstaged code', None, 0)
 
     def test_load_job_debug(self, mock_db, mock_git_ops):
         from app import runner
@@ -216,7 +217,7 @@ class TestLoadUtils:
                 assert fetched.state == "loading"  # State set to loading by loadJob
             # Since overrides has set::name, read_content should not be called
             mock_read_content.assert_not_called()
-            assert result == ("owner", "set", "name", "debug", "param", "override", '{"set::name": "override"}')
+            assert result == ("owner", "set", "name", "debug", "param", "override", '{"set::name": "override"}', 0)
 
     def test_load_lib(self, mock_git_ops):
         from app import runner
@@ -309,56 +310,60 @@ class TestProcessImports:
         from app.runner import process_imports
         text = "#!{set::lib}\npass"
         libs = []
-        result = process_imports(text, 'set', 'task', libs)
-        assert result == "#!{set::lib}\npass"
-        assert libs == []
+        with pytest.raises(Exception, match='load error'):
+            process_imports(text, 'set', 'task', libs)
 
 class TestProcessInstallLines:
+    @patch('app.runner.ensure_set_environment')
+    @patch('os.makedirs')
     @patch('app.runner.subprocess.run')
     @patch('app.runner.os.path.join', side_effect=lambda *args: '/'.join(args))
-    def test_process_install_lines_pip_install(self, mock_join, mock_run):
+    def test_process_install_lines_pip_install(self, mock_join, mock_run, mock_makedirs, mock_ensure):
         from app.runner import process_install_lines
-        # Mock pip list returns empty (module not installed), then install succeeds
-        mock_result_list = Mock()
-        mock_result_list.returncode = 0
-        mock_result_list.stdout = ""
-        mock_result_install = Mock()
-        mock_result_install.returncode = 0
-        mock_run.side_effect = [mock_result_list, mock_result_install]
+        # Mock pip install succeeds
+        mock_result = Mock()
+        mock_result.returncode = 0
+        mock_run.return_value = mock_result
         lines = ['#!pip_module']
-        process_install_lines(lines, '/venv', '/pkg', 'job_id')
-        assert mock_run.call_count == 2
-        mock_run.assert_any_call(['/venv/bin/pip', 'list', '--format=freeze'], capture_output=True, text=True, cwd='/venv')
-        mock_run.assert_any_call(['/venv/bin/pip', 'install', '-q', 'pip_module'], capture_output=True, text=True)
+        process_install_lines(lines, '/venv', '/pkg', 'testset', 'job_id')
+        assert mock_run.call_count == 1
+        mock_run.assert_called_once_with(['/venv/testset/bin/pip', 'install', '-q', 'pip_module'], capture_output=True, text=True)
 
+    @patch('app.runner.ensure_set_environment')
+    @patch('os.makedirs')
     @patch('app.runner.subprocess.run')
     @patch('app.runner.os.path.join', side_effect=lambda *args: '/'.join(args))
     @patch('app.runner.os.path.exists', return_value=False)
-    def test_process_install_lines_git_clone(self, mock_exists, mock_join, mock_run):
+    def test_process_install_lines_git_clone(self, mock_exists, mock_join, mock_run, mock_makedirs, mock_ensure):
         from app.runner import process_install_lines
         # Mock git clone succeeds
         mock_result = Mock()
         mock_result.returncode = 0
         mock_run.return_value = mock_result
         lines = ['#!https://github.com/user/repo.git']
-        process_install_lines(lines, '/venv', '/pkg', 'job_id')
-        mock_run.assert_called_once_with(['git', 'clone', 'https://github.com/user/repo.git', '/pkg/repo'], capture_output=True, text=True, cwd='/pkg')
+        process_install_lines(lines, '/venv', '/pkg', 'testset', 'job_id')
+        # Check that git clone was called with correct args
+        mock_run.assert_any_call(['git', 'clone', 'https://github.com/user/repo.git', '/pkg/testset/repo'], capture_output=True, text=True, cwd='/pkg/testset')
 
+    @patch('app.runner.ensure_set_environment')
+    @patch('os.makedirs')
     @patch('app.runner.subprocess.run')
     @patch('app.runner.os.path.join', side_effect=lambda *args: '/'.join(args))
-    def test_process_install_lines_no_bang(self, mock_join, mock_run):
+    def test_process_install_lines_no_bang(self, mock_join, mock_run, mock_makedirs, mock_ensure):
         from app.runner import process_install_lines
         lines = ['pass']
-        result = process_install_lines(lines, '/venv', '/pkg', 'job_id')
+        result = process_install_lines(lines, '/venv', '/pkg', 'testset', 'job_id')
         assert result == ['pass']
         mock_run.assert_not_called()
 
+    @patch('app.runner.ensure_set_environment')
+    @patch('os.makedirs')
     @patch('app.runner.subprocess.run')
     @patch('app.runner.os.path.join', side_effect=lambda *args: '/'.join(args))
-    def test_process_install_lines_empty(self, mock_join, mock_run):
+    def test_process_install_lines_empty(self, mock_join, mock_run, mock_makedirs, mock_ensure):
         from app.runner import process_install_lines
         lines = ['!']
-        result = process_install_lines(lines, '/venv', '/pkg', 'job_id')
+        result = process_install_lines(lines, '/venv', '/pkg', 'testset', 'job_id')
         assert result == ['!']
         mock_run.assert_not_called()
 
@@ -447,7 +452,7 @@ class TestKillProcTree:
         from app.orm.database import get_db_engine
         from app.orm.job import Job
         overrides = '{"key": "value"}'
-        result_id = runner.enqueue("set", "name", "owner", "debug", True, "param", overrides)
+        result_id = runner.enqueue("set", "name", "owner", "debug", True, "param", 0, overrides)
         with Session(get_db_engine()) as test_session:
             fetched = test_session.query(Job).filter_by(id=result_id).first()
             assert fetched.overrides == overrides
@@ -536,52 +541,22 @@ class TestAssignJob:
 class TestTerminateJobProcesses:
     @patch('app.runner.postTerm')
     @patch('app.runner.os.kill')
-    @patch('app.runner.logger')
-    @patch('app.runner.files.conf_users')
-    @patch('app.runner.psutil.process_iter')
-    def test_adapter_match_kill(self, mock_process_iter, mock_conf_users, mock_logger, mock_os_kill, mock_postTerm):
-        from app.runner import terminate_job_processes
-        mock_conf_users.return_value = {'owner': {'debug_port': 5678}}
-        # Mock matching adapter pinfo
-        mock_pinfo = Mock()
-        mock_pinfo.info = {'pid': 999, 'cmdline': ['python', '/path/debugpy/adapter', '--port', '5678']}
-        mock_process_iter.return_value = iter([mock_pinfo])
-        # Mock parent process (job)
-        mock_parent = Mock()
-        mock_parent.pid = 123
-        mock_parent.children.return_value = []
-        mock_parent.is_running.return_value = False  # Graceful termination
-        with patch('app.runner.psutil.Process', return_value=mock_parent):
-            terminate_job_processes("job_id", 123, True, 'owner')
-        # Kill job with SIGTERM (no adapter kill expected)
-        assert mock_os_kill.call_count == 1
-        mock_os_kill.assert_called_once_with(123, signal.SIGTERM)
-        mock_postTerm.assert_called_once_with("job_id", killed=False)
-
-    @patch('app.runner.postTerm')
-    @patch('app.runner.os.kill')
     @patch('app.runner.psutil.Process')
-    @patch('app.runner.psutil.process_iter')
-    @patch('app.runner.files.conf_users')
-    def test_no_adapter_match(self, mock_conf_users, mock_process_iter, mock_Process, mock_os_kill, mock_postTerm):
+    def test_terminate_graceful_quick_debug(self, mock_Process, mock_os_kill, mock_postTerm):
         from app.runner import terminate_job_processes
-        mock_conf_users.return_value = {'owner': {'debug_port': 5678}}
-        # No matching pinfo
-        mock_process_iter.return_value = iter([])
         mock_parent = Mock()
         mock_parent.pid = 123
         mock_parent.children.return_value = []
         mock_parent.is_running.return_value = False
         mock_Process.return_value = mock_parent
         terminate_job_processes("job_id", 123, True, 'owner')
-        mock_process_iter.assert_not_called()
-        mock_postTerm.assert_called_once_with("job_id", killed=False)
+        mock_os_kill.assert_called_once_with(123, signal.SIGTERM)
+        mock_postTerm.assert_called_once_with("job_id")
 
     @patch('app.runner.postTerm')
     @patch('app.runner.os.kill')
     @patch('app.runner.psutil.Process')
-    @patch('app.runner.files.conf_users')
-    def test_non_debug_no_adapter_search(self, mock_conf_users, mock_Process, mock_os_kill, mock_postTerm):
+    def test_terminate_graceful_quick_non_debug(self, mock_Process, mock_os_kill, mock_postTerm):
         from app.runner import terminate_job_processes
         mock_parent = Mock()
         mock_parent.pid = 123
@@ -589,9 +564,167 @@ class TestTerminateJobProcesses:
         mock_parent.is_running.return_value = False
         mock_Process.return_value = mock_parent
         terminate_job_processes("job_id", 123, False, 'owner')
-        mock_conf_users.assert_not_called()
-        mock_postTerm.assert_called_once_with("job_id", killed=False)
+        mock_os_kill.assert_called_once_with(123, signal.SIGTERM)
+        mock_postTerm.assert_called_once_with("job_id")
 
+    @patch('app.runner.postTerm')
+    @patch('app.runner.kill_proc_tree')
+    @patch('time.time')
+    @patch('app.runner.get_process_tree')
+    def test_terminate_timeout_force_kill(self, mock_tree, mock_time, mock_kill_tree, mock_post):
+        from app.runner import terminate_job_processes
+        mock_time.side_effect = [0.0, 14.9, 15.1]
+        mock_alive = Mock()
+        mock_alive.is_running.return_value = True
+        mock_tree.side_effect = [
+            [mock_alive],  # TERM tree
+            [mock_alive],  # poll alive=True
+        ]
+        terminate_job_processes("job_id", 123, True, 'owner', graceful_timeout=15.0)
+        mock_kill_tree.assert_has_calls([
+            call(ANY, signal.SIGTERM),
+            call(ANY, signal.SIGKILL)
+        ], any_order=False)
+        mock_post.assert_called_once_with("job_id", killed=True)
+
+    @patch('app.runner.psutil.Process')
+    def test_get_process_tree_exists_children(self, mock_Process):
+        from app.runner import get_process_tree
+        mock_parent = Mock(pid=123)
+        mock_child = Mock(pid=456)
+        mock_parent.children.return_value = [mock_child]
+        mock_Process.return_value = mock_parent
+        tree = get_process_tree(123)
+        assert len(tree) == 2
+        assert tree[0].pid == 123
+        assert tree[1].pid == 456
+
+    def test_get_process_tree_pid_gone(self):
+        from app.runner import get_process_tree
+        with patch('app.runner.psutil.Process', side_effect=psutil.NoSuchProcess(123)):
+            tree = get_process_tree(123)
+        assert tree == []
+
+
+class TestPostTerm:
+    def test_post_term_killed(self, mock_db):
+        from app.runner import postTerm
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        from sqlalchemy.orm import Session
+        with Session(get_db_engine()) as session:
+            job = Job(id="testid", name="testname", state="running", owner="owner", set="set", kind="task")
+            session.add(job)
+            session.commit()
+        postTerm("testid", killed=True)
+        with Session(get_db_engine()) as session:
+            job = session.get(Job, "testid")
+            assert job.state == "cancelled"
+            assert job.detail is None
+            assert job.pid is None
+            assert job.end is not None
+
+    def test_post_term_graceful_cancel(self, mock_db):
+        from app.runner import postTerm
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        from sqlalchemy.orm import Session
+        with Session(get_db_engine()) as session:
+            job = Job(id="testid", name="testname", state="cancel", owner="owner", set="set", kind="task")
+            session.add(job)
+            session.commit()
+        postTerm("testid")
+        with Session(get_db_engine()) as session:
+            job = session.get(Job, "testid")
+            assert job.state == "cancelled"
+            assert job.detail is None
+            assert job.pid is None
+            assert job.end is not None
+
+    def test_post_term_graceful_done_nochange(self, mock_db):
+        from app.runner import postTerm
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        from sqlalchemy.orm import Session
+        with Session(get_db_engine()) as session:
+            job = Job(id="testid", name="testname", state="done", owner="owner", set="set", kind="task")
+            session.add(job)
+            session.commit()
+        postTerm("testid")
+        with Session(get_db_engine()) as session:
+            job = session.get(Job, "testid")
+            assert job.state == "done"
+            assert job.pid is None
+            assert job.end is not None
+
+    @patch('app.lib.runner.drop')
+    def test_post_term_remove_delete_drop(self, mock_drop, mock_db):
+        from app.runner import postTerm
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        from sqlalchemy.orm import Session
+        with Session(get_db_engine()) as session:
+            job = Job(id="testid", name="testname", state="remove", owner="owner", set="set", kind="task")
+            session.add(job)
+            session.commit()
+        postTerm("testid")
+        mock_drop.assert_called_once_with("testid", "owner", "set")
+        with Session(get_db_engine()) as session:
+            assert session.get(Job, "testid") is None
+
+class TestDebugAdapterUtils:
+    @patch('app.runner.psutil.process_iter')
+    @patch('app.runner.files.conf_users', return_value={"owner": {"debug_port": 5678}})
+    @patch('app.runner.os.kill')
+    def test_terminate_debugpy_adapter_match_kill(self, mock_kill, mock_conf, mock_iter):
+        from app.runner import terminate_debugpy_adapter
+        mock_pinfo = Mock()
+        mock_pinfo.info = {'pid': 999, 'cmdline': ['python', '-m', 'debugpy.adapter', '--port', '5678']}
+        mock_iter.return_value = iter([mock_pinfo])
+        terminate_debugpy_adapter("owner")
+        mock_kill.assert_called_once_with(999, signal.SIGKILL)
+
+    @patch('app.runner.psutil.process_iter')
+    @patch('app.runner.files.conf_users', return_value={"owner": {"debug_port": 5678}})
+    def test_terminate_debugpy_adapter_no_match(self, mock_conf, mock_iter):
+        from app.runner import terminate_debugpy_adapter
+        mock_iter.return_value = iter([])
+        with patch('app.runner.logger.warning') as mock_warn:
+            terminate_debugpy_adapter("owner")
+            mock_warn.assert_called()
+
+    @patch('app.runner.files.conf_users', return_value={})
+    def test_terminate_debugpy_adapter_no_port(self, mock_conf):
+        from app.runner import terminate_debugpy_adapter
+        with patch('app.runner.logger.warning') as mock_warn:
+            terminate_debugpy_adapter("owner")
+            mock_warn.assert_called_with("no debug_port configured for owner %s", "owner")
+
+    def test_get_debugpy_adapter_pid_match(self):
+        from app.runner import get_debugpy_adapter_pid
+        mock_pinfo = Mock()
+        mock_pinfo.info = {'pid': 999, 'cmdline': ['python', '-m', 'debugpy.adapter', '--port', '5678']}
+        with patch('app.runner.psutil.process_iter', return_value=iter([mock_pinfo])):
+            pid = get_debugpy_adapter_pid(5678)
+            assert pid == 999
+
+    def test_get_debugpy_adapter_pid_no_match(self):
+        from app.runner import get_debugpy_adapter_pid
+        with patch('app.runner.psutil.process_iter', return_value=iter([])):
+            pid = get_debugpy_adapter_pid(5678)
+            assert pid is None
+
+    @patch('app.runner.files.conf_users', return_value={"owner": {"debug_port": 5678}})
+    def test_validate_debug_prerequisites_valid(self, mock_conf):
+        from app.runner import validate_debug_prerequisites
+        port = validate_debug_prerequisites("id", "owner")
+        assert port == 5678
+
+    @patch('app.runner.files.conf_users', return_value={"owner": {"debug_port": "invalid"}})
+    def test_validate_debug_prerequisites_invalid(self, mock_conf):
+        from app.runner import validate_debug_prerequisites
+        with pytest.raises(Exception, match="Invalid or missing debug_port"):
+            validate_debug_prerequisites("id", "owner")
 
 class TestLibRunnerLoad:
     def test_load_lib_task_committed(self, mock_git_ops):

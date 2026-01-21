@@ -56,6 +56,7 @@ Cline outputs full file content; paste/replace in editor, then save via VSIX. It
 - **Execution Model**: Isolated global dict (`glob`) with:
   - `control`: Pyops.Control for API calls (e.g., `control.job.list()` returns dict of jobs).
   - `listener`: For services (inbound requests; see Services).
+  - `"__name__": "__main__" (enables `if __name__ == "__main__":` idiom: executes main logic in PyOps jobs; skips when imported locally for pytest testing without running main block).`
   - Logging: Use Python's built-in `logging` module for structured logging. Configure it early:
   ```
   import logging
@@ -71,8 +72,8 @@ Cline outputs full file content; paste/replace in editor, then save via VSIX. It
   - Post-process: Commented out (e.g., `# #!requests`); errors fail job.
 - **Param**: Optional pre-exec code string (enqueue via UI/API; supports directives). Vars/functions available in main.
 - **Debug Mode**: Enqueue as "debug" (uses draft files, no auto-cleanup).
-- **Enqueue/Run**: Via web UI (e.g., /scriptlet/manager.html) or API (POST /scriptlet/job/item {set, name, kind="task"/"service"/"debug", param, drop_done}); manage jobs in VSIX pyops-monitor.
-- **Scheduling**: POST /scriptlet/schedule/item {set, name, kind="task", schedule="cron_expr" (e.g., "* * * * *"), param, drop_done}.
+- **Enqueue/Run**: Via web UI (e.g., /scriptlet/manager.html) or API (PUT /scriptlet/job/item {set, name, kind="task"/"service"/"debug", param, drop_done, max_retries}); manage jobs in VSIX pyops-monitor.
+- **Scheduling**: PUT /scriptlet/schedule/item {set, name, kind="task", schedule="cron_expr" (e.g., "* * * * *"), param, drop_done, max_retries}.
 - **Monitoring**: VSIX pyops-monitor or /scriptlet/monitor for jobs/schedules by state. Download logs/files.
 - **API Access**: HTTP to `/controller/{set}/{name}/{rest:path}` proxies (via controller globals service name) to service listener with ZMQ msg dict: `{"type": METHOD, "path": "/{rest:path}", **all query_params (e.g. ?cmd=run → "cmd": "run"), "data": body (parsed to dict if application/json, str if text/*, bytes otherwise), "data_type": "json"/"text"/"binary"/"none"}`. Convention: `/q?cmd=...` GET or POST `/q` body.
 
@@ -126,6 +127,9 @@ Use: Run code once, produce output/files.
 Template (`task/{name}.py`):
 ```
 # Task: One-off execution
+import logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 #!requests  # Install requests if missing
 #!git git@github.com/user/myrepo.git main  # Clone/pull myrepo
 
@@ -133,23 +137,27 @@ import os
 import requests  # Now available
 import myrepo.helper  # From cloned repo
 
-# Access control and workspace
-# control: e.g., control.job.list()
-# workspace: job output dir
+def main():
+    # Access control and workspace
+    # control: e.g., control.job.list()
+    # workspace: job output dir
 
-# Example: HTTP request
-response = requests.get("https://api.example.com/data")
-data = response.json()
+    # Example: HTTP request
+    response = requests.get("https://api.example.com/data")
+    data = response.json()
 
-# Write output
-output_path = os.path.join(workspace, "result.txt")
-with open(output_path, "w") as f:
-    f.write(str(data))
+    # Write output
+    output_path = os.path.join(workspace, "result.txt")
+    with open(output_path, "w") as f:
+        f.write(str(data))
 
-# Example: API call via control
-jobs = control.job.list()  # Returns dict
+    # Example: API call via control
+    jobs = control.job.list()  # Returns dict
 
-logger.info("Task done")
+    logger.info("Task done")
+
+if __name__ == "__main__":
+    main()
 ```
 
 Param Example (enqueue string):
@@ -492,7 +500,7 @@ PyOps UI: http://{pyops.serverUrl}/scriptlet/sets.html
 
 - List sets/branch; auto-refresh.
 - Add: clone (name, Git URL/branch, git name/email, username/password).
-- Actions: switch (local branches), remove (confirm).
+- Actions: pull (sync repos), switch (local branches), remove (confirm).
 
 Safe Git ops with per-set locks; errors in UI.
 
@@ -506,6 +514,44 @@ Safe Git ops with per-set locks; errors in UI.
 - **Cline Tips**: Provide full context (file + prompt); request iterative changes (e.g., "Refine previous: add logging"); ensure directives commented post-gen.
 - **Debug**: Use VSIX debug for quick tests; check logs in monitor.
 - **Views**: Rely on Bootstrap defaults; dynamic {{SET}}/{{NAME}}; JS in head only.
+
+### Local Testing with Pytest
+
+The runner sets `"__name__": "__main__"` in `glob`, enabling scriptlets to be structured for both PyOps execution and local testing:
+
+```python
+import logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# Directives and imports...
+
+def main():
+    # Task/service logic here
+    logger.info("Execution complete")
+
+if __name__ == "__main__":
+    main()
+```
+
+**How it works**:
+- PyOps jobs: `__name__ == "__main__"`, runs `main()`.
+- Local import: `__name__ = "myops.task.mytask"`, skips `main()`; test functions directly.
+
+**Pytest Example** (`tests/myops/test_mytask.py` or local `pyops/tests/`):
+```python
+import pytest
+from myops.task.mytask import main  # No main() execution!
+
+def test_main(capsys):
+    main()
+    captured = capsys.readouterr()
+    assert "Execution complete" in captured.out
+```
+
+Run: `pytest -v` (mock `control`/`listener`/`workspace` as needed for services).
+
+**Cline Usage**: Prompt "Refactor to `if __name__ == '__main__': main()` pattern for local pytest compatibility."
 
 ## Logging Best Practices
 

@@ -291,13 +291,14 @@ Polls DB via getNextToDo() for todo jobs
 ; assigns PID via assignJob().
 
 Job-Execution:
-loadJob(job_id) fetches from DB; returns ..., code
+loadJob(job_id) fetches from DB; returns owner set name kind param code overrides
+; skips scriptlet file check if debug+overrides has main_key
 ; run() processes param & libs & code in subprocess
 ; handles venv activation & directives via process_imports() & process_install_lines()
 ; for debug without overrides, uses unstaged code (preview)
 ; for debug with overrides (VSIX), uses override code
 ; uses compile() with custom filenames for accurate stacktraces.
-finishJob(job_id, state, detail) updates DB.
+finishJob(job_id, state, detail) sets state end detail pid=None; daemon terminate_job_processes full tree.
 
 Directive-Processing:
 process_imports(text, set, kind, libs) handles `!pip` `!git` `#!{set::lib}`
@@ -305,11 +306,24 @@ process_imports(text, set, kind, libs) handles `!pip` `!git` `#!{set::lib}`
 ; uses committed code for libs.
 process_install_lines(lines, venv, pkg, id) executes installs.
 
-Termination:
-getNextToTerm() finds to-kill jobs
-; term() kills processes
-; postTerm() updates DB.
-cleanProcesses() reaps zombies.
+Runner-PostTerm:
+postTerm(job_id, killed=False) ignores killed param
+; if state=="remove": session.delete(job); runner.drop(job_id, owner, set)
+; else: job.end=now; job.pid=None; if state not in ("done", "failed"): state="cancelled"; no detail update.
+
+
+Runner-TerminateJobProcesses:
+terminate_job_processes(job_id pid is_debug owner timeout=15) get_process_tree(pid) full tree
+; kill_proc_tree(SIGTERM); poll recreate tree if any alive sleep1
+; if gone postTerm(job_id); else SIGKILL postTerm(job_id killed=True ignored).
+
+Runner-GetProcessTree:
+get_process_tree(pid) psutil.Process(pid) + children(recursive) or [] NoSuchProcess.
+
+Runner-Main-TermLoop:
+getNextToTerm select Job.state=="cancel"
+; if pid processes: finishJob(id "cancelling" detail)
+; else postTerm(id).
 
 Scheduling:
 schedule() enqueues from cron Schedules via croniter.
@@ -657,3 +671,12 @@ pyops.attachDebugJob simplified: removed buildOverrides/pathMappings (only for n
 ; pure {type:'python', request:'attach', connect:localhost:{port}, justMyCode:false}
 ; no local file dependency/crash on undefined job.set
 ; extension.test.ts: success/single-job, missing-set/name no-crash, no-job, multiple-jobs.
+
+Job-MaxRetries:
+Job & Schedule models add max_retries Column(Integer, default=0, nullable=False).
+Runner-Retries:
+app/runner.py execute_job_code accepts max_retries: int = 0; if job_type=="task" for attempt in range(max_retries + 1): exec param/libs/code; except: if attempt < max_retries logger.warning retry sleep 60s else q.put failed "Failed after {max_retries} retries\n{traceback}".
+JobControl.create:
+app/lib/pyops.py JobControl.create sig adds max_retries: int = 0; json adds "max_retries": max_retries.
+UI-Scheduler:
+app/sites/scriptlet/scheduler.html createModal adds #createModal-maxRetries input type=number min=0 value=0 after drop_done; clearCreateModal val("0"); onCreate parseInt || 0 sends PUT /scriptlet/schedule/item.

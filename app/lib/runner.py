@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 
-def enqueue(set: str, name: str, owner: str, kind: str, drop_done: bool, param: str, overrides: str | None = None):
+def enqueue(set: str, name: str, owner: str, kind: str, drop_done: bool, param: str, max_retries: int = 0, overrides: str | None = None):
     """Enqueues a new job into the database.
 
     Args:
@@ -52,6 +52,7 @@ def enqueue(set: str, name: str, owner: str, kind: str, drop_done: bool, param: 
             name = name,
             owner = owner,
             drop_done = drop_done,
+            max_retries = max_retries,
             kind = kind,
             state = "todo",
             param = param,

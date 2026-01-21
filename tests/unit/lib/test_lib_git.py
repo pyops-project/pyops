@@ -230,6 +230,9 @@ class TestRepoPathAndFiles:
     def test_get_repo_path_new(self, tmp_path, mock_subprocess, mock_files_conf):
         mock_run, mock_check = mock_subprocess
         mock_run.return_value.returncode = 0
+        # Create the repo directory manually since os.makedirs is removed
+        repo_path = tmp_path / '.cache/git/new_set'
+        repo_path.mkdir(parents=True, exist_ok=True)
         with patch('os.path.exists') as mock_exists:
             def exists_side(p):
                 if '.git' in p or p.endswith('.gitignore') or p.endswith('README.md'):
@@ -242,6 +245,11 @@ class TestRepoPathAndFiles:
             # .gitignore and README commits
             assert any(call.args[0] == ['git', 'commit', '-m', 'Initial .gitignore for new_set'] for call in mock_run.call_args_list)
             assert any(call.args[0] == ['git', 'commit', '-m', 'Initial README for new_set'] for call in mock_run.call_args_list)
+
+    def test_get_repo_path_directory_not_exist(self, mock_files_conf):
+        from fastapi import HTTPException
+        with pytest.raises(HTTPException, match="Set 'nonexistent' does not exist"):
+            git.get_repo_path('nonexistent')
 
     def test_get_repo_path_existing(self, mock_repo, mock_subprocess, mock_files_conf):
         # Assume already exists, no init

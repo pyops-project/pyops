@@ -9,8 +9,9 @@ import logging
 logger = logging.getLogger(__name__)
 
 class ControlRequest:
-    def __init__(self, web_bind: str):
+    def __init__(self, owner, web_bind: str):
         self.web_bind = web_bind
+        self.owner = owner
 
     def handle_response(self, m, r):
         if r.status_code == 200:
@@ -22,18 +23,22 @@ class ControlRequest:
             raise Exception("{}: {} {}\n{}".format(m, r.status_code, r.reason, r.content))
 
     def get(self, path, params = {}, headers = {}):
+        headers = {**headers, "X-User": self.owner} if self.owner else headers
         r = rq.get(f"http://{self.web_bind}/{path}", params=params, headers=headers)
         return self.handle_response(f"GET {path}", r)
 
     def delete(self, path, params = {}, headers = {}):
+        headers = {**headers, "X-User": self.owner} if self.owner else headers
         r = rq.delete(f"http://{self.web_bind}/{path}", params=params, headers=headers)
         return self.handle_response(f"DELETE {path}", r)
-    
+
     def post(self, path, headers = {}, json = {}):
+        headers = {**headers, "X-User": self.owner} if self.owner else headers
         r = rq.post(f"http://{self.web_bind}/{path}", headers=headers, json=json)
         return self.handle_response(f"POST {path}", r)
-    
+
     def put(self, path, headers = {}, json = {}):
+        headers = {**headers, "X-User": self.owner} if self.owner else headers
         r = rq.put(f"http://{self.web_bind}/{path}", headers=headers, json=json)
         return self.handle_response(f"PUT {path}", r)
 
@@ -44,11 +49,13 @@ class JobControl:
     def list(self):
         return self.rq.get("scriptlet/job/list")
     
-    def create(self, set: str, name: str, drop_done: bool, param: str, debug: bool):
-        return self.rq.put("scriptlet/job/item", json={
+    def create(self, set: str, name: str, drop_done: bool = False, max_retries: int = 0, param: str = None, debug: bool = False, user: str = None):
+        headers = {"X-User": user} if user else {}
+        return self.rq.put("scriptlet/job/item", headers=headers, json={
             "set": set,
             "name": name,
             "drop_done": drop_done,
+            "max_retries": max_retries,
             "param": param,
             "debug": debug
         })["job"]
@@ -72,13 +79,14 @@ class ScheduleControl:
     def list(self):
         return self.rq.get("scriptlet/schedule/list")
     
-    def create(self, set: str, name: str, drop_done: bool, schedule: str, param: str):
+    def create(self, set: str, name: str, drop_done: bool, schedule: str, param: str, max_retries: int = 0):
         return self.rq.put("scriptlet/schedule/item", json={
             "set": set,
             "name": name,
             "drop_done": drop_done,
             "schedule": schedule,
-            "param": param
+            "param": param,
+            "max_retries": max_retries
         })["schedule"]
 
     def get(self, id: int):
@@ -94,8 +102,8 @@ class ScheduleControl:
         return self.rq.get("scriptlet/schedule/deactivate", params={id:id})
 
 class Control:
-    def __init__(self, web_bind: str):
-        self.rq = ControlRequest(web_bind)
+    def __init__(self, owner: str, web_bind: str):
+        self.rq = ControlRequest(owner, web_bind)
         self.job = JobControl(self.rq)
         self.schedule = ScheduleControl(self.rq)
 
@@ -112,9 +120,9 @@ class Control:
         return self.rq.get(f"controller/{set}/{name}/post", json=json)
 
 class ServiceListener:
-    def __init__(self, job_id: str, current_user: str = "anonymous"):
+    def __init__(self, owner: str, job_id: str):
         self.kill_now = False
-        self.current_user = current_user
+        self.owner = owner
         signal.signal(signal.SIGINT, self.exit_gracefully)
         signal.signal(signal.SIGTERM, self.exit_gracefully)
 
@@ -127,11 +135,20 @@ class ServiceListener:
         self.socket.bind(f"ipc://{self.sockfile}")
         self.poller = zmq.Poller()
         self.poller.register(self.socket, flags=zmq.POLLIN)
-        atexit.register(self.close)
 
     def close(self):
+        if hasattr(self, 'poller'):
+            try:
+                self.poller.unregister(self.socket)
+            except zmq.ZMQError:
+                pass
+            self.poller = None
         if hasattr(self, 'socket'):
-            self.socket.close()
+            try:
+                self.socket.setsockopt(zmq.LINGER, 0)
+                self.socket.close()
+            except Exception:
+                pass
         if hasattr(self, 'context'):
             self.context.term()
         if os.path.exists(self.sockfile):
@@ -161,8 +178,8 @@ class ServiceListener:
         self.socket.send(b)
 
 class ServiceClient:
-    def __init__(self, set: str, name: str, debug: bool = False, owner: str = None):
-        self.owner = owner or "anonymous"
+    def __init__(self, owner: str, set: str, name: str, debug: bool = False):
+        self.owner = owner
         jobs = runner.find(self.owner, set, name, "debug" if debug else "service", ["running"])
 
         if not jobs:
