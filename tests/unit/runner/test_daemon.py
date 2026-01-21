@@ -38,6 +38,40 @@ class TestDaemon:
             assert job_running.state == "failed"
             assert job_running.detail == "incomplete execution detected on startup"
 
+    def test_purgeLeftoverServiceJobs_running_service(self, mock_db):
+        from app.runner import purgeLeftoverServiceJobs
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        with Session(get_db_engine()) as test_session:
+            job_running_service = Job(id="run_svc_id", set="test_set", name="test_name", owner="test_owner", kind="service", state="running", param=None, detail=None, pid=123, drop_done=False)
+            job_running_task = Job(id="run_task_id", set="test_set", name="test_name", owner="test_owner", kind="task", state="running", param=None, detail=None, pid=None, drop_done=False)
+            job_done_service = Job(id="done_svc_id", set="test_set", name="test_name", owner="test_owner", kind="service", state="done", param=None, detail=None, pid=None, drop_done=False)
+            test_session.add_all([job_running_service, job_running_task, job_done_service])
+            test_session.commit()
+        purgeLeftoverServiceJobs()
+        with Session(get_db_engine()) as test_session:
+            # Service jobs should be deleted
+            assert test_session.get(Job, "run_svc_id") is None
+            assert test_session.get(Job, "done_svc_id") is None
+            # Non-service jobs should be unchanged
+            job_running_task = test_session.get(Job, "run_task_id")
+            assert job_running_task.state == "running"
+
+    def test_purgeLeftoverServiceJobs_dequeued_service(self, mock_db):
+        from app.runner import purgeLeftoverServiceJobs
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        with Session(get_db_engine()) as test_session:
+            job_dequeued_service = Job(id="deq_svc_id", set="test_set", name="test_name", owner="test_owner", kind="service", state="dequeued", param=None, detail=None, pid=None, drop_done=False)
+            job_failed_service = Job(id="fail_svc_id", set="test_set", name="test_name", owner="test_owner", kind="service", state="failed", param=None, detail=None, pid=None, drop_done=False)
+            test_session.add_all([job_dequeued_service, job_failed_service])
+            test_session.commit()
+        purgeLeftoverServiceJobs()
+        with Session(get_db_engine()) as test_session:
+            # Service jobs should be deleted
+            assert test_session.get(Job, "deq_svc_id") is None
+            assert test_session.get(Job, "fail_svc_id") is None
+
     def test_getNextToDo_found(self, mock_db):
         from app.runner import getNextToDo
         from app.orm.database import get_db_engine

@@ -169,6 +169,21 @@ def handleOddJobs():
                 job.detail = "incomplete execution detected on startup"
         session.commit()
 
+def purgeLeftoverServiceJobs():
+    """Purge leftover service jobs at startup to ensure clean servicing."""
+    with Session(get_db_engine()) as session:
+        stmt = select(Job).where(
+            and_(Job.kind == "service", or_(Job.state == "dequeued", Job.state == "running", Job.state == "failed", Job.state == "done"))
+        ).order_by(Job.id.asc())
+
+        jobs = session.scalars(stmt).all()
+
+        for job in jobs:
+            logger.debug(f"Purging leftover service job {job.id} in state {job.state}")
+            session.delete(job)
+            lib_runner.drop(job.id, job.owner, job.set)
+        session.commit()
+
 def getNextToDo():
     with Session(get_db_engine()) as session:
         logger.debug(f"getNextToDo: session ID {id(session)} at {datetime.now()}")
@@ -305,7 +320,9 @@ def finishJob(job_id: str, state: str, detail: str):
 
         if job != None:
             old_state = job.state
-            if job.state == "running" and state == "done" and job.drop_done and not job.kind == "debug":
+            if job.kind == "service" and state == "done" and job.drop_done:
+                new_state = "remove"  # Immediately remove done services
+            elif job.state == "running" and state == "done" and job.drop_done and not job.kind == "debug":
                 new_state = state  # Keep as "done" for delayed removal
             elif job.state != "cancel" and job.state != "cancelling":
                 new_state = state
@@ -904,6 +921,9 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
 
     # restore jobs which were taken out of queue but not executed due to crash
     handleOddJobs()
+
+    # purge leftover service jobs at startup to ensure clean servicing
+    purgeLeftoverServiceJobs()
 
     # clean up drop_done jobs that have been done for 60+ seconds
     cleanup_drop_done_jobs()
