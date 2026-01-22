@@ -180,7 +180,7 @@ class ServiceListener:
 class ServiceClient:
     def __init__(self, owner: str, set: str, name: str, debug: bool = False):
         self.owner = owner
-        jobs = runner.find(self.owner, set, name, "debug" if debug else "service", ["running"])
+        jobs = runner.find(self.owner if debug else None, set, name, "debug" if debug else "service", ["running"])
 
         if not jobs:
             raise Exception(f"No running service: {set} {name}")

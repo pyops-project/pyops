@@ -444,7 +444,7 @@ class TestServiceClient:
         assert client.job_id == mock_job
         mock_context.assert_called_once()
         client.socket.connect.assert_called_once_with("ipc:///tmp/pyops/123.sock")
-        mock_find.assert_called_once_with("user", "test_set", "test_name", "service", ["running"])
+        mock_find.assert_called_once_with(None, "test_set", "test_name", "service", ["running"])
 
     @patch('app.lib.runner.find')
     @patch('msgpack.unpackb')

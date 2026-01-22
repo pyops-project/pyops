@@ -76,27 +76,29 @@ def query(id: str):
     with Session(get_db_engine()) as session:
         return session.get(Job, id)
 
-def find(owner: str, set: str, name: str, kind: str, states: list[str]):
+def find(owner: str | None, set: str, name: str, kind: str, states: list[str]):
     """Finds job IDs matching criteria.
-    
+
     Args:
-        owner (str): Owner.
+        owner (str | None): Owner (optional, if None, no owner filter).
         set (str): Set.
         name (str): Name.
         kind (str): Kind.
         states (list[str]): Job states to filter.
-    
+
     Returns:
         list[str]: Matching job IDs (descending order).
     """
     with Session(get_db_engine()) as session:
         stmt = select(Job.id).where(
-            Job.owner == owner,
             Job.set == set,
             Job.name == name,
             Job.kind == kind,
             Job.state.in_(states)
-        ).order_by(Job.id.desc())
+        )
+        if owner is not None:
+            stmt = stmt.where(Job.owner == owner)
+        stmt = stmt.order_by(Job.id.desc())
         return [j.id for j in session.execute(stmt)]
 
 def cancel(id: str):

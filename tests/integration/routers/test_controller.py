@@ -144,7 +144,8 @@ def test_controller_proxy_service_client_args(client, mock_git_ops, mock_db):
 
         # Verify ServiceClient was instantiated with correct args: (user, glob["set"], glob["service"], debug)
         # The mock controller code sets: set="test", service="test", debug=False (default)
-        mock_find.assert_called_once_with("testuser", "test", "test", "service", ["running"])
+        # For services (not debug), owner is None to allow access by all users
+        mock_find.assert_called_once_with(None, "test", "test", "service", ["running"])
 
 def test_controller_html_output(client, mock_git_ops, mock_db):
     # Test that controller endpoint returns HTML with sticky navbar
