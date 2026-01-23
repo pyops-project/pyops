@@ -67,7 +67,7 @@ Cline outputs full file content; paste/replace in editor, then save via VSIX. It
   - Job workspace: Dir for outputs/files (abstract; access via `workspace` var in code).
 - **Dependency Directives**: Line-start (after indent), processed before exec (in param/libraries/main). No recursion.
   - Pip: `#!module_name` (e.g., `#!requests` or `#!numpy==1.21`); installs quietly in isolated venv.
-  - Git Repo: `#!git repopath [branch]` (e.g., `#!git git@github.com/user/myrepo.git main`); clones/pulls, prepends to sys.path.
+  - Git Repo: `#!` + git URL (e.g., `#!git@github.com/user/myrepo.git` or `#!https://github.com/user/myrepo.git`); clones/pulls, prepends to sys.path. Optional branch as second argument.
   - Local Library: `#!{::lib_name}` (own set) or `#!{otherset::lib_name}` (foreign); loads/execs.
   - Post-process: Commented out (e.g., `# #!requests`); errors fail job.
 - **Param**: Optional pre-exec code string (enqueue via UI/API; supports directives). Vars/functions available in main.
@@ -131,7 +131,7 @@ import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 #!requests  # Install requests if missing
-#!git git@github.com/user/myrepo.git main  # Clone/pull myrepo
+#!git@github.com/user/myrepo.git main  # Clone/pull myrepo
 
 import os
 import requests  # Now available
@@ -189,7 +189,7 @@ Template (`service/{name}.py`):
 ```
 # Service: Persistent, handles requests (blocking listener)
 #!flask  # Install Flask for internal use
-#!git git@gitlab.com/team/utils.git  # Clone utils
+#!git@gitlab.com/team/utils.git  # Clone utils
 
 import time
 import utils.api  # From cloned repo
@@ -243,7 +243,7 @@ logger.info("Service stopped")
 #### Non-Blocking Example (poll() - Responsive Loops)
 ```
 # Service: Persistent, handles requests (non-blocking poll)
-#!git git@gitlab.com/team/utils.git  # Clone utils
+#!git@gitlab.com/team/utils.git  # Clone utils
 
 import time
 import utils.api  # From cloned repo
@@ -580,23 +580,22 @@ VSIX is TypeScript extension for VSCodium & VSCode
 
 Config-Auth:
 VSCode workspace settings: "pyops.serverUrl", "pyops.username" (prompts password stored in state)
-; "pyops.localPyopsDir": "pyops"
+; "pyops.localPyopsDir": "pyops", "pyops.autoRefreshInterval": 10, "pyops.excludedSets": []
 ; status bar shows connection (serverUrl required)
 ; X-User header = username or "anonymous".
 
 Trees-Actions:
-ManagerTreeDataProvider lists sets > type folders > scriptlets; icons ✓/⚠/local-only
+ManagerTreeDataProvider lists sets > type folders > scriptlets; icons ✓ synced, ⚠ unsynced, diff-added local-only
 ; right-click: Reset Local/Write Draft/Save Draft/Diff/Delete; Debug (tasks)
-; downloads to `pyops/{set}/{type}/{name}.{ext}`.
+; downloads to `pyops/{set}/{type}/{name}.{ext}`; local-only scriptlets auto-create remote on write.
 JobsTreeDataProvider shows jobs by state (todo/running/done/failed)
-; enables bulk cancel/download/view/remove & refresh.
+; enables bulk cancel/download/view/remove & refresh; titlebar Attach to Debug Job reattaches to running debug sessions.
 
 Sets-Management:
 Sets are Git repos grouping scriptlets
-; clone_set via VSIX webview or /scriptlet/sets API with URL/branch
-; switch_branch checks out local branch & pull_if_needed syncs
-; remove_set deletes dir with confirmation
-; locking prevents concurrent Git ops.
+; clone via VSIX webview or /scriptlet/sets API with URL/branch
+; switch branch checks out local branch & syncs
+; remove deletes dir with confirmation.
 
 Scriptlets-Types:
 Scriptlets are Python files executed isolated
@@ -608,23 +607,22 @@ Scriptlets are Python files executed isolated
 Directives-Deps:
 Directives start with `#!` after indent & process pre-exec
 ; #!module installs pip (e.g., #!requests==2.31.0)
-; #!git git@url [branch] clones/pulls repo to sys.path
+; #!git@url [branch] clones/pulls repo to sys.path
 ; #!{::lib_name} loads/execs local library.
 
 Execution-Globals:
-glob provides control (Pyops.Control for API: job.list/enqueue, schedule.create)
-; listener (ServiceListener for ZMQ IPC: listen blocks 1s, poll non-blocking, response dict)
-; workspace is job dir for files/output
-; userspace/setspace are parent dirs
+glob provides control (Pyops.Control for API calls like job.list())
+; listener (ServiceListener for services: listen() blocks, poll() non-blocking)
+; workspace (job dir for files/output), userspace/setspace (parent dirs)
 ; logging via import logging & basicConfig(level=INFO).
 
 Services-Handling:
 Services enqueue as kind=service & auto-restart <3 failures
 ; listener.listen() blocks for msg or TERM
-; msg has type (GET/POST), cmd/query params, data (dict/str/bytes) & data_type (json/text/binary/none)
-; handle POST data: json.loads if str & json type
+; msg has type (GET/POST), query params, data (dict/str/bytes/none)
+; handle POST data: parse based on data_type
 ; listener.response({"status": "ok/error", "value/message": ...})
-; non-blocking: while loop with poll() & time.sleep(0.1) for other work.
+; non-blocking: while loop with poll() for other work.
 
 Controllers-Views:
 Controllers are .py stubs defining set/service/debug/head/menu/body/name
@@ -643,7 +641,7 @@ FastAPI routers at /scriptlet/: editor (CRUD code, Jedi completion), inventory (
 Runner-Jobs:
 runner.py daemon polls DB for todo jobs every 5s
 ; dequeues & executes in data/jobs/{owner}/{set}/{id}/ with venv isolation
-; states: todo > dequeued > running (PID) > done/failed/cancelled > remove (drop_done)
+; states: todo dequeued running done failed cancelled remove
 ; processes directives, logs to stdout.log (INFO+)/stderr.log (ERROR+), ZMQ for services.
 
 Best-Practices:
@@ -652,5 +650,5 @@ Use Cline for one-shot code gen with full context/prompts & iterate refinements
 ; validate/sanitize inputs in services, return error dicts
 ; self-contained deps via directives, efficient loops (poll 1s max)
 ; views: Bootstrap classes for light/dark theme, JS in head, dynamic Ace modes
-; debug via VSIX start debug or enqueue debug (draft files, no cleanup)
+; debug via VSIX start debug (awaits attach) or attach to running debug jobs
 ; monitor via pyops-monitor tree or /scriptlet/monitor.
