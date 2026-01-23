@@ -582,20 +582,20 @@ def run_debug_job(job_id: str, owner: str, set: str, name: str, param: str, code
                 # Terminate any existing debugpy adapter for the owner before starting new debug job
                 terminate_debugpy_adapter(owner)
 
-                # Inject debugpy for debug kind
+                # Ensure debugpy is installed early
+                pip_path = os.path.join(venv_path, set, 'bin', 'pip')
+                subprocess.run([pip_path, 'install', '-q', 'debugpy'], check=True, capture_output=True)
+
+                # Start debugpy adapter immediately
                 await_debug = '#>AWAIT_DEBUG' in param
-                debug_code = f"""#!debugpy
+                debug_code = f"""
 import debugpy
 debugpy.log_to('.debug/adapter')
 debugpy.listen(('0.0.0.0', {port}))"""
                 if await_debug:
                     debug_code += """
 debugpy.wait_for_client()"""
-                debug_lib = {
-                    "code": debug_code,
-                    "filename": "system::debugpy"
-                }
-                libs.insert(0, debug_lib)
+                exec(debug_code)
 
                 # Apply overrides for debug kind
                 if overrides:
