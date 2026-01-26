@@ -333,6 +333,21 @@ class TestProcessInstallLines:
     @patch('os.makedirs')
     @patch('app.runner.subprocess.run')
     @patch('app.runner.os.path.join', side_effect=lambda *args: '/'.join(args))
+    def test_process_install_lines_pip_install_with_args(self, mock_join, mock_run, mock_makedirs, mock_ensure):
+        from app.runner import process_install_lines
+        # Mock pip install with additional arguments succeeds
+        mock_result = Mock()
+        mock_result.returncode = 0
+        mock_run.return_value = mock_result
+        lines = ['#!torch --index-url https://download.pytorch.org/whl/cu130']
+        process_install_lines(lines, '/venv', '/pkg', 'testset', 'job_id')
+        assert mock_run.call_count == 1
+        mock_run.assert_called_once_with(['/venv/testset/bin/pip', 'install', '-q', 'torch --index-url https://download.pytorch.org/whl/cu130'], capture_output=True, text=True)
+
+    @patch('app.runner.ensure_set_environment')
+    @patch('os.makedirs')
+    @patch('app.runner.subprocess.run')
+    @patch('app.runner.os.path.join', side_effect=lambda *args: '/'.join(args))
     @patch('app.runner.os.path.exists', return_value=False)
     def test_process_install_lines_git_clone(self, mock_exists, mock_join, mock_run, mock_makedirs, mock_ensure):
         from app.runner import process_install_lines
