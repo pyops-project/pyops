@@ -236,6 +236,25 @@ class TestExecution:
     @patch('os.makedirs')
     @patch('subprocess.run')
     @patch('os.path.exists')
+    def test_process_install_lines_pip_with_options(self, mock_exists, mock_run, mock_makedirs, mock_conf, tmp_path):
+        from app.runner import process_install_lines
+        mock_run.return_value = Mock(returncode=0)  # install succeeds
+        mock_exists.return_value = True  # venv exists
+        lines = ["#!torch --index-url https://download.pytorch.org/whl/cu130"]
+        venv_path = "/venv"
+        pkg_path = "/pkg"
+        set = "testset"
+        id = "id"
+        process_install_lines(lines, venv_path, pkg_path, set, id)
+        pip_path = os.path.join(venv_path, set, 'bin', 'pip')
+        # Check that pip install was called with split args
+        pip_calls = [call for call in mock_run.call_args_list if pip_path in str(call)]
+        assert len(pip_calls) == 1
+        assert pip_calls[0] == call([pip_path, 'install', '-q', 'torch', '--index-url', 'https://download.pytorch.org/whl/cu130'], capture_output=True, text=True)
+
+    @patch('os.makedirs')
+    @patch('subprocess.run')
+    @patch('os.path.exists')
     def test_process_install_lines_skip_lib_directive(self, mock_exists, mock_run, mock_makedirs, mock_conf, tmp_path):
         from app.runner import process_install_lines
         mock_exists.return_value = True  # venv exists

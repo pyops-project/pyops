@@ -426,11 +426,11 @@ def process_install_lines(lines, venv_path, pkg_path, set, id):
                 # Skip if it looks like a library directive (starts with { or contains ::)
                 if rest.startswith('{') or '::' in rest:
                     continue
-                # Use entire rest as pip install arguments
-                package_spec = rest
-                install_result = subprocess.run([pip_path, 'install', '-q', package_spec], capture_output=True, text=True)
+                # Split rest into pip install arguments
+                args = rest.split()
+                install_result = subprocess.run([pip_path, 'install', '-q'] + args, capture_output=True, text=True)
                 if install_result.returncode != 0:
-                    raise Exception(f"pip install {package_spec} failed: {install_result.stderr}")
+                    raise Exception(f"pip install {rest} failed: {install_result.stderr}")
     return lines
 
 def process_code_installs(param: str, code: str, libs: list[dict], venv_path: str, pkg_path: str, set: str, job_id: str) -> tuple[str, str, list[dict]]:

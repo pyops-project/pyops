@@ -342,7 +342,7 @@ class TestProcessInstallLines:
         lines = ['#!torch --index-url https://download.pytorch.org/whl/cu130']
         process_install_lines(lines, '/venv', '/pkg', 'testset', 'job_id')
         assert mock_run.call_count == 1
-        mock_run.assert_called_once_with(['/venv/testset/bin/pip', 'install', '-q', 'torch --index-url https://download.pytorch.org/whl/cu130'], capture_output=True, text=True)
+        mock_run.assert_called_once_with(['/venv/testset/bin/pip', 'install', '-q', 'torch', '--index-url', 'https://download.pytorch.org/whl/cu130'], capture_output=True, text=True)
 
     @patch('app.runner.ensure_set_environment')
     @patch('os.makedirs')
