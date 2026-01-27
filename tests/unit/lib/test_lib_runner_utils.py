@@ -584,17 +584,16 @@ class TestTerminateJobProcesses:
 
     @patch('app.runner.postTerm')
     @patch('app.runner.kill_proc_tree')
+    @patch('time.sleep')
     @patch('time.time')
     @patch('app.runner.get_process_tree')
-    def test_terminate_timeout_force_kill(self, mock_tree, mock_time, mock_kill_tree, mock_post):
+    def test_terminate_timeout_force_kill(self, mock_tree, mock_time, mock_sleep, mock_kill_tree, mock_post):
         from app.runner import terminate_job_processes
-        mock_time.side_effect = [0.0, 14.9, 15.1]
+        mock_time.side_effect = iter(range(32))
+        mock_sleep.return_value = None  # No-op sleep
         mock_alive = Mock()
         mock_alive.is_running.return_value = True
-        mock_tree.side_effect = [
-            [mock_alive],  # TERM tree
-            [mock_alive],  # poll alive=True
-        ]
+        mock_tree.return_value = [mock_alive]
         terminate_job_processes("job_id", 123, True, 'owner', graceful_timeout=15.0)
         mock_kill_tree.assert_has_calls([
             call(ANY, signal.SIGTERM),

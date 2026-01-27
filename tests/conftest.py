@@ -105,10 +105,23 @@ def mock_git_dir(tmp_path):
         # Dummy for test_set post etc.
         (set_dir / "dummy.py").touch()
         # Controller for menu failures test
-        (set_dir / "sample.controller.py").touch()
+        (set_dir / "sample.controller.py").write_text("set = 'default'\nservice = 'sample.service'\nname = 'Test Controller'\ndebug = False\n")
+        # Views for controller
+        (set_dir / "head.html").write_text("<title>Head</title>")
+        (set_dir / "menu.html").write_text("<nav>Menu</nav>")
+        (set_dir / "body.html").write_text("<div>Body</div>")
+        if set_name == "testset":
+            # For wrong type test
+            (set_dir / "wrongtype.controller.py").write_text("set = 'testset'\nservice = 'testservice'\nname = 'Wrong Type'\ndebug = False\nhead = 'wronghead'\nmenu = 'menu'\nbody = 'body'\n")
+            (set_dir / "wronghead.html").write_text("<title>Head</title>")  # Wrong type, mock infer_type returns task
+            # For controller tests
+            (set_dir / "testname.py").write_text("set = 'testset'\nservice = 'testservice'\nname = 'Test Controller'\ndebug = False\nhead = 'head'\nmenu = 'menu'\nbody = 'body'\n")
+            (set_dir / "head.html").write_text("<title>Head</title>")
+            (set_dir / "menu.html").write_text("<nav>Menu</nav>")
+            (set_dir / "body.html").write_text("<div>Body</div>")
 
     create_mock_set("default")
-    create_mock_set("test_set")
+    create_mock_set("testset")
     
     mock = Mock()
     mock.tmp_path = tmp_path
@@ -116,17 +129,17 @@ def mock_git_dir(tmp_path):
     
     def mock_os_listdir(path):
         path_str = str(path)
-        if path_str == str(mock_data_dir):
-            return ["default", "test_set"]
-        elif path_str == str(mock_data_dir / "default"):
-            return ["sample_task.py", "sample_view.html", "README.md", ".gitignore", "dummy.py", "sample.controller.py"]
-        elif path_str == str(mock_data_dir / "test_set"):
-            return ["dummy.py", "README.md", ".gitignore", "sample.controller.py"]
+        if path_str.endswith("data/git"):
+            return ["default", "testset"]
+        elif path_str.endswith("data/git/default"):
+            return ["sample_task.py", "sample_view.html", "README.md", ".gitignore", "dummy.py", "sample.controller.py", "head.html", "menu.html", "body.html"]
+        elif path_str.endswith("data/git/testset"):
+            return ["dummy.py", "README.md", ".gitignore", "sample.controller.py", "wrongtype.controller.py", "wronghead.html", "testname.py", "head.html", "menu.html", "body.html"]
         return []
     
     def mock_exists(p):
         p_str = str(p)
-        return p_str.endswith('.git') or any(p_str.endswith(f'/data/git/{set}') for set in ['default', 'test_set'])
+        return p_str.endswith('.git') or any(p_str.endswith(f'/data/git/{set}') for set in ['default', 'testset'])
     
     with patch("os.listdir", side_effect=mock_os_listdir), \
          patch("os.path.exists", side_effect=mock_exists):
@@ -144,7 +157,7 @@ def mock_git_ops(mock_git_dir):
     
     def mock_list_scriptlets():
         scriptlets = []
-        sets = ["default", "test_set"]
+        sets = ["default", "testset"]
         for set_name in sets:
             set_dir_path = str(mock_data_dir / set_name)
             files = ["sample_task.py", "sample_view.html", "README.md", "dummy.py", "sample.controller.py"]
@@ -160,12 +173,22 @@ def mock_git_ops(mock_git_dir):
         full_path.parent.mkdir(parents=True, exist_ok=True)
         full_path.write_text(content)
     
-    def mock_read_content(repo, name, type_, committed=True):
-        ext = ".py" if type_ == "task" else ".html" if type_ == "view" else ".md"
+    def mock_read_content(repo, name, type_, committed=True, strict=False):
+        if type_ == "controller" and name == "sample":
+            return "set = 'default'\nservice = 'sample.service'\nname = 'Test Controller'\ndebug = False\nhead = 'head'\nmenu = 'menu'\nbody = 'body'\n"
+        elif type_ == "controller" and name == "wrongtype":
+            return "set = 'testset'\nservice = 'testservice'\nname = 'Wrong Type'\ndebug = False\nhead = 'wronghead'\nmenu = 'menu'\nbody = 'body'\n"
+        elif type_ == "controller" and name == "testname":
+            return "set = 'testset'\nservice = 'testservice'\nname = 'Test Controller'\ndebug = False\nhead = 'head'\nmenu = 'menu'\nbody = 'body'\n"
+        ext = ".py" if type_ in ["task", "controller"] else ".html" if type_ == "view" else ".md"
         full_path = mock_git_dir.tmp_path / repo / f"{name}{ext}"
         return full_path.read_text(encoding="utf-8") if full_path.exists() else "pass"
     
     def mock_infer_type_from_filename(fn):
+        if fn == "wronghead.html":
+            return "task"  # Wrong type for test
+        if fn == "testname.py":
+            return "controller"  # For controller tests
         if fn.endswith(".py"):
             return "task" if "controller" not in fn else "controller"
         elif fn.endswith(".html"):
@@ -232,8 +255,6 @@ def mock_git_ops(mock_git_dir):
     mock_delete_file_and_commit_mock = MagicMock(side_effect=mock_delete_file_and_commit)
     mock_rollback_committed_mock = MagicMock(side_effect=mock_rollback_committed)
     mock_get_repo_status_mock = MagicMock(return_value={"branch": "main"})
-    mock_get_controller_code_mock = MagicMock(side_effect=mock_get_controller_code)
-    mock_get_view_content_mock = MagicMock(side_effect=mock_get_view_content)
     mock_subprocess_run = MagicMock(return_value=Mock(returncode=0, stdout="", stderr=""))
     mock_check_output = MagicMock(return_value=b"")
 
@@ -249,8 +270,6 @@ def mock_git_ops(mock_git_dir):
     mock.delete_file_and_commit = mock_delete_file_and_commit_mock
     mock.rollback_committed = mock_rollback_committed_mock
     mock.get_repo_status = mock_get_repo_status_mock
-    mock.get_controller_code = mock_get_controller_code_mock
-    mock.get_view_content = mock_get_view_content_mock
 
     with patch("app.lib.git.list_scriptlets", mock_list_scriptlets_mock), \
         patch("app.lib.git.get_git_base", mock_get_git_base_mock), \
@@ -264,8 +283,6 @@ def mock_git_ops(mock_git_dir):
         patch("app.lib.git.delete_file_and_commit", mock_delete_file_and_commit_mock), \
         patch("app.lib.git.rollback_committed", mock_rollback_committed_mock), \
         patch("app.lib.git.get_repo_status", mock_get_repo_status_mock), \
-        patch("app.web.get_controller_code", mock_get_controller_code_mock), \
-        patch("app.web.get_view_content", mock_get_view_content_mock), \
         patch("subprocess.run", mock_subprocess_run), \
         patch("subprocess.check_output", mock_check_output):
         yield mock

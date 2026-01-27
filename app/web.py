@@ -18,6 +18,7 @@ from .routers.scriptlet import editor
 from .routers.scriptlet import sets
 
 from .lib import sites, files, pyops, git
+from .lib.async_utils import run_in_executor
 from .lib.auth import sanitize_owner
 
 from sqlalchemy import select, and_
@@ -87,22 +88,22 @@ async def file(path: str):
         logger.exception("Error in file: %s", ex)
         raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
 
-def get_controller_code(set: str, name: str, debug: bool = True) -> str:
+async def get_controller_code(set: str, name: str, debug: bool = True) -> str:
     """Loads controller code from Git, preferring unstaged if debug=True (default).
-    
+
     Args:
         set (str): Set.
         name (str): Controller name.
         debug (bool): If True (default), load unstaged (working tree); else committed.
-    
+
     Returns:
         str: Executable Python code.
-    
+
     Raises:
         HTTPException: 404 if not found, 405 if wrong type.
         FileNotFoundError: No committed version if debug=False.
     """
-    repo = git.get_repo_path(set)
+    repo = await run_in_executor(git.get_repo_path, set)
     # Check exists and right type.
     files_list = [f for f in os.listdir(repo) if f.startswith(f"{name}.") and f.endswith('.py')]
     if not files_list:
@@ -113,26 +114,26 @@ def get_controller_code(set: str, name: str, debug: bool = True) -> str:
         raise HTTPException(status_code=HTTP_405_METHOD_NOT_ALLOWED, detail=f"Scriptlet {set}::{name} is not a controller.")
     # Load based on debug.
     if debug:
-        return git.read_content(repo, name, inferred_type, committed=False)
+        return await run_in_executor(git.read_content, repo, name, inferred_type, committed=False)
     else:
-        return git.read_content(repo, name, inferred_type, committed=True, strict=True)
+        return await run_in_executor(git.read_content, repo, name, inferred_type, committed=True, strict=True)
 
-def get_view_content(set: str, name: str, debug: bool = False) -> str:  # Renamed/Updated: Raw HTML, no exec
+async def get_view_content(set: str, name: str, debug: bool = False) -> str:  # Renamed/Updated: Raw HTML, no exec
     """Loads view content from Git (.html), preferring unstaged if debug=True.
-    
+
     Args:
         set (str): Set.
         name (str): View name.
         debug (bool): If True, load unstaged (working tree); else committed (default).
-    
+
     Returns:
         str: Raw HTML content.
-    
+
     Raises:
         HTTPException: 404 if not found, 405 if wrong type.
         FileNotFoundError: No committed version if debug=False.
     """
-    repo = git.get_repo_path(set)
+    repo = await run_in_executor(git.get_repo_path, set)
     # Check exists and right type.
     files_list = [f for f in os.listdir(repo) if f.startswith(f"{name}.") and f.endswith('.html')]
     if not files_list:
@@ -143,20 +144,20 @@ def get_view_content(set: str, name: str, debug: bool = False) -> str:  # Rename
         raise HTTPException(status_code=HTTP_405_METHOD_NOT_ALLOWED, detail=f"Scriptlet {set}::{name} is not a view.")
     # Load based on debug.
     if debug:
-        return git.read_content(repo, name, inferred_type, committed=False)
+        return await run_in_executor(git.read_content, repo, name, inferred_type, committed=False)
     else:
-        return git.read_content(repo, name, inferred_type, committed=True, strict=True)
+        return await run_in_executor(git.read_content, repo, name, inferred_type, committed=True, strict=True)
 
 @app.get("/controller/{set}/{name}")
-def controller(set: str, name: str):
+async def controller(set: str, name: str):
     try:
         glob = {}
-        code = get_controller_code(set, name)
+        code = await get_controller_code(set, name)
         exec(code, glob)
         controller_debug = glob.get("debug", False)
-        head_content = get_view_content(set, glob["head"], debug=controller_debug)
-        menu_content = get_view_content(set, glob["menu"], debug=controller_debug)
-        body_content = get_view_content(set, glob["body"], debug=controller_debug)
+        head_content = await get_view_content(set, glob["head"], debug=controller_debug)
+        menu_content = await get_view_content(set, glob["menu"], debug=controller_debug)
+        body_content = await get_view_content(set, glob["body"], debug=controller_debug)
         display_name = glob.get("name", name)
 
         head_content = head_content.replace("{{SET}}", set).replace("{{NAME}}", name)
@@ -236,7 +237,7 @@ def controller(set: str, name: str):
 async def controller_proxy(set: str, name: str, rest: str, request: Request):
     try:
         glob = {}
-        code = get_controller_code(set, name)
+        code = await get_controller_code(set, name)
         exec(code, glob)
 
         user = sanitize_owner(request.headers.get("X-User", "anonymous"))
@@ -320,9 +321,9 @@ async def menu():
         failures = []
     
         # Scan Git for controllers.
-        scriptlets = git.list_scriptlets()
+        scriptlets = await run_in_executor(git.list_scriptlets)
         sets = sorted(set(s["set"] for s in scriptlets if s["type"] == "controller"))
-        
+
         for g in sets:
             m = {
                 "id": g,
@@ -332,9 +333,9 @@ async def menu():
             ctrl_scriptlets = [s for s in scriptlets if s["set"] == g and s["type"] == "controller"]
             for s in sorted(ctrl_scriptlets, key=lambda x: x["name"]):
                 name = s["name"]
-                repo = git.get_repo_path(g)
+                repo = await run_in_executor(git.get_repo_path, g)
                 try:
-                    code = get_controller_code(g, name)
+                    code = await get_controller_code(g, name)
                     glob = {}
                     exec(code, glob)
                     display_name = glob.get("name", name)

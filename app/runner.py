@@ -507,7 +507,8 @@ def setup_job_globals(owner: str, userspace: str, setspace: str, workspace: str,
         "jobsspace": os.path.join(files.project_root, files.conf_data()["jobs"]),
         "control": pyops.Control(owner, web_bind),
         "listener": listener,
-        "__name__": "__main__"
+        "__name__": "__main__",
+        "__builtins__": __builtins__
     }
 
 def setup_logging(log_level: int):
@@ -526,15 +527,16 @@ def setup_logging(log_level: int):
 
     return info_handler, warn_handler
 
-def execute_job_code(compiled_param, compiled_code, compiled_libs, glob: dict, job_type: str, job_id: str, q: Queue, max_retries: int = 0):
+def execute_job_code(param: str, compiled_code, compiled_libs, glob: dict, job_type: str, job_id: str, q: Queue, max_retries: int = 0):
     """Execute code with appropriate retry/error handling based on job_type"""
     try:
         if job_type == "task":
             # Task jobs have retry logic
             for attempt in range(max_retries + 1):
                 try:
-                    if compiled_param is not None:
-                        exec(compiled_param, glob)
+                    # Execute param before each attempt
+                    if param:
+                        exec(param, glob)
                     for cl in compiled_libs:
                         exec(cl, glob)
                     exec(compiled_code, glob)
@@ -553,8 +555,9 @@ def execute_job_code(compiled_param, compiled_code, compiled_libs, glob: dict, j
                         break
         else:
             # Service and debug jobs - no retry
-            if compiled_param is not None:
-                exec(compiled_param, glob)
+            # Execute param once before execution
+            if param:
+                exec(param, glob)
             for cl in compiled_libs:
                 exec(cl, glob)
             exec(compiled_code, glob)
@@ -660,7 +663,7 @@ debugpy.wait_for_client()"""
 
                 info_handler, warn_handler = setup_logging(logging.DEBUG)
 
-                execute_job_code(compiled_param, compiled_code, compiled_libs, glob, "debug", job_id, q)
+                execute_job_code(param, compiled_code, compiled_libs, glob, "debug", job_id, q)
     except Exception:
         error_msg = f"Error executing debug job {job_id}\n{traceback.format_exc()}"
         stderr_file.write(error_msg)
@@ -714,7 +717,7 @@ def run_task_job(job_id: str, owner: str, set: str, name: str, param: str, code:
 
                 info_handler, warn_handler = setup_logging(logging.INFO)
 
-                execute_job_code(compiled_param, compiled_code, compiled_libs, glob, "task", job_id, q, max_retries)
+                execute_job_code(param, compiled_code, compiled_libs, glob, "task", job_id, q, max_retries)
     except Exception:
         error_msg = f"Error executing task job {job_id}\n{traceback.format_exc()}"
         stderr_file.write(error_msg)
@@ -769,7 +772,7 @@ def run_service_job(job_id: str, owner: str, set: str, name: str, param: str, co
 
                 info_handler, warn_handler = setup_logging(logging.INFO)
 
-                execute_job_code(compiled_param, compiled_code, compiled_libs, glob, "service", job_id, q)
+                execute_job_code(param, compiled_code, compiled_libs, glob, "service", job_id, q)
     except Exception:
         error_msg = f"Error executing service job {job_id}\n{traceback.format_exc()}"
         stderr_file.write(error_msg)

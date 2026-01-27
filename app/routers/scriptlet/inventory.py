@@ -6,6 +6,7 @@ from starlette.status import HTTP_204_NO_CONTENT, HTTP_404_NOT_FOUND, HTTP_409_C
 from pydantic import BaseModel, create_model
 
 from app.lib import git
+from app.lib.async_utils import run_in_executor
 from app.lib.auth import sanitize_owner
 
 import logging
@@ -32,7 +33,7 @@ async def list_get():
     Returns a list of available Scriptlets
     """
     try:
-        return git.list_scriptlets()
+        return await run_in_executor(git.list_scriptlets)
     except Exception as ex:
         logger.exception("Error in list_get: %s", ex)
         raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
@@ -48,20 +49,20 @@ async def item_put(cr: CreateArgument, user: str = Depends(get_current_user)):
         if not os.path.exists(os.path.join(potential_repo, '.git')):
             raise HTTPException(status_code=HTTP_400_BAD_REQUEST, detail="Set does not exist")
 
-        repo = git.get_repo_path(cr.set)
-        if not git.check_name_unique(repo, cr.name):
+        repo = await run_in_executor(git.get_repo_path, cr.set)
+        if not await run_in_executor(git.check_name_unique, repo, cr.name):
             raise HTTPException(status_code=HTTP_409_CONFLICT, detail="Name {} already exists".format(cr.name))
 
         if cr.type == "markdown" and cr.name != "README":
             raise HTTPException(400, "Markdown only for README.")
-        
+
         if cr.type == "view":
             initial_content = '<div class="container">\n  <!-- View content here -->\n</div>'
         else:
             initial_content = "" if cr.type == "markdown" else "pass\n"
-        git.write_content(repo, cr.name, cr.type, initial_content)
-        file_path = git.get_file_path(repo, cr.name, cr.type)
-        git.perform_git_add_commit_push(repo, file_path, f"Create {cr.name}.{cr.type} by {user}")
+        await run_in_executor(git.write_content, repo, cr.name, cr.type, initial_content)
+        file_path = await run_in_executor(git.get_file_path, repo, cr.name, cr.type)
+        await run_in_executor(git.perform_git_add_commit_push, repo, file_path, f"Create {cr.name}.{cr.type} by {user}")
 
         return {"set": cr.set, "name": cr.name, "type": cr.type}
 
@@ -77,17 +78,17 @@ async def item_post(sa: SaveArgument, user: str = Depends(get_current_user)):
     Updates a Scriptlet's content (with commit/push for explicit save).
     """
     try:
-        repo = git.get_repo_path(sa.set)
+        repo = await run_in_executor(git.get_repo_path, sa.set)
         # Infer type from existing file.
         files = [f for f in os.listdir(repo) if f.startswith(f"{sa.name}.") and f.endswith(('.py', '.html', '.md'))]
         if not files:
             raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Scriptlet {}::{} not existing".format(sa.set, sa.name))
         filename = files[0]  # Assume unique.
         type_ = git.infer_type_from_filename(filename)
-        
-        git.write_content(repo, sa.name, type_, sa.code)
-        file_path = git.get_file_path(repo, sa.name, type_)
-        git.perform_git_add_commit_push(repo, file_path, f"Update {sa.name}.{type_} by {user}")
+
+        await run_in_executor(git.write_content, repo, sa.name, type_, sa.code)
+        file_path = await run_in_executor(git.get_file_path, repo, sa.name, type_)
+        await run_in_executor(git.perform_git_add_commit_push, repo, file_path, f"Update {sa.name}.{type_} by {user}")
     except HTTPException as ex:
         raise ex
     except Exception as ex:
@@ -101,15 +102,15 @@ async def draft_post(sa: SaveArgument):
     Use for auto-save; follow with /item POST for explicit save.
     """
     try:
-        repo = git.get_repo_path(sa.set)
+        repo = await run_in_executor(git.get_repo_path, sa.set)
         # Infer type from existing file.
         files = [f for f in os.listdir(repo) if f.startswith(f"{sa.name}.") and f.endswith(('.py', '.html', '.md'))]
         if not files:
             raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Scriptlet {}::{} not existing".format(sa.set, sa.name))
         filename = files[0]  # Assume unique.
         type_ = git.infer_type_from_filename(filename)
-        
-        git.write_content(repo, sa.name, type_, sa.code)
+
+        await run_in_executor(git.write_content, repo, sa.name, type_, sa.code)
         # No git add/commit/push: leaves unstaged for draft workflow.
     except HTTPException as ex:
         raise ex
@@ -123,14 +124,14 @@ async def item_del(set: str, name: str, user: str = Depends(get_current_user)):
     Deletes a Scriptlet
     """
     try:
-        repo = git.get_repo_path(set)
+        repo = await run_in_executor(git.get_repo_path, set)
         files = [f for f in os.listdir(repo) if f.startswith(f"{name}.") and f.endswith(('.py', '.html', '.md'))]
         if not files:
             raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Scriptlet {}::{} not existing".format(set, name))
         filename = files[0]
         type_ = git.infer_type_from_filename(filename)
-        file_path = git.get_file_path(repo, name, type_)
-        git.delete_file_and_commit(repo, file_path, f"Delete {name}.{type_} by {user}")
+        file_path = await run_in_executor(git.get_file_path, repo, name, type_)
+        await run_in_executor(git.delete_file_and_commit, repo, file_path, f"Delete {name}.{type_} by {user}")
     except HTTPException as ex:
         raise ex
     except Exception as ex:
@@ -145,7 +146,7 @@ async def draft_del(set: str = Query(..., description="Set"), name: str = Query(
     Returns 204 on full success (content match); raises on fail.
     """
     try:
-        repo = git.get_repo_path(set)
+        repo = await run_in_executor(git.get_repo_path, set)
         files = [f for f in os.listdir(repo) if f.startswith(f"{name}.") and f.endswith(('.py', '.html', '.md'))]
         if not files:
             raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail=f"Scriptlet {set}::{name} not existing")
@@ -155,13 +156,13 @@ async def draft_del(set: str = Query(..., description="Set"), name: str = Query(
             raise HTTPException(status_code=HTTP_400_BAD_REQUEST, detail=f"Provided type '{type_}' mismatches inferred '{inferred_type}'")
         type_ = inferred_type  # Use inferred if None or valid.
 
-        file_path = git.get_file_path(repo, name, type_)
+        file_path = await run_in_executor(git.get_file_path, repo, name, type_)
 
         # Perform rollback (no .bck)
-        git.rollback_committed(set, name, type_)
+        await run_in_executor(git.rollback_committed, set, name, type_)
 
         # Verify post-checkout
-        committed_content = git.read_content(repo, name, type_, committed=True, strict=True)
+        committed_content = await run_in_executor(git.read_content, repo, name, type_, committed=True, strict=True)
 
         if os.path.exists(file_path):
             with open(file_path, "r", encoding="utf-8") as f:
@@ -188,13 +189,13 @@ async def draft_del(set: str = Query(..., description="Set"), name: str = Query(
 @router.get("/scriptlet/inventory/code", tags=["scriptlet"])
 async def code_get(set: str, name: str):
     try:
-        repo = git.get_repo_path(set)
+        repo = await run_in_executor(git.get_repo_path, set)
         files = [f for f in os.listdir(repo) if f.startswith(f"{name}.") and f.endswith(('.py', '.html', '.md'))]
         if not files:
             raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Scriptlet {}::{} not existing".format(set, name))
         filename = files[0]
         type_ = git.infer_type_from_filename(filename)
-        content = git.read_content(repo, name, type_, committed=False)
+        content = await run_in_executor(git.read_content, repo, name, type_, committed=False)
         return {"code": content}
     except HTTPException as ex:
         raise ex
@@ -222,7 +223,7 @@ async def list_sets():
 async def repo_status(set: str = Query(..., description="Set name")):
     """Gets repo status (branch, tag flag)."""
     try:
-        return git.get_repo_status(set)
+        return await run_in_executor(git.get_repo_status, set)
     except Exception as ex:
         logger.exception("Error in repo_status: %s", ex)
         raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail=str(ex))
@@ -233,13 +234,13 @@ async def status_get(set: str, name: str):
     Checks if the scriptlet has unstaged changes.
     """
     try:
-        repo = git.get_repo_path(set)
+        repo = await run_in_executor(git.get_repo_path, set)
         files = [f for f in os.listdir(repo) if f.startswith(f"{name}.") and f.endswith(('.py', '.html', '.md'))]
         if not files:
             raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail=f"Scriptlet {set}::{name} not existing")
         filename = files[0]
         type_ = git.infer_type_from_filename(filename)
-        has_unstaged = git.has_unstaged_changes(repo, name, type_)
+        has_unstaged = await run_in_executor(git.has_unstaged_changes, repo, name, type_)
         logger.debug(f"Status for {set}::{name}: {has_unstaged}")
         return {"has_unstaged": has_unstaged}
     except HTTPException as ex:

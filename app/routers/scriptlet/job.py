@@ -16,6 +16,7 @@ from app.orm.database import get_db_engine
 from app.orm.job import Job
 
 from app.lib import runner, files, git
+from app.lib.async_utils import run_in_executor
 from app.lib.auth import sanitize_owner
 
 from zipstream import ZipStream, ZIP_DEFLATED
@@ -70,13 +71,13 @@ async def job_put(ru: RunArgument, user: str = Depends(get_current_user)):
     Creates a new Job
     """
     try:
-        repo = git.get_repo_path(ru.set)
+        repo = await run_in_executor(git.get_repo_path, ru.set)
         # Check exists (committed), skip for debug (uses unstaged or overrides).
         scriptlet_key = f"{ru.set}::{ru.name}"
         overrides_present = ru.overrides is not None and scriptlet_key in ru.overrides
         if ru.kind != "debug" or not overrides_present:
             try:
-                git.read_content(repo, ru.name, "task", committed=True)
+                await run_in_executor(git.read_content, repo, ru.name, "task", committed=True)
             except FileNotFoundError:
                 raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail=f"Scriptlet {scriptlet_key} not existing.")
 
