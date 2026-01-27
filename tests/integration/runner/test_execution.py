@@ -119,7 +119,7 @@ class TestExecution:
     @patch('subprocess.run')
     @patch('app.runner.pyops.ServiceListener')
     @patch('time.sleep')
-    def test_run_debug_no_retry(self, mock_run, mock_sleep, mock_listener, tmp_path):
+    def test_run_debug_no_retry(self, mock_run, mock_sleep, mock_listener, tmp_path, mock_conf):
         mock_run.return_value = Mock(returncode=0, stdout="pip==24.2\n")
         from app.runner import run
         q = Mock()
@@ -134,6 +134,38 @@ class TestExecution:
 
         assert mock_sleep.call_count == 0  # No retries for debug
         q.put.assert_called_once_with({"id": "id", "state": "failed", "detail": ANY})
+
+    @patch('app.runner.pyops.ServiceListener')
+    def test_run_draft_success(self, mock_listener, tmp_path, mock_conf):
+        from app.runner import run
+        q = Mock()
+        mock_listener.return_value = None  # For non-service
+        data_base = str(tmp_path / "data")
+        venv_path = str(tmp_path / "venv")
+        pkg_path = str(tmp_path / "pkg")
+
+        run("id", "owner", "set", "name", "draft", "print('param executed')", "print('code executed')", [], q, data_base, "bind", venv_path, pkg_path)
+
+        q.put.assert_called_once_with({"id": "id", "state": "done", "detail": None})
+
+    def test_draft_jobs_allow_concurrent_execution(self, mock_conf, mock_db):
+        """Test that multiple draft jobs can run concurrently (unlike debug jobs)."""
+        from app.lib import runner as lib_runner
+
+        # Enqueue first draft job
+        job1_id = lib_runner.enqueue("set", "name", "owner", "draft", False, "param1", 0, None)
+
+        # Enqueue second draft job - should not cancel the first
+        job2_id = lib_runner.enqueue("set", "name", "owner", "draft", False, "param2", 0, None)
+
+        # Both jobs should be in todo state
+        job1 = lib_runner.query(job1_id)
+        job2 = lib_runner.query(job2_id)
+
+        assert job1.state == "todo"
+        assert job2.state == "todo"
+        assert job1.detail is None  # No cancellation message
+        assert job2.detail is None
 
     @patch('app.runner.pyops.ServiceListener')
     @patch('time.sleep')

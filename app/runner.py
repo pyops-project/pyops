@@ -224,7 +224,7 @@ def assignJob(job_id: str, pid: int):
         logger.debug(f"assignJob: after commit, session ID {id(session)}, committed pid for {job_id} at {datetime.now()}")
 
 def loadLib(set: str, name: str, kind: str):
-    """Loads library code from Git (unstaged if kind=="debug", else committed)."""
+    """Loads library code from Git (unstaged if kind=="debug" or "draft", else committed)."""
     logger.debug(f"loadLib(set={set}, name={name}, kind={kind})")
     repo = git.get_repo_path(set)
     files_list = [f for f in os.listdir(repo) if f.startswith(f"{name}.") and f.endswith('.py')]
@@ -232,7 +232,7 @@ def loadLib(set: str, name: str, kind: str):
         raise Exception(f"Scriptlet {set}::{name} not existing")
     filename = files_list[0]
     type_ = git.infer_type_from_filename(filename)
-    committed = kind != "debug"
+    committed = kind not in ("debug", "draft")
     code = git.read_content(repo, name, type_, committed=committed)
     return code
 
@@ -263,7 +263,7 @@ def loadJob(job_id: str):
                 raise Exception("Invalid overrides JSON")
             if main_key in override_dict:
                 override_code = override_dict[main_key]
-        committed = job.kind != "debug"
+        committed = job.kind not in ("debug", "draft")
         if override_code is not None:
             code = override_code
         else:
@@ -682,6 +682,60 @@ debugpy.wait_for_client()"""
         logger.debug(f"{current_process().pid:<10}end debug job({job_id})")
 
 
+def run_draft_job(job_id: str, owner: str, set: str, name: str, param: str, code: str, libs: list[dict[str, str]], q: Queue, data_base: str, web_bind: str, venv_path: str, pkg_path: str):
+    """Executes draft job in isolated workspace with in-memory compilation."""
+    userspace, setspace, workspace = setup_workspace(data_base, owner, set, job_id)
+
+    logger.debug(f"{current_process().pid:<10}start draft job({job_id})")
+
+    stdout_file, stderr_file = setup_execution_environment(venv_path, pkg_path, set, workspace, logging.INFO)
+    info_handler, warn_handler = None, None
+    try:
+        with redirect_stdout(stdout_file):
+            with redirect_stderr(stderr_file):
+                # Process installs w/ env prop.
+                param, code, libs = process_code_installs(param, code, libs, venv_path, pkg_path, set, job_id)
+
+                # Compile code objects with custom filenames for accurate tracebacks
+                if param:
+                    param_filename = f"{set}/task/param.py"
+                    compiled_param = compile(param, param_filename, 'exec')
+                else:
+                    compiled_param = None
+
+                code_filename = f"{set}/task/{name}.py"
+                compiled_code = compile(code, code_filename, 'exec')
+
+                # Compile libs with generated subdirectory filenames for debugger mapping
+                compiled_libs = []
+                for lib in libs:
+                    lib_name = lib["filename"].split('::')[1]
+                    lib_filename = f"{set}/library/{lib_name}.py"
+                    compiled_libs.append(compile(lib["code"], lib_filename, 'exec'))
+
+                glob = setup_job_globals(owner, userspace, setspace, workspace, web_bind, job_id, "draft", set)
+
+                info_handler, warn_handler = setup_logging(logging.INFO)
+
+                execute_job_code(param, compiled_code, compiled_libs, glob, "draft", job_id, q)
+    except Exception:
+        error_msg = f"Error executing draft job {job_id}\n{traceback.format_exc()}"
+        stderr_file.write(error_msg)
+        stderr_file.flush()
+        q.put({"id": job_id, "state": "failed", "detail": error_msg})
+    finally:
+        stdout_file.flush()
+        stderr_file.flush()
+        stdout_file.close()
+        stderr_file.close()
+        root = logging.getLogger()
+        if info_handler:
+            root.removeHandler(info_handler)
+        if warn_handler:
+            root.removeHandler(warn_handler)
+        logger.debug(f"{current_process().pid:<10}end draft job({job_id})")
+
+
 def run_task_job(job_id: str, owner: str, set: str, name: str, param: str, code: str, libs: list[dict[str, str]], q: Queue, data_base: str, web_bind: str, venv_path: str, pkg_path: str, max_retries: int = 0):
     """Executes task job in isolated workspace with in-memory compilation and retry logic."""
     userspace, setspace, workspace = setup_workspace(data_base, owner, set, job_id)
@@ -796,6 +850,8 @@ def run(job_id: str, owner: str, set: str, name: str, kind: str, param: str, cod
         if port is None:
             raise ValueError("Port must be provided for debug jobs")
         run_debug_job(job_id, owner, set, name, param, code, libs, q, data_base, web_bind, venv_path, pkg_path, overrides, port)
+    elif kind == "draft":
+        run_draft_job(job_id, owner, set, name, param, code, libs, q, data_base, web_bind, venv_path, pkg_path)
     elif kind == "task":
         run_task_job(job_id, owner, set, name, param, code, libs, q, data_base, web_bind, venv_path, pkg_path, max_retries)
     elif kind == "service":
