@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, patch, call
 from datetime import datetime
 import croniter
 
@@ -459,3 +459,79 @@ class TestDaemon:
             new_job = session.query(Job).filter(Job.id == job_id).first()
             assert new_job.state == "todo"
             assert new_job.kind == "debug"
+
+    @patch('app.runner.time.sleep')
+    def test_commit_with_retry_success_on_first_try(self, mock_sleep, mock_db):
+        from app.runner import commit_with_retry
+        from app.orm.database import get_db_engine
+        from sqlalchemy.orm import Session
+        with Session(get_db_engine()) as session:
+            # Should commit without retry
+            commit_with_retry(session)
+            mock_sleep.assert_not_called()
+
+    @patch('app.runner.time.sleep')
+    def test_commit_with_retry_success_after_retry(self, mock_sleep, mock_db):
+        from app.runner import commit_with_retry
+        from app.orm.database import get_db_engine
+        from sqlalchemy.orm import Session
+        import sqlalchemy.exc
+        with Session(get_db_engine()) as session:
+            # Mock commit to fail once with lock, then succeed
+            original_commit = session.commit
+            call_count = 0
+            def mock_commit():
+                nonlocal call_count
+                call_count += 1
+                if call_count == 1:
+                    raise sqlalchemy.exc.OperationalError("database is locked", None, None)
+                else:
+                    original_commit()
+            session.commit = mock_commit
+            try:
+                commit_with_retry(session, max_retries=2)
+                assert call_count == 2
+                # Should sleep once: 0.1 * (2^0) = 0.1
+                mock_sleep.assert_called_once_with(0.1)
+            finally:
+                session.commit = original_commit
+
+    @patch('app.runner.time.sleep')
+    def test_commit_with_retry_fails_after_max_retries(self, mock_sleep, mock_db):
+        from app.runner import commit_with_retry
+        from app.orm.database import get_db_engine
+        from sqlalchemy.orm import Session
+        import sqlalchemy.exc
+        with Session(get_db_engine()) as session:
+            original_commit = session.commit
+            # Mock commit to always fail with lock
+            def mock_commit():
+                raise sqlalchemy.exc.OperationalError("database is locked", None, None)
+            session.commit = mock_commit
+            try:
+                with pytest.raises(sqlalchemy.exc.OperationalError):
+                    commit_with_retry(session, max_retries=2)
+                # For max_retries=2, sleeps 1 time (after attempt 0)
+                assert mock_sleep.call_count == 1
+                mock_sleep.assert_has_calls([call(0.1)])
+            finally:
+                session.commit = original_commit
+
+    @patch('app.runner.time.sleep')
+    def test_commit_with_retry_no_retry_on_other_error(self, mock_sleep, mock_db):
+        from app.runner import commit_with_retry
+        from app.orm.database import get_db_engine
+        from sqlalchemy.orm import Session
+        import sqlalchemy.exc
+        with Session(get_db_engine()) as session:
+            original_commit = session.commit
+            # Mock commit to fail with non-lock error
+            def mock_commit():
+                raise sqlalchemy.exc.OperationalError("some other error", None, None)
+            session.commit = mock_commit
+            try:
+                with pytest.raises(sqlalchemy.exc.OperationalError):
+                    commit_with_retry(session)
+                mock_sleep.assert_not_called()
+            finally:
+                session.commit = original_commit

@@ -13,6 +13,7 @@ import psutil
 
 from sqlalchemy import null, select, delete, and_, or_
 from sqlalchemy.orm import Session
+import sqlalchemy.exc
 
 from app.orm.database import get_db_engine
 from app.orm.job import Job
@@ -21,6 +22,23 @@ from app.orm.schedule import Schedule
 from app.lib import runner as lib_runner, files
 # Import Git helpers for code loading.
 from app.lib import git
+
+def commit_with_retry(session, max_retries=5, backoff=0.1):
+    for attempt in range(max_retries):
+        try:
+            session.commit()
+            return
+        except sqlalchemy.exc.OperationalError as e:
+            if 'database is locked' in str(e).lower():
+                if attempt < max_retries - 1:
+                    time.sleep(backoff * (2 ** attempt))
+                    continue
+                else:
+                    raise
+            else:
+                raise
+        time.sleep(1.0)
+
 from app.lib import pyops
 from app.lib.sets import ensure_set_environment
 
@@ -167,7 +185,7 @@ def handleOddJobs():
             else:
                 job.state = "failed"
                 job.detail = "incomplete execution detected on startup"
-        session.commit()
+        commit_with_retry(session)
 
 def purgeLeftoverServiceJobs():
     """Purge leftover service jobs at startup to ensure clean servicing."""
@@ -182,7 +200,7 @@ def purgeLeftoverServiceJobs():
             logger.debug(f"Purging leftover service job {job.id} in state {job.state}")
             session.delete(job)
             lib_runner.drop(job.id, job.owner, job.set)
-        session.commit()
+        commit_with_retry(session)
 
 def getNextToDo():
     with Session(get_db_engine()) as session:
@@ -196,7 +214,7 @@ def getNextToDo():
         if job != None:
             logger.debug(f"getNextToDo: before commit, session ID {id(session)}, job.state '{job.state}' at {datetime.now()}")
             job.state = "dequeued"
-            session.commit()
+            commit_with_retry(session)
             logger.debug(f"getNextToDo: after commit, session ID {id(session)}, committed 'dequeued' for {job.id} at {datetime.now()}")
             logger.debug(f"getNextToDo: about to return job.id = '{job.id}'")
 
@@ -220,7 +238,7 @@ def assignJob(job_id: str, pid: int):
         job.state = "running"
         job.start = datetime.now()
         logger.debug(f"assignJob: before commit, session ID {id(session)}, job.pid {old_pid} to {pid} for {job_id} at {datetime.now()}")
-        session.commit()
+        commit_with_retry(session)
         logger.debug(f"assignJob: after commit, session ID {id(session)}, committed pid for {job_id} at {datetime.now()}")
 
 def loadLib(set: str, name: str, kind: str):
@@ -279,7 +297,7 @@ def loadJob(job_id: str):
         job.state = "loading"
         job.start = datetime.now()
 
-        session.commit()
+        commit_with_retry(session)
         logger.debug(f"loadJob: after commit, session ID {id(session)}, committed 'running' for {job_id} at {datetime.now()}")
 
         return job.owner, job.set, job.name, job.kind, job.param, code, job.overrides, job.max_retries
@@ -306,7 +324,7 @@ def cleanup_drop_done_jobs():
             job.state = "remove"
 
         if jobs_to_remove:
-            session.commit()
+            commit_with_retry(session)
             logger.debug("cleanup_drop_done_jobs: committed changes")
         else:
             logger.debug("cleanup_drop_done_jobs: no jobs to clean up")
@@ -340,7 +358,7 @@ def finishJob(job_id: str, state: str, detail: str):
 
             job.pid = None
             logger.debug(f"finishJob({job_id}): before commit, session ID {id(session)}, changing {job_id} from '{old_state}' to '{new_state}' at {datetime.now()}")
-            session.commit()
+            commit_with_retry(session)
             logger.debug(f"finishJob({job_id}): after commit, session ID {id(session)}, committed state '{job.state}' for {job_id} at {datetime.now()}")
 
 def disposeJobs():
@@ -351,7 +369,7 @@ def disposeJobs():
             stmt = delete(Job).where(Job.state == "removed")
             session.execute(stmt)
 
-            session.commit()
+            commit_with_retry(session)
             logger.debug("disposeJobs: committed deletions")
 
 def process_imports(text: str, current_set: str, kind: str, libs: list[dict[str, str]], overrides_dict: dict[str, str] = None, seen_libs: set[str] = None, depth: int = 0) -> str:
@@ -897,7 +915,7 @@ def postTerm(job_id: str, killed: bool = False):
                 if job.state != "done" and job.state != "failed":
                     job.state = "cancelled"
                 logger.debug(f"postTerm: before commit, session ID {id(session)}, setting {job_id} to '{job.state}' from '{old_state}' at {datetime.now()}")
-            session.commit()
+            commit_with_retry(session)
             logger.debug(f"postTerm: after commit, session ID {id(session)}, committed for {job_id} at {datetime.now()}")
 
 def schedule():
@@ -934,7 +952,7 @@ def schedule():
                             schedule_obj = session.get(Schedule, s.id)
                             schedule_obj.last = now
                             logger.debug(f"schedule: before commit, session ID {id(session)}, last {s.last} to {next_run} for {s.id} at {datetime.now()}")
-                            session.commit()
+                            commit_with_retry(session)
                             logger.debug(f"schedule: after commit, session ID {id(session)}, committed last={next_run} for {s.id} at {datetime.now()}")
                 elif not lib_runner.find(s.owner, s.set, s.name, "service", ["todo", "dequeued", "running", "cancel", "done"]) and \
                      len(lib_runner.find(s.owner, s.set, s.name, "service", ["failed"])) < 3:
@@ -944,7 +962,7 @@ def schedule():
                     old_last = schedule_obj.last
                     schedule_obj.last = now
                     logger.debug(f"schedule: before commit, session ID {id(session)}, last {old_last} to {now} for service {s.id} at {datetime.now()}")
-                    session.commit()
+                    commit_with_retry(session)
                     logger.debug(f"schedule: after commit, session ID {id(session)}, committed last={now} for service {s.id} at {datetime.now()}")
         logger.debug(f"schedule: completed at {datetime.now()}")
 
@@ -1032,10 +1050,17 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
                 logger.exception("Error terminating job: %s", e)
 
             # handle jobs "failed" or "done"
+            msgs = []
             while not q.empty():
-                msg = q.get()
-                logger.debug(f"main: processing queue msg {msg}")
-                finishJob(msg["id"], msg["state"], msg["detail"])
+                msgs.append(q.get())
+
+            for msg in msgs:
+                try:
+                    logger.debug(f"main: processing queue msg {msg}")
+                    finishJob(msg["id"], msg["state"], msg["detail"])
+                except Exception as e:
+                    logger.exception("Failed to finish job %s, putting back on queue: %s", msg["id"], e)
+                    q.put(msg)
 
             # clean up drop_done jobs that have been done for delay+ seconds
             cleanup_drop_done_jobs()
