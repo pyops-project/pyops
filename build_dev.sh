@@ -8,5 +8,13 @@ REGISTRY="registry.ralph.or.at/pyops/pyops:dev"
 cd $DIR
 
 find . -type d -name __pycache__ -exec rm -fr {} \; > /dev/null 2>&1
-docker build --pull --no-cache -t $REGISTRY .
-docker push $REGISTRY
+
+# Ensure Buildx builder exists (run once, or add --bootstrap if needed)
+docker buildx create --use --name pyops-builder-dev || true
+docker buildx inspect --bootstrap
+
+docker buildx build \
+  --provenance=false \
+  --platform linux/amd64,linux/arm64 \
+  --tag "$REGISTRY" \
+  --push .

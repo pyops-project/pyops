@@ -346,9 +346,8 @@ def test_controller_get_wrong_type_controller(mock_client, mock_git_ops):
 
 def test_controller_get_wrong_type_view(mock_client, mock_git_ops):
     # Test controller GET with wrong type view
-    with patch("app.web.get_view_content", side_effect=HTTPException(status_code=405, detail="Not a view")):
-        response = mock_client.get("/controller/testset/wrongtype")
-        assert response.status_code == 405
+    response = mock_client.get("/controller/testset/wrongtype")
+    assert response.status_code == 405
 
 def test_menu_exception(mock_client):
     # Test menu endpoint exception handling

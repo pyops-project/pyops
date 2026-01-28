@@ -16,6 +16,7 @@ from app.orm.schedule import Schedule
 
 from app.lib import runner
 from app.lib import git
+from app.lib.async_utils import run_in_executor
 from app.lib.auth import sanitize_owner
 
 import logging
@@ -109,10 +110,10 @@ async def item_put(cr: ScheduleArgument, user: str = Depends(get_current_user)):
     Creates or updates a Schedule
     """
     try:
-        repo = git.get_repo_path(cr.set)
+        repo = await run_in_executor(git.get_repo_path, cr.set)
         # Check exists (committed or unstaged via fallback).
         try:
-            git.read_content(repo, cr.name, "task", committed=True)
+            await run_in_executor(git.read_content, repo, cr.name, "task", committed=True)
         except FileNotFoundError:
             raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail=f"Scriptlet {cr.set}::{cr.name} not existing.")
 

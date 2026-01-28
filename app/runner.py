@@ -13,6 +13,7 @@ import psutil
 
 from sqlalchemy import null, select, delete, and_, or_
 from sqlalchemy.orm import Session
+import sqlalchemy.exc
 
 from app.orm.database import get_db_engine
 from app.orm.job import Job
@@ -21,6 +22,23 @@ from app.orm.schedule import Schedule
 from app.lib import runner as lib_runner, files
 # Import Git helpers for code loading.
 from app.lib import git
+
+def commit_with_retry(session, max_retries=5, backoff=0.1):
+    for attempt in range(max_retries):
+        try:
+            session.commit()
+            return
+        except sqlalchemy.exc.OperationalError as e:
+            if 'database is locked' in str(e).lower():
+                if attempt < max_retries - 1:
+                    time.sleep(backoff * (2 ** attempt))
+                    continue
+                else:
+                    raise
+            else:
+                raise
+        time.sleep(1.0)
+
 from app.lib import pyops
 from app.lib.sets import ensure_set_environment
 
@@ -167,7 +185,7 @@ def handleOddJobs():
             else:
                 job.state = "failed"
                 job.detail = "incomplete execution detected on startup"
-        session.commit()
+        commit_with_retry(session)
 
 def purgeLeftoverServiceJobs():
     """Purge leftover service jobs at startup to ensure clean servicing."""
@@ -182,7 +200,7 @@ def purgeLeftoverServiceJobs():
             logger.debug(f"Purging leftover service job {job.id} in state {job.state}")
             session.delete(job)
             lib_runner.drop(job.id, job.owner, job.set)
-        session.commit()
+        commit_with_retry(session)
 
 def getNextToDo():
     with Session(get_db_engine()) as session:
@@ -196,7 +214,7 @@ def getNextToDo():
         if job != None:
             logger.debug(f"getNextToDo: before commit, session ID {id(session)}, job.state '{job.state}' at {datetime.now()}")
             job.state = "dequeued"
-            session.commit()
+            commit_with_retry(session)
             logger.debug(f"getNextToDo: after commit, session ID {id(session)}, committed 'dequeued' for {job.id} at {datetime.now()}")
             logger.debug(f"getNextToDo: about to return job.id = '{job.id}'")
 
@@ -220,11 +238,11 @@ def assignJob(job_id: str, pid: int):
         job.state = "running"
         job.start = datetime.now()
         logger.debug(f"assignJob: before commit, session ID {id(session)}, job.pid {old_pid} to {pid} for {job_id} at {datetime.now()}")
-        session.commit()
+        commit_with_retry(session)
         logger.debug(f"assignJob: after commit, session ID {id(session)}, committed pid for {job_id} at {datetime.now()}")
 
 def loadLib(set: str, name: str, kind: str):
-    """Loads library code from Git (unstaged if kind=="debug", else committed)."""
+    """Loads library code from Git (unstaged if kind=="debug" or "draft", else committed)."""
     logger.debug(f"loadLib(set={set}, name={name}, kind={kind})")
     repo = git.get_repo_path(set)
     files_list = [f for f in os.listdir(repo) if f.startswith(f"{name}.") and f.endswith('.py')]
@@ -232,7 +250,7 @@ def loadLib(set: str, name: str, kind: str):
         raise Exception(f"Scriptlet {set}::{name} not existing")
     filename = files_list[0]
     type_ = git.infer_type_from_filename(filename)
-    committed = kind != "debug"
+    committed = kind not in ("debug", "draft")
     code = git.read_content(repo, name, type_, committed=committed)
     return code
 
@@ -263,7 +281,7 @@ def loadJob(job_id: str):
                 raise Exception("Invalid overrides JSON")
             if main_key in override_dict:
                 override_code = override_dict[main_key]
-        committed = job.kind != "debug"
+        committed = job.kind not in ("debug", "draft")
         if override_code is not None:
             code = override_code
         else:
@@ -279,7 +297,7 @@ def loadJob(job_id: str):
         job.state = "loading"
         job.start = datetime.now()
 
-        session.commit()
+        commit_with_retry(session)
         logger.debug(f"loadJob: after commit, session ID {id(session)}, committed 'running' for {job_id} at {datetime.now()}")
 
         return job.owner, job.set, job.name, job.kind, job.param, code, job.overrides, job.max_retries
@@ -306,7 +324,7 @@ def cleanup_drop_done_jobs():
             job.state = "remove"
 
         if jobs_to_remove:
-            session.commit()
+            commit_with_retry(session)
             logger.debug("cleanup_drop_done_jobs: committed changes")
         else:
             logger.debug("cleanup_drop_done_jobs: no jobs to clean up")
@@ -340,7 +358,7 @@ def finishJob(job_id: str, state: str, detail: str):
 
             job.pid = None
             logger.debug(f"finishJob({job_id}): before commit, session ID {id(session)}, changing {job_id} from '{old_state}' to '{new_state}' at {datetime.now()}")
-            session.commit()
+            commit_with_retry(session)
             logger.debug(f"finishJob({job_id}): after commit, session ID {id(session)}, committed state '{job.state}' for {job_id} at {datetime.now()}")
 
 def disposeJobs():
@@ -351,7 +369,7 @@ def disposeJobs():
             stmt = delete(Job).where(Job.state == "removed")
             session.execute(stmt)
 
-            session.commit()
+            commit_with_retry(session)
             logger.debug("disposeJobs: committed deletions")
 
 def process_imports(text: str, current_set: str, kind: str, libs: list[dict[str, str]], overrides_dict: dict[str, str] = None, seen_libs: set[str] = None, depth: int = 0) -> str:
@@ -424,12 +442,13 @@ def process_install_lines(lines, venv_path, pkg_path, set, id):
                         raise Exception(f"git pull in {repo_dir} failed: {pull_result.stderr}")
             else:
                 # Skip if it looks like a library directive (starts with { or contains ::)
-                if arg1.startswith('{') or '::' in arg1:
+                if rest.startswith('{') or '::' in rest:
                     continue
-                package_spec = arg1
-                install_result = subprocess.run([pip_path, 'install', '-q', package_spec], capture_output=True, text=True)
+                # Split rest into pip install arguments
+                args = rest.split()
+                install_result = subprocess.run([pip_path, 'install', '-q'] + args, capture_output=True, text=True)
                 if install_result.returncode != 0:
-                    raise Exception(f"pip install {package_spec} failed: {install_result.stderr}")
+                    raise Exception(f"pip install {rest} failed: {install_result.stderr}")
     return lines
 
 def process_code_installs(param: str, code: str, libs: list[dict], venv_path: str, pkg_path: str, set: str, job_id: str) -> tuple[str, str, list[dict]]:
@@ -506,7 +525,8 @@ def setup_job_globals(owner: str, userspace: str, setspace: str, workspace: str,
         "jobsspace": os.path.join(files.project_root, files.conf_data()["jobs"]),
         "control": pyops.Control(owner, web_bind),
         "listener": listener,
-        "__name__": "__main__"
+        "__name__": "__main__",
+        "__builtins__": __builtins__
     }
 
 def setup_logging(log_level: int):
@@ -525,15 +545,16 @@ def setup_logging(log_level: int):
 
     return info_handler, warn_handler
 
-def execute_job_code(compiled_param, compiled_code, compiled_libs, glob: dict, job_type: str, job_id: str, q: Queue, max_retries: int = 0):
+def execute_job_code(param: str, compiled_code, compiled_libs, glob: dict, job_type: str, job_id: str, q: Queue, max_retries: int = 0):
     """Execute code with appropriate retry/error handling based on job_type"""
     try:
         if job_type == "task":
             # Task jobs have retry logic
             for attempt in range(max_retries + 1):
                 try:
-                    if compiled_param is not None:
-                        exec(compiled_param, glob)
+                    # Execute param before each attempt
+                    if param:
+                        exec(param, glob)
                     for cl in compiled_libs:
                         exec(cl, glob)
                     exec(compiled_code, glob)
@@ -552,8 +573,9 @@ def execute_job_code(compiled_param, compiled_code, compiled_libs, glob: dict, j
                         break
         else:
             # Service and debug jobs - no retry
-            if compiled_param is not None:
-                exec(compiled_param, glob)
+            # Execute param once before execution
+            if param:
+                exec(param, glob)
             for cl in compiled_libs:
                 exec(cl, glob)
             exec(compiled_code, glob)
@@ -582,20 +604,20 @@ def run_debug_job(job_id: str, owner: str, set: str, name: str, param: str, code
                 # Terminate any existing debugpy adapter for the owner before starting new debug job
                 terminate_debugpy_adapter(owner)
 
-                # Inject debugpy for debug kind
+                # Ensure debugpy is installed early
+                pip_path = os.path.join(venv_path, set, 'bin', 'pip')
+                subprocess.run([pip_path, 'install', '-q', 'debugpy'], check=True, capture_output=True)
+
+                # Start debugpy adapter immediately
                 await_debug = '#>AWAIT_DEBUG' in param
-                debug_code = f"""#!debugpy
+                debug_code = f"""
 import debugpy
 debugpy.log_to('.debug/adapter')
 debugpy.listen(('0.0.0.0', {port}))"""
                 if await_debug:
                     debug_code += """
 debugpy.wait_for_client()"""
-                debug_lib = {
-                    "code": debug_code,
-                    "filename": "system::debugpy"
-                }
-                libs.insert(0, debug_lib)
+                exec(debug_code)
 
                 # Apply overrides for debug kind
                 if overrides:
@@ -659,7 +681,7 @@ debugpy.wait_for_client()"""
 
                 info_handler, warn_handler = setup_logging(logging.DEBUG)
 
-                execute_job_code(compiled_param, compiled_code, compiled_libs, glob, "debug", job_id, q)
+                execute_job_code(param, compiled_code, compiled_libs, glob, "debug", job_id, q)
     except Exception:
         error_msg = f"Error executing debug job {job_id}\n{traceback.format_exc()}"
         stderr_file.write(error_msg)
@@ -676,6 +698,60 @@ debugpy.wait_for_client()"""
         if warn_handler:
             root.removeHandler(warn_handler)
         logger.debug(f"{current_process().pid:<10}end debug job({job_id})")
+
+
+def run_draft_job(job_id: str, owner: str, set: str, name: str, param: str, code: str, libs: list[dict[str, str]], q: Queue, data_base: str, web_bind: str, venv_path: str, pkg_path: str):
+    """Executes draft job in isolated workspace with in-memory compilation."""
+    userspace, setspace, workspace = setup_workspace(data_base, owner, set, job_id)
+
+    logger.debug(f"{current_process().pid:<10}start draft job({job_id})")
+
+    stdout_file, stderr_file = setup_execution_environment(venv_path, pkg_path, set, workspace, logging.INFO)
+    info_handler, warn_handler = None, None
+    try:
+        with redirect_stdout(stdout_file):
+            with redirect_stderr(stderr_file):
+                # Process installs w/ env prop.
+                param, code, libs = process_code_installs(param, code, libs, venv_path, pkg_path, set, job_id)
+
+                # Compile code objects with custom filenames for accurate tracebacks
+                if param:
+                    param_filename = f"{set}/task/param.py"
+                    compiled_param = compile(param, param_filename, 'exec')
+                else:
+                    compiled_param = None
+
+                code_filename = f"{set}/task/{name}.py"
+                compiled_code = compile(code, code_filename, 'exec')
+
+                # Compile libs with generated subdirectory filenames for debugger mapping
+                compiled_libs = []
+                for lib in libs:
+                    lib_name = lib["filename"].split('::')[1]
+                    lib_filename = f"{set}/library/{lib_name}.py"
+                    compiled_libs.append(compile(lib["code"], lib_filename, 'exec'))
+
+                glob = setup_job_globals(owner, userspace, setspace, workspace, web_bind, job_id, "draft", set)
+
+                info_handler, warn_handler = setup_logging(logging.INFO)
+
+                execute_job_code(param, compiled_code, compiled_libs, glob, "draft", job_id, q)
+    except Exception:
+        error_msg = f"Error executing draft job {job_id}\n{traceback.format_exc()}"
+        stderr_file.write(error_msg)
+        stderr_file.flush()
+        q.put({"id": job_id, "state": "failed", "detail": error_msg})
+    finally:
+        stdout_file.flush()
+        stderr_file.flush()
+        stdout_file.close()
+        stderr_file.close()
+        root = logging.getLogger()
+        if info_handler:
+            root.removeHandler(info_handler)
+        if warn_handler:
+            root.removeHandler(warn_handler)
+        logger.debug(f"{current_process().pid:<10}end draft job({job_id})")
 
 
 def run_task_job(job_id: str, owner: str, set: str, name: str, param: str, code: str, libs: list[dict[str, str]], q: Queue, data_base: str, web_bind: str, venv_path: str, pkg_path: str, max_retries: int = 0):
@@ -713,7 +789,7 @@ def run_task_job(job_id: str, owner: str, set: str, name: str, param: str, code:
 
                 info_handler, warn_handler = setup_logging(logging.INFO)
 
-                execute_job_code(compiled_param, compiled_code, compiled_libs, glob, "task", job_id, q, max_retries)
+                execute_job_code(param, compiled_code, compiled_libs, glob, "task", job_id, q, max_retries)
     except Exception:
         error_msg = f"Error executing task job {job_id}\n{traceback.format_exc()}"
         stderr_file.write(error_msg)
@@ -768,7 +844,7 @@ def run_service_job(job_id: str, owner: str, set: str, name: str, param: str, co
 
                 info_handler, warn_handler = setup_logging(logging.INFO)
 
-                execute_job_code(compiled_param, compiled_code, compiled_libs, glob, "service", job_id, q)
+                execute_job_code(param, compiled_code, compiled_libs, glob, "service", job_id, q)
     except Exception:
         error_msg = f"Error executing service job {job_id}\n{traceback.format_exc()}"
         stderr_file.write(error_msg)
@@ -792,6 +868,8 @@ def run(job_id: str, owner: str, set: str, name: str, kind: str, param: str, cod
         if port is None:
             raise ValueError("Port must be provided for debug jobs")
         run_debug_job(job_id, owner, set, name, param, code, libs, q, data_base, web_bind, venv_path, pkg_path, overrides, port)
+    elif kind == "draft":
+        run_draft_job(job_id, owner, set, name, param, code, libs, q, data_base, web_bind, venv_path, pkg_path)
     elif kind == "task":
         run_task_job(job_id, owner, set, name, param, code, libs, q, data_base, web_bind, venv_path, pkg_path, max_retries)
     elif kind == "service":
@@ -837,7 +915,7 @@ def postTerm(job_id: str, killed: bool = False):
                 if job.state != "done" and job.state != "failed":
                     job.state = "cancelled"
                 logger.debug(f"postTerm: before commit, session ID {id(session)}, setting {job_id} to '{job.state}' from '{old_state}' at {datetime.now()}")
-            session.commit()
+            commit_with_retry(session)
             logger.debug(f"postTerm: after commit, session ID {id(session)}, committed for {job_id} at {datetime.now()}")
 
 def schedule():
@@ -874,7 +952,7 @@ def schedule():
                             schedule_obj = session.get(Schedule, s.id)
                             schedule_obj.last = now
                             logger.debug(f"schedule: before commit, session ID {id(session)}, last {s.last} to {next_run} for {s.id} at {datetime.now()}")
-                            session.commit()
+                            commit_with_retry(session)
                             logger.debug(f"schedule: after commit, session ID {id(session)}, committed last={next_run} for {s.id} at {datetime.now()}")
                 elif not lib_runner.find(s.owner, s.set, s.name, "service", ["todo", "dequeued", "running", "cancel", "done"]) and \
                      len(lib_runner.find(s.owner, s.set, s.name, "service", ["failed"])) < 3:
@@ -884,7 +962,7 @@ def schedule():
                     old_last = schedule_obj.last
                     schedule_obj.last = now
                     logger.debug(f"schedule: before commit, session ID {id(session)}, last {old_last} to {now} for service {s.id} at {datetime.now()}")
-                    session.commit()
+                    commit_with_retry(session)
                     logger.debug(f"schedule: after commit, session ID {id(session)}, committed last={now} for service {s.id} at {datetime.now()}")
         logger.debug(f"schedule: completed at {datetime.now()}")
 
@@ -935,137 +1013,148 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
 
     loop_count = 0
     while not killer.kill_now:
-        loop_count += 1
-        logger.debug(f"main loop iteration {loop_count} at {datetime.now()}")
-        current_time = time.time()
-
-        # dispose already remove jobs
-        logger.debug("main: calling disposeJobs")
-        disposeJobs()
-        logger.debug("main: disposeJobs completed")
-
-        # remove cancelled processes from list
-        processes = cleanProcesses(processes)
-        logger.debug(f"main: cleaned processes, {len(processes)} remaining")
-
-        # terminate "remove" or "cancel" jobs
         try:
-            logger.debug("main: calling getNextToTerm")
-            job = getNextToTerm()
-            logger.debug(f"main: getNextToTerm returned {job}")
+            loop_count += 1
+            logger.debug(f"main loop iteration {loop_count} at {datetime.now()}")
+            current_time = time.time()
 
-            if job != None:
-                if job["pid"] in processes:
-                    logger.debug(f"Trying to term job {job}")
-                    # Get job kind for termination
-                    with Session(get_db_engine()) as session:
-                        job_obj = session.get(Job, job["id"])
-                        is_debug = job_obj.kind == "debug" if job_obj else False
-                        owner = job_obj.owner if job_obj else None
-                        detail = job_obj.detail
-                    finishJob(job["id"], "cancelling", detail)
-                else:
-                    postTerm(job["id"])
-        except Exception as e:
-            logger.debug(f"main: exception in terminate block: {e}")
-            logger.exception("Error terminating job: %s", e)
+            # dispose already remove jobs
+            logger.debug("main: calling disposeJobs")
+            disposeJobs()
+            logger.debug("main: disposeJobs completed")
 
-        # handle jobs "failed" or "done"
-        while not q.empty():
-            msg = q.get()
-            logger.debug(f"main: processing queue msg {msg}")
-            finishJob(msg["id"], msg["state"], msg["detail"])
+            # remove cancelled processes from list
+            processes = cleanProcesses(processes)
+            logger.debug(f"main: cleaned processes, {len(processes)} remaining")
 
-        # clean up drop_done jobs that have been done for delay+ seconds
-        cleanup_drop_done_jobs()
+            # terminate "remove" or "cancel" jobs
+            try:
+                logger.debug("main: calling getNextToTerm")
+                job = getNextToTerm()
+                logger.debug(f"main: getNextToTerm returned {job}")
 
-        try:
-            logger.debug("main: calling getNextToDo")
-            job_id = getNextToDo()
-            logger.debug(f"main: job_id from getNextToDo = '{job_id}'")
+                if job != None:
+                    if job["pid"] in processes:
+                        logger.debug(f"Trying to term job {job}")
+                        # Get job kind for termination
+                        with Session(get_db_engine()) as session:
+                            job_obj = session.get(Job, job["id"])
+                            is_debug = job_obj.kind == "debug" if job_obj else False
+                            owner = job_obj.owner if job_obj else None
+                            detail = job_obj.detail
+                        finishJob(job["id"], "cancelling", detail)
+                    else:
+                        postTerm(job["id"])
+            except Exception as e:
+                logger.debug(f"main: exception in terminate block: {e}")
+                logger.exception("Error terminating job: %s", e)
 
-            if job_id != None:
+            # handle jobs "failed" or "done"
+            msgs = []
+            while not q.empty():
+                msgs.append(q.get())
+
+            for msg in msgs:
                 try:
-                    logger.debug(f"main: loading job {job_id}")
-                    owner, set, name, kind, param, code, overrides, max_retries = loadJob(job_id)
-
-                    port = None
-                    if kind == "debug":
-                        try:
-                            port = validate_debug_prerequisites(job_id, owner)
-                        except Exception as e:
-                            finishJob(job_id, "failed", str(e))
-                            continue
-
-                    libs = []
-
-                    override_dict = json.loads(overrides) if overrides else None
-
-                    if param:
-                        param = process_imports(param, set, kind, libs, override_dict)
-                    code = process_imports(code, set, kind, libs, override_dict)
-
-                    logger.debug(f"Run job {job_id}")
-                    p = Process(target=run, name=f"{set}::{name}", kwargs={"job_id": job_id, "owner": owner, "set": set, "name": name, "kind": kind, "param": param, "code": code, "libs": libs, "overrides": overrides, "q": q, "data_base": data_base, "web_bind": web_bind, "venv_path": venv_path, "pkg_path": pkg_path, "max_retries": max_retries, "port": port})
-                    p.start()
-
-                    if kind == "debug":
-                        adapter_up = False
-                        for attempt in range(50):  # 5 seconds max
-                            if not p.is_alive():
-                                logger.warning("Job process died before debugpy adapter appeared for job %s", job_id)
-                                break
-                            if has_debugpy_adapter(port):
-                                adapter_up = True
-                                logger.debug("Debugpy adapter is up for job %s", job_id)
-                                break
-                            time.sleep(0.1)
-                        
-                        if not adapter_up:
-                            if p.is_alive():
-                                logger.warning("Debugpy adapter did not appear within timeout for job %s - terminating broken debug job", job_id)
-                                # Mark job as failed
-                                finishJob(job_id, "failed", "Debug adapter failed to start within timeout")
-                                continue
-                            else:
-                                logger.warning("Job process died before debugpy adapter appeared for job %s", job_id)
-                                # Let normal cleanup handle dead process
-                                continue
-
-                    # Adapter is up or not a debug job - proceed normally
-                    assignJob(job_id, p.pid)
-                    processes[p.pid] = p
-                    logger.debug(f"main: started process for {job_id}, pid {p.pid}")
+                    logger.debug(f"main: processing queue msg {msg}")
+                    finishJob(msg["id"], msg["state"], msg["detail"])
                 except Exception as e:
-                    logger.debug(f"main: exception loading/running {job_id}: {e}")
-                    logger.exception("Error loading/running job %s: %s", job_id, e)
-                    finishJob(job_id, "failed", traceback.format_exc())
-            else:
-                logger.debug("main: no job, calling schedule")
-                schedule()
-                logger.debug("main: schedule completed")
+                    logger.exception("Failed to finish job %s, putting back on queue: %s", msg["id"], e)
+                    q.put(msg)
 
-                # Periodic Git pull
-                if current_time - last_pull_time > pull_interval:
-                    logger.debug("main: performing git pulls")
-                    git_base = git.get_git_base()
-                    sets = [d for d in os.listdir(git_base) if os.path.isdir(os.path.join(git_base, d)) and os.path.exists(os.path.join(git_base, d, ".git"))]
-                    for set in sets:
-                        try:
-                            repo = git.get_repo_path(set)
-                            git.pull_if_needed(repo)
-                            logger.debug(f"main: pulled {set}")
-                        except Exception as e:
-                            logger.debug(f"main: pull error for {set}: {e}")
-                            logger.exception("Error pulling repo %s: %s", set, e)
-                    last_pull_time = current_time
-                    logger.debug("main: git pulls completed")
+            # clean up drop_done jobs that have been done for delay+ seconds
+            cleanup_drop_done_jobs()
 
-                logger.debug("main: sleeping 0.5s")
-                time.sleep(0.5)
+            try:
+                logger.debug("main: calling getNextToDo")
+                job_id = getNextToDo()
+                logger.debug(f"main: job_id from getNextToDo = '{job_id}'")
+
+                if job_id != None:
+                    try:
+                        logger.debug(f"main: loading job {job_id}")
+                        owner, set, name, kind, param, code, overrides, max_retries = loadJob(job_id)
+
+                        port = None
+                        if kind == "debug":
+                            try:
+                                port = validate_debug_prerequisites(job_id, owner)
+                            except Exception as e:
+                                finishJob(job_id, "failed", str(e))
+                                continue
+
+                        libs = []
+
+                        override_dict = json.loads(overrides) if overrides else None
+
+                        if param:
+                            param = process_imports(param, set, kind, libs, override_dict)
+                        code = process_imports(code, set, kind, libs, override_dict)
+
+                        logger.debug(f"Run job {job_id}")
+                        p = Process(target=run, name=f"{set}::{name}", kwargs={"job_id": job_id, "owner": owner, "set": set, "name": name, "kind": kind, "param": param, "code": code, "libs": libs, "overrides": overrides, "q": q, "data_base": data_base, "web_bind": web_bind, "venv_path": venv_path, "pkg_path": pkg_path, "max_retries": max_retries, "port": port})
+                        p.start()
+
+                        if kind == "debug":
+                            adapter_up = False
+                            for attempt in range(50):  # 5 seconds max
+                                if not p.is_alive():
+                                    logger.warning("Job process died before debugpy adapter appeared for job %s", job_id)
+                                    break
+                                if has_debugpy_adapter(port):
+                                    adapter_up = True
+                                    logger.debug("Debugpy adapter is up for job %s", job_id)
+                                    break
+                                time.sleep(0.1)
+
+                            if not adapter_up:
+                                if p.is_alive():
+                                    logger.warning("Debugpy adapter did not appear within timeout for job %s - terminating broken debug job", job_id)
+                                    # Mark job as failed
+                                    finishJob(job_id, "failed", "Debug adapter failed to start within timeout")
+                                    continue
+                                else:
+                                    logger.warning("Job process died before debugpy adapter appeared for job %s", job_id)
+                                    # Let normal cleanup handle dead process
+                                    continue
+
+                        # Adapter is up or not a debug job - proceed normally
+                        assignJob(job_id, p.pid)
+                        processes[p.pid] = p
+                        logger.debug(f"main: started process for {job_id}, pid {p.pid}")
+                    except Exception as e:
+                        logger.debug(f"main: exception loading/running {job_id}: {e}")
+                        logger.exception("Error loading/running job %s: %s", job_id, e)
+                        finishJob(job_id, "failed", traceback.format_exc())
+                else:
+                    logger.debug("main: no job, calling schedule")
+                    schedule()
+                    logger.debug("main: schedule completed")
+
+                    # Periodic Git pull
+                    if current_time - last_pull_time > pull_interval:
+                        logger.debug("main: performing git pulls")
+                        git_base = git.get_git_base()
+                        sets = [d for d in os.listdir(git_base) if os.path.isdir(os.path.join(git_base, d)) and os.path.exists(os.path.join(git_base, d, ".git"))]
+                        for set in sets:
+                            try:
+                                repo = git.get_repo_path(set)
+                                git.pull_if_needed(repo)
+                                logger.debug(f"main: pulled {set}")
+                            except Exception as e:
+                                logger.debug(f"main: pull error for {set}: {e}")
+                                logger.exception("Error pulling repo %s: %s", set, e)
+                        last_pull_time = current_time
+                        logger.debug("main: git pulls completed")
+
+                    logger.debug("main: sleeping 0.5s")
+                    time.sleep(0.5)
+            except Exception as e:
+                logger.debug(f"main: exception in main try block iteration {loop_count}: {e}")
+                logger.exception("Error in main loop: %s", e)
         except Exception as e:
-            logger.debug(f"main: exception in main try block iteration {loop_count}: {e}")
-            logger.exception("Error in main loop: %s", e)
+            logger.exception("Critical error in main loop iteration %d, continuing: %s", loop_count, e)
+            time.sleep(1)  # Brief pause before retry to avoid tight loops on persistent errors
 
     # join running processes for graceful shutdown with timeout/kill logic
     for pid in list(processes.keys()):

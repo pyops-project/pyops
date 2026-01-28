@@ -36,15 +36,15 @@ def enqueue(set: str, name: str, owner: str, kind: str, drop_done: bool, param: 
     """
     with Session(get_db_engine()) as session:
         if kind == "debug":
-            # Mark existing debug job for cancellation to allow new one
+            # Mark existing debug job for cancellation to allow new one (only one debug session at a time)
             stmt = select(Job).where(and_(Job.owner == owner, Job.kind == "debug", Job.state.in_(["dequeued", "running"]))).limit(1)
             existing = session.scalar(stmt)
             if existing:
                 existing.state = "cancel"
-                existing.detail = f"Cancelled by new debug job start for {owner}"
+                existing.detail = f"Cancelled by new {kind} job start for {owner}"
                 existing.end = datetime.now()
                 session.commit()
-                logger.info(f"Marked existing debug job {existing.id} for cancellation by new debug enqueue by {owner}")
+                logger.info(f"Marked existing {existing.kind} job {existing.id} for cancellation by new {kind} enqueue by {owner}")
 
         job = Job(
             id = "{}_{}_{}_{}".format(owner, set, name, datetime.now().strftime("%Y%m%dT%H%M%S%f")),
@@ -199,7 +199,7 @@ def loadLib(set: str, name: str, kind: str):
         raise Exception(f"Library {set}::{name} not existing")
     filename = files_list[0]
     type_ = git.infer_type_from_filename(filename)
-    committed = kind != "debug" # if debug job prefer unstaged changes
+    committed = kind not in ("debug", "draft") # if debug/draft job prefer unstaged changes
     return git.read_content(repo, name, type_, committed=committed)
 
 def loadJob(id: str):
@@ -226,7 +226,7 @@ def loadJob(id: str):
             raise Exception(f"Scriptlet {job.set}::{job.name} not existing")
         filename = files_list[0]
         type_ = git.infer_type_from_filename(filename)
-        committed = job.kind != "debug" # if debug job prefer unstaged changes
+        committed = job.kind not in ("debug", "draft") # if debug/draft job prefer unstaged changes
         code = git.read_content(repo, job.name, type_, committed=committed)
 
         job.state = "running"

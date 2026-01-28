@@ -1,3 +1,7 @@
 .venv
 __pycache__
 *.pyc
+pyops
+data
+vsix
+htmlcov

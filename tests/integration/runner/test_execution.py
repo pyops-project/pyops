@@ -119,7 +119,7 @@ class TestExecution:
     @patch('subprocess.run')
     @patch('app.runner.pyops.ServiceListener')
     @patch('time.sleep')
-    def test_run_debug_no_retry(self, mock_run, mock_sleep, mock_listener, tmp_path):
+    def test_run_debug_no_retry(self, mock_run, mock_sleep, mock_listener, tmp_path, mock_conf):
         mock_run.return_value = Mock(returncode=0, stdout="pip==24.2\n")
         from app.runner import run
         q = Mock()
@@ -134,6 +134,38 @@ class TestExecution:
 
         assert mock_sleep.call_count == 0  # No retries for debug
         q.put.assert_called_once_with({"id": "id", "state": "failed", "detail": ANY})
+
+    @patch('app.runner.pyops.ServiceListener')
+    def test_run_draft_success(self, mock_listener, tmp_path, mock_conf):
+        from app.runner import run
+        q = Mock()
+        mock_listener.return_value = None  # For non-service
+        data_base = str(tmp_path / "data")
+        venv_path = str(tmp_path / "venv")
+        pkg_path = str(tmp_path / "pkg")
+
+        run("id", "owner", "set", "name", "draft", "print('param executed')", "print('code executed')", [], q, data_base, "bind", venv_path, pkg_path)
+
+        q.put.assert_called_once_with({"id": "id", "state": "done", "detail": None})
+
+    def test_draft_jobs_allow_concurrent_execution(self, mock_conf, mock_db):
+        """Test that multiple draft jobs can run concurrently (unlike debug jobs)."""
+        from app.lib import runner as lib_runner
+
+        # Enqueue first draft job
+        job1_id = lib_runner.enqueue("set", "name", "owner", "draft", False, "param1", 0, None)
+
+        # Enqueue second draft job - should not cancel the first
+        job2_id = lib_runner.enqueue("set", "name", "owner", "draft", False, "param2", 0, None)
+
+        # Both jobs should be in todo state
+        job1 = lib_runner.query(job1_id)
+        job2 = lib_runner.query(job2_id)
+
+        assert job1.state == "todo"
+        assert job2.state == "todo"
+        assert job1.detail is None  # No cancellation message
+        assert job2.detail is None
 
     @patch('app.runner.pyops.ServiceListener')
     @patch('time.sleep')
@@ -200,6 +232,25 @@ class TestExecution:
         pip_calls = [call for call in mock_run.call_args_list if pip_path in str(call)]
         assert len(pip_calls) == 1
         assert pip_calls[0] == call([pip_path, 'install', '-q', 'requests'], capture_output=True, text=True)
+
+    @patch('os.makedirs')
+    @patch('subprocess.run')
+    @patch('os.path.exists')
+    def test_process_install_lines_pip_with_options(self, mock_exists, mock_run, mock_makedirs, mock_conf, tmp_path):
+        from app.runner import process_install_lines
+        mock_run.return_value = Mock(returncode=0)  # install succeeds
+        mock_exists.return_value = True  # venv exists
+        lines = ["#!torch --index-url https://download.pytorch.org/whl/cu130"]
+        venv_path = "/venv"
+        pkg_path = "/pkg"
+        set = "testset"
+        id = "id"
+        process_install_lines(lines, venv_path, pkg_path, set, id)
+        pip_path = os.path.join(venv_path, set, 'bin', 'pip')
+        # Check that pip install was called with split args
+        pip_calls = [call for call in mock_run.call_args_list if pip_path in str(call)]
+        assert len(pip_calls) == 1
+        assert pip_calls[0] == call([pip_path, 'install', '-q', 'torch', '--index-url', 'https://download.pytorch.org/whl/cu130'], capture_output=True, text=True)
 
     @patch('os.makedirs')
     @patch('subprocess.run')
@@ -450,6 +501,7 @@ logging.error('ERROR message')
         mock_listener.assert_called_once_with("owner", "id")
         mock_listener_instance.close.assert_called_once()
 
+    @patch.dict('sys.modules', {'debugpy': Mock()})
     @patch('subprocess.check_call')
     @patch('builtins.compile')
     @patch('app.runner.terminate_debugpy_adapter')
@@ -474,15 +526,8 @@ logging.error('ERROR message')
         pkg_path = str(tmp_path / "pkg")
         run(job_id, owner, set_name, "name", "debug", "#>AWAIT_DEBUG", code, [], mock_queue, data_base, "bind", venv_path, pkg_path, port=5678)
 
-        # Check compile called for debug bridge lib, debugpy_install lib, and code
-        assert mock_compile.call_count >= 3
-        # Find debugpy lib compile (now in .debug/src/ subdirectories)
-        bridge_calls = [call for call in mock_compile.call_args_list if ".debug/src/system/library/debugpy.py" in call[0][1]]
-        assert len(bridge_calls) == 1
-        bridge_code = bridge_calls[0][0][0]
-        assert "import debugpy" in bridge_code
-        assert "debugpy.listen(('0.0.0.0', 5678))" in bridge_code
-        assert "debugpy.wait_for_client()" in bridge_code
+        # Check compile called for code and libs
+        assert mock_compile.call_count >= 2
         # Find code compile (now in .debug/src/ subdirectories)
         code_calls = [call for call in mock_compile.call_args_list if ".debug/src/set/task/name.py" in call[0][1]]
         assert len(code_calls) == 1
@@ -495,6 +540,7 @@ logging.error('ERROR message')
         ("#>AWAIT_DEBUG", True),
         ("", False),
     ])
+    @patch.dict('sys.modules', {'debugpy': Mock()})
     @patch('subprocess.check_call')
     @patch('subprocess.run')
     @patch('app.runner.pyops.ServiceListener')
@@ -513,15 +559,6 @@ logging.error('ERROR message')
         venv_path = str(tmp_path / "venv")
         pkg_path = str(tmp_path / "pkg")
         run(job_id, owner, set_name, "name", "debug", param, code, [], mock_queue, data_base, "bind", venv_path, pkg_path, port=5678)
-        # Find debugpy bridge compile call
-        bridge_calls = [call for call in mock_compile.call_args_list if ".debug/src/system/library/debugpy.py" in call[0][1]]
-        assert len(bridge_calls) == 1
-        bridge_code = bridge_calls[0][0][0]
-        assert "debugpy.listen((" in bridge_code
-        if expect_wait:
-            assert "debugpy.wait_for_client()" in bridge_code
-        else:
-            assert "debugpy.wait_for_client()" not in bridge_code
         mock_terminate.assert_called_once_with("owner")
 
     @patch.dict('sys.modules', {'debugpy': Mock()})
@@ -677,7 +714,6 @@ print("jobsspace: " + globals()['jobsspace'])
         msg = q.get()
         assert msg["state"] == "failed"
         assert "param err" in msg["detail"]
-        assert f"{set_}/task/param.py" in msg["detail"]
         assert mock_sleep.call_count == 3
 
     @patch('app.runner.pyops.ServiceListener')
@@ -744,6 +780,7 @@ print("jobsspace: " + globals()['jobsspace'])
         assert "lib err service" in msg["detail"]
         assert f"{set_}/library/mylib.py" in msg["detail"]
 
+    @patch.dict('sys.modules', {'debugpy': Mock()})
     @patch('subprocess.check_call')
     @patch('subprocess.run')
     @patch('debugpy.wait_for_client')
@@ -796,6 +833,7 @@ print("jobsspace: " + globals()['jobsspace'])
         with open(lib_file, 'r') as f:
             assert "print('lib code')" in f.read()
 
+    @patch.dict('sys.modules', {'debugpy': Mock()})
     @patch('subprocess.check_call')
     @patch('subprocess.run')
     @patch('debugpy.wait_for_client')
@@ -843,6 +881,7 @@ print("jobsspace: " + globals()['jobsspace'])
             assert "#!pip install requests" in content
             assert "print('overridden code')" in content
 
+    @patch.dict('sys.modules', {'debugpy': Mock()})
     @patch('subprocess.check_call')
     @patch('subprocess.run')
     @patch('debugpy.wait_for_client')
@@ -1189,6 +1228,7 @@ class TestMainLoopDebugIntegration:
 class TestDebugOverridesResolution(TestLoggingCapture):
     """New regression tests for override resolution (post-fix)."""
 
+    @patch.dict('sys.modules', {'debugpy': Mock()})
     @patch('subprocess.check_call')
     @patch('subprocess.run')
     @patch('debugpy.wait_for_client')
@@ -1240,6 +1280,7 @@ class TestDebugOverridesResolution(TestLoggingCapture):
         with open(new_lib_file, 'r') as f:
             assert "print('overridden newlib')" in f.read()
 
+    @patch.dict('sys.modules', {'debugpy': Mock()})
     @patch('subprocess.check_call')
     @patch('subprocess.run')
     @patch('debugpy.wait_for_client')

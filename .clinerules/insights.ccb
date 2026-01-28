@@ -73,7 +73,7 @@ Stack-VSIX:
 VSIX is TypeScript with TreeDataProviders.
 
 Key-Features:
-Scriptlets support types task & service & library & controller & view.html; support directives `!pip` & `!git` & `!{set::lib}`; support scheduling via croniter; support monitoring & bulk ops; support VSIX trees for manager & jobs.
+Scriptlets support types task & service & library & controller & view.html; support directives for pip packages & git repos & libraries; support scheduling via croniter; support monitoring & bulk ops; support VSIX trees for manager & jobs.
 
 Global-PyOps:
 PyOps is "IT Infrastructure Python Leveraging Tool".
@@ -301,10 +301,17 @@ loadJob(job_id) fetches from DB; returns owner set name kind param code override
 finishJob(job_id, state, detail) sets state end detail pid=None; daemon terminate_job_processes full tree.
 
 Directive-Processing:
-process_imports(text, set, kind, libs) handles `!pip` `!git` `#!{set::lib}`
+process_imports(text, set, kind, libs) handles pip packages & git repos & libraries
 ; installs pip -q & clones git to pkg/ & prepends sys.path & exec libs
 ; uses committed code for libs.
 process_install_lines(lines, venv, pkg, id) executes installs.
+
+Directive-Parsing-Logic:
+Code distinguishes directive types by argument content, not keywords
+; git if arg1 contains '://' or starts with 'git@' (e.g., `#!git@github.com/user/repo.git`)
+; pip if arg1 plain string not starting with '{' and not containing '::'
+; library if arg1 starts with '{' or contains '::' (e.g., `#!{::mylib}`)
+; no explicit 'git' keyword required; documentation was incorrect.
 
 Runner-PostTerm:
 postTerm(job_id, killed=False) ignores killed param
