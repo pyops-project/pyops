@@ -372,6 +372,11 @@ def disposeJobs():
             commit_with_retry(session)
             logger.debug("disposeJobs: committed deletions")
 
+def install_git_repo(pip_path: str, repo_dir: str):
+    """Install git repo as editable package."""
+    result = subprocess.run([pip_path, 'install', '-q', '-e', repo_dir], capture_output=True, text=True, check=True)
+    return result
+
 def process_imports(text: str, current_set: str, kind: str, libs: list[dict[str, str]], overrides_dict: dict[str, str] = None, seen_libs: set[str] = None, depth: int = 0) -> str:
     r"""
     Recursively processes directives ^#!\{[set::]name\} in text/libs.
@@ -440,6 +445,7 @@ def process_install_lines(lines, venv_path, pkg_path, set, id):
                     pull_result = subprocess.run(['git', '-C', repo_dir, 'pull'], capture_output=True, text=True, cwd=repo_dir)
                     if pull_result.returncode != 0:
                         raise Exception(f"git pull in {repo_dir} failed: {pull_result.stderr}")
+                install_git_repo(pip_path, repo_dir)
             else:
                 # Skip if it looks like a library directive (starts with { or contains ::)
                 if rest.startswith('{') or '::' in rest:
@@ -497,9 +503,8 @@ def setup_execution_environment(venv_path: str, pkg_path: str, set: str, workspa
     """Setup sys.path, change to workspace directory, and return stdout/stderr files"""
     import sys
     site_packages = os.path.join(venv_path, set, 'lib', f'python{sys.version_info.major}.{sys.version_info.minor}', 'site-packages')
-
     sys.path.insert(0, os.path.join(pkg_path, set))
-    sys.path.insert(1, site_packages)
+    sys.path.insert(0, site_packages)
 
     os.chdir(workspace)
 

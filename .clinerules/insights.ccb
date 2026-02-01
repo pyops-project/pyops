@@ -302,7 +302,7 @@ finishJob(job_id, state, detail) sets state end detail pid=None; daemon terminat
 
 Directive-Processing:
 process_imports(text, set, kind, libs) handles pip packages & git repos & libraries
-; installs pip -q & clones git to pkg/ & prepends sys.path & exec libs
+; installs pip -q & clones git repos to pkg/ & pip installs -e cloned repos (raises if fails) & exec libs
 ; uses committed code for libs.
 process_install_lines(lines, venv, pkg, id) executes installs.
 

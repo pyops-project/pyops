@@ -283,6 +283,38 @@ class TestExecution:
         # Check that git clone was called with correct args
         mock_run.assert_any_call(['git', 'clone', 'https://repo.git', '.cache/test_pkg/testset/repo'], capture_output=True, text=True, cwd='.cache/test_pkg/testset')
 
+    @patch('subprocess.run')
+    @patch('os.path.exists')
+    def test_process_install_lines_git_pip_e_success(self, mock_exists, mock_run, mock_conf, tmp_path):
+        from app.runner import process_install_lines
+        mock_run.return_value = Mock(returncode=0)  # clone and pip success
+        mock_exists.return_value = False  # repo_dir not exist
+        lines = ["#! https://repo.git"]
+        venv_path = ".cache/test_venv"
+        pkg_path = ".cache/test_pkg"
+        set = "testset"
+        id = "id"
+        process_install_lines(lines, venv_path, pkg_path, set, id)
+        pip_path = os.path.join(venv_path, set, 'bin', 'pip')
+        repo_dir = os.path.join(pkg_path, set, 'repo')
+        # Check pip install -e called
+        mock_run.assert_any_call([pip_path, 'install', '-q', '-e', repo_dir], capture_output=True, text=True, check=True)
+
+    @patch('subprocess.run')
+    @patch('os.path.exists')
+    def test_process_install_lines_git_pip_e_fail_raises(self, mock_exists, mock_run, mock_conf, tmp_path):
+        from app.runner import process_install_lines
+        from subprocess import CalledProcessError
+        mock_run.side_effect = [Mock(returncode=0), CalledProcessError(1, 'pip', stderr='no setup.py')]  # clone success, pip fail
+        mock_exists.return_value = False  # repo_dir not exist
+        lines = ["#! https://repo.git"]
+        venv_path = ".cache/test_venv"
+        pkg_path = ".cache/test_pkg"
+        set = "testset"
+        id = "id"
+        with pytest.raises(CalledProcessError):
+            process_install_lines(lines, venv_path, pkg_path, set, id)
+
     @patch('os.makedirs')
     @patch('subprocess.run')
     def test_process_install_lines_git_error(self, mock_run, mock_makedirs, mock_conf):
