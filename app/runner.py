@@ -621,7 +621,8 @@ debugpy.log_to('.debug/adapter')
 debugpy.listen(('0.0.0.0', {port}))"""
                 if await_debug:
                     debug_code += """
-debugpy.wait_for_client()"""
+debugpy.wait_for_client()
+debugpy.breakpoint()"""
                 exec(debug_code)
 
                 # Apply overrides for debug kind
@@ -667,12 +668,6 @@ debugpy.wait_for_client()"""
                     lib_files.append(lib_file)
 
                 # Compile code objects from files for accurate breakpoint mapping
-                if param:
-                    with open(param_file, 'r') as f:
-                        compiled_param = compile(f.read(), param_file, 'exec')
-                else:
-                    compiled_param = None
-
                 with open(code_file, 'r') as f:
                     compiled_code = compile(f.read(), code_file, 'exec')
 
@@ -720,12 +715,6 @@ def run_draft_job(job_id: str, owner: str, set: str, name: str, param: str, code
                 param, code, libs = process_code_installs(param, code, libs, venv_path, pkg_path, set, job_id)
 
                 # Compile code objects with custom filenames for accurate tracebacks
-                if param:
-                    param_filename = f"{set}/task/param.py"
-                    compiled_param = compile(param, param_filename, 'exec')
-                else:
-                    compiled_param = None
-
                 code_filename = f"{set}/task/{name}.py"
                 compiled_code = compile(code, code_filename, 'exec')
 
@@ -774,12 +763,6 @@ def run_task_job(job_id: str, owner: str, set: str, name: str, param: str, code:
                 param, code, libs = process_code_installs(param, code, libs, venv_path, pkg_path, set, job_id)
 
                 # Compile code objects with custom filenames for accurate tracebacks
-                if param:
-                    param_filename = f"{set}/task/param.py"
-                    compiled_param = compile(param, param_filename, 'exec')
-                else:
-                    compiled_param = None
-
                 code_filename = f"{set}/task/{name}.py"
                 compiled_code = compile(code, code_filename, 'exec')
 
@@ -829,12 +812,6 @@ def run_service_job(job_id: str, owner: str, set: str, name: str, param: str, co
                 param, code, libs = process_code_installs(param, code, libs, venv_path, pkg_path, set, job_id)
 
                 # Compile code objects with custom filenames for accurate tracebacks
-                if param:
-                    param_filename = f"{set}/task/param.py"
-                    compiled_param = compile(param, param_filename, 'exec')
-                else:
-                    compiled_param = None
-
                 code_filename = f"{set}/task/{name}.py"
                 compiled_code = compile(code, code_filename, 'exec')
 

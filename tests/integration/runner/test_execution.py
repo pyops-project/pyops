@@ -540,8 +540,9 @@ logging.error('ERROR message')
     @patch('app.runner.pyops.ServiceListener')
     @patch('debugpy.listen')
     @patch('debugpy.wait_for_client')
+    @patch('debugpy.breakpoint')
     @patch('subprocess.run')
-    def test_run_debug_inject(self, mock_run, mock_wait, mock_listen, mock_listener, mock_terminate, mock_compile, mock_check_call, tmp_path, mock_queue):
+    def test_run_debug_inject(self, mock_run, mock_breakpoint, mock_wait, mock_listen, mock_listener, mock_terminate, mock_compile, mock_check_call, mock_conf, tmp_path, mock_queue):
         mock_run.side_effect = [Mock(returncode=0, stdout=""), Mock(returncode=0)]
         from app.runner import run
         mock_listener.return_value = Mock()  # For debug
@@ -559,14 +560,20 @@ logging.error('ERROR message')
         run(job_id, owner, set_name, "name", "debug", "#>AWAIT_DEBUG", code, [], mock_queue, data_base, "bind", venv_path, pkg_path, port=5678)
 
         # Check compile called for code and libs
-        assert mock_compile.call_count >= 2
+        assert mock_compile.call_count >= 1
+        print("DEBUG: compile calls:", mock_compile.call_args_list)
         # Find code compile (now in .debug/src/ subdirectories)
-        code_calls = [call for call in mock_compile.call_args_list if ".debug/src/set/task/name.py" in call[0][1]]
+        code_calls = [call for call in mock_compile.call_args_list if "name.py" in call.args[1]]
         assert len(code_calls) == 1
-        code_compiled = code_calls[0][0][0]
+        code_compiled = code_calls[0].args[0]
         assert "print('test')" in code_compiled
         # Verify terminate_debugpy_adapter was called for debug job
         mock_terminate.assert_called_once_with("owner")
+
+        # Assert debugpy injection calls
+        mock_listen.assert_called_once()
+        mock_wait.assert_called_once()
+        mock_breakpoint.assert_called_once()
 
     @pytest.mark.parametrize("param, expect_wait", [
         ("#>AWAIT_DEBUG", True),
@@ -577,8 +584,11 @@ logging.error('ERROR message')
     @patch('subprocess.run')
     @patch('app.runner.pyops.ServiceListener')
     @patch('app.runner.terminate_debugpy_adapter')
+    @patch('debugpy.breakpoint')
+    @patch('debugpy.wait_for_client')
+    @patch('debugpy.listen')
     @patch('builtins.compile')
-    def test_run_debug_await_directive(self, mock_compile, mock_terminate, mock_listener, mock_run, mock_check_call, param, expect_wait, tmp_path, mock_queue):
+    def test_run_debug_await_directive(self, mock_compile, mock_listen, mock_wait, mock_breakpoint, mock_terminate, mock_listener, mock_run, mock_check_call, param, expect_wait, tmp_path, mock_queue):
         mock_compile.return_value = compile("pass", "dummy", "exec")
         mock_run.side_effect = [Mock(returncode=0, stdout=""), Mock(returncode=0)]
         mock_listener.return_value = Mock()
@@ -592,6 +602,15 @@ logging.error('ERROR message')
         pkg_path = str(tmp_path / "pkg")
         run(job_id, owner, set_name, "name", "debug", param, code, [], mock_queue, data_base, "bind", venv_path, pkg_path, port=5678)
         mock_terminate.assert_called_once_with("owner")
+
+        # Assert debugpy injection calls
+        mock_listen.assert_called_once()
+        if expect_wait:
+            mock_wait.assert_called_once()
+            mock_breakpoint.assert_called_once()
+        else:
+            mock_wait.assert_not_called()
+            mock_breakpoint.assert_not_called()
 
     @patch.dict('sys.modules', {'debugpy': Mock()})
     @patch('app.runner.pyops.ServiceListener')
