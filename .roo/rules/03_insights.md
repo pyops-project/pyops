@@ -200,7 +200,7 @@ sequenceDiagram
 
 #### Service Components
 
-- **ServiceListener**: Listens for messages, handles TERM signals
+- **ServiceListener**: Listens for messages, handles TERM signals, supports both synchronous and asynchronous messaging
 - **ServiceClient**: Connects to running services
 - **Control Class**: Wraps controls, proxies to `/controller/{set}/{name}/q`
 
@@ -210,6 +210,8 @@ sequenceDiagram
 - Message format: `{"type": "GET/POST", "path": str, "cmd": query, "data": body, "data_type": "json/text/binary/none"}`
 - Uses msgpack for serialization
 - Listener poll uses zmq.Poller with timeout=0
+- Supports both synchronous (`listen()`, `poll()`, `response()`) and asynchronous (`async_poll()`, `async_response()`) messaging
+- Asynchronous methods enable concurrent request handling
 
 ### Sets Management
 
@@ -445,7 +447,7 @@ Runner treats debug kind specially for web preview/VSIX.
 - `conftest.py`: Fixtures mock_conf, mock_db, mock_client, mock_git_dir, mock_git_ops, etc.
 - unit/lib/: Tests lib_files, lib_git, lib_pyops, lib_runner_utils, lib_sets, lib_sites
 - unit/orm/: Tests job, schedule
-- integration/: Tests git, orm, routers, runner execution
+- integration/: Tests git, orm, routers, runner execution, zmq_integration
 - api/: Tests api_editor, api_endpoints, api_job, api_schedule, api_sets
 
 ### Fixtures-Mocks

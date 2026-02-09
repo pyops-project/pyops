@@ -123,6 +123,7 @@ class ServiceListener:
     def __init__(self, owner: str, job_id: str):
         self.kill_now = False
         self.owner = owner
+        self.last_identity = None
         signal.signal(signal.SIGINT, self.exit_gracefully)
         signal.signal(signal.SIGTERM, self.exit_gracefully)
 
@@ -131,7 +132,7 @@ class ServiceListener:
         os.makedirs(pyops_dir, exist_ok=True)
         self.sockfile = os.path.join(pyops_dir, f"{job_id}.sock")
         self.context = zmq.Context()
-        self.socket = self.context.socket(zmq.REP)
+        self.socket = self.context.socket(zmq.ROUTER)
         self.socket.bind(f"ipc://{self.sockfile}")
         self.poller = zmq.Poller()
         self.poller.register(self.socket, flags=zmq.POLLIN)
@@ -162,6 +163,8 @@ class ServiceListener:
             return "TERM"
         events = self.poller.poll(timeout=0)
         if events:
+            self.last_identity = self.socket.recv()
+            self.socket.recv()  # empty frame
             return msgpack.unpackb(self.socket.recv())
         return None
 
@@ -169,12 +172,38 @@ class ServiceListener:
         while not self.poller.poll(timeout=1000) and not self.kill_now:
             pass
         if not self.kill_now:
+            self.last_identity = self.socket.recv()
+            self.socket.recv()  # empty frame
             return msgpack.unpackb(self.socket.recv())
         else:
             return "TERM"
 
     def response(self, msg):
+        if self.last_identity is not None:
+            b = msgpack.packb(msg)
+            self.socket.send(self.last_identity, zmq.SNDMORE)
+            self.socket.send(b'', zmq.SNDMORE)
+            self.socket.send(b)
+            self.last_identity = None
+
+    def async_poll(self):
+        """Poll for pending messages and return list of (identity, message) tuples."""
+        messages = []
+        while True:
+            events = self.poller.poll(timeout=0)
+            if not events:
+                break
+            identity = self.socket.recv()
+            self.socket.recv()  # empty frame
+            message = msgpack.unpackb(self.socket.recv())
+            messages.append((identity, message))
+        return messages
+
+    def async_response(self, identity, msg):
+        """Send response to a specific client identity."""
         b = msgpack.packb(msg)
+        self.socket.send(identity, zmq.SNDMORE)
+        self.socket.send(b'', zmq.SNDMORE)
         self.socket.send(b)
 
 class ServiceClient:
