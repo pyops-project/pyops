@@ -1,0 +1,70 @@
+<workflow>
+  <overview>
+    This workflow provides direct instructions to transform a task into an approved plan, with iterative refinement.
+  </overview>
+  <steps>
+    <step number="0">
+      <action>Check task understanding</action>
+      <action>Analyze the task for clarity, completeness, and specificity. Identify any ambiguous terms, missing details, or unclear requirements. Return a list of gaps if any, or confirm full understanding.</action>
+      <loop>If gaps found, clarify with user until understood</loop>
+    </step>
+    <step number="1">
+      <action>Check task consistency</action>
+      <action>Review the task for internal logical consistency, alignment with known facts, and coherence. Identify contradictions, conflicting requirements, or illogical elements. Return a list of all inconsistencies found, or confirm consistency.</action>
+      <loop>If inconsistencies found, resolve with user</loop>
+    </step>
+    <step number="2">
+      <action>Search and analyze relevant example/test code to understand coding pattern.</action>
+    </step>
+    <step number="3">
+      <action>Check plan feasibility</action>
+      <action>Assess the task against the provided context for completeness and alignment. Determine if a working plan can be created without major uncertainties. If uncertainties exist, return a list of all uncertainties; otherwise, confirm feasibility.</action>
+      <nested_loop>
+        <phase>code_resolution</phase>
+        <action>If uncertainties found, for each uncertainty: review the uncertainty and determine how it could be resolved through analyzing code and resolve if feasible. Output the validation result, including evidence and conclusion.</action>
+        <then>Check plan feasibility again</then>
+        <phase>web_resolution</phase>
+        <action>If uncertainties remain, for each remaining uncertainty: review the uncertainty and determine if it can be resolved through web searches (e.g., by searching, summarizing, or verifying online information) and resolve it if feasible. Output the validation result, including evidence and conclusion.</action>
+        <then>Check plan feasibility again</then>
+        <phase>user_clarification</phase>
+        <action>If uncertainties still remain, address with user</action>
+      </nested_loop>
+    </step>
+    <step number="4">
+      <action>Create initial plan</action>
+      <action>Synthesize the task requirements with the context to outline steps. Structure the plan into logical, sequential phases with clear deliverables.</action>
+    </step>
+    <step number="5">
+      <action>Analyze plan for assumptions</action>
+      <action>Analyze the provided context for statements that appear to be assumptions (e.g., "this will always work", "users prefer X", "the system handles Y"). Flag any unproven assumptions found, listing them explicitly. Output the list of unproven assumptions for further processing.</action>
+      <nested_loop>
+        <phase>insights_resolution</phase>
+        <action>For each assumption: review the assumption and determine if it can be proven through reading insights (e.g., by searching, summarizing, or verifying related data). If provable, identify the most appropriate method (e.g., search for finding specific information, verify for validation). Use the identified method to gather relevant evidence. Analyze the evidence to determine if the assumption is proven, disproven, or remains unproven. Output the validation result, including evidence and conclusion.</action>
+        <phase>code_resolution</phase>
+        <action>For remaining assumptions: review the assumption and determine if it can be proven through reading code (e.g., by searching, analyzing, or verifying code-related data). If provable, identify the most appropriate method (e.g., search for finding specific code patterns). Use the identified method to gather relevant evidence. Analyze the evidence to determine if the assumption is proven, disproven, or remains unproven. Output the validation result, including evidence and conclusion.</action>
+        <phase>web_resolution</phase>
+        <action>For remaining assumptions: review the assumption and determine if it can be proven through web searches (e.g., by searching, summarizing, or verifying online information). If provable, identify the most appropriate method (e.g., search for finding specific information online). Use the identified method to gather relevant evidence. Analyze the evidence to determine if the assumption is proven, disproven, or remains unproven. Output the validation result, including evidence and conclusion.</action>
+        <phase>user_clarification</phase>
+        <action>If assumptions still unproven, clarify with user</action>
+      </nested_loop>
+    </step>
+    <step number="6">
+      <action>Analyze plan for Mermaid diagrams</action>
+      <action>Break down the plan into individual parts or sections. Evaluate each part for complexity, relationships, or processes that could be clarified with a diagram. List the plan parts that would profit from a Mermaid diagram, explaining why for each.</action>
+      <loop>For each part needing diagram, create and add</loop>
+      <action>Analyze the plan part to identify key elements, relationships, and flow. Choose an appropriate Mermaid diagram type (e.g., graph TD for flowcharts). Generate the Mermaid code that accurately represents the plan part. Output the Mermaid diagram code.</action>
+      <error_handling>If Mermaid errors detected, parse the error message to identify the specific problem (e.g., syntax error, invalid node, etc.). Review the Mermaid code for the identified issue. Correct the code to fix the error while preserving the intended diagram structure. Output the fixed Mermaid diagram code.</error_handling>
+    </step>
+    <step number="7">
+      <action>Output the complete plan in resonse (not file), including any assumptions or dependencies.</action>
+      <action>Incorporate the user input into the existing plan. Adjust steps, add details, or remove elements based on the feedback. Output the refined plan with changes highlighted.</action>
+    </step>
+    <step number="8">
+      <action>If user did not approve plan incorporate the user input into the existing plan. Adjust steps, add details, or remove elements based on the feedback. If user approved continue to workflow step 9.</action>
+      <loop>After each plan refinement, go back to workflow step 5.</loop>
+    </step>
+    <step number="9">
+      <action>Switch to code mode</action>
+    </step>
+  </steps>
+</workflow>

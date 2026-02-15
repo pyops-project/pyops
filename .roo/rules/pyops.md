@@ -4,6 +4,9 @@
 - needs to be sourced before executing any command.
 - activates running `. ./.venv/bin/activate`.
 
+## Roo Code Agent
+- never touches Git.
+
 ## App Code
 - located at `app/`.
 - fixes & workarounds are forbidden.
