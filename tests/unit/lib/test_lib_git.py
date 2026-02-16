@@ -276,6 +276,7 @@ class TestRepoPathAndFiles:
         ('script.task.py', 'script'),
         ('view.html', 'view'),
         ('README.md', 'README'),
+        ('mylib.js', 'mylib'),
     ])
     def test_get_name_from_file(self, filename, expected):
         assert git.get_name_from_file(filename) == expected
@@ -284,6 +285,7 @@ class TestRepoPathAndFiles:
         ('script.task.py', 'task'),
         ('view.html', 'view'),
         ('README.md', 'markdown'),
+        ('mylib.js', 'jslibrary'),
     ])
     def test_infer_type_from_filename(self, filename, expected):
         assert git.infer_type_from_filename(filename) == expected

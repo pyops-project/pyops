@@ -224,5 +224,35 @@ describe('CreateScriptletCommand', () => {
 
     expect(mockFsWriteFileSync).toHaveBeenCalledWith(localPath, '');
   });
+
+  it('should create a jslibrary scriptlet locally successfully', async () => {
+    const localPath = '/test/workspace/pyops/set1/jslibrary/script1.js';
+    const dirPath = '/test/workspace/pyops/set1/jslibrary';
+    mockPathJoin
+      .mockReturnValueOnce(localPath) // loop local check
+      .mockReturnValueOnce(localPath); // create localPath
+    mockPathDirname.mockReturnValue(dirPath);
+    mockFsExistsSync
+      .mockReturnValueOnce(false) // loop local check
+      .mockReturnValueOnce(false); // dir check
+
+    mockShowQuickPick
+      .mockResolvedValueOnce({ label: 'JS Library' })
+      .mockResolvedValueOnce({ label: 'set1' });
+    mockShowInputBox.mockResolvedValue('script1');
+    (global.fetch as jest.Mock).mockResolvedValueOnce({
+      ok: true,
+      json: jest.fn().mockResolvedValue([{ set: 'set1', name: 'existing', type: 'task' }]),
+    });
+
+    await CreateScriptletCommand.execute(context, outputChannel, managerTreeProvider);
+
+
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(mockFsMkdirSync).toHaveBeenCalledWith(dirPath, { recursive: true });
+    expect(mockFsWriteFileSync).toHaveBeenCalledWith(localPath, '');
+    expect(managerTreeProvider.refresh).toHaveBeenCalled();
+    expect(mockShowInformationMessage).toHaveBeenCalledWith('Created local jslibrary set1::script1');
+  });
 });
 

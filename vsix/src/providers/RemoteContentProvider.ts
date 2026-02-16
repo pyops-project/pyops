@@ -30,6 +30,8 @@ export function getLanguageId(type: string): string | undefined {
             return 'html';
         case 'markdown':
             return 'markdown';
+        case 'jslibrary':
+            return 'javascript';
         default:
             return undefined;
     }

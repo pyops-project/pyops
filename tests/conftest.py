@@ -127,6 +127,9 @@ def mock_git_dir(tmp_path):
     mock.tmp_path = tmp_path
     mock.mock_data_dir = mock_data_dir
     
+    original_listdir = os.listdir
+    original_exists = os.path.exists
+    
     def mock_os_listdir(path):
         path_str = str(path)
         if path_str.endswith("data/git"):
@@ -135,11 +138,15 @@ def mock_git_dir(tmp_path):
             return ["sample_task.py", "sample_view.html", "README.md", ".gitignore", "dummy.py", "sample.controller.py", "head.html", "menu.html", "body.html"]
         elif path_str.endswith("data/git/testset"):
             return ["dummy.py", "README.md", ".gitignore", "sample.controller.py", "wrongtype.controller.py", "wronghead.html", "testname.py", "head.html", "menu.html", "body.html"]
-        return []
+        else:
+            return original_listdir(path)
     
     def mock_exists(p):
         p_str = str(p)
-        return p_str.endswith('.git') or any(p_str.endswith(f'/data/git/{set}') for set in ['default', 'testset'])
+        if p_str.endswith('.git') or any(p_str.endswith(f'/data/git/{set}') for set in ['default', 'testset']):
+            return True
+        else:
+            return original_exists(p)
     
     with patch("os.listdir", side_effect=mock_os_listdir), \
          patch("os.path.exists", side_effect=mock_exists):
@@ -168,7 +175,7 @@ def mock_git_ops(mock_git_dir):
         return scriptlets
     
     def mock_write_content(repo, name, type_, content):
-        ext = ".py" if type_ == "task" else ".html" if type_ == "view" else ".md"
+        ext = ".py" if type_ == "task" else ".html" if type_ == "view" else ".md" if type_ == "markdown" else ".js" if type_ == "jslibrary" else ".md"
         full_path = mock_git_dir.tmp_path / repo / f"{name}{ext}"
         full_path.parent.mkdir(parents=True, exist_ok=True)
         full_path.write_text(content)
@@ -180,7 +187,7 @@ def mock_git_ops(mock_git_dir):
             return "set = 'testset'\nservice = 'testservice'\nname = 'Wrong Type'\ndebug = False\nhead = 'wronghead'\nmenu = 'menu'\nbody = 'body'\n"
         elif type_ == "controller" and name == "testname":
             return "set = 'testset'\nservice = 'testservice'\nname = 'Test Controller'\ndebug = False\nhead = 'head'\nmenu = 'menu'\nbody = 'body'\n"
-        ext = ".py" if type_ in ["task", "controller"] else ".html" if type_ == "view" else ".md"
+        ext = ".py" if type_ in ["task", "controller"] else ".html" if type_ == "view" else ".md" if type_ == "markdown" else ".js" if type_ == "jslibrary" else ".md"
         full_path = mock_git_dir.tmp_path / repo / f"{name}{ext}"
         return full_path.read_text(encoding="utf-8") if full_path.exists() else "pass"
     
@@ -195,6 +202,8 @@ def mock_git_ops(mock_git_dir):
             return "view"
         elif fn.endswith(".md"):
             return "markdown"
+        elif fn.endswith(".js"):
+            return "jslibrary"
         return "unknown"
     
     def mock_check_name_unique(repo, name):

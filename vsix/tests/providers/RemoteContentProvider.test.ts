@@ -53,6 +53,10 @@ describe('getLanguageId', () => {
     expect(getLanguageId('markdown')).toBe('markdown');
   });
 
+  it('returns javascript for jslibrary', () => {
+    expect(getLanguageId('jslibrary')).toBe('javascript');
+  });
+
   it('returns undefined for unknown type', () => {
     expect(getLanguageId('unknown')).toBeUndefined();
   });

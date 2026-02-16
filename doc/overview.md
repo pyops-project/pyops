@@ -464,7 +464,7 @@ Runner treats debug kind specially for web preview/VSIX.
 
 ## Key Features
 
-- Scriptlets support types: task, library, controller, view, markdown
+- Scriptlets support types: task, library, controller, view, markdown, jslibrary
 - Support directives for pip packages, git repos, libraries
 - Scheduling via croniter
 - Monitoring and bulk operations

@@ -16,6 +16,7 @@ from .routers.scriptlet import monitor
 from .routers.scriptlet import scheduler
 from .routers.scriptlet import editor
 from .routers.scriptlet import sets
+from .routers.scriptlet import jslib
 
 from .lib import sites, files, pyops, git
 from .lib.async_utils import run_in_executor
@@ -44,6 +45,7 @@ app.include_router(manager.router)
 app.include_router(monitor.router)
 app.include_router(editor.router)
 app.include_router(sets.router)
+app.include_router(jslib.router)
 
 @app.get("/debug/port")
 def get_debug_port(request: Request):

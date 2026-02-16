@@ -21,7 +21,7 @@ Pyops allows set developers to build reusable operations: scriptlets for tasks/s
 - **Status**: Status bar shows connection (requires valid `pyops.serverUrl`).
 
 VSIX provides pyops-container in sidebar/activitybar:
-- **pyops-manager**: Sets > type folders (task/service/library/controller/view/markdown) > scriptlets; icons: ✓ synced, ⚠ unsynced/draft/local-only; contextValues pyopsItem-{type}(-local).
+- **pyops-manager**: Sets > type folders (task/service/library/controller/view/markdown/jslibrary) > scriptlets; icons: ✓ synced, ⚠ unsynced/draft/local-only; contextValues pyopsItem-{type}(-local).
   Right-click: Reset Local from Remote, Write Local to Remote Draft, Save Remote Draft, Diff Local Remote, Delete Scriptlet; Start/Stop Debug Job (tasks).
   Titlebar: Refresh Manager, Create Scriptlet, Attach to Debug Job.
 - **pyops-monitor**: Jobs by state; right-click: Copy Job Param, Cancel/Download/Delete/View Job.
@@ -44,7 +44,7 @@ Cline outputs full file content; paste/replace in editor, then save via VSIX. It
 
 ## VSIX Workflow
 
-- **Create Scriptlet**: pyops-manager titlebar > Create Scriptlet (prompts for set/type/name); opens local `pyops/{set}/{type}/{name}.{ext}` (.py for task/service/library/controller, .html for view, .md for markdown).
+- **Create Scriptlet**: pyops-manager titlebar > Create Scriptlet (prompts for set/type/name); opens local `pyops/{set}/{type}/{name}.{ext}` (.py for task/service/library/controller, .html for view, .md for markdown, .js for jslibrary).
 - **Edit/Generate**: Use VSCode/Cline to code. Edit local file.
 - **Sync**: Right-click > Reset Local from Remote (download draft), Write Local to Remote Draft (upload), Save Remote Draft (commit/push).
 - **Diff**: Right-click > Diff Local Remote.

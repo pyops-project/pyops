@@ -10,6 +10,7 @@
 - **Controllers**: Python stubs defining UI structure and routing to services (e.g., /controller/{set}/{name}).
 - **Views**: HTML fragments (head for styles/JS, menu for nav, body for content) rendered by controllers.
 - **Markdown**: Documentation files in sets, editable via editor with preview.
+- **JS Libraries**: JavaScript modules for client-side code, served via /scriptlet/jslib/{set}/{name}, edited in Ace JS mode.
 - **Execution Model**: Isolated global dict (`glob`) with:
   - `control`: Pyops.Control for API calls (e.g., `control.job.list()` returns dict of jobs).
   - `listener`: For services (inbound requests; see Services).
@@ -308,6 +309,21 @@ def helper_func(x):
 ```
 
 Usage: In scriptlet/param: `#!{::lib_name}` (own set) or `#!{otherset::lib_name}` (foreign); replaces with comment after load/exec.
+
+### JS Libraries (Client-Side)
+Use: JavaScript modules for client-side code, served to browsers.
+
+Template (`jslibrary/{name}.js`):
+```javascript
+// JS Library: Client-side module
+console.log('Hello from JS lib');
+
+// Available via GET /scriptlet/jslib/{set}/{name}
+```
+
+Served: GET `/scriptlet/jslib/{set}/{name}` returns JS content (application/javascript).
+
+Edited: Via VSIX `editor_jslibrary`, Ace JS mode.
 
 ## Controllers and Views
 

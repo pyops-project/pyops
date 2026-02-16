@@ -224,16 +224,16 @@ def get_file_path(repo: str, name: str, type_: str) -> str:
 
 def get_name_from_file(filename: str) -> str:
     """Extracts name from filename.
-    
-    Views/Markdown: Basename without extension (allows hyphens/multiples).
+
+    Views/Markdown/JS: Basename without extension (allows hyphens/multiples).
     Python: {name}.{type} → name; raise if no type dot.
-    
+
     Args:
-        filename (str): e.g., 'myscript.task.py', 'SimpleDog-Head.html', or 'README.md'.
-    
+        filename (str): e.g., 'myscript.task.py', 'SimpleDog-Head.html', 'mylib.js', or 'README.md'.
+
     Returns:
         str: Name.
-    
+
     Raises:
         ValueError: Invalid .py format.
     """
@@ -241,6 +241,8 @@ def get_name_from_file(filename: str) -> str:
         return "README"
     base = os.path.splitext(filename)[0]
     if filename.endswith('.html'):
+        return base
+    if filename.endswith('.js'):
         return base
     if '.' not in base:
         raise ValueError(f"Invalid filename: {filename}")
@@ -251,10 +253,11 @@ def infer_type_from_filename(filename: str) -> str:
     
     Views: .html → "view".
     Python: {name}.{type}.py → type (task/library/controller).
+    JS Libraries: .js → "jslibrary".
     Markdown: README.md → "markdown".
     
     Args:
-        filename (str): e.g., 'myscript.task.py' or 'myview.html'.
+        filename (str): e.g., 'myscript.task.py', 'myview.html', or 'mylib.js'.
     
     Returns:
         str: Type.
@@ -266,8 +269,10 @@ def infer_type_from_filename(filename: str) -> str:
         return "markdown"
     if filename.endswith('.html'):
         return "view"
+    if filename.endswith('.js'):
+        return "jslibrary"
     if not filename.endswith('.py'):
-        raise ValueError(f"Not a Python/HTML file: {filename}")
+        raise ValueError(f"Not a Python/HTML/JS file: {filename}")
     base = os.path.splitext(filename)[0]
     parts = base.rsplit('.', 1)
     if len(parts) < 2:
@@ -295,7 +300,7 @@ def list_scriptlets() -> List[Dict[str, str]]:
     for set in sorted(sets):
         repo = get_repo_path(set)
         for filename in os.listdir(repo):
-            if filename.endswith(('.py', '.html')) or filename == "README.md":
+            if filename.endswith(('.py', '.html', '.js')) or filename == "README.md":
                 try:
                     name = get_name_from_file(filename)
                     type_ = infer_type_from_filename(filename)
@@ -304,6 +309,25 @@ def list_scriptlets() -> List[Dict[str, str]]:
                     continue  # Skip invalid files.
     
     return sorted(scriptlets, key=lambda x: (x["set"], x["name"]))
+
+def list_scriptlet_files(repo: str, name: str) -> List[str]:
+    """Lists scriptlet files for a given name in repo.
+    
+    Args:
+        repo (str): Repo path.
+        name (str): Scriptlet name.
+    
+    Returns:
+        List[str]: Matching filenames.
+    """
+    files = []
+    for filename in os.listdir(repo):
+        try:
+            if get_name_from_file(filename) == name:
+                files.append(filename)
+        except ValueError:
+            continue
+    return files
 
 def check_name_unique(repo: str, name: str) -> bool:
     """Checks if name is unique (no existing {name}.*.py or {name}.html).
