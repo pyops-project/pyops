@@ -6,6 +6,7 @@ import os
 import shutil
 import signal
 import psutil
+import sys
 
 class TestDBUtils:
     def test_enqueue(self, mock_db):
@@ -325,9 +326,11 @@ class TestProcessInstallLines:
         mock_result.returncode = 0
         mock_run.return_value = mock_result
         lines = ['#!pip_module']
-        process_install_lines(lines, '/venv', '/pkg', 'testset', 'job_id')
+        result = process_install_lines(lines, '/venv', '/pkg', 'testset', 'job_id')
+        assert result == lines
         assert mock_run.call_count == 1
-        mock_run.assert_called_once_with(['/venv/testset/bin/pip', 'install', '-q', 'pip_module'], capture_output=True, text=True)
+        expected_cmd = ". /venv/testset/bin/activate && pip install pip_module"
+        mock_run.assert_called_once_with(expected_cmd, shell=True, capture_output=True, text=True, check=True)
 
     @patch('app.runner.ensure_set_environment')
     @patch('os.makedirs')
@@ -340,9 +343,11 @@ class TestProcessInstallLines:
         mock_result.returncode = 0
         mock_run.return_value = mock_result
         lines = ['#!torch --index-url https://download.pytorch.org/whl/cu130']
-        process_install_lines(lines, '/venv', '/pkg', 'testset', 'job_id')
+        result = process_install_lines(lines, '/venv', '/pkg', 'testset', 'job_id')
+        assert result == lines
         assert mock_run.call_count == 1
-        mock_run.assert_called_once_with(['/venv/testset/bin/pip', 'install', '-q', 'torch', '--index-url', 'https://download.pytorch.org/whl/cu130'], capture_output=True, text=True)
+        expected_cmd = ". /venv/testset/bin/activate && pip install torch --index-url https://download.pytorch.org/whl/cu130"
+        mock_run.assert_called_once_with(expected_cmd, shell=True, capture_output=True, text=True, check=True)
 
     @patch('app.runner.ensure_set_environment')
     @patch('os.makedirs')
@@ -809,3 +814,16 @@ class TestLibRunnerLoad:
         with patch('os.listdir', return_value=[]):
             with pytest.raises(Exception, match="Scriptlet testset::testname not existing"):
                 loadJob("testid")
+
+class TestProcessInstallLines:
+    @patch('app.runner.subprocess.run')
+    @patch('app.runner.sys.stderr')
+    def test_process_install_lines_pip(self, mock_stderr, mock_run, mock_conf):
+        from app.runner import process_install_lines
+        lines = ["code\n", "#!torch --index-url https://download.pytorch.org/whl/cpu\n", "more code\n"]
+        mock_run.return_value = Mock()
+        result_lines = process_install_lines(lines, "/venv", "/pkg", "set", "id")
+        mock_stderr.write.assert_called_with("Running pip install torch --index-url https://download.pytorch.org/whl/cpu\n")
+        mock_stderr.flush.assert_called()
+        expected_cmd = ". /venv/set/bin/activate && pip install torch --index-url https://download.pytorch.org/whl/cpu"
+        mock_run.assert_called_with(expected_cmd, shell=True, stdout=sys.stdout, stderr=sys.stderr, text=True, check=True)

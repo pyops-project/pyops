@@ -374,7 +374,7 @@ def disposeJobs():
 
 def install_git_repo(pip_path: str, repo_dir: str):
     """Install git repo as editable package."""
-    result = subprocess.run([pip_path, 'install', '-q', '-e', repo_dir], capture_output=True, text=True, check=True)
+    result = subprocess.run([pip_path, 'install', '-e', repo_dir], capture_output=False, text=True, check=True)
     return result
 
 def process_imports(text: str, current_set: str, kind: str, libs: list[dict[str, str]], overrides_dict: dict[str, str] = None, seen_libs: set[str] = None, depth: int = 0) -> str:
@@ -414,7 +414,7 @@ def process_install_lines(lines, venv_path, pkg_path, set, id):
     """Process #! lines for installs; uses env prop + CWD for shebang/path resolution."""
     # Ensure per-set directories and venv exist for migration scenarios
     ensure_set_environment(set)
-    pip_path = os.path.join(venv_path, set, 'bin', 'pip')
+    venv_activate = os.path.join(venv_path, set, 'bin', 'activate')
     for line in lines:
         stripped = line.lstrip()
         if stripped.startswith('#!'):
@@ -435,16 +435,23 @@ def process_install_lines(lines, venv_path, pkg_path, set, id):
                         clone_args.insert(1, '-b')
                         clone_args.insert(2, arg2)
                     result = subprocess.run(['git'] + clone_args, capture_output=True, text=True, cwd=os.path.join(pkg_path, set))
+                    sys.stderr.write(result.stderr)
+                    sys.stderr.flush()
                     if result.returncode != 0:
                         raise Exception(f"git clone {arg1} failed: {result.stderr}")
                 else:
                     if arg2:
                         ck_result = subprocess.run(['git', '-C', repo_dir, 'checkout', arg2], capture_output=True, text=True, cwd=repo_dir)
+                        sys.stderr.write(ck_result.stderr)
+                        sys.stderr.flush()
                         if ck_result.returncode != 0:
                             raise Exception(f"git checkout {arg2} in {repo_dir} failed: {ck_result.stderr}")
                     pull_result = subprocess.run(['git', '-C', repo_dir, 'pull'], capture_output=True, text=True, cwd=repo_dir)
+                    sys.stderr.write(pull_result.stderr)
+                    sys.stderr.flush()
                     if pull_result.returncode != 0:
                         raise Exception(f"git pull in {repo_dir} failed: {pull_result.stderr}")
+                pip_path = os.path.join(venv_path, set, 'bin', 'pip')
                 install_git_repo(pip_path, repo_dir)
             else:
                 # Skip if it looks like a library directive (starts with { or contains ::)
@@ -452,9 +459,10 @@ def process_install_lines(lines, venv_path, pkg_path, set, id):
                     continue
                 # Split rest into pip install arguments
                 args = rest.split()
-                install_result = subprocess.run([pip_path, 'install', '-q'] + args, capture_output=True, text=True)
-                if install_result.returncode != 0:
-                    raise Exception(f"pip install {rest} failed: {install_result.stderr}")
+                cmd = f". {venv_activate} && pip install {' '.join(args)}"
+                sys.stderr.write(f"Running pip install {' '.join(args)}\n")
+                sys.stderr.flush()
+                result = subprocess.run(cmd, shell=True, stdout=sys.stdout, stderr=sys.stderr, text=True, check=True)
     return lines
 
 def process_code_installs(param: str, code: str, libs: list[dict], venv_path: str, pkg_path: str, set: str, job_id: str) -> tuple[str, str, list[dict]]:
@@ -611,7 +619,7 @@ def run_debug_job(job_id: str, owner: str, set: str, name: str, param: str, code
 
                 # Ensure debugpy is installed early
                 pip_path = os.path.join(venv_path, set, 'bin', 'pip')
-                subprocess.run([pip_path, 'install', '-q', 'debugpy'], check=True, capture_output=True)
+                subprocess.run([pip_path, 'install', 'debugpy'], check=True, capture_output=False)
 
                 # Start debugpy adapter immediately
                 await_debug = '#>AWAIT_DEBUG' in param

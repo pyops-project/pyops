@@ -215,45 +215,47 @@ class TestExecution:
         mock_loadLib.assert_not_called()
 
     @patch('os.makedirs')
-    @patch('subprocess.run')
+    @patch('app.runner.subprocess.run')
     @patch('os.path.exists')
     def test_process_install_lines_pip(self, mock_exists, mock_run, mock_makedirs, mock_conf, tmp_path):
         from app.runner import process_install_lines
-        mock_run.return_value = Mock(returncode=0)  # install succeeds
+        mock_result = Mock(returncode=0)
+        mock_run.return_value = mock_result  # install succeeds
         mock_exists.return_value = True  # venv exists
         lines = ["#!requests"]
         venv_path = "/venv"
         pkg_path = "/pkg"
         set = "testset"
         id = "id"
-        process_install_lines(lines, venv_path, pkg_path, set, id)
-        pip_path = os.path.join(venv_path, set, 'bin', 'pip')
+        result = process_install_lines(lines, venv_path, pkg_path, set, id)
+        assert result == lines
         # Check that pip install was called
-        pip_calls = [call for call in mock_run.call_args_list if pip_path in str(call)]
-        assert len(pip_calls) == 1
-        assert pip_calls[0] == call([pip_path, 'install', '-q', 'requests'], capture_output=True, text=True)
+        assert mock_run.call_count == 1
+        expected_cmd = ". /venv/testset/bin/activate && pip install requests"
+        mock_run.assert_called_once_with(expected_cmd, shell=True, stdout=sys.stdout, stderr=sys.stderr, text=True, check=True)
 
     @patch('os.makedirs')
-    @patch('subprocess.run')
+    @patch('app.runner.subprocess.run')
     @patch('os.path.exists')
     def test_process_install_lines_pip_with_options(self, mock_exists, mock_run, mock_makedirs, mock_conf, tmp_path):
         from app.runner import process_install_lines
-        mock_run.return_value = Mock(returncode=0)  # install succeeds
+        mock_result = Mock(returncode=0)
+        mock_run.return_value = mock_result  # install succeeds
         mock_exists.return_value = True  # venv exists
         lines = ["#!torch --index-url https://download.pytorch.org/whl/cu130"]
         venv_path = "/venv"
         pkg_path = "/pkg"
         set = "testset"
         id = "id"
-        process_install_lines(lines, venv_path, pkg_path, set, id)
-        pip_path = os.path.join(venv_path, set, 'bin', 'pip')
-        # Check that pip install was called with split args
-        pip_calls = [call for call in mock_run.call_args_list if pip_path in str(call)]
-        assert len(pip_calls) == 1
-        assert pip_calls[0] == call([pip_path, 'install', '-q', 'torch', '--index-url', 'https://download.pytorch.org/whl/cu130'], capture_output=True, text=True)
+        result = process_install_lines(lines, venv_path, pkg_path, set, id)
+        assert result == lines
+        # Check that pip install was called
+        assert mock_run.call_count == 1
+        expected_cmd = ". /venv/testset/bin/activate && pip install torch --index-url https://download.pytorch.org/whl/cu130"
+        mock_run.assert_called_once_with(expected_cmd, shell=True, stdout=sys.stdout, stderr=sys.stderr, text=True, check=True)
 
     @patch('os.makedirs')
-    @patch('subprocess.run')
+    @patch('app.runner.subprocess.run')
     @patch('os.path.exists')
     def test_process_install_lines_skip_lib_directive(self, mock_exists, mock_run, mock_makedirs, mock_conf, tmp_path):
         from app.runner import process_install_lines
@@ -263,7 +265,8 @@ class TestExecution:
         pkg_path = "/pkg"
         set = "testset"
         id = "id"
-        process_install_lines(lines, venv_path, pkg_path, set, id)
+        result = process_install_lines(lines, venv_path, pkg_path, set, id)
+        assert result == lines
         # Should not call pip commands for lib directives
         pip_calls = [call for call in mock_run.call_args_list if 'pip' in str(call)]
         assert len(pip_calls) == 0
@@ -272,7 +275,7 @@ class TestExecution:
     @patch('os.path.exists')
     def test_process_install_lines_git_clone(self, mock_exists, mock_run, mock_conf, tmp_path):
         from app.runner import process_install_lines
-        mock_run.return_value = Mock(returncode=0)  # clone success
+        mock_run.return_value = Mock(returncode=0, stderr="")  # clone success
         mock_exists.return_value = False  # repo_dir not exist
         lines = ["#! https://repo.git"]
         venv_path = ".cache/test_venv"
@@ -287,7 +290,7 @@ class TestExecution:
     @patch('os.path.exists')
     def test_process_install_lines_git_pip_e_success(self, mock_exists, mock_run, mock_conf, tmp_path):
         from app.runner import process_install_lines
-        mock_run.return_value = Mock(returncode=0)  # clone and pip success
+        mock_run.return_value = Mock(returncode=0, stderr="")  # clone and pip success
         mock_exists.return_value = False  # repo_dir not exist
         lines = ["#! https://repo.git"]
         venv_path = ".cache/test_venv"
@@ -298,14 +301,14 @@ class TestExecution:
         pip_path = os.path.join(venv_path, set, 'bin', 'pip')
         repo_dir = os.path.join(pkg_path, set, 'repo')
         # Check pip install -e called
-        mock_run.assert_any_call([pip_path, 'install', '-q', '-e', repo_dir], capture_output=True, text=True, check=True)
+        mock_run.assert_any_call([pip_path, 'install', '-e', repo_dir], capture_output=False, text=True, check=True)
 
     @patch('subprocess.run')
     @patch('os.path.exists')
     def test_process_install_lines_git_pip_e_fail_raises(self, mock_exists, mock_run, mock_conf, tmp_path):
         from app.runner import process_install_lines
         from subprocess import CalledProcessError
-        mock_run.side_effect = [Mock(returncode=0), CalledProcessError(1, 'pip', stderr='no setup.py')]  # clone success, pip fail
+        mock_run.side_effect = [Mock(returncode=0, stderr=""), CalledProcessError(1, 'pip', stderr='no setup.py')]  # clone success, pip fail
         mock_exists.return_value = False  # repo_dir not exist
         lines = ["#! https://repo.git"]
         venv_path = ".cache/test_venv"
@@ -325,12 +328,12 @@ class TestExecution:
             process_install_lines(lines, "/venv", "/pkg", "testset", "id")
 
     @patch('os.makedirs')
-    @patch('subprocess.run')
+    @patch('app.runner.subprocess.run')
     def test_process_install_lines_no_bang(self, mock_run, mock_makedirs, mock_conf):
         from app.runner import process_install_lines
         lines = ["normal line"]
         result = process_install_lines(lines, "/venv", "/pkg", "testset", "id")
-        assert result[0] == "normal line"
+        assert result == lines
         mock_run.assert_not_called()
 
     def test_shutdown_updates_running_jobs_to_cancelled(self, mock_conf, mock_db):
@@ -1384,3 +1387,34 @@ class TestDebugOverridesResolution(TestLoggingCapture):
         libB_file = os.path.join(debug_src_dir, set_name, "library", "libB.py")
         assert os.path.exists(libA_file)
         assert os.path.exists(libB_file)
+
+    @patch('app.runner.pyops.ServiceListener')
+    def test_run_task_with_pip_install(self, mock_listener, tmp_path, mock_conf):
+        from app.runner import run
+        q = Queue()
+        mock_listener.return_value = None
+
+        data_base = str(tmp_path / "data")
+        owner = "owner"
+        set_name = "set"
+        job_id = "id"
+        param = "#!torch --index-url https://download.pytorch.org/whl/cpu\nprint('param')"
+        code = "print('code')"
+
+        venv_path = str(tmp_path / "venv")
+        pkg_path = str(tmp_path / "pkg")
+
+        # Mock subprocess.run to avoid actual pip install
+        with patch('app.runner.subprocess.run') as mock_subprocess:
+            mock_subprocess.return_value = Mock()
+            run(job_id, owner, set_name, "name", "task", param, code, [], q, data_base, "bind", venv_path, pkg_path)
+
+        msg = q.get()
+        assert msg["state"] == "done"
+
+        # Check stderr.log contains the pip output
+        stderr_path = os.path.join(data_base, owner, set_name, job_id, "stderr.log")
+        with open(stderr_path, 'r') as f:
+            stderr_content = f.read()
+            assert "Running pip install torch --index-url https://download.pytorch.org/whl/cpu" in stderr_content
+            # Since we mocked subprocess, "Collecting torch" won't be there, but in real it would
