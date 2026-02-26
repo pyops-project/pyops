@@ -1,7 +1,15 @@
 <workflow>
   <overview>
     This workflow provides direct instructions to transform a task into an approved plan, with iterative refinement.
+    At the end of this workflow after user approved plan before switching to code mode plan gets condensed into insight (never before user explicit approval of plan).
+    Interpretations of user statements are no approval, user explicitly approves using precise wording like "Plan approved".
   </overview>
+  <principles>
+    <principle>Follow this workflow precisely in the exact order specified. Do not skip steps, deviate from the sequence, or perform actions out of order.</principle>
+    <principle>Complete each step fully before moving to the next. If a step requires user interaction, wait for user response before proceeding.</principle>
+    <principle>Strict adherence to this workflow is mandatory. Any violation or deviation is prohibited and will result in invalid output.</principle>
+    <principle>If uncertainties arise, resolve them through the specified nested loops before advancing.</principle>
+  </principles>
   <steps>
     <step number="0">
       <action>Check task understanding</action>
@@ -60,10 +68,18 @@
       <action>Incorporate the user input into the existing plan. Adjust steps, add details, or remove elements based on the feedback. Output the refined plan with changes highlighted.</action>
     </step>
     <step number="8">
-      <action>If user did not approve plan incorporate the user input into the existing plan. Adjust steps, add details, or remove elements based on the feedback. If user approved continue to workflow step 9.</action>
-      <loop>After each plan refinement, go back to workflow step 5.</loop>
+      <action>Ask the user for approval of the plan without switching modes.</action>
+      <action>If user explicitly approved plan, continue to workflow step 9.</action>
+      <action>If user did not approve, incorporate the user input into the existing plan. Adjust steps, add details, or remove elements based on the feedback and go back to workflow step 5..</action>
     </step>
     <step number="9">
+      <action>If user explicitly approved plan, invoke condense-plan-insights skill</action>
+      <skill name="condense-plan-insights" />
+      <description>
+        Condense Insights gained by this plan.
+      </description>
+    </step>
+    <step number="10">
       <action>Switch to code mode</action>
     </step>
   </steps>
