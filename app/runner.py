@@ -374,7 +374,7 @@ def disposeJobs():
 
 def install_git_repo(pip_path: str, repo_dir: str):
     """Install git repo as editable package."""
-    result = subprocess.run([pip_path, 'install', '-e', repo_dir], capture_output=False, text=True, check=True)
+    result = subprocess.run([pip_path, 'install', '--no-cache-dir', '--upgrade', '--upgrade-strategy', 'eager', '-e', repo_dir], capture_output=False, text=True, check=True)
     return result
 
 def process_imports(text: str, current_set: str, kind: str, libs: list[dict[str, str]], overrides_dict: dict[str, str] = None, seen_libs: set[str] = None, depth: int = 0) -> str:
@@ -415,6 +415,9 @@ def process_install_lines(lines, venv_path, pkg_path, set, id):
     # Ensure per-set directories and venv exist for migration scenarios
     ensure_set_environment(set)
     venv_activate = os.path.join(venv_path, set, 'bin', 'activate')
+    # Bootstrap: Upgrade core packaging tools to ensure proper dependency resolution
+    # and help newer venv packages override any older system-level versions
+    subprocess.run(f". {venv_activate} && pip install --upgrade pip setuptools wheel", shell=True, check=True)
     for line in lines:
         stripped = line.lstrip()
         if stripped.startswith('#!'):
@@ -459,10 +462,11 @@ def process_install_lines(lines, venv_path, pkg_path, set, id):
                     continue
                 # Split rest into pip install arguments
                 args = rest.split()
-                cmd = f". {venv_activate} && pip install {' '.join(args)}"
-                sys.stderr.write(f"Running pip install {' '.join(args)}\n")
-                sys.stderr.flush()
+                # Use safe flags to avoid conflicts with system site-packages
+                cmd = f". {venv_activate} && pip install --no-cache-dir --upgrade --upgrade-strategy eager {' '.join(args)}"
                 result = subprocess.run(cmd, shell=True, stdout=sys.stdout, stderr=sys.stderr, text=True, check=True)
+                sys.stdout.flush()
+                sys.stderr.flush()
     return lines
 
 def process_code_installs(param: str, code: str, libs: list[dict], venv_path: str, pkg_path: str, set: str, job_id: str) -> tuple[str, str, list[dict]]:

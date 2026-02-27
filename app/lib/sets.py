@@ -13,6 +13,8 @@ def ensure_set_environment(name):
     Ensure per-set venv and pkg directories exist and venv is initialized.
     Creates directories and initializes venv if not present.
     """
+    if not name:
+        raise ValueError("Set name cannot be empty")
     runner_conf = conf_runner()
     venv_base = runner_conf.get("venv", "data/venv")
     pkg_base = runner_conf.get("pkg", "data/pkg")
@@ -27,6 +29,8 @@ def remove_set_environment(name):
     """
     Remove per-set venv and pkg directories.
     """
+    if not name:
+        raise ValueError("Set name cannot be empty")
     runner_conf = conf_runner()
     venv_base = runner_conf.get("venv", "data/venv")
     pkg_base = runner_conf.get("pkg", "data/pkg")

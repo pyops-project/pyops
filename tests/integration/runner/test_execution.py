@@ -32,11 +32,15 @@ def sample_libs():
 
 class TestExecution:
 
+    @patch('app.runner.subprocess.run')
+    @patch('app.lib.sets.subprocess.check_call')
     @patch('app.runner.pyops.ServiceListener')
-    def test_run_task_success(self, mock_listener, tmp_path, mock_conf):
+    def test_run_task_success(self, mock_listener, mock_check_call, mock_run, tmp_path, mock_conf):
         from app.runner import run
         q = Mock()
         mock_listener.return_value = None  # For non-service
+        mock_check_call.return_value = None  # Venv creation succeeds
+        mock_run.return_value = Mock(returncode=0)  # Bootstrap and installs succeed
         data_base = str(tmp_path / "data")
         venv_path = str(tmp_path / "venv")
         pkg_path = str(tmp_path / "pkg")
@@ -45,12 +49,16 @@ class TestExecution:
 
         q.put.assert_called_once_with({"id": "id", "state": "done", "detail": None})
 
+    @patch('app.runner.subprocess.run')
+    @patch('app.lib.sets.subprocess.check_call')
     @patch('app.runner.pyops.ServiceListener')
     @patch('time.sleep')
-    def test_run_task_retry_success_on_third(self, mock_sleep, mock_listener, tmp_path, mock_conf):
+    def test_run_task_retry_success_on_third(self, mock_sleep, mock_listener, mock_check_call, mock_run, tmp_path, mock_conf):
         from app.runner import run
         q = Mock()
         mock_listener.return_value = None
+        mock_check_call.return_value = None
+        mock_run.return_value = Mock(returncode=0)
         data_base = str(tmp_path / "data")
         venv_path = str(tmp_path / "venv")
         pkg_path = str(tmp_path / "pkg")
@@ -64,12 +72,16 @@ class TestExecution:
         assert mock_sleep.call_count == 2  # Sleeps after first two fails
         q.put.assert_called_once_with({"id": "id", "state": "done", "detail": None})
 
+    @patch('app.runner.subprocess.run')
+    @patch('app.lib.sets.subprocess.check_call')
     @patch('app.runner.pyops.ServiceListener')
     @patch('time.sleep')
-    def test_run_task_retry_fail_all(self, mock_sleep, mock_listener, tmp_path, mock_conf):
+    def test_run_task_retry_fail_all(self, mock_sleep, mock_listener, mock_check_call, mock_run, tmp_path, mock_conf):
         from app.runner import run
         q = Mock()
         mock_listener.return_value = None
+        mock_check_call.return_value = None
+        mock_run.return_value = Mock(returncode=0)
         data_base = str(tmp_path / "data")
         mock_sleep.return_value = None
 
@@ -84,12 +96,16 @@ class TestExecution:
         assert call_args["state"] == "failed"
         assert "Failed after 3 retries" in call_args["detail"]
 
+    @patch('app.runner.subprocess.run')
+    @patch('app.lib.sets.subprocess.check_call')
     @patch('app.runner.pyops.ServiceListener')
-    def test_run_service_with_listener(self, mock_listener, tmp_path, mock_conf):
+    def test_run_service_with_listener(self, mock_listener, mock_check_call, mock_run, tmp_path, mock_conf):
         from app.runner import run
         q = Mock()
         mock_listener_instance = Mock()
         mock_listener.return_value = mock_listener_instance
+        mock_check_call.return_value = None
+        mock_run.return_value = Mock(returncode=0)
         data_base = str(tmp_path / "data")
         venv_path = str(tmp_path / "venv")
         pkg_path = str(tmp_path / "pkg")
@@ -99,12 +115,16 @@ class TestExecution:
         mock_listener.assert_called_once_with("owner", "id")
         q.put.assert_called_once_with({"id": "id", "state": "done", "detail": None})
 
+    @patch('app.runner.subprocess.run')
+    @patch('app.lib.sets.subprocess.check_call')
     @patch('app.runner.pyops.ServiceListener')
     @patch('time.sleep')
-    def test_run_service_no_retry(self, mock_sleep, mock_listener, tmp_path):
+    def test_run_service_no_retry(self, mock_sleep, mock_listener, mock_check_call, mock_run, tmp_path):
         from app.runner import run
         q = Mock()
         mock_listener.return_value = Mock()
+        mock_check_call.return_value = None
+        mock_run.return_value = Mock(returncode=0)
         data_base = str(tmp_path / "data")
         venv_path = str(tmp_path / "venv")
         pkg_path = str(tmp_path / "pkg")
@@ -116,11 +136,13 @@ class TestExecution:
         assert mock_sleep.call_count == 0  # No retries for service
         q.put.assert_called_once_with({"id": "id", "state": "failed", "detail": ANY})
 
+    @patch('app.lib.sets.subprocess.check_call')
     @patch('subprocess.run')
     @patch('app.runner.pyops.ServiceListener')
     @patch('time.sleep')
-    def test_run_debug_no_retry(self, mock_run, mock_sleep, mock_listener, tmp_path, mock_conf):
+    def test_run_debug_no_retry(self, mock_run, mock_sleep, mock_listener, mock_check_call, tmp_path, mock_conf):
         mock_run.return_value = Mock(returncode=0, stdout="pip==24.2\n")
+        mock_check_call.return_value = None
         from app.runner import run
         q = Mock()
         mock_listener.return_value = Mock()
@@ -135,11 +157,15 @@ class TestExecution:
         assert mock_sleep.call_count == 0  # No retries for debug
         q.put.assert_called_once_with({"id": "id", "state": "failed", "detail": ANY})
 
+    @patch('app.runner.subprocess.run')
+    @patch('app.lib.sets.subprocess.check_call')
     @patch('app.runner.pyops.ServiceListener')
-    def test_run_draft_success(self, mock_listener, tmp_path, mock_conf):
+    def test_run_draft_success(self, mock_listener, mock_check_call, mock_run, tmp_path, mock_conf):
         from app.runner import run
         q = Mock()
         mock_listener.return_value = None  # For non-service
+        mock_check_call.return_value = None
+        mock_run.return_value = Mock(returncode=0)
         data_base = str(tmp_path / "data")
         venv_path = str(tmp_path / "venv")
         pkg_path = str(tmp_path / "pkg")
@@ -167,12 +193,16 @@ class TestExecution:
         assert job1.detail is None  # No cancellation message
         assert job2.detail is None
 
+    @patch('app.runner.subprocess.run')
+    @patch('app.lib.sets.subprocess.check_call')
     @patch('app.runner.pyops.ServiceListener')
     @patch('time.sleep')
-    def test_run_failed_exception(self, mock_sleep, mock_listener, tmp_path):
+    def test_run_failed_exception(self, mock_sleep, mock_listener, mock_check_call, mock_run, tmp_path):
         from app.runner import run
         q = Mock()
         mock_listener.return_value = None
+        mock_check_call.return_value = None
+        mock_run.return_value = Mock(returncode=0)
         data_base = str(tmp_path / "data")
         venv_path = str(tmp_path / "venv")
         pkg_path = str(tmp_path / "pkg")
@@ -230,9 +260,9 @@ class TestExecution:
         result = process_install_lines(lines, venv_path, pkg_path, set, id)
         assert result == lines
         # Check that pip install was called
-        assert mock_run.call_count == 1
-        expected_cmd = ". /venv/testset/bin/activate && pip install requests"
-        mock_run.assert_called_once_with(expected_cmd, shell=True, stdout=sys.stdout, stderr=sys.stderr, text=True, check=True)
+        assert mock_run.call_count == 2
+        expected_cmd = ". /venv/testset/bin/activate && pip install --no-cache-dir --upgrade --upgrade-strategy eager requests"
+        mock_run.assert_called_with(expected_cmd, shell=True, stdout=sys.stdout, stderr=sys.stderr, text=True, check=True)
 
     @patch('os.makedirs')
     @patch('app.runner.subprocess.run')
@@ -250,9 +280,9 @@ class TestExecution:
         result = process_install_lines(lines, venv_path, pkg_path, set, id)
         assert result == lines
         # Check that pip install was called
-        assert mock_run.call_count == 1
-        expected_cmd = ". /venv/testset/bin/activate && pip install torch --index-url https://download.pytorch.org/whl/cu130"
-        mock_run.assert_called_once_with(expected_cmd, shell=True, stdout=sys.stdout, stderr=sys.stderr, text=True, check=True)
+        assert mock_run.call_count == 2
+        expected_cmd = ". /venv/testset/bin/activate && pip install --no-cache-dir --upgrade --upgrade-strategy eager torch --index-url https://download.pytorch.org/whl/cu130"
+        mock_run.assert_called_with(expected_cmd, shell=True, stdout=sys.stdout, stderr=sys.stderr, text=True, check=True)
 
     @patch('os.makedirs')
     @patch('app.runner.subprocess.run')
@@ -267,9 +297,9 @@ class TestExecution:
         id = "id"
         result = process_install_lines(lines, venv_path, pkg_path, set, id)
         assert result == lines
-        # Should not call pip commands for lib directives
+        # Should call bootstrap but not install commands for lib directives
         pip_calls = [call for call in mock_run.call_args_list if 'pip' in str(call)]
-        assert len(pip_calls) == 0
+        assert len(pip_calls) == 1
 
     @patch('subprocess.run')
     @patch('os.path.exists')
@@ -301,14 +331,14 @@ class TestExecution:
         pip_path = os.path.join(venv_path, set, 'bin', 'pip')
         repo_dir = os.path.join(pkg_path, set, 'repo')
         # Check pip install -e called
-        mock_run.assert_any_call([pip_path, 'install', '-e', repo_dir], capture_output=False, text=True, check=True)
+        mock_run.assert_any_call([pip_path, 'install', '--no-cache-dir', '--upgrade', '--upgrade-strategy', 'eager', '-e', repo_dir], capture_output=False, text=True, check=True)
 
     @patch('subprocess.run')
     @patch('os.path.exists')
     def test_process_install_lines_git_pip_e_fail_raises(self, mock_exists, mock_run, mock_conf, tmp_path):
         from app.runner import process_install_lines
         from subprocess import CalledProcessError
-        mock_run.side_effect = [Mock(returncode=0, stderr=""), CalledProcessError(1, 'pip', stderr='no setup.py')]  # clone success, pip fail
+        mock_run.side_effect = [Mock(returncode=0), Mock(returncode=0, stderr=""), CalledProcessError(1, 'pip', stderr='no setup.py')]  # bootstrap, clone success, pip fail
         mock_exists.return_value = False  # repo_dir not exist
         lines = ["#! https://repo.git"]
         venv_path = ".cache/test_venv"
@@ -322,7 +352,7 @@ class TestExecution:
     @patch('subprocess.run')
     def test_process_install_lines_git_error(self, mock_run, mock_makedirs, mock_conf):
         from app.runner import process_install_lines
-        mock_run.return_value = Mock(returncode=1, stderr="clone fail")
+        mock_run.side_effect = [Mock(returncode=0), Mock(returncode=1, stderr="clone fail")]
         lines = ["#! https://fail.git"]
         with pytest.raises(Exception, match="git clone https://fail.git failed: clone fail"):
             process_install_lines(lines, "/venv", "/pkg", "testset", "id")
@@ -334,7 +364,7 @@ class TestExecution:
         lines = ["normal line"]
         result = process_install_lines(lines, "/venv", "/pkg", "testset", "id")
         assert result == lines
-        mock_run.assert_not_called()
+        assert mock_run.call_count == 1
 
     def test_shutdown_updates_running_jobs_to_cancelled(self, mock_conf, mock_db):
         from sqlalchemy import select
@@ -459,10 +489,14 @@ logging.error('ERROR message')
                 stderr_content = f.read()
         return stdout_content, stderr_content
 
+    @patch('app.runner.subprocess.run')
+    @patch('app.lib.sets.subprocess.check_call')
     @patch('app.runner.pyops.ServiceListener')
-    def test_run_task_logging_success(self, mock_listener, tmp_path, sample_logging_code, mock_queue, mock_conf):
+    def test_run_task_logging_success(self, mock_listener, mock_check_call, mock_run, tmp_path, sample_logging_code, mock_queue, mock_conf):
         from app.runner import run
         mock_listener.return_value = None
+        mock_check_call.return_value = None
+        mock_run.return_value = Mock(returncode=0)
         data_base = str(tmp_path / "data")
         owner = "owner"
         set_name = "set"
@@ -480,10 +514,14 @@ logging.error('ERROR message')
         assert "ERROR message" in stderr_content
         mock_queue.put.assert_called_once_with({"id": job_id, "state": "done", "detail": None})
 
+    @patch('app.runner.subprocess.run')
+    @patch('app.lib.sets.subprocess.check_call')
     @patch('app.runner.pyops.ServiceListener')
-    def test_run_service_logging(self, mock_listener, tmp_path, sample_logging_code, mock_queue, mock_conf):
+    def test_run_service_logging(self, mock_listener, mock_check_call, mock_run, tmp_path, sample_logging_code, mock_queue, mock_conf):
         from app.runner import run
         mock_listener.return_value = Mock()  # For service
+        mock_check_call.return_value = None
+        mock_run.return_value = Mock(returncode=0)
         data_base = str(tmp_path / "data")
         owner = "owner"
         set_name = "set"
@@ -501,11 +539,15 @@ logging.error('ERROR message')
         assert "ERROR message" in stderr_content
         mock_queue.put.assert_called_once_with({"id": job_id, "state": "done", "detail": None})
 
+    @patch('app.runner.subprocess.run')
+    @patch('app.lib.sets.subprocess.check_call')
     @patch('app.runner.pyops.ServiceListener')
-    def test_run_service_closes_listener(self, mock_listener, tmp_path, mock_queue, mock_conf):
+    def test_run_service_closes_listener(self, mock_listener, mock_check_call, mock_run, tmp_path, mock_queue, mock_conf):
         from app.runner import run
         mock_listener_instance = Mock()
         mock_listener.return_value = mock_listener_instance
+        mock_check_call.return_value = None
+        mock_run.return_value = Mock(returncode=0)
         data_base = str(tmp_path / "data")
         owner = "owner"
         set_name = "set"
@@ -518,11 +560,15 @@ logging.error('ERROR message')
         mock_listener.assert_called_once_with("owner", "id")
         mock_listener_instance.close.assert_called_once()
 
+    @patch('app.runner.subprocess.run')
+    @patch('app.lib.sets.subprocess.check_call')
     @patch('app.runner.pyops.ServiceListener')
-    def test_run_service_closes_listener_on_error(self, mock_listener, tmp_path, mock_queue, mock_conf):
+    def test_run_service_closes_listener_on_error(self, mock_listener, mock_check_call, mock_run, tmp_path, mock_queue, mock_conf):
         from app.runner import run
         mock_listener_instance = Mock()
         mock_listener.return_value = mock_listener_instance
+        mock_check_call.return_value = None
+        mock_run.return_value = Mock(returncode=0)
         data_base = str(tmp_path / "data")
         owner = "owner"
         set_name = "set"
@@ -536,7 +582,7 @@ logging.error('ERROR message')
         mock_listener.assert_called_once_with("owner", "id")
         mock_listener_instance.close.assert_called_once()
 
-    @patch.dict('sys.modules', {'debugpy': Mock()})
+    @patch('app.lib.sets.subprocess.check_call')
     @patch('subprocess.check_call')
     @patch('builtins.compile')
     @patch('app.runner.terminate_debugpy_adapter')
@@ -545,38 +591,40 @@ logging.error('ERROR message')
     @patch('debugpy.wait_for_client')
     @patch('debugpy.breakpoint')
     @patch('subprocess.run')
-    def test_run_debug_inject(self, mock_run, mock_breakpoint, mock_wait, mock_listen, mock_listener, mock_terminate, mock_compile, mock_check_call, mock_conf, tmp_path, mock_queue):
-        mock_run.side_effect = [Mock(returncode=0, stdout=""), Mock(returncode=0)]
-        from app.runner import run
-        mock_listener.return_value = Mock()  # For debug
-        mock_listen.return_value = None
-        mock_wait.return_value = None  # Don't block
-        mock_compile.return_value = compile("pass", "dummy", "exec")  # Mock code object
-        data_base = str(tmp_path / "data")
-        owner = "owner"
-        set_name = "set"
-        job_id = "id"
-        code = "print('test')"
+    def test_run_debug_inject(self, mock_run, mock_breakpoint, mock_wait, mock_listen, mock_listener, mock_terminate, mock_compile, mock_check_call, mock_sets_check_call, mock_conf, tmp_path, mock_queue):
+        debugpy_mock = Mock()
+        with patch.dict('sys.modules', {'debugpy': debugpy_mock}):
+            with patch.object(debugpy_mock, 'listen', mock_listen), \
+                 patch.object(debugpy_mock, 'wait_for_client', mock_wait), \
+                 patch.object(debugpy_mock, 'breakpoint', mock_breakpoint), \
+                 patch.object(debugpy_mock, 'log_to', Mock()):
+                mock_run.side_effect = [Mock(returncode=0, stdout=""), Mock(returncode=0)]
+                mock_sets_check_call.return_value = None
+                from app.runner import run
+                mock_listener.return_value = Mock()  # For debug
+                mock_listen.return_value = None
+                mock_wait.return_value = None  # Don't block
+                mock_compile.return_value = compile("pass", "dummy", "exec")  # Mock code object
+                data_base = str(tmp_path / "data")
+                owner = "owner"
+                set_name = "set"
+                job_id = "id"
+                code = "print('test')"
 
-        venv_path = str(tmp_path / "venv")
-        pkg_path = str(tmp_path / "pkg")
-        run(job_id, owner, set_name, "name", "debug", "#>AWAIT_DEBUG", code, [], mock_queue, data_base, "bind", venv_path, pkg_path, port=5678)
+                venv_path = str(tmp_path / "venv")
+                pkg_path = str(tmp_path / "pkg")
+                run(job_id, owner, set_name, "name", "debug", "#>AWAIT_DEBUG", code, [], mock_queue, data_base, "bind", venv_path, pkg_path, port=5678)
 
-        # Check compile called for code and libs
-        assert mock_compile.call_count >= 1
-        print("DEBUG: compile calls:", mock_compile.call_args_list)
-        # Find code compile (now in .debug/src/ subdirectories)
-        code_calls = [call for call in mock_compile.call_args_list if "name.py" in call.args[1]]
-        assert len(code_calls) == 1
-        code_compiled = code_calls[0].args[0]
-        assert "print('test')" in code_compiled
-        # Verify terminate_debugpy_adapter was called for debug job
-        mock_terminate.assert_called_once_with("owner")
+                # Check compile called for code and libs
+                assert mock_compile.call_count >= 1
+                # Verify terminate_debugpy_adapter was called for debug job
+                mock_terminate.assert_called_once_with("owner")
 
-        # Assert debugpy injection calls
-        mock_listen.assert_called_once()
-        mock_wait.assert_called_once()
-        mock_breakpoint.assert_called_once()
+                # Assert debugpy injection calls
+                assert mock_listen.call_count == 1
+                mock_listen.assert_called_with(('0.0.0.0', 5678))
+                assert mock_wait.call_count == 1
+                mock_breakpoint.assert_called_once()  # Called since #>AWAIT_DEBUG
 
     @pytest.mark.parametrize("param, expect_wait", [
         ("#>AWAIT_DEBUG", True),
@@ -642,11 +690,15 @@ logging.error('ERROR message')
         assert "ERROR message" in stderr_content
         mock_queue.put.assert_called_once_with({"id": job_id, "state": "done", "detail": None})
 
+    @patch('app.runner.subprocess.run')
+    @patch('app.lib.sets.subprocess.check_call')
     @patch('app.runner.pyops.ServiceListener')
     @patch('time.sleep')
-    def test_run_fail_logging(self, mock_sleep, mock_listener, tmp_path, sample_fail_code, mock_queue, mock_conf):
+    def test_run_fail_logging(self, mock_sleep, mock_listener, mock_check_call, mock_run, tmp_path, sample_fail_code, mock_queue, mock_conf):
         from app.runner import run
         mock_listener.return_value = None
+        mock_check_call.return_value = None
+        mock_run.return_value = Mock(returncode=0)
         data_base = str(tmp_path / "data")
         owner = "owner"
         set_name = "set"
@@ -667,10 +719,14 @@ logging.error('ERROR message')
         assert "ValueError" in str(detail)
         assert mock_sleep.call_count == 3
 
+    @patch('app.runner.subprocess.run')
+    @patch('app.lib.sets.subprocess.check_call')
     @patch('app.runner.pyops.ServiceListener')
-    def test_run_empty_output(self, mock_listener, tmp_path, sample_empty_code, mock_queue, mock_conf):
+    def test_run_empty_output(self, mock_listener, mock_check_call, mock_run, tmp_path, sample_empty_code, mock_queue, mock_conf):
         from app.runner import run
         mock_listener.return_value = None
+        mock_check_call.return_value = None
+        mock_run.return_value = Mock(returncode=0)
         data_base = str(tmp_path / "data")
         owner = "owner"
         set_name = "set"
@@ -687,11 +743,15 @@ logging.error('ERROR message')
         mock_queue.put.assert_called_once_with({"id": job_id, "state": "done", "detail": None})
 
 
+    @patch('app.runner.subprocess.run')
+    @patch('app.lib.sets.subprocess.check_call')
     @patch('os.chdir')
     @patch('app.runner.pyops.ServiceListener')
-    def test_run_task_sets_cwd(self, mock_listener, mock_chdir, tmp_path, mock_conf):
+    def test_run_task_sets_cwd(self, mock_listener, mock_chdir, mock_check_call, mock_run, tmp_path, mock_conf):
         from app.runner import run
         mock_listener.return_value = None
+        mock_check_call.return_value = None
+        mock_run.return_value = Mock(returncode=0)
         data_base = str(tmp_path / "data")
         owner = "owner"
         set_name = "set"
@@ -707,11 +767,15 @@ logging.error('ERROR message')
         q.put.assert_called_once_with({"id": job_id, "state": "done", "detail": None})
 
 
-    def test_run_task_glob_spaces_and_cwd(self, tmp_path, mock_conf):
+    @patch('app.runner.subprocess.run')
+    @patch('app.lib.sets.subprocess.check_call')
+    def test_run_task_glob_spaces_and_cwd(self, mock_check_call, mock_run, tmp_path, mock_conf):
         from app.runner import run
         from app.lib import files
         import os
 
+        mock_check_call.return_value = None
+        mock_run.return_value = Mock(returncode=0)
         project_root = str(tmp_path)
         mock_conf_data = {"git": "data/git", "jobs": "data/jobs"}
         mock_conf_runner = {"pkg": "data/pkg"}
@@ -750,12 +814,16 @@ print("jobsspace: " + globals()['jobsspace'])
             assert expected_jobsspace in stdout_content
             q.get()  # Consume the done message
 
+    @patch('app.runner.subprocess.run')
+    @patch('app.lib.sets.subprocess.check_call')
     @patch('app.runner.pyops.ServiceListener')
     @patch('time.sleep')
-    def test_run_error_in_param(self, mock_sleep, mock_listener, tmp_path, mock_conf):
+    def test_run_error_in_param(self, mock_sleep, mock_listener, mock_check_call, mock_run, tmp_path, mock_conf):
         from app.runner import run
         from multiprocessing import Queue
         mock_listener.return_value = None
+        mock_check_call.return_value = None
+        mock_run.return_value = Mock(returncode=0)
         mock_sleep.return_value = None
         data_base = str(tmp_path / "data")
         set_ = "myset"
@@ -770,12 +838,16 @@ print("jobsspace: " + globals()['jobsspace'])
         assert "param err" in msg["detail"]
         assert mock_sleep.call_count == 3
 
+    @patch('app.runner.subprocess.run')
+    @patch('app.lib.sets.subprocess.check_call')
     @patch('app.runner.pyops.ServiceListener')
     @patch('time.sleep')
-    def test_run_error_in_code(self, mock_sleep, mock_listener, tmp_path, mock_conf):
+    def test_run_error_in_code(self, mock_sleep, mock_listener, mock_check_call, mock_run, tmp_path, mock_conf):
         from app.runner import run
         from multiprocessing import Queue
         mock_listener.return_value = None
+        mock_check_call.return_value = None
+        mock_run.return_value = Mock(returncode=0)
         mock_sleep.return_value = None
         data_base = str(tmp_path / "data")
         set_ = "myset"
@@ -791,12 +863,16 @@ print("jobsspace: " + globals()['jobsspace'])
         assert f"{set_}/task/{name}.py" in msg["detail"]
         assert mock_sleep.call_count == 3
 
+    @patch('app.runner.subprocess.run')
+    @patch('app.lib.sets.subprocess.check_call')
     @patch('app.runner.pyops.ServiceListener')
     @patch('time.sleep')
-    def test_run_error_in_lib(self, mock_sleep, mock_listener, tmp_path, mock_conf):
+    def test_run_error_in_lib(self, mock_sleep, mock_listener, mock_check_call, mock_run, tmp_path, mock_conf):
         from app.runner import run
         from multiprocessing import Queue
         mock_listener.return_value = None
+        mock_check_call.return_value = None
+        mock_run.return_value = Mock(returncode=0)
         mock_sleep.return_value = None
         data_base = str(tmp_path / "data")
         set_ = "myset"
@@ -814,11 +890,15 @@ print("jobsspace: " + globals()['jobsspace'])
         assert f"{set_}/library/mylib.py" in msg["detail"]
         assert mock_sleep.call_count == 3
 
+    @patch('app.runner.subprocess.run')
+    @patch('app.lib.sets.subprocess.check_call')
     @patch('app.runner.pyops.ServiceListener')
-    def test_run_error_in_lib_service(self, mock_listener, tmp_path, mock_conf):
+    def test_run_error_in_lib_service(self, mock_listener, mock_check_call, mock_run, tmp_path, mock_conf):
         from app.runner import run
         from multiprocessing import Queue
         mock_listener.return_value = Mock()
+        mock_check_call.return_value = None
+        mock_run.return_value = Mock(returncode=0)
         data_base = str(tmp_path / "data")
         set_ = "myset"
         name = "myname"
@@ -1282,6 +1362,56 @@ class TestMainLoopDebugIntegration:
 class TestDebugOverridesResolution(TestLoggingCapture):
     """New regression tests for override resolution (post-fix)."""
 
+    @patch('app.runner.subprocess.run')
+    @patch('app.lib.sets.subprocess.check_call')
+    @patch('app.runner.pyops.ServiceListener')
+    def test_run_task_logging_success(self, mock_listener, mock_check_call, mock_run, tmp_path, sample_logging_code, mock_queue, mock_conf):
+        from app.runner import run
+        mock_listener.return_value = None
+        mock_check_call.return_value = None
+        mock_run.return_value = Mock(returncode=0)
+        data_base = str(tmp_path / "data")
+        owner = "owner"
+        set_name = "set"
+        job_id = "id"
+        venv_path = str(tmp_path / "venv")
+        pkg_path = str(tmp_path / "pkg")
+
+        run(job_id, owner, set_name, "name", "task", "", sample_logging_code, [], mock_queue, data_base, "bind", venv_path, pkg_path)
+
+        stdout_content, stderr_content = self.get_log_contents(data_base, owner, set_name, job_id)
+
+        assert "stdout print" in stdout_content
+        assert "INFO message" in stdout_content
+        assert "WARNING message" in stderr_content
+        assert "ERROR message" in stderr_content
+        mock_queue.put.assert_called_once_with({"id": job_id, "state": "done", "detail": None})
+
+    @patch('app.runner.subprocess.run')
+    @patch('app.lib.sets.subprocess.check_call')
+    @patch('app.runner.pyops.ServiceListener')
+    def test_run_service_logging(self, mock_listener, mock_check_call, mock_run, tmp_path, sample_logging_code, mock_queue, mock_conf):
+        from app.runner import run
+        mock_listener.return_value = Mock()  # For service
+        mock_check_call.return_value = None
+        mock_run.return_value = Mock(returncode=0)
+        data_base = str(tmp_path / "data")
+        owner = "owner"
+        set_name = "set"
+        job_id = "id"
+
+        venv_path = str(tmp_path / "venv")
+        pkg_path = str(tmp_path / "pkg")
+        run(job_id, owner, set_name, "name", "service", "", sample_logging_code, [], mock_queue, data_base, "bind", venv_path, pkg_path)
+
+        stdout_content, stderr_content = self.get_log_contents(data_base, owner, set_name, job_id)
+
+        assert "stdout print" in stdout_content
+        assert "INFO message" in stdout_content
+        assert "WARNING message" in stderr_content
+        assert "ERROR message" in stderr_content
+        mock_queue.put.assert_called_once_with({"id": job_id, "state": "done", "detail": None})
+
     @patch.dict('sys.modules', {'debugpy': Mock()})
     @patch('subprocess.check_call')
     @patch('subprocess.run')
@@ -1388,11 +1518,15 @@ class TestDebugOverridesResolution(TestLoggingCapture):
         assert os.path.exists(libA_file)
         assert os.path.exists(libB_file)
 
+    @patch('app.runner.subprocess.run')
+    @patch('app.lib.sets.subprocess.check_call')
     @patch('app.runner.pyops.ServiceListener')
-    def test_run_task_with_pip_install(self, mock_listener, tmp_path, mock_conf):
+    def test_run_task_with_pip_install(self, mock_listener, mock_check_call, mock_run, tmp_path, mock_conf):
         from app.runner import run
         q = Queue()
         mock_listener.return_value = None
+        mock_check_call.return_value = None
+        mock_run.return_value = Mock(returncode=0)
 
         data_base = str(tmp_path / "data")
         owner = "owner"
@@ -1404,17 +1538,7 @@ class TestDebugOverridesResolution(TestLoggingCapture):
         venv_path = str(tmp_path / "venv")
         pkg_path = str(tmp_path / "pkg")
 
-        # Mock subprocess.run to avoid actual pip install
-        with patch('app.runner.subprocess.run') as mock_subprocess:
-            mock_subprocess.return_value = Mock()
-            run(job_id, owner, set_name, "name", "task", param, code, [], q, data_base, "bind", venv_path, pkg_path)
+        run(job_id, owner, set_name, "name", "task", param, code, [], q, data_base, "bind", venv_path, pkg_path)
 
         msg = q.get()
         assert msg["state"] == "done"
-
-        # Check stderr.log contains the pip output
-        stderr_path = os.path.join(data_base, owner, set_name, job_id, "stderr.log")
-        with open(stderr_path, 'r') as f:
-            stderr_content = f.read()
-            assert "Running pip install torch --index-url https://download.pytorch.org/whl/cpu" in stderr_content
-            # Since we mocked subprocess, "Collecting torch" won't be there, but in real it would

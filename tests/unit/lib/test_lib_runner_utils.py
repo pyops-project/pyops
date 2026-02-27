@@ -817,13 +817,11 @@ class TestLibRunnerLoad:
 
 class TestProcessInstallLines:
     @patch('app.runner.subprocess.run')
-    @patch('app.runner.sys.stderr')
-    def test_process_install_lines_pip(self, mock_stderr, mock_run, mock_conf):
+    def test_process_install_lines_pip(self, mock_run, mock_conf):
         from app.runner import process_install_lines
         lines = ["code\n", "#!torch --index-url https://download.pytorch.org/whl/cpu\n", "more code\n"]
         mock_run.return_value = Mock()
         result_lines = process_install_lines(lines, "/venv", "/pkg", "set", "id")
-        mock_stderr.write.assert_called_with("Running pip install torch --index-url https://download.pytorch.org/whl/cpu\n")
-        mock_stderr.flush.assert_called()
-        expected_cmd = ". /venv/set/bin/activate && pip install torch --index-url https://download.pytorch.org/whl/cpu"
+        assert mock_run.call_count == 2
+        expected_cmd = ". /venv/set/bin/activate && pip install --no-cache-dir --upgrade --upgrade-strategy eager torch --index-url https://download.pytorch.org/whl/cpu"
         mock_run.assert_called_with(expected_cmd, shell=True, stdout=sys.stdout, stderr=sys.stderr, text=True, check=True)
