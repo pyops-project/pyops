@@ -23,6 +23,9 @@ def ensure_set_environment(name):
     os.makedirs(venv_path, exist_ok=True)
     if not os.path.exists(os.path.join(venv_path, 'bin', 'python')):
         subprocess.check_call([sys.executable, '-m', 'venv', venv_path])
+        pip_path = os.path.join(venv_path, 'bin', 'pip')
+        subprocess.check_call([pip_path, 'install', '--upgrade', 'pip', 'setuptools', 'wheel'])
+        subprocess.check_call([pip_path, 'install', 'pyzmq', 'msgpack', 'psutil', 'debugpy', 'requests'])
     os.makedirs(pkg_path, exist_ok=True)
 
 def remove_set_environment(name):

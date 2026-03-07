@@ -18,7 +18,7 @@ from .routers.scriptlet import editor
 from .routers.scriptlet import sets
 from .routers.scriptlet import jslib
 
-from .lib import sites, files, pyops, git
+from .lib import sites, files, pyops, git, runner
 from .lib.async_utils import run_in_executor
 from .lib.auth import sanitize_owner
 
@@ -243,7 +243,13 @@ async def controller_proxy(set: str, name: str, rest: str, request: Request):
         exec(code, glob)
 
         user = sanitize_owner(request.headers.get("X-User", "anonymous"))
-        s = pyops.ServiceClient(user, glob["set"], glob["service"], debug=glob.get("debug", False))
+        kind = "debug" if glob.get("debug", False) else "service"
+        owner_filter = user if kind == "debug" else None
+        jobs = runner.find(owner_filter, glob["set"], glob["service"], kind, ["running"])
+        if not jobs:
+            raise Exception(f"No running {kind}: {glob['set']}::{glob['service']}")
+        job_id = jobs[0]
+        s = pyops.ServiceClient(job_id)
 
         params = dict(request.query_params)
         params["type"] = request.method

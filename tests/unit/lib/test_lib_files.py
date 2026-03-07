@@ -328,3 +328,27 @@ def test_config_users_uninit():
     config = Config()
     with pytest.raises(ValueError, match="Config not initialized"):
         config.users()
+
+def test_conf_web_no_init_when_loaded(mock_conf, tmp_path):
+    with patch('app.lib.files.Config.init') as mock_init:
+        result = files.conf_web()
+        mock_init.assert_not_called()
+        expected = {
+            "bind": "127.0.0.1:8000"
+        }
+        assert result == expected
+
+def test_conf_web_with_override(mock_conf):
+    result = files.conf_web()
+    assert "bind" in result
+
+def test_conf_web_init_on_empty(tmp_path):
+    from app.lib.files import Config
+    mock_content = '{"web": {"bind": "0.0.0.0:80"}}'
+    conf_path = tmp_path / "test.json"
+    with open(conf_path, "w") as f:
+        f.write(mock_content)
+    Config.init(str(conf_path))
+    result = files.conf_web()
+    expected = {"bind": "0.0.0.0:80"}
+    assert result == expected

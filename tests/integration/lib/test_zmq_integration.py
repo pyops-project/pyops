@@ -8,18 +8,10 @@ from unittest.mock import patch, MagicMock
 from app.lib.pyops import ServiceListener, ServiceClient
 
 
-@pytest.fixture
-def mock_runner_find():
-    """Mock runner.find to return a fake job ID"""
-    with patch('app.lib.runner.find') as mock_find:
-        mock_find.return_value = ["test_job_123"]
-        yield mock_find
-
-
 class TestZMQIntegration:
     """Integration tests for real ZMQ communication between ServiceListener and ServiceClient"""
 
-    def test_sync_messaging(self, mock_runner_find):
+    def test_sync_messaging(self):
         """Test synchronous request-response messaging"""
         owner = "test_user"
         job_id = "test_job_123"
@@ -46,7 +38,7 @@ class TestZMQIntegration:
             time.sleep(0.1)
 
             # Connect client
-            client = ServiceClient(owner, "test_set", "test_name")
+            client = ServiceClient(job_id)
 
             # Send sync message
             test_data = "hello world"
@@ -68,10 +60,10 @@ class TestZMQIntegration:
             if hasattr(client, 'close'):
                 client.close()
 
-    def test_async_messaging(self, mock_runner_find):
+    def test_async_messaging(self):
         """Test asynchronous messaging with multiple concurrent requests"""
         owner = "test_user"
-        job_id = "test_job_123"  # Must match mock_runner_find return value
+        job_id = "test_job_123"
 
         # Start listener in background thread
         listener = ServiceListener(owner, job_id)
@@ -94,7 +86,7 @@ class TestZMQIntegration:
             time.sleep(0.1)
 
             # Connect client
-            client = ServiceClient(owner, "test_set", "test_name")
+            client = ServiceClient(job_id)
 
             # Send multiple messages quickly (before responses)
             test_messages = ["msg1", "msg2", "msg3"]

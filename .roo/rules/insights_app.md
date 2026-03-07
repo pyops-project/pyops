@@ -55,7 +55,7 @@ flowchart LR
     B("View")
     C("Controller<br>FastAPI/AsyncIO<br>Uvicorn")
     D[(DB<br>SQLAlchemy)]
-    E("Runner<br>multiprocessing")
+    E("Runner<br>subprocess.Popen")
     F("Scriptlet<br>Process")
 
     A <-->|"REST/Poll"| C
@@ -164,6 +164,22 @@ graph TD
 - Pull syncs at interval; skips dirty/tag, soft reset clean
 - Unique lock per set prevents concurrent access
 - Commit-push checks remotes; skip if no remote
+
+#### Status Caching
+```mermaid
+flowchart TD
+    A[Refresh] --> B[/list: FS only]
+    B --> C[Loop /status per scriptlet]
+    C --> D[has_unstaged_changes]
+    D --> E{Set cache hit?}
+    E -->|Yes| F[Return cached]
+    E -->|No| G[repo_lock]
+    G --> H[git status --porcelain]
+    H --> I[Parse unstaged]
+    I --> J[Cache & return]
+```
+
+Global attributes: Cache serializes via lock; TTL refreshes on writes; matches existing logic.
 
 ### ZMQ Control
 
@@ -316,6 +332,122 @@ Distinguishes types by argument:
 - Supports debug mode & drop_done cleanup
 - GracefulKiller handles SIGTERM/SIGINT
 
+## Subprocess Execution Isolation
+
+- **Current Implementation**: Jobs executed via multiprocessing.Process in shared environment.
+- **Updated**: subprocess.Popen with set-specific venv Python interpreter for per-set isolation.
+- **Benefits**: Prevents package conflicts, ensures clean execution context.
+- **CLI Invocation**: job_runner.py accepts JSON-serialized kwargs via command-line for complex arg passing.
+- **Process Management**: Polling uses p.poll() is None (alive), termination via Popen.terminate() with psutil tree-kill.
+- **ZMQ IPC**: Unchanged; works across subprocess boundaries.
+- **Debug Handling**: Adapter checks and debugpy injection functional in venv context.
+- **Testing**: Mocks updated to subprocess.Popen; maintains >90% coverage.
+
+### Config Isolation via Kwargs
+- Subprocesses consume JSON-serialized config dicts passed from runner, no file reads or module patching.
+- Relative paths (e.g., "data/git") resolved with locally computed project_root.
+- Functions refactored to accept conf dicts: run_*_job, setup_job_globals, terminate_debugpy_adapter.
+
+### Call Flow
+```mermaid
+graph TD
+    A[main] --> B[run_task_job(project_root, conf_data, conf_runner, conf_users)]
+    B --> C[setup_job_globals(..., project_root, conf_data, conf_runner)]
+    A --> D[run_debug_job(..., project_root, conf_data, conf_runner, conf_users)]
+    D --> C
+    D --> E[terminate_debugpy_adapter(conf_users, owner)]
+```
+
+```mermaid
+graph TD
+    A[Runner] --> B[ensure_set_environment]
+    B --> C[venv/bin/python]
+    C --> D[Popen: python job_runner.py json_kwargs]
+    D --> E[Isolated Job Execution in Workspace]
+```
+
+## Runner IPC Mechanism
+
+The runner uses ZMQ ROUTER/REQ over IPC sockets for reliable job completion signaling from child processes, replacing multiprocessing.Queue.
+
+### IPC Pattern
+
+- **Socket**: Runner binds ROUTER to `/tmp/pyops/runner.sock`; children connect REQ.
+- **Message Format**: `{"id": str, "state": str, "detail": str|None}` (msgpack-packed).
+- **Protocol**: Child sends REQ (single frame), runner receives multipart (identity + empty + packed), processes `finishJob`, replies empty REP (identity + empty + b'ack').
+- **Guarantees**: REQ/REP ensures delivery; no message loss like Queue.
+- **Polling**: Integrated in main loop with `zmq.Poller` timeout=0 for non-blocking.
+- **Cleanup**: `setsockopt(zmq.LINGER, 0)`; close on shutdown.
+
+### Runner Main Loop with ZMQ Polling
+
+```mermaid
+flowchart TD
+    A[Main Loop Start] --> B{Poll DB for todo jobs?}
+    B -->|Yes| C[Dequeue & Spawn Process<br/>(pass sock_path)]
+    C --> D[Poll ZMQ Socket<br/>(timeout=0)]
+    D --> E{Event?}
+    E -->|Yes| F[Recv Multipart Msg<br/>(identity + empty + packed)]
+    F --> G[Unpack msgpack<br/>Call finishJob]
+    G --> H[Send REP<br/>(identity + empty + b'ack')]
+    H --> I[Clean DB/Processes]
+    E -->|No| I
+    B -->|No| J[Schedule/Pull Git]
+    J --> I
+    I --> A
+```
+
+### Child Completion Signaling
+
+```mermaid
+sequenceDiagram
+    participant Child as Job Process
+    participant ZMQ as REQ Socket
+    participant Parent as Runner ROUTER
+    Child->>ZMQ: Context(); socket = REQ(); connect(ipc://runner.sock)
+    Note over Child,ZMQ: Execute job code
+    alt Success
+        Child->>ZMQ: packb(msg); send(single frame)
+        ZMQ->>Parent: Multipart: identity + empty + packed
+        Parent->>ZMQ: Process finishJob; send REP: identity + empty + b'ack'
+        ZMQ->>Child: Recv ACK
+        Child->>Child: Close socket; exit
+    else Failure
+        Child->>ZMQ: packb(failed msg); send/recv (retry 3x)
+        Note over Child: Log if no ACK
+    end
+```
+
+## Runner Process Lifecycle
+
+### Current
+- `app/runner.py` main: spawn `job_runner.py` → `assignJob(pid, "running")` → loop `cleanProcesses` (poll!=None → remove `Popen` dict).
+- Completion: ZMQ `ROUTER/REQ` → `receive_and_process` → `finishJob(state/detail, pid=None)` → `postTerm` (remove/cancelled).
+- Startup: `handleOddJobs` dequeued/running → todo/failed.
+- Debug: Post-spawn adapter poll (5s timeout → fail if no).
+
+```mermaid
+flowchart TD
+    Spawn[Spawn job_runner Popen] --> Assign[assignJob pid running DB]
+    Assign --> Loop[Loop cleanProcesses poll!=None rm dict]
+    Loop --> ZMQ{ZMQ ROUTER recv?}
+    ZMQ -->|yes| Finish[finishJob state/detail pid=None postTerm]
+    Loop --> NoZMQ[No ZMQ dead pid cleaned]
+```
+
+### Enhanced Stale PID Monitoring
+- Post-`cleanProcesses`: Query DB `Job.pid` in former dict → `!psutil.Process(pid).is_running()` → `finishJob("failed", "process termination pid={pid}")`.
+- Ensures DB sync for silent deaths (e.g., segv).
+
+**Updated Diagram**:
+```mermaid
+flowchart TD
+    Spawn --> Assign --> Loop
+    Loop --> ZMQ -->|yes| Finish
+    Loop --> Stale[Stale: DB pid !psutil.running → finishJob failed term]
+    Stale --> Finish
+```
+
 ### Debug Implementation
 
 #### Debug Kind
@@ -456,7 +588,8 @@ Runner treats debug kind specially for web preview/VSIX.
 - `mock_git_ops(mock_git_dir)`: Temp FS ops via `mock_git_dir.tmp_path / repo` (repo="data/git/{set}" → `tmp_path/data/git/{set}/{name}.{ext}`).
   - Covers `write_content`, `read_content`, `get_controller_code`, `get_view_content`, `delete_file_and_commit`.
   - **Pitfall**: `Path(repo)` creates **real** `./data/git/{set}/` files (e.g., "test_set" tests → pollution; conflicts `testset/test_task.py` pytest collection despite `norecursedirs=data`).
-- `mock_process`: Subprocess mock
+- `mock_popen`: Subprocess.Popen mock with pid, poll(), terminate(), wait()
+- `mock_zmq`: ZMQ Context/Socket mock for REQ/REP simulation (msgpack-packed messages, 3 retries on ZMQError)
 - `mock_croniter`, `mock_jedi`, `mock_datetime`
 - Overrides for controller_code, view_content, file_path
 

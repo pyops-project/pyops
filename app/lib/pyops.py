@@ -3,7 +3,6 @@ import os, signal, zmq, msgpack, json
 import requests as rq
 import tempfile
 import atexit
-from . import runner, files
 
 import logging
 logger = logging.getLogger(__name__)
@@ -207,23 +206,17 @@ class ServiceListener:
         self.socket.send(b)
 
 class ServiceClient:
-    def __init__(self, owner: str, set: str, name: str, debug: bool = False):
-        self.owner = owner
-        jobs = runner.find(self.owner if debug else None, set, name, "debug" if debug else "service", ["running"])
+    def __init__(self, job_id: str):
+        self.job_id = job_id
 
-        if not jobs:
-            raise Exception(f"No running service: {set} {name}")
-        else:
-            self.job_id = jobs[0]
+        temp_dir = tempfile.gettempdir()
+        pyops_dir = os.path.join(temp_dir, "pyops")
+        self.sockfile = os.path.join(pyops_dir, f"{self.job_id}.sock")
 
-            temp_dir = tempfile.gettempdir()
-            pyops_dir = os.path.join(temp_dir, "pyops")
-            self.sockfile = os.path.join(pyops_dir, f"{self.job_id}.sock")
-
-            self.context = zmq.Context()
-            self.socket = self.context.socket(zmq.REQ)
-            self.socket.connect(f"ipc://{self.sockfile}")
-            atexit.register(self.close)
+        self.context = zmq.Context()
+        self.socket = self.context.socket(zmq.REQ)
+        self.socket.connect(f"ipc://{self.sockfile}")
+        atexit.register(self.close)
 
     def close(self):
         if hasattr(self, 'socket'):

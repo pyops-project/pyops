@@ -11,7 +11,6 @@ import shutil
 from unittest.mock import Mock, patch
 from sqlalchemy import create_engine, text
 from fastapi.testclient import TestClient
-from multiprocessing import Process
 from pathlib import Path
 
 """Common mock config fixture for tests."""
@@ -297,15 +296,44 @@ def mock_git_ops(mock_git_dir):
         yield mock
 
 @pytest.fixture
-def mock_process():
-    with patch("multiprocessing.Process") as mock_proc:
-        mock_proc.return_value.start.return_value = None
-        mock_proc.return_value.join.return_value = None
-        mock_proc.return_value.is_alive.return_value = False
-        yield mock_proc
-        # Teardown: Terminate any alive mock processes
-        if mock_proc.return_value.is_alive():
-            mock_proc.return_value.terminate()
+def mock_popen():
+    with patch("subprocess.Popen") as mock_popen:
+        mock_process = Mock()
+        mock_process.pid = 12345
+        mock_process.poll.return_value = None  # Alive by default; use side_effect for sequences
+        mock_process.terminate.return_value = None
+        mock_process.wait.return_value = None
+        mock_popen.return_value = mock_process
+        yield mock_popen
+
+@pytest.fixture
+def mock_zmq():
+    with patch("zmq.Context") as mock_context, \
+         patch("zmq.Poller") as mock_poller:
+        mock_socket = Mock()
+        mock_socket.connect.return_value = None
+        mock_socket.bind.return_value = None
+        # Simulate ZMQError on first two sends, success on third for retry tests
+        mock_socket.send.side_effect = [Exception("ZMQError"), Exception("ZMQError"), None]
+        mock_socket.recv.return_value = b'ack'
+        mock_socket.setsockopt.return_value = None
+        mock_socket.close.return_value = None
+        mock_context.return_value.socket.return_value = mock_socket
+        mock_context.return_value.term.return_value = None
+        mock_poller_instance = Mock()
+        mock_poller_instance.register.return_value = None
+        mock_poller_instance.poll.return_value = [(mock_socket, 0)]
+        mock_poller.return_value = mock_poller_instance
+        yield {"context": mock_context, "socket": mock_socket, "poller": mock_poller}
+
+@pytest.fixture
+def runner_sock_path():
+    return "/tmp/pyops/runner.sock"
+
+@pytest.fixture
+def mock_send_completion():
+    with patch("app.job_runner.send_completion") as mock_send:
+        yield mock_send
 
 @pytest.fixture
 def mock_croniter():
@@ -355,8 +383,6 @@ def mock_datetime():
         yield
 
 def pytest_configure(config):
-    import multiprocessing
-    multiprocessing.set_start_method('spawn', force=True)
     import tracemalloc
     tracemalloc.start()
     import warnings
@@ -388,5 +414,31 @@ menu = "menu"
 body = "body"
 name = "Test Controller"
 """
-    with patch("app.web.get_controller_code", return_value=code):
+    with (
+        patch("app.web.get_controller_code", return_value=code),
+        patch("app.lib.runner.find", return_value=["fake_job_123"])
+    ):
         yield
+
+@pytest.fixture(scope="function")
+def job_env(tmp_path, mock_conf):
+    data_base = tmp_path / "data"
+    data_base.mkdir(parents=True, exist_ok=True)
+    git_base = data_base / "git"
+    venv_base = tmp_path / "venv"
+    pkg_base = tmp_path / "pkg"
+    return {
+        "conf_data": {
+            "jobs": str(data_base),
+            "git": str(git_base),
+            "db": str(tmp_path / "test.db"),  # Align w/ mock_db
+            "web": {"bind": "bind"}
+        },
+        "conf_runner": {
+            "venv": str(venv_base),
+            "pkg": str(pkg_base),
+            "git_pull_interval": 60
+        },
+        "conf_users": {"anonymous": {"debug_port": 5678}},
+        "conf_web": {"bind": "127.0.0.1:8000"}
+    }

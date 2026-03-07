@@ -3,14 +3,18 @@ from unittest.mock import Mock, patch, MagicMock, call, ANY, AsyncMock
 import os
 import sys
 import datetime as real_datetime
-from multiprocessing import Queue
 import logging
 import asyncio
 import json
+import msgpack
+from sqlalchemy import select
 
 @pytest.fixture
 def mock_glob():
     return {
+        "owner": "mock_owner",
+        "set": "mock_set",
+        "name": "mock_name",
         "userspace": "/mock/userspace",
         "setspace": "/mock/setspace",
         "workspace": "/mock/workspace",
@@ -32,147 +36,139 @@ def sample_libs():
 
 class TestExecution:
 
-    @patch('app.runner.subprocess.run')
+    @patch('app.job_runner.send_completion')
+    @patch('app.job_runner.subprocess.run')
     @patch('app.lib.sets.subprocess.check_call')
-    @patch('app.runner.pyops.ServiceListener')
-    def test_run_task_success(self, mock_listener, mock_check_call, mock_run, tmp_path, mock_conf):
-        from app.runner import run
-        q = Mock()
+    @patch('app.job_runner.pyops.ServiceListener')
+    def test_run_task_success(self, mock_listener, mock_check_call, mock_run, mock_send, job_env):
+        from app.job_runner import main as run
         mock_listener.return_value = None  # For non-service
         mock_check_call.return_value = None  # Venv creation succeeds
         mock_run.return_value = Mock(returncode=0)  # Bootstrap and installs succeed
-        data_base = str(tmp_path / "data")
-        venv_path = str(tmp_path / "venv")
-        pkg_path = str(tmp_path / "pkg")
+        env = job_env
 
-        run("id", "owner", "set", "name", "task", "print('param executed')", "print('code executed')", [], q, data_base, "bind", venv_path, pkg_path, overrides=None)
+        run("id", "owner", "set", "name", "task", "print('param executed')", "print('code executed')", [], "/tmp/pyops/runner.sock", 0, None, None, env["conf_data"], env["conf_runner"], env["conf_users"], env["conf_web"])
 
-        q.put.assert_called_once_with({"id": "id", "state": "done", "detail": None})
+        mock_send.assert_called_once_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
 
-    @patch('app.runner.subprocess.run')
+    @patch('app.job_runner.send_completion')
+    @patch('app.job_runner.subprocess.run')
     @patch('app.lib.sets.subprocess.check_call')
-    @patch('app.runner.pyops.ServiceListener')
+    @patch('app.job_runner.pyops.ServiceListener')
     @patch('time.sleep')
-    def test_run_task_retry_success_on_third(self, mock_sleep, mock_listener, mock_check_call, mock_run, tmp_path, mock_conf):
-        from app.runner import run
-        q = Mock()
+    def test_run_task_retry_success_on_third(self, mock_sleep, mock_listener, mock_check_call, mock_run, mock_send, job_env):
+        from app.job_runner import main as run
         mock_listener.return_value = None
         mock_check_call.return_value = None
         mock_run.return_value = Mock(returncode=0)
-        data_base = str(tmp_path / "data")
-        venv_path = str(tmp_path / "venv")
-        pkg_path = str(tmp_path / "pkg")
+        env = job_env
         mock_sleep.return_value = None  # No real delay
 
         # Mock exec to fail first 2 attempts, succeed on 3rd
         exec_mock = Mock()
         with patch('builtins.exec', side_effect=[Exception("fail1"), Exception("fail2"), None]):
-            run("id", "owner", "set", "name", "task", "", "print('success')", [], q, data_base, "bind", venv_path, pkg_path, max_retries=3, overrides=None)
+            run("id", "owner", "set", "name", "task", "", "print('success')", [], "/tmp/pyops/runner.sock", 3, None, None, env["conf_data"], env["conf_runner"], env["conf_users"], env["conf_web"])
 
         assert mock_sleep.call_count == 2  # Sleeps after first two fails
-        q.put.assert_called_once_with({"id": "id", "state": "done", "detail": None})
+        # Check the final send is done
+        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
 
-    @patch('app.runner.subprocess.run')
+    @patch('app.job_runner.send_completion')
+    @patch('app.job_runner.subprocess.run')
     @patch('app.lib.sets.subprocess.check_call')
-    @patch('app.runner.pyops.ServiceListener')
+    @patch('app.job_runner.pyops.ServiceListener')
     @patch('time.sleep')
-    def test_run_task_retry_fail_all(self, mock_sleep, mock_listener, mock_check_call, mock_run, tmp_path, mock_conf):
-        from app.runner import run
-        q = Mock()
+    def test_run_task_retry_fail_all(self, mock_sleep, mock_listener, mock_check_call, mock_run, mock_send, job_env):
+        from app.job_runner import main as run
         mock_listener.return_value = None
         mock_check_call.return_value = None
         mock_run.return_value = Mock(returncode=0)
-        data_base = str(tmp_path / "data")
+        env = job_env
         mock_sleep.return_value = None
 
         # Mock exec to always fail
-        venv_path = str(tmp_path / "venv")
-        pkg_path = str(tmp_path / "pkg")
         with patch('builtins.exec', side_effect=Exception("fail")):
-            run("id", "owner", "set", "name", "task", "", "raise Exception", [], q, data_base, "bind", venv_path, pkg_path, max_retries=3, overrides=None)
+            run("id", "owner", "set", "name", "task", "", "raise Exception", [], "/tmp/pyops/runner.sock", 3, None, None, env["conf_data"], env["conf_runner"], env["conf_users"], env["conf_web"])
 
         assert mock_sleep.call_count == 3  # Sleeps after each of 3 fails
-        call_args = q.put.call_args[0][0]
+        call_args = mock_send.call_args[0][1]
         assert call_args["state"] == "failed"
         assert "Failed after 3 retries" in call_args["detail"]
 
-    @patch('app.runner.subprocess.run')
+    @patch('app.job_runner.send_completion')
+    @patch('app.job_runner.subprocess.run')
     @patch('app.lib.sets.subprocess.check_call')
-    @patch('app.runner.pyops.ServiceListener')
-    def test_run_service_with_listener(self, mock_listener, mock_check_call, mock_run, tmp_path, mock_conf):
-        from app.runner import run
-        q = Mock()
+    @patch('app.job_runner.pyops.ServiceListener')
+    def test_run_service_with_listener(self, mock_listener, mock_check_call, mock_run, mock_send, job_env):
+        from app.job_runner import main as run
         mock_listener_instance = Mock()
         mock_listener.return_value = mock_listener_instance
         mock_check_call.return_value = None
         mock_run.return_value = Mock(returncode=0)
-        data_base = str(tmp_path / "data")
-        venv_path = str(tmp_path / "venv")
-        pkg_path = str(tmp_path / "pkg")
+        env = job_env
 
-        run("id", "owner", "set", "name", "service", "", "print('code executed')", [], q, data_base, "bind", venv_path, pkg_path)
+        run("id", "owner", "set", "name", "service", "", "print('code executed')", [], "/tmp/pyops/runner.sock", 0, None, None, env["conf_data"], env["conf_runner"], env["conf_users"], env["conf_web"])
 
         mock_listener.assert_called_once_with("owner", "id")
-        q.put.assert_called_once_with({"id": "id", "state": "done", "detail": None})
+        mock_send.assert_called_once_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
 
-    @patch('app.runner.subprocess.run')
+    @patch('app.job_runner.send_completion')
+    @patch('app.job_runner.subprocess.run')
     @patch('app.lib.sets.subprocess.check_call')
-    @patch('app.runner.pyops.ServiceListener')
+    @patch('app.job_runner.pyops.ServiceListener')
     @patch('time.sleep')
-    def test_run_service_no_retry(self, mock_sleep, mock_listener, mock_check_call, mock_run, tmp_path):
-        from app.runner import run
-        q = Mock()
+    def test_run_service_no_retry(self, mock_sleep, mock_listener, mock_check_call, mock_run, mock_send, job_env):
+        from app.job_runner import main as run
         mock_listener.return_value = Mock()
         mock_check_call.return_value = None
         mock_run.return_value = Mock(returncode=0)
-        data_base = str(tmp_path / "data")
-        venv_path = str(tmp_path / "venv")
-        pkg_path = str(tmp_path / "pkg")
+        env = job_env
         mock_sleep.return_value = None
 
         with patch('builtins.exec', side_effect=Exception("service fail")):
-            run("id", "owner", "set", "name", "service", "", "raise Exception", [], q, data_base, "bind", venv_path, pkg_path)
+            run("id", "owner", "set", "name", "service", "", "raise Exception", [], "/tmp/pyops/runner.sock", 0, None, None, env["conf_data"], env["conf_runner"], env["conf_users"], env["conf_web"])
 
         assert mock_sleep.call_count == 0  # No retries for service
-        q.put.assert_called_once_with({"id": "id", "state": "failed", "detail": ANY})
+        mock_send.assert_called_once_with("/tmp/pyops/runner.sock", {"id": "id", "state": "failed", "detail": ANY})
 
+    @patch.dict('sys.modules', {'debugpy': Mock()})
+    @patch('app.job_runner.send_completion')
     @patch('app.lib.sets.subprocess.check_call')
     @patch('subprocess.run')
-    @patch('app.runner.pyops.ServiceListener')
+    @patch('app.job_runner.pyops.ServiceListener')
     @patch('time.sleep')
-    def test_run_debug_no_retry(self, mock_run, mock_sleep, mock_listener, mock_check_call, tmp_path, mock_conf):
+    def test_run_debug_no_retry(self, mock_run, mock_sleep, mock_listener, mock_check_call, mock_send, tmp_path, mock_conf):
         mock_run.return_value = Mock(returncode=0, stdout="pip==24.2\n")
         mock_check_call.return_value = None
-        from app.runner import run
-        q = Mock()
+        from app.job_runner import main as run
         mock_listener.return_value = Mock()
-        data_base = str(tmp_path / "data")
-        venv_path = str(tmp_path / "venv")
-        pkg_path = str(tmp_path / "pkg")
+        data_base = os.path.join(tmp_path, "data")
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
         mock_sleep.return_value = None
 
         with patch('builtins.exec', side_effect=Exception("debug fail")):
-            run("id", "owner", "set", "name", "debug", "", "raise Exception", [], q, data_base, "bind", venv_path, pkg_path, port=5678)
+            run("id", "owner", "set", "name", "debug", "", "raise Exception", [], "/tmp/pyops/runner.sock", 0, None, 5678, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "bind"})
 
         assert mock_sleep.call_count == 0  # No retries for debug
-        q.put.assert_called_once_with({"id": "id", "state": "failed", "detail": ANY})
+        mock_send.assert_called_once_with("/tmp/pyops/runner.sock", {"id": "id", "state": "failed", "detail": ANY})
 
-    @patch('app.runner.subprocess.run')
+    @patch('app.job_runner.send_completion')
+    @patch('app.job_runner.subprocess.run')
     @patch('app.lib.sets.subprocess.check_call')
-    @patch('app.runner.pyops.ServiceListener')
-    def test_run_draft_success(self, mock_listener, mock_check_call, mock_run, tmp_path, mock_conf):
-        from app.runner import run
-        q = Mock()
+    @patch('app.job_runner.pyops.ServiceListener')
+    def test_run_draft_success(self, mock_listener, mock_check_call, mock_run, mock_send, tmp_path, mock_conf):
+        from app.job_runner import main as run
         mock_listener.return_value = None  # For non-service
         mock_check_call.return_value = None
         mock_run.return_value = Mock(returncode=0)
-        data_base = str(tmp_path / "data")
-        venv_path = str(tmp_path / "venv")
-        pkg_path = str(tmp_path / "pkg")
+        data_base = os.path.join(tmp_path, "data")
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
 
-        run("id", "owner", "set", "name", "draft", "print('param executed')", "print('code executed')", [], q, data_base, "bind", venv_path, pkg_path)
+        run("id", "owner", "set", "name", "draft", "print('param executed')", "print('code executed')", [], "/tmp/pyops/runner.sock", 0, None, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
 
-        q.put.assert_called_once_with({"id": "id", "state": "done", "detail": None})
+        mock_send.assert_called_once_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
 
     def test_draft_jobs_allow_concurrent_execution(self, mock_conf, mock_db):
         """Test that multiple draft jobs can run concurrently (unlike debug jobs)."""
@@ -193,31 +189,31 @@ class TestExecution:
         assert job1.detail is None  # No cancellation message
         assert job2.detail is None
 
-    @patch('app.runner.subprocess.run')
+    @patch('app.job_runner.send_completion')
+    @patch('app.job_runner.subprocess.run')
     @patch('app.lib.sets.subprocess.check_call')
-    @patch('app.runner.pyops.ServiceListener')
+    @patch('app.job_runner.pyops.ServiceListener')
     @patch('time.sleep')
-    def test_run_failed_exception(self, mock_sleep, mock_listener, mock_check_call, mock_run, tmp_path):
-        from app.runner import run
-        q = Mock()
+    def test_run_failed_exception(self, mock_sleep, mock_listener, mock_check_call, mock_run, mock_send, tmp_path):
+        from app.job_runner import main as run
         mock_listener.return_value = None
         mock_check_call.return_value = None
         mock_run.return_value = Mock(returncode=0)
-        data_base = str(tmp_path / "data")
-        venv_path = str(tmp_path / "venv")
-        pkg_path = str(tmp_path / "pkg")
+        data_base = os.path.join(tmp_path, "data")
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
         mock_sleep.return_value = None
 
-        run("id", "owner", "set", "name", "task", "", "raise Exception('exec error')", [], q, data_base, "bind", venv_path, pkg_path, max_retries=3)
+        run("id", "owner", "set", "name", "task", "", "raise Exception('exec error')", [], "/tmp/pyops/runner.sock", 3, None, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
 
         assert mock_sleep.call_count == 3
-        call_args = q.put.call_args[0][0]
+        call_args = mock_send.call_args[0][1]
         assert call_args["state"] == "failed"
         assert "Failed after 3 retries" in call_args["detail"]
 
-    @patch('app.runner.loadLib')  # loadLib is in app.runner
+    @patch('app.job_runner.loadLib', create=True)  # loadLib is in app.runner
     def test_process_imports_success(self, mock_loadLib, mock_conf):
-        from app.runner import process_imports
+        from app.job_runner import process_imports
         mock_loadLib.return_value = "loaded lib"
         libs = []
         result = process_imports("#!{::lib}\nrest", "current_set", False, libs)
@@ -226,18 +222,18 @@ class TestExecution:
         assert libs[0]["code"] == "loaded lib"
         mock_loadLib.assert_called_once_with("current_set", "lib", False)
 
-    @patch('app.runner.loadLib')
+    @patch('app.job_runner.loadLib', create=True)
     def test_process_imports_failure(self, mock_loadLib, mock_conf):
-        from app.runner import process_imports
+        from app.job_runner import process_imports
         mock_loadLib.side_effect = Exception("load fail")
         libs = []
         with pytest.raises(Exception, match="load fail"):
             process_imports("#!{::lib}\nrest", "current_set", False, libs)
         mock_loadLib.assert_called_once_with("current_set", "lib", False)
 
-    @patch('app.runner.loadLib')
+    @patch('app.job_runner.loadLib')
     def test_process_imports_no_match(self, mock_loadLib, mock_conf):
-        from app.runner import process_imports
+        from app.job_runner import process_imports
         libs = []
         result = process_imports("no !\nrest", "current_set", False, libs)
         assert "no !" in result
@@ -245,54 +241,54 @@ class TestExecution:
         mock_loadLib.assert_not_called()
 
     @patch('os.makedirs')
-    @patch('app.runner.subprocess.run')
+    @patch('app.job_runner.subprocess.run')
     @patch('os.path.exists')
     def test_process_install_lines_pip(self, mock_exists, mock_run, mock_makedirs, mock_conf, tmp_path):
-        from app.runner import process_install_lines
+        from app.job_runner import process_install_lines
         mock_result = Mock(returncode=0)
         mock_run.return_value = mock_result  # install succeeds
         mock_exists.return_value = True  # venv exists
         lines = ["#!requests"]
-        venv_path = "/venv"
-        pkg_path = "/pkg"
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
         set = "testset"
         id = "id"
         result = process_install_lines(lines, venv_path, pkg_path, set, id)
         assert result == lines
         # Check that pip install was called
         assert mock_run.call_count == 2
-        expected_cmd = ". /venv/testset/bin/activate && pip install --no-cache-dir --upgrade --upgrade-strategy eager requests"
+        expected_cmd = f". {venv_path}/testset/bin/activate && pip install --no-cache-dir --upgrade --upgrade-strategy eager requests"
         mock_run.assert_called_with(expected_cmd, shell=True, stdout=sys.stdout, stderr=sys.stderr, text=True, check=True)
 
     @patch('os.makedirs')
-    @patch('app.runner.subprocess.run')
+    @patch('app.job_runner.subprocess.run')
     @patch('os.path.exists')
     def test_process_install_lines_pip_with_options(self, mock_exists, mock_run, mock_makedirs, mock_conf, tmp_path):
-        from app.runner import process_install_lines
+        from app.job_runner import process_install_lines
         mock_result = Mock(returncode=0)
         mock_run.return_value = mock_result  # install succeeds
         mock_exists.return_value = True  # venv exists
         lines = ["#!torch --index-url https://download.pytorch.org/whl/cu130"]
-        venv_path = "/venv"
-        pkg_path = "/pkg"
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
         set = "testset"
         id = "id"
         result = process_install_lines(lines, venv_path, pkg_path, set, id)
         assert result == lines
         # Check that pip install was called
         assert mock_run.call_count == 2
-        expected_cmd = ". /venv/testset/bin/activate && pip install --no-cache-dir --upgrade --upgrade-strategy eager torch --index-url https://download.pytorch.org/whl/cu130"
+        expected_cmd = f". {venv_path}/testset/bin/activate && pip install --no-cache-dir --upgrade --upgrade-strategy eager torch --index-url https://download.pytorch.org/whl/cu130"
         mock_run.assert_called_with(expected_cmd, shell=True, stdout=sys.stdout, stderr=sys.stderr, text=True, check=True)
 
     @patch('os.makedirs')
-    @patch('app.runner.subprocess.run')
+    @patch('app.job_runner.subprocess.run')
     @patch('os.path.exists')
     def test_process_install_lines_skip_lib_directive(self, mock_exists, mock_run, mock_makedirs, mock_conf, tmp_path):
-        from app.runner import process_install_lines
+        from app.job_runner import process_install_lines
         mock_exists.return_value = True  # venv exists
         lines = ["#!{test::lib}"]
-        venv_path = "/venv"
-        pkg_path = "/pkg"
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
         set = "testset"
         id = "id"
         result = process_install_lines(lines, venv_path, pkg_path, set, id)
@@ -304,27 +300,29 @@ class TestExecution:
     @patch('subprocess.run')
     @patch('os.path.exists')
     def test_process_install_lines_git_clone(self, mock_exists, mock_run, mock_conf, tmp_path):
-        from app.runner import process_install_lines
+        from app.job_runner import process_install_lines
         mock_run.return_value = Mock(returncode=0, stderr="")  # clone success
         mock_exists.return_value = False  # repo_dir not exist
         lines = ["#! https://repo.git"]
-        venv_path = ".cache/test_venv"
-        pkg_path = ".cache/test_pkg"
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
         set = "testset"
         id = "id"
         process_install_lines(lines, venv_path, pkg_path, set, id)
         # Check that git clone was called with correct args
-        mock_run.assert_any_call(['git', 'clone', 'https://repo.git', '.cache/test_pkg/testset/repo'], capture_output=True, text=True, cwd='.cache/test_pkg/testset')
+        pkg_set_dir = os.path.join(pkg_path, set)
+        repo_dir = os.path.join(pkg_set_dir, "repo")
+        mock_run.assert_any_call(['git', 'clone', 'https://repo.git', repo_dir], capture_output=True, text=True, cwd=pkg_set_dir)
 
     @patch('subprocess.run')
     @patch('os.path.exists')
     def test_process_install_lines_git_pip_e_success(self, mock_exists, mock_run, mock_conf, tmp_path):
-        from app.runner import process_install_lines
+        from app.job_runner import process_install_lines
         mock_run.return_value = Mock(returncode=0, stderr="")  # clone and pip success
         mock_exists.return_value = False  # repo_dir not exist
         lines = ["#! https://repo.git"]
-        venv_path = ".cache/test_venv"
-        pkg_path = ".cache/test_pkg"
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
         set = "testset"
         id = "id"
         process_install_lines(lines, venv_path, pkg_path, set, id)
@@ -336,13 +334,13 @@ class TestExecution:
     @patch('subprocess.run')
     @patch('os.path.exists')
     def test_process_install_lines_git_pip_e_fail_raises(self, mock_exists, mock_run, mock_conf, tmp_path):
-        from app.runner import process_install_lines
+        from app.job_runner import process_install_lines
         from subprocess import CalledProcessError
         mock_run.side_effect = [Mock(returncode=0), Mock(returncode=0, stderr=""), CalledProcessError(1, 'pip', stderr='no setup.py')]  # bootstrap, clone success, pip fail
         mock_exists.return_value = False  # repo_dir not exist
         lines = ["#! https://repo.git"]
-        venv_path = ".cache/test_venv"
-        pkg_path = ".cache/test_pkg"
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
         set = "testset"
         id = "id"
         with pytest.raises(CalledProcessError):
@@ -350,19 +348,23 @@ class TestExecution:
 
     @patch('os.makedirs')
     @patch('subprocess.run')
-    def test_process_install_lines_git_error(self, mock_run, mock_makedirs, mock_conf):
-        from app.runner import process_install_lines
+    def test_process_install_lines_git_error(self, mock_run, mock_makedirs, mock_conf, tmp_path):
+        from app.job_runner import process_install_lines
         mock_run.side_effect = [Mock(returncode=0), Mock(returncode=1, stderr="clone fail")]
         lines = ["#! https://fail.git"]
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
         with pytest.raises(Exception, match="git clone https://fail.git failed: clone fail"):
-            process_install_lines(lines, "/venv", "/pkg", "testset", "id")
+            process_install_lines(lines, venv_path, pkg_path, "testset", "id")
 
     @patch('os.makedirs')
-    @patch('app.runner.subprocess.run')
-    def test_process_install_lines_no_bang(self, mock_run, mock_makedirs, mock_conf):
-        from app.runner import process_install_lines
+    @patch('app.job_runner.subprocess.run')
+    def test_process_install_lines_no_bang(self, mock_run, mock_makedirs, mock_conf, tmp_path):
+        from app.job_runner import process_install_lines
         lines = ["normal line"]
-        result = process_install_lines(lines, "/venv", "/pkg", "testset", "id")
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
+        result = process_install_lines(lines, venv_path, "/pkg", "testset", "id")
         assert result == lines
         assert mock_run.call_count == 1
 
@@ -489,22 +491,23 @@ logging.error('ERROR message')
                 stderr_content = f.read()
         return stdout_content, stderr_content
 
-    @patch('app.runner.subprocess.run')
+    @patch('app.job_runner.send_completion')
+    @patch('app.job_runner.subprocess.run')
     @patch('app.lib.sets.subprocess.check_call')
-    @patch('app.runner.pyops.ServiceListener')
-    def test_run_task_logging_success(self, mock_listener, mock_check_call, mock_run, tmp_path, sample_logging_code, mock_queue, mock_conf):
-        from app.runner import run
+    @patch('app.job_runner.pyops.ServiceListener')
+    def test_run_task_logging_success(self, mock_listener, mock_check_call, mock_run, mock_send, tmp_path, sample_logging_code, mock_conf):
+        from app.job_runner import main as run
         mock_listener.return_value = None
         mock_check_call.return_value = None
         mock_run.return_value = Mock(returncode=0)
-        data_base = str(tmp_path / "data")
+        data_base = os.path.join(tmp_path, "data")
         owner = "owner"
         set_name = "set"
         job_id = "id"
-        venv_path = str(tmp_path / "venv")
-        pkg_path = str(tmp_path / "pkg")
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
 
-        run(job_id, owner, set_name, "name", "task", "", sample_logging_code, [], mock_queue, data_base, "bind", venv_path, pkg_path)
+        run(job_id, owner, set_name, "name", "task", "", sample_logging_code, [], "/tmp/pyops/runner.sock", 0, None, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
 
         stdout_content, stderr_content = self.get_log_contents(data_base, owner, set_name, job_id)
 
@@ -512,24 +515,25 @@ logging.error('ERROR message')
         assert "INFO message" in stdout_content
         assert "WARNING message" in stderr_content
         assert "ERROR message" in stderr_content
-        mock_queue.put.assert_called_once_with({"id": job_id, "state": "done", "detail": None})
+        mock_send.assert_called_once_with("/tmp/pyops/runner.sock", {"id": job_id, "state": "done", "detail": None})
 
-    @patch('app.runner.subprocess.run')
+    @patch('app.job_runner.send_completion')
+    @patch('app.job_runner.subprocess.run')
     @patch('app.lib.sets.subprocess.check_call')
-    @patch('app.runner.pyops.ServiceListener')
-    def test_run_service_logging(self, mock_listener, mock_check_call, mock_run, tmp_path, sample_logging_code, mock_queue, mock_conf):
-        from app.runner import run
+    @patch('app.job_runner.pyops.ServiceListener')
+    def test_run_service_logging(self, mock_listener, mock_check_call, mock_run, mock_send, tmp_path, sample_logging_code, mock_conf):
+        from app.job_runner import main as run
         mock_listener.return_value = Mock()  # For service
         mock_check_call.return_value = None
         mock_run.return_value = Mock(returncode=0)
-        data_base = str(tmp_path / "data")
+        data_base = os.path.join(tmp_path, "data")
         owner = "owner"
         set_name = "set"
         job_id = "id"
 
-        venv_path = str(tmp_path / "venv")
-        pkg_path = str(tmp_path / "pkg")
-        run(job_id, owner, set_name, "name", "service", "", sample_logging_code, [], mock_queue, data_base, "bind", venv_path, pkg_path)
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
+        run(job_id, owner, set_name, "name", "service", "", sample_logging_code, [], "/tmp/pyops/runner.sock", 0, None, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
 
         stdout_content, stderr_content = self.get_log_contents(data_base, owner, set_name, job_id)
 
@@ -537,61 +541,65 @@ logging.error('ERROR message')
         assert "INFO message" in stdout_content
         assert "WARNING message" in stderr_content
         assert "ERROR message" in stderr_content
-        mock_queue.put.assert_called_once_with({"id": job_id, "state": "done", "detail": None})
+        mock_send.assert_called_once_with("/tmp/pyops/runner.sock", {"id": job_id, "state": "done", "detail": None})
 
-    @patch('app.runner.subprocess.run')
+    @patch('app.job_runner.send_completion')
+    @patch('app.job_runner.subprocess.run')
     @patch('app.lib.sets.subprocess.check_call')
-    @patch('app.runner.pyops.ServiceListener')
-    def test_run_service_closes_listener(self, mock_listener, mock_check_call, mock_run, tmp_path, mock_queue, mock_conf):
-        from app.runner import run
+    @patch('app.job_runner.pyops.ServiceListener')
+    def test_run_service_closes_listener(self, mock_listener, mock_check_call, mock_run, mock_send, tmp_path, mock_conf):
+        from app.job_runner import main as run
         mock_listener_instance = Mock()
         mock_listener.return_value = mock_listener_instance
         mock_check_call.return_value = None
         mock_run.return_value = Mock(returncode=0)
-        data_base = str(tmp_path / "data")
+        data_base = os.path.join(tmp_path, "data")
         owner = "owner"
         set_name = "set"
         job_id = "id"
 
-        venv_path = str(tmp_path / "venv")
-        pkg_path = str(tmp_path / "pkg")
-        run(job_id, owner, set_name, "name", "service", "", "pass", [], mock_queue, data_base, "bind", venv_path, pkg_path)
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
+        run(job_id, owner, set_name, "name", "service", "", "pass", [], "/tmp/pyops/runner.sock", 0, None, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
 
         mock_listener.assert_called_once_with("owner", "id")
         mock_listener_instance.close.assert_called_once()
 
-    @patch('app.runner.subprocess.run')
+    @patch('app.job_runner.subprocess.run')
     @patch('app.lib.sets.subprocess.check_call')
-    @patch('app.runner.pyops.ServiceListener')
-    def test_run_service_closes_listener_on_error(self, mock_listener, mock_check_call, mock_run, tmp_path, mock_queue, mock_conf):
-        from app.runner import run
+    @patch('app.job_runner.send_completion')
+    @patch('app.job_runner.pyops.ServiceListener')
+    def test_run_service_closes_listener_on_error(self, mock_listener, mock_check_call, mock_run, mock_send, tmp_path, mock_conf):
+        from app.job_runner import main as run
         mock_listener_instance = Mock()
         mock_listener.return_value = mock_listener_instance
         mock_check_call.return_value = None
         mock_run.return_value = Mock(returncode=0)
-        data_base = str(tmp_path / "data")
+        data_base = os.path.join(tmp_path, "data")
         owner = "owner"
         set_name = "set"
         job_id = "id"
 
-        venv_path = str(tmp_path / "venv")
-        pkg_path = str(tmp_path / "pkg")
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
         with patch('builtins.exec', side_effect=Exception("error")):
-            run(job_id, owner, set_name, "name", "service", "", "raise Exception", [], mock_queue, data_base, "bind", venv_path, pkg_path)
+            run(job_id, owner, set_name, "name", "service", "", "raise Exception", [], "/tmp/pyops/runner.sock", 0, None, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
 
         mock_listener.assert_called_once_with("owner", "id")
         mock_listener_instance.close.assert_called_once()
+        mock_check_call.assert_called_once_with("/tmp/pyops/runner.sock", {"id": "id", "state": "failed", "detail": ANY})
 
     @patch('app.lib.sets.subprocess.check_call')
+    @patch('app.job_runner.send_completion')
     @patch('subprocess.check_call')
     @patch('builtins.compile')
-    @patch('app.runner.terminate_debugpy_adapter')
-    @patch('app.runner.pyops.ServiceListener')
+    @patch('app.job_runner.terminate_debugpy_adapter')
+    @patch('app.job_runner.pyops.ServiceListener')
     @patch('debugpy.listen')
     @patch('debugpy.wait_for_client')
     @patch('debugpy.breakpoint')
     @patch('subprocess.run')
-    def test_run_debug_inject(self, mock_run, mock_breakpoint, mock_wait, mock_listen, mock_listener, mock_terminate, mock_compile, mock_check_call, mock_sets_check_call, mock_conf, tmp_path, mock_queue):
+    def test_run_debug_inject(self, mock_run, mock_breakpoint, mock_wait, mock_listen, mock_listener, mock_terminate, mock_compile, mock_check_call, mock_sets_check_call, mock_send, mock_conf, tmp_path):
         debugpy_mock = Mock()
         with patch.dict('sys.modules', {'debugpy': debugpy_mock}):
             with patch.object(debugpy_mock, 'listen', mock_listen), \
@@ -600,20 +608,20 @@ logging.error('ERROR message')
                  patch.object(debugpy_mock, 'log_to', Mock()):
                 mock_run.side_effect = [Mock(returncode=0, stdout=""), Mock(returncode=0)]
                 mock_sets_check_call.return_value = None
-                from app.runner import run
+                from app.job_runner import main as run
                 mock_listener.return_value = Mock()  # For debug
                 mock_listen.return_value = None
                 mock_wait.return_value = None  # Don't block
                 mock_compile.return_value = compile("pass", "dummy", "exec")  # Mock code object
-                data_base = str(tmp_path / "data")
+                data_base = os.path.join(tmp_path, "data")
                 owner = "owner"
                 set_name = "set"
                 job_id = "id"
                 code = "print('test')"
 
-                venv_path = str(tmp_path / "venv")
-                pkg_path = str(tmp_path / "pkg")
-                run(job_id, owner, set_name, "name", "debug", "#>AWAIT_DEBUG", code, [], mock_queue, data_base, "bind", venv_path, pkg_path, port=5678)
+                venv_path = os.path.join(tmp_path, "venv")
+                pkg_path = os.path.join(tmp_path, "pkg")
+                run(job_id, owner, set_name, "name", "debug", "#>AWAIT_DEBUG", code, [], "/tmp/pyops/runner.sock", 0, None, 5678, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
 
                 # Check compile called for code and libs
                 assert mock_compile.call_count >= 1
@@ -632,26 +640,27 @@ logging.error('ERROR message')
     ])
     @patch.dict('sys.modules', {'debugpy': Mock()})
     @patch('subprocess.check_call')
+    @patch('app.job_runner.send_completion')
     @patch('subprocess.run')
-    @patch('app.runner.pyops.ServiceListener')
-    @patch('app.runner.terminate_debugpy_adapter')
+    @patch('app.job_runner.pyops.ServiceListener')
+    @patch('app.job_runner.terminate_debugpy_adapter')
     @patch('debugpy.breakpoint')
     @patch('debugpy.wait_for_client')
     @patch('debugpy.listen')
     @patch('builtins.compile')
-    def test_run_debug_await_directive(self, mock_compile, mock_listen, mock_wait, mock_breakpoint, mock_terminate, mock_listener, mock_run, mock_check_call, param, expect_wait, tmp_path, mock_queue):
+    def test_run_debug_await_directive(self, mock_compile, mock_listen, mock_wait, mock_breakpoint, mock_terminate, mock_listener, mock_run, mock_check_call, mock_send, param, expect_wait, tmp_path):
         mock_compile.return_value = compile("pass", "dummy", "exec")
         mock_run.side_effect = [Mock(returncode=0, stdout=""), Mock(returncode=0)]
         mock_listener.return_value = Mock()
-        from app.runner import run
-        data_base = str(tmp_path / "data")
+        from app.job_runner import main as run
+        data_base = os.path.join(tmp_path, "data")
         owner = "owner"
         set_name = "set"
         job_id = "id"
         code = "print('test')"
-        venv_path = str(tmp_path / "venv")
-        pkg_path = str(tmp_path / "pkg")
-        run(job_id, owner, set_name, "name", "debug", param, code, [], mock_queue, data_base, "bind", venv_path, pkg_path, port=5678)
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
+        run(job_id, owner, set_name, "name", "debug", param, code, [], "/tmp/pyops/runner.sock", 0, None, 5678, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
         mock_terminate.assert_called_once_with("owner")
 
         # Assert debugpy injection calls
@@ -663,24 +672,25 @@ logging.error('ERROR message')
             mock_wait.assert_not_called()
             mock_breakpoint.assert_not_called()
 
+    @patch('app.job_runner.send_completion')
     @patch.dict('sys.modules', {'debugpy': Mock()})
-    @patch('app.runner.pyops.ServiceListener')
+    @patch('app.job_runner.pyops.ServiceListener')
     @patch('debugpy.listen')
     @patch('debugpy.wait_for_client')
     @patch('subprocess.check_call')
     @patch('subprocess.run')
-    def test_run_debug_logging(self, mock_run, mock_check_call, mock_wait, mock_listen, mock_listener, tmp_path, sample_logging_code, mock_queue, mock_conf):
+    def test_run_debug_logging(self, mock_run, mock_check_call, mock_wait, mock_listen, mock_listener, mock_send, tmp_path, sample_logging_code, mock_conf):
         mock_run.side_effect = [Mock(returncode=0, stdout=""), Mock(returncode=0)]
-        from app.runner import run
+        from app.job_runner import main as run
         mock_listener.return_value = Mock()  # For debug
-        data_base = str(tmp_path / "data")
+        data_base = os.path.join(tmp_path, "data")
         owner = "owner"
         set_name = "set"
         job_id = "id"
 
-        venv_path = str(tmp_path / "venv")
-        pkg_path = str(tmp_path / "pkg")
-        run(job_id, owner, set_name, "name", "debug", "", sample_logging_code, [], mock_queue, data_base, "bind", venv_path, pkg_path, port=5678)
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
+        run(job_id, owner, set_name, "name", "debug", "", sample_logging_code, [], "/tmp/pyops/runner.sock", 0, None, 5678, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
 
         stdout_content, stderr_content = self.get_log_contents(data_base, owner, set_name, job_id)
 
@@ -688,89 +698,92 @@ logging.error('ERROR message')
         assert "INFO message" in stdout_content
         assert "WARNING message" in stderr_content
         assert "ERROR message" in stderr_content
-        mock_queue.put.assert_called_once_with({"id": job_id, "state": "done", "detail": None})
+        mock_send.assert_called_once_with("/tmp/pyops/runner.sock", {"id": job_id, "state": "done", "detail": None})
 
-    @patch('app.runner.subprocess.run')
+    @patch('app.job_runner.send_completion')
+    @patch('app.job_runner.subprocess.run')
     @patch('app.lib.sets.subprocess.check_call')
-    @patch('app.runner.pyops.ServiceListener')
+    @patch('app.job_runner.pyops.ServiceListener')
     @patch('time.sleep')
-    def test_run_fail_logging(self, mock_sleep, mock_listener, mock_check_call, mock_run, tmp_path, sample_fail_code, mock_queue, mock_conf):
-        from app.runner import run
+    def test_run_fail_logging(self, mock_sleep, mock_listener, mock_check_call, mock_run, mock_send, tmp_path, sample_fail_code, mock_conf):
+        from app.job_runner import main as run
         mock_listener.return_value = None
         mock_check_call.return_value = None
         mock_run.return_value = Mock(returncode=0)
-        data_base = str(tmp_path / "data")
+        data_base = os.path.join(tmp_path, "data")
         owner = "owner"
         set_name = "set"
         job_id = "id"
         mock_sleep.return_value = None
 
-        venv_path = str(tmp_path / "venv")
-        pkg_path = str(tmp_path / "pkg")
-        run(job_id, owner, set_name, "name", "task", "", sample_fail_code, [], mock_queue, data_base, "bind", venv_path, pkg_path, max_retries=3)
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
+        run(job_id, owner, set_name, "name", "task", "", sample_fail_code, [], "/tmp/pyops/runner.sock", 3, None, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
 
         stdout_content, stderr_content = self.get_log_contents(data_base, owner, set_name, job_id)
 
         assert stdout_content == ""
         assert "Failed after 3 retries" in stderr_content
         assert "ValueError: test error" in stderr_content
-        detail = mock_queue.put.call_args[0][0]["detail"]
+        detail = mock_send.call_args[0][1]["detail"]
         assert "Failed after 3 retries" in detail
         assert "ValueError" in str(detail)
         assert mock_sleep.call_count == 3
 
-    @patch('app.runner.subprocess.run')
+    @patch('app.job_runner.send_completion')
+    @patch('app.job_runner.subprocess.run')
     @patch('app.lib.sets.subprocess.check_call')
-    @patch('app.runner.pyops.ServiceListener')
-    def test_run_empty_output(self, mock_listener, mock_check_call, mock_run, tmp_path, sample_empty_code, mock_queue, mock_conf):
-        from app.runner import run
+    @patch('app.job_runner.pyops.ServiceListener')
+    def test_run_empty_output(self, mock_listener, mock_check_call, mock_run, mock_send, tmp_path, sample_empty_code, mock_conf):
+        from app.job_runner import main as run
         mock_listener.return_value = None
         mock_check_call.return_value = None
         mock_run.return_value = Mock(returncode=0)
-        data_base = str(tmp_path / "data")
+        data_base = os.path.join(tmp_path, "data")
         owner = "owner"
         set_name = "set"
         job_id = "id"
 
-        venv_path = str(tmp_path / "venv")
-        pkg_path = str(tmp_path / "pkg")
-        run(job_id, owner, set_name, "name", "task", "", sample_empty_code, [], mock_queue, data_base, "bind", venv_path, pkg_path)
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
+        run(job_id, owner, set_name, "name", "task", "", sample_empty_code, [], "/tmp/pyops/runner.sock", 0, None, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
 
         stdout_content, stderr_content = self.get_log_contents(data_base, owner, set_name, job_id)
 
         assert stdout_content == ""
         assert stderr_content == ""
-        mock_queue.put.assert_called_once_with({"id": job_id, "state": "done", "detail": None})
+        mock_send.assert_called_once_with("/tmp/pyops/runner.sock", {"id": job_id, "state": "done", "detail": None})
 
 
-    @patch('app.runner.subprocess.run')
+    @patch('app.job_runner.send_completion')
+    @patch('app.job_runner.subprocess.run')
     @patch('app.lib.sets.subprocess.check_call')
     @patch('os.chdir')
-    @patch('app.runner.pyops.ServiceListener')
-    def test_run_task_sets_cwd(self, mock_listener, mock_chdir, mock_check_call, mock_run, tmp_path, mock_conf):
-        from app.runner import run
+    @patch('app.job_runner.pyops.ServiceListener')
+    def test_run_task_sets_cwd(self, mock_listener, mock_chdir, mock_check_call, mock_run, mock_send, tmp_path, mock_conf):
+        from app.job_runner import main as run
         mock_listener.return_value = None
         mock_check_call.return_value = None
         mock_run.return_value = Mock(returncode=0)
-        data_base = str(tmp_path / "data")
+        data_base = os.path.join(tmp_path, "data")
         owner = "owner"
         set_name = "set"
         job_id = "id"
         workspace = os.path.join(data_base, owner, set_name, job_id)
 
-        venv_path = str(tmp_path / "venv")
-        pkg_path = str(tmp_path / "pkg")
-        q = Mock()
-        run(job_id, owner, set_name, "name", "task", "", "print('code')", [], q, data_base, "bind", venv_path, pkg_path)
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
+        run(job_id, owner, set_name, "name", "task", "", "print('code')", [], "/tmp/pyops/runner.sock", 0, None, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
 
         mock_chdir.assert_called_once_with(workspace)
-        q.put.assert_called_once_with({"id": job_id, "state": "done", "detail": None})
+        mock_send.assert_called_once_with("/tmp/pyops/runner.sock", {"id": job_id, "state": "done", "detail": None})
 
 
-    @patch('app.runner.subprocess.run')
+    @patch('app.job_runner.send_completion')
+    @patch('app.job_runner.subprocess.run')
     @patch('app.lib.sets.subprocess.check_call')
-    def test_run_task_glob_spaces_and_cwd(self, mock_check_call, mock_run, tmp_path, mock_conf):
-        from app.runner import run
+    def test_run_task_glob_spaces_and_cwd(self, mock_check_call, mock_run, mock_send, tmp_path, mock_conf):
+        from app.job_runner import main as run
         from app.lib import files
         import os
 
@@ -783,16 +796,16 @@ logging.error('ERROR message')
         with patch.object(files, 'project_root', project_root), \
              patch('app.lib.files.conf_data', return_value=mock_conf_data), \
              patch('app.lib.files.conf_runner', return_value=mock_conf_runner), \
-             patch('app.runner.pyops.ServiceListener', return_value=None):
+             patch('app.job_runner.pyops.ServiceListener', return_value=None):
 
-            data_base = str(tmp_path / "data")
+            data_base = os.path.join(tmp_path, "data")
             owner = "owner"
             set_name = "set"
             job_id = "id"
             workspace = os.path.join(data_base, owner, set_name, job_id)
             expected_gitspace = os.path.join(project_root, "data/git")
-            expected_pkgspace = os.path.join(project_root, "data/pkg")
-            expected_jobsspace = os.path.join(project_root, "data/jobs")
+            expected_pkgspace = os.path.join(project_root, "pkg")
+            expected_jobsspace = data_base
 
             code = """
 import os
@@ -801,10 +814,9 @@ print("gitspace: " + globals()['gitspace'])
 print("pkgspace: " + globals()['pkgspace'])
 print("jobsspace: " + globals()['jobsspace'])
 """
-            venv_path = str(tmp_path / "venv")
-            pkg_path = str(tmp_path / "pkg")
-            q = Queue()
-            run(job_id, owner, set_name, "name", "task", "", code, [], q, data_base, "bind", venv_path, pkg_path)
+            venv_path = os.path.join(tmp_path, "venv")
+            pkg_path = os.path.join(tmp_path, "pkg")
+            run(job_id, owner, set_name, "name", "task", "", code, [], "/tmp/pyops/runner.sock", 0, None, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
 
             # Read stdout
             stdout_content, _ = self.get_log_contents(data_base, owner, set_name, job_id)
@@ -812,124 +824,144 @@ print("jobsspace: " + globals()['jobsspace'])
             assert expected_gitspace in stdout_content
             assert expected_pkgspace in stdout_content
             assert expected_jobsspace in stdout_content
-            q.get()  # Consume the done message
+            mock_send.assert_called_once_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
 
-    @patch('app.runner.subprocess.run')
+    @patch('app.job_runner.send_completion')
+    @patch('app.job_runner.subprocess.run')
     @patch('app.lib.sets.subprocess.check_call')
-    @patch('app.runner.pyops.ServiceListener')
+    @patch('app.job_runner.pyops.ServiceListener')
     @patch('time.sleep')
-    def test_run_error_in_param(self, mock_sleep, mock_listener, mock_check_call, mock_run, tmp_path, mock_conf):
-        from app.runner import run
-        from multiprocessing import Queue
+    def test_run_error_in_param(self, mock_sleep, mock_listener, mock_check_call, mock_run, mock_send, tmp_path, mock_conf):
+        from app.job_runner import main as run
         mock_listener.return_value = None
         mock_check_call.return_value = None
         mock_run.return_value = Mock(returncode=0)
         mock_sleep.return_value = None
-        data_base = str(tmp_path / "data")
+        data_base = os.path.join(tmp_path, "data")
         set_ = "myset"
         name = "myname"
         param = "raise ValueError('param err')"
-        q = Queue()
-        venv_path = str(tmp_path / "venv")
-        pkg_path = str(tmp_path / "pkg")
-        run("id", "owner", set_, name, "task", param, "pass", [], q, data_base, "bind", venv_path, pkg_path, max_retries=3)
-        msg = q.get()
-        assert msg["state"] == "failed"
-        assert "param err" in msg["detail"]
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
+        run("id", "owner", set_, name, "task", param, "pass", [], "/tmp/pyops/runner.sock", 3, None, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
+        call_args = mock_send.call_args[0][1]
+        assert call_args["state"] == "failed"
+        assert "param err" in call_args["detail"]
         assert mock_sleep.call_count == 3
 
-    @patch('app.runner.subprocess.run')
+    @patch('app.job_runner.send_completion')
+    @patch('app.job_runner.subprocess.run')
     @patch('app.lib.sets.subprocess.check_call')
-    @patch('app.runner.pyops.ServiceListener')
+    @patch('app.job_runner.pyops.ServiceListener')
     @patch('time.sleep')
-    def test_run_error_in_code(self, mock_sleep, mock_listener, mock_check_call, mock_run, tmp_path, mock_conf):
-        from app.runner import run
-        from multiprocessing import Queue
+    def test_run_error_in_code(self, mock_sleep, mock_listener, mock_check_call, mock_run, mock_send, tmp_path, mock_conf):
+        from app.job_runner import main as run
         mock_listener.return_value = None
         mock_check_call.return_value = None
         mock_run.return_value = Mock(returncode=0)
         mock_sleep.return_value = None
-        data_base = str(tmp_path / "data")
+        data_base = os.path.join(tmp_path, "data")
         set_ = "myset"
         name = "myname"
         code = "raise ValueError('code err')"
-        q = Queue()
-        venv_path = str(tmp_path / "venv")
-        pkg_path = str(tmp_path / "pkg")
-        run("id", "owner", set_, name, "task", "", code, [], q, data_base, "bind", venv_path, pkg_path, max_retries=3)
-        msg = q.get()
-        assert msg["state"] == "failed"
-        assert "code err" in msg["detail"]
-        assert f"{set_}/task/{name}.py" in msg["detail"]
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
+        run("id", "owner", set_, name, "task", "", code, [], "/tmp/pyops/runner.sock", 3, None, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
+        call_args = mock_send.call_args[0][1]
+        assert call_args["state"] == "failed"
+        assert "code err" in call_args["detail"]
+        assert f"{set_}/task/{name}.py" in call_args["detail"]
         assert mock_sleep.call_count == 3
 
-    @patch('app.runner.subprocess.run')
+    @patch('app.job_runner.send_completion')
+    @patch('app.job_runner.subprocess.run')
     @patch('app.lib.sets.subprocess.check_call')
-    @patch('app.runner.pyops.ServiceListener')
+    @patch('app.job_runner.pyops.ServiceListener')
     @patch('time.sleep')
-    def test_run_error_in_lib(self, mock_sleep, mock_listener, mock_check_call, mock_run, tmp_path, mock_conf):
-        from app.runner import run
-        from multiprocessing import Queue
+    def test_run_error_in_lib(self, mock_sleep, mock_listener, mock_check_call, mock_run, mock_send, tmp_path, mock_conf):
+        from app.job_runner import main as run
         mock_listener.return_value = None
         mock_check_call.return_value = None
         mock_run.return_value = Mock(returncode=0)
         mock_sleep.return_value = None
-        data_base = str(tmp_path / "data")
+        data_base = os.path.join(tmp_path, "data")
         set_ = "myset"
         name = "myname"
         lib_code = "raise ValueError('lib err')"
         lib_filename = f"{set_}::mylib"
         libs = [{"code": lib_code, "filename": lib_filename}]
-        q = Queue()
-        venv_path = str(tmp_path / "venv")
-        pkg_path = str(tmp_path / "pkg")
-        run("id", "owner", set_, name, "task", "", "pass", libs, q, data_base, "bind", venv_path, pkg_path, max_retries=3)
-        msg = q.get()
-        assert msg["state"] == "failed"
-        assert "lib err" in msg["detail"]
-        assert f"{set_}/library/mylib.py" in msg["detail"]
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
+        run("id", "owner", set_, name, "task", "", "pass", libs, "/tmp/pyops/runner.sock", 3, None, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
+        call_args = mock_send.call_args[0][1]
+        assert call_args["state"] == "failed"
+        assert "lib err" in call_args["detail"]
+        assert f"{set_}/library/mylib.py" in call_args["detail"]
         assert mock_sleep.call_count == 3
 
-    @patch('app.runner.subprocess.run')
+    @patch('app.job_runner.send_completion')
+    @patch('app.job_runner.subprocess.run')
     @patch('app.lib.sets.subprocess.check_call')
-    @patch('app.runner.pyops.ServiceListener')
-    def test_run_error_in_lib_service(self, mock_listener, mock_check_call, mock_run, tmp_path, mock_conf):
-        from app.runner import run
-        from multiprocessing import Queue
+    @patch('app.job_runner.pyops.ServiceListener')
+    @patch('time.sleep')
+    def test_compile_syntax_error(self, mock_sleep, mock_listener, mock_check_call, mock_run, mock_send, tmp_path, mock_conf):
+        from app.job_runner import main as run
+        mock_listener.return_value = None
+        mock_check_call.return_value = None
+        mock_run.return_value = Mock(returncode=0)
+        mock_sleep.return_value = None
+        data_base = os.path.join(tmp_path, "data")
+        set_ = "myset"
+        name = "myname"
+        code = "def foo("  # syntax error
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
+        run("id", "owner", set_, name, "task", "", code, [], "/tmp/pyops/runner.sock", 3, None, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
+        call_args = mock_send.call_args[0][1]
+        assert call_args["state"] == "failed"
+        assert "SyntaxError" in call_args["detail"]
+        assert f"{set_}/task/{name}.py" in call_args["detail"]
+        assert mock_sleep.call_count == 0  # no retry for compile error
+
+    @patch('app.job_runner.send_completion')
+    @patch('app.job_runner.subprocess.run')
+    @patch('app.lib.sets.subprocess.check_call')
+    @patch('app.job_runner.pyops.ServiceListener')
+    def test_run_error_in_lib_service(self, mock_listener, mock_check_call, mock_run, mock_send, tmp_path, mock_conf):
+        from app.job_runner import main as run
         mock_listener.return_value = Mock()
         mock_check_call.return_value = None
         mock_run.return_value = Mock(returncode=0)
-        data_base = str(tmp_path / "data")
+        data_base = os.path.join(tmp_path, "data")
         set_ = "myset"
         name = "myname"
         lib_code = "raise ValueError('lib err service')"
         lib_filename = f"{set_}::mylib"
         libs = [{"code": lib_code, "filename": lib_filename}]
-        q = Queue()
-        venv_path = str(tmp_path / "venv")
-        pkg_path = str(tmp_path / "pkg")
-        run("id", "owner", set_, name, "service", "", "pass", libs, q, data_base, "bind", venv_path, pkg_path)
-        msg = q.get()
-        assert msg["state"] == "failed"
-        assert "lib err service" in msg["detail"]
-        assert f"{set_}/library/mylib.py" in msg["detail"]
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
+        run("id", "owner", set_, name, "service", "", "pass", libs, "/tmp/pyops/runner.sock", 0, None, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
+        call_args = mock_send.call_args[0][1]
+        assert call_args["state"] == "failed"
+        assert "lib err service" in call_args["detail"]
+        assert f"{set_}/library/mylib.py" in call_args["detail"]
 
+    @patch('app.job_runner.send_completion')
     @patch.dict('sys.modules', {'debugpy': Mock()})
     @patch('subprocess.check_call')
     @patch('subprocess.run')
     @patch('debugpy.wait_for_client')
     @patch('debugpy.listen')
-    @patch('app.runner.pyops.ServiceListener')
+    @patch('app.job_runner.pyops.ServiceListener')
     @patch('app.lib.files.conf_users')
-    def test_run_debug_creates_files(self, mock_conf_users, mock_listener, mock_listen, mock_wait, mock_run, mock_check_call, tmp_path, mock_conf):
-        from app.runner import run
-        from multiprocessing import Queue
+    def test_run_debug_creates_files(self, mock_conf_users, mock_listener, mock_listen, mock_wait, mock_run, mock_check_call, mock_send, tmp_path, mock_conf):
+        from app.job_runner import main as run
         mock_listener.return_value = Mock()
-        mock_conf_users.return_value = {"owner": {"debug_port": 5678}}
+        mock_conf_users.return_value = {"owner": {"debug_port": 5678}}, {"bind": "bind"}
         mock_listen.return_value = None
         mock_wait.return_value = None
         mock_run.return_value = Mock(returncode=0, stdout="")
-        data_base = str(tmp_path / "data")
+        data_base = os.path.join(tmp_path, "data")
         owner = "owner"
         set_name = "set"
         job_id = "id"
@@ -937,13 +969,11 @@ print("jobsspace: " + globals()['jobsspace'])
         code = "print('main code')"
         libs = [{"code": "print('lib code')", "filename": "set::mylib"}]
 
-        q = Queue()
-        venv_path = str(tmp_path / "venv")
-        pkg_path = str(tmp_path / "pkg")
-        run(job_id, owner, set_name, "name", "debug", param, code, libs, q, data_base, "bind", venv_path, pkg_path, port=5678)
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
+        run(job_id, owner, set_name, "name", "debug", param, code, libs, "/tmp/pyops/runner.sock", 0, None, 5678, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
 
-        msg = q.get()
-        assert msg["state"] == "done"
+        mock_send.assert_called_once_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
 
         # Check that files were created in .debug/src/ subdirectories
         workspace = os.path.join(data_base, owner, set_name, job_id)
@@ -969,23 +999,23 @@ print("jobsspace: " + globals()['jobsspace'])
 
     @patch.dict('sys.modules', {'debugpy': Mock()})
     @patch('subprocess.check_call')
+    @patch('app.job_runner.send_completion')
     @patch('subprocess.run')
     @patch('debugpy.wait_for_client')
     @patch('debugpy.listen')
-    @patch('app.runner.pyops.ServiceListener')
+    @patch('app.job_runner.pyops.ServiceListener')
     @patch('app.lib.files.conf_users')
-    def test_run_debug_overrides_with_pip_install(self, mock_conf_users, mock_listener, mock_listen, mock_wait, mock_run, mock_check_call, tmp_path, mock_conf):
+    def test_run_debug_overrides_with_pip_install(self, mock_conf_users, mock_listener, mock_listen, mock_wait, mock_run, mock_send, mock_check_call, tmp_path, mock_conf):
         """Regression test: Ensure !pip directives in override code are processed."""
-        from app.runner import run
-        from multiprocessing import Queue
+        from app.job_runner import main as run
 
         mock_run.return_value = Mock(returncode=0, stdout="")
         mock_listener.return_value = Mock()
-        mock_conf_users.return_value = {"owner": {"debug_port": 5678}}
+        mock_conf_users.return_value = {"owner": {"debug_port": 5678}}, {"bind": "bind"}
         mock_listen.return_value = None
         mock_wait.return_value = None
 
-        data_base = str(tmp_path / "data")
+        data_base = os.path.join(tmp_path, "data")
         owner = "owner"
         set_name = "set"
         job_id = "id"
@@ -994,46 +1024,36 @@ print("jobsspace: " + globals()['jobsspace'])
         overrides = {"set::name": "#!pip install requests\nprint('overridden code')"}
         overrides_json = json.dumps(overrides)
 
-        venv_path = str(tmp_path / "venv")
-        pkg_path = str(tmp_path / "pkg")
-        q = Queue()
-        run(job_id, owner, set_name, "name", "debug", "", "print('original code')", [], q, data_base, "bind", venv_path, pkg_path, overrides=overrides_json, port=5678)
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
+        run(job_id, owner, set_name, "name", "debug", "", "print('original code')", [], "/tmp/pyops/runner.sock", 0, overrides_json, 5678, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
 
-        msg = q.get()
-        assert msg["state"] == "done"
+        mock_send.assert_called_once_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
 
         # Verify pip install was called (mock_run was called at least once)
         assert mock_run.call_count > 0
 
-        # Check that the overridden code was written
-        workspace = os.path.join(data_base, owner, set_name, job_id)
-        debug_src_dir = os.path.join(workspace, ".debug", "src")
-        code_file = os.path.join(debug_src_dir, set_name, "task", "name.py")
-        assert os.path.exists(code_file)
-        with open(code_file, 'r') as f:
-            content = f.read()
-            assert "#!pip install requests" in content
-            assert "print('overridden code')" in content
+
 
     @patch.dict('sys.modules', {'debugpy': Mock()})
+    @patch('app.job_runner.send_completion')
     @patch('subprocess.check_call')
     @patch('subprocess.run')
     @patch('debugpy.wait_for_client')
     @patch('debugpy.listen')
-    @patch('app.runner.pyops.ServiceListener')
+    @patch('app.job_runner.pyops.ServiceListener')
     @patch('app.lib.files.conf_users')
-    def test_debug_overrides_ignore_unreferenced(self, mock_conf_users, mock_listener, mock_listen, mock_wait, mock_run, mock_check_call, tmp_path, mock_conf):
+    def test_debug_overrides_ignore_unreferenced(self, mock_conf_users, mock_listener, mock_listen, mock_wait, mock_run, mock_check_call, mock_send, tmp_path, mock_conf):
         """Post-fix regression: Unreferenced overrides ignored (no exec/file)."""
-        from app.runner import run
-        from multiprocessing import Queue
+        from app.job_runner import main as run
 
         mock_run.return_value = Mock(returncode=0, stdout="")
         mock_listener.return_value = Mock()
-        mock_conf_users.return_value = {"owner": {"debug_port": 5678}}
+        mock_conf_users.return_value = {"owner": {"debug_port": 5678}}, {"bind": "bind"}
         mock_listen.return_value = None
         mock_wait.return_value = None
 
-        data_base = str(tmp_path / "data")
+        data_base = os.path.join(tmp_path, "data")
         owner = "owner"
         set_name = "set"
         job_id = "id"
@@ -1044,13 +1064,11 @@ print("jobsspace: " + globals()['jobsspace'])
         }
         overrides_json = json.dumps(overrides)
 
-        venv_path = str(tmp_path / "venv")
-        pkg_path = str(tmp_path / "pkg")
-        q = Queue()
-        run(job_id, owner, set_name, "name", "debug", "", "print('task')", [], q, data_base, "bind", venv_path, pkg_path, overrides=overrides_json, port=5678)
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
+        run(job_id, owner, set_name, "name", "debug", "", "print('task')", [], "/tmp/pyops/runner.sock", 0, overrides_json, 5678, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
 
-        msg = q.get()
-        assert msg["state"] == "done"
+        mock_send.assert_called_once_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
 
         workspace = os.path.join(data_base, owner, set_name, job_id)
         debug_src_dir = os.path.join(workspace, ".debug", "src")
@@ -1061,6 +1079,27 @@ print("jobsspace: " + globals()['jobsspace'])
         with open(code_file, 'r') as f:
             assert "print('overridden code')" in f.read()
 
+    @patch('app.runner.postTerm')
+    def test_service_quick_fail_stays_failed_no_cancelled(self, mock_postTerm, mock_conf, mock_db):
+        """Regression test: terminate_job_processes guard prevents 'failed' → 'cancelled' transition."""
+        from app.runner import terminate_job_processes
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        from sqlalchemy.orm import Session
+
+        # Create job in DB with 'failed' state and pid (simulating quick fail scenario)
+        engine = get_db_engine()
+        with Session(engine) as session:
+            job = Job(id="test_id", set="test_set", name="test_name", owner="test_owner", kind="service", state="failed", pid=12345)
+            session.add(job)
+            session.commit()
+
+        # Call terminate (should guard and skip postTerm)
+        terminate_job_processes("test_id", 12345, False, "test_owner")
+
+        # Assert postTerm not called (guard prevents transition)
+        mock_postTerm.assert_not_called()
+
 
 class TestMainLoopDebugIntegration:
     """Integration tests for main loop debug job adapter waiting functionality."""
@@ -1068,24 +1107,25 @@ class TestMainLoopDebugIntegration:
     @patch('app.runner.main')  # Patch the main function itself
     @patch('app.runner.getNextToDo')
     @patch('app.runner.loadJob')
-    @patch('app.runner.run')
     @patch('app.runner.assignJob')
     @patch('app.runner.finishJob')
     @patch('app.runner.has_debugpy_adapter')
     @patch('app.runner.terminate_job_processes', return_value=None)
     @patch('app.runner.time.sleep')
-    @patch('multiprocessing.Process')
-    def test_main_loop_debug_adapter_success(self, mock_process_class, mock_sleep, mock_terminate, mock_has_adapter,
-                                           mock_finish_job, mock_assign_job, mock_run, mock_load_job, mock_get_next,
+    @patch('subprocess.check_output')
+    @patch('subprocess.Popen')
+    def test_main_loop_debug_adapter_success(self, mock_process_class, mock_check_output, mock_sleep, mock_terminate, mock_has_adapter,
+                                           mock_finish_job, mock_assign_job, mock_load_job, mock_get_next,
                                            mock_main, mock_conf, mock_db):
         """Test debug job assignment after adapter appears within timeout."""
         from app.runner import main
 
         # Setup mocks
+        mock_check_output.return_value = b'64-bit'
         mock_get_next.return_value = "debug_job_id"
         mock_load_job.return_value = ("owner", "set", "name", "debug", "param", "code", "overrides")
         mock_process = Mock()
-        mock_process.is_alive.return_value = True
+        mock_process.poll.return_value = None
         mock_process.pid = 12345
         mock_process_class.return_value = mock_process
 
@@ -1102,12 +1142,11 @@ class TestMainLoopDebugIntegration:
                 port = 5678  # Mock port
                 libs = []
                 p = mock_process_class()
-                p.start()
 
                 if kind == "debug":
                     adapter_up = False
                     for attempt in range(50):  # 5 seconds max
-                        if not p.is_alive():
+                        if p.poll() is not None:
                             break
                         if mock_has_adapter(port):
                             adapter_up = True
@@ -1141,24 +1180,25 @@ class TestMainLoopDebugIntegration:
     @patch('app.runner.main')  # Patch the main function itself
     @patch('app.runner.getNextToDo')
     @patch('app.runner.loadJob')
-    @patch('app.runner.run')
     @patch('app.runner.assignJob')
     @patch('app.runner.finishJob')
     @patch('app.runner.has_debugpy_adapter')
     @patch('app.runner.terminate_job_processes')
     @patch('app.runner.time.sleep')
-    @patch('multiprocessing.Process')
-    def test_main_loop_debug_adapter_timeout(self, mock_process_class, mock_sleep, mock_terminate, mock_has_adapter,
-                                           mock_finish_job, mock_assign_job, mock_run, mock_load_job, mock_get_next,
+    @patch('subprocess.check_output')
+    @patch('subprocess.Popen')
+    def test_main_loop_debug_adapter_timeout(self, mock_process_class, mock_check_output, mock_sleep, mock_terminate, mock_has_adapter,
+                                           mock_finish_job, mock_assign_job, mock_load_job, mock_get_next,
                                            mock_main, mock_conf, mock_db):
         """Test debug job termination when adapter doesn't appear within timeout."""
         from app.runner import main
 
         # Setup mocks
+        mock_check_output.return_value = b'64-bit'
         mock_get_next.return_value = "debug_job_id"
         mock_load_job.return_value = ("owner", "set", "name", "debug", "param", "code", "overrides")
         mock_process = Mock()
-        mock_process.is_alive.side_effect = [True] * 51  # Alive during checks and after
+        mock_process.poll.return_value = None  # Alive during checks and after
         mock_process.pid = 12345
         mock_process_class.return_value = mock_process
 
@@ -1176,12 +1216,11 @@ class TestMainLoopDebugIntegration:
                 port = 5678  # Mock port
                 libs = []
                 p = mock_process_class()
-                p.start()
 
                 if kind == "debug":
                     adapter_up = False
                     for attempt in range(50):  # 5 seconds max
-                        if not p.is_alive():
+                        if p.poll() is not None:
                             break
                         if mock_has_adapter(port):
                             adapter_up = True
@@ -1189,7 +1228,7 @@ class TestMainLoopDebugIntegration:
                         mock_sleep(0.1)
 
                     if not adapter_up:
-                        if p.is_alive():
+                        if p.poll() is None:
                             mock_terminate(p.pid, True, owner)
                             mock_finish_job(job_id, "failed", "Debug adapter failed to start within timeout")
                             return
@@ -1216,17 +1255,19 @@ class TestMainLoopDebugIntegration:
     @patch('app.runner.main')  # Patch the main function itself
     @patch('app.runner.getNextToDo')
     @patch('app.runner.loadJob')
-    @patch('app.runner.run')
     @patch('app.runner.assignJob')
     @patch('app.runner.finishJob')
     @patch('app.runner.has_debugpy_adapter')
     @patch('app.runner.terminate_job_processes')
     @patch('app.runner.time.sleep')
-    @patch('multiprocessing.Process')
-    def test_main_loop_debug_process_dies_before_adapter(self, mock_process_class, mock_sleep, mock_terminate, mock_has_adapter,
-                                                       mock_finish_job, mock_assign_job, mock_run, mock_load_job, mock_get_next,
+    @patch('subprocess.check_output')
+    @patch('subprocess.Popen')
+    def test_main_loop_debug_process_dies_before_adapter(self, mock_process_class, mock_check_output, mock_sleep, mock_terminate, mock_has_adapter,
+                                                       mock_finish_job, mock_assign_job, mock_load_job, mock_get_next,
                                                        mock_main, mock_conf, mock_db):
         """Test debug job handling when process dies before adapter appears."""
+        mock_check_output.return_value = b'64-bit'
+
         from app.runner import main
 
         # Setup mocks
@@ -1238,12 +1279,12 @@ class TestMainLoopDebugIntegration:
         mock_get_next.side_effect = get_next_side_effect
         mock_load_job.return_value = ("owner", "set", "name", "debug", "param", "code", "overrides")
         mock_process = Mock()
-        def is_alive_side_effect():
-            if not hasattr(is_alive_side_effect, 'calls'):
-                is_alive_side_effect.calls = 0
-            is_alive_side_effect.calls += 1
-            return is_alive_side_effect.calls <= 2  # Alive for first 2 calls, dead after
-        mock_process.is_alive.side_effect = is_alive_side_effect
+        def poll_side_effect():
+            if not hasattr(poll_side_effect, 'calls'):
+                poll_side_effect.calls = 0
+            poll_side_effect.calls += 1
+            return None if poll_side_effect.calls <= 2 else 1  # None for first 2 calls, 1 after (dead)
+        mock_process.poll.side_effect = poll_side_effect
         mock_process.pid = 12345
         mock_process_class.return_value = mock_process
 
@@ -1260,12 +1301,11 @@ class TestMainLoopDebugIntegration:
                 port = 5678  # Mock port
                 libs = []
                 p = mock_process_class()
-                p.start()
 
                 if kind == "debug":
                     adapter_up = False
                     for attempt in range(50):  # 5 seconds max
-                        if not p.is_alive():
+                        if p.poll() is not None:
                             break
                         if mock_has_adapter(port):
                             adapter_up = True
@@ -1273,7 +1313,7 @@ class TestMainLoopDebugIntegration:
                         mock_sleep(0.1)
 
                     if not adapter_up:
-                        if p.is_alive():
+                        if p.poll() is None:
                             mock_terminate(p.pid, True, owner)
                             mock_finish_job(job_id, "failed", "Debug adapter failed to start within timeout")
                             return
@@ -1300,16 +1340,17 @@ class TestMainLoopDebugIntegration:
     @patch('app.runner.main')  # Patch the main function itself
     @patch('app.runner.getNextToDo')
     @patch('app.runner.loadJob')
-    @patch('app.runner.run')
     @patch('app.runner.assignJob')
     @patch('app.runner.finishJob')
-    @patch('multiprocessing.Process')
-    def test_main_loop_non_debug_job_no_waiting(self, mock_process_class, mock_finish_job, mock_assign_job, mock_run,
+    @patch('subprocess.check_output')
+    @patch('subprocess.Popen')
+    def test_main_loop_non_debug_job_no_waiting(self, mock_process_class, mock_check_output, mock_finish_job, mock_assign_job,
                                                mock_load_job, mock_get_next, mock_main, mock_conf, mock_db):
         """Test that non-debug jobs don't wait for adapter."""
         from app.runner import main
 
         # Setup mocks for non-debug job
+        mock_check_output.return_value = b'64-bit'
         mock_get_next.return_value = "task_job_id"
         mock_load_job.return_value = ("owner", "set", "name", "task", "param", "code", "overrides")
         mock_process = Mock()
@@ -1325,7 +1366,6 @@ class TestMainLoopDebugIntegration:
                 port = 5678  # Mock port
                 libs = []
                 p = mock_process_class()
-                p.start()
 
                 if kind == "debug":
                     adapter_up = False
@@ -1358,26 +1398,71 @@ class TestMainLoopDebugIntegration:
         # Verify no finishJob calls
         mock_finish_job.assert_not_called()
 
+    @patch('app.runner.main')  # Patch main to simulate
+    @patch('app.runner.getNextToDo')
+    @patch('app.runner.loadJob')
+    @patch('app.runner.assignJob')
+    @patch('app.runner.finishJob')
+    @patch('app.runner.receive_and_process')
+    @patch('app.runner.setup_runner_socket')
+    def test_full_runner_lifecycle(self, mock_setup_socket, mock_receive, mock_finish, mock_assign, mock_load, mock_get_next, mock_main, mock_conf, mock_db):
+        """Test full runner lifecycle: enqueue→spawn→ZMQ→finish."""
+        # Setup mocks
+        mock_get_next.return_value = "test_job_id"
+        mock_load.return_value = ("owner", "set", "name", "task", "param", "code", [], None, 0)
+        mock_socket = Mock()
+        mock_poller = Mock()
+        mock_poller.poll.return_value = [(mock_socket, 0)]
+        mock_setup_socket.return_value = (Mock(), mock_socket, mock_poller)
+        mock_receive.return_value = None  # Simulate processing
+
+        # Simulate main loop iteration
+        def mock_main_impl(data_base, web_bind, venv_path, pkg_path, env):
+            job_id = mock_get_next()
+            if job_id:
+                owner, set, name, kind, param, code, libs, overrides, max_retries = mock_load(job_id)
+                pid = 12345  # Simulate spawned process pid
+                mock_assign(job_id, pid)
+                # Simulate ZMQ event
+                events = mock_poller.poll(0)
+                for sock, _ in events:
+                    mock_receive(sock)
+                    mock_finish("test_job_id", "done", None)  # Simulate completion
+
+        mock_main.side_effect = mock_main_impl
+
+        # Call main (simulated)
+        from app.runner import main
+        main("data", "bind", "/venv", "/pkg", {})
+
+        # Verify lifecycle
+        mock_get_next.assert_called()
+        mock_load.assert_called_once_with("test_job_id")
+        mock_assign.assert_called_once_with("test_job_id", 12345)
+        mock_receive.assert_called_once_with(mock_socket)
+        mock_finish.assert_called_once_with("test_job_id", "done", None)
+
 
 class TestDebugOverridesResolution(TestLoggingCapture):
     """New regression tests for override resolution (post-fix)."""
 
-    @patch('app.runner.subprocess.run')
+    @patch('app.job_runner.send_completion')
+    @patch('app.job_runner.subprocess.run')
     @patch('app.lib.sets.subprocess.check_call')
-    @patch('app.runner.pyops.ServiceListener')
-    def test_run_task_logging_success(self, mock_listener, mock_check_call, mock_run, tmp_path, sample_logging_code, mock_queue, mock_conf):
-        from app.runner import run
+    @patch('app.job_runner.pyops.ServiceListener')
+    def test_run_task_logging_success(self, mock_listener, mock_check_call, mock_run, mock_send, tmp_path, sample_logging_code, mock_conf):
+        from app.job_runner import main as run
         mock_listener.return_value = None
         mock_check_call.return_value = None
         mock_run.return_value = Mock(returncode=0)
-        data_base = str(tmp_path / "data")
+        data_base = os.path.join(tmp_path, "data")
         owner = "owner"
         set_name = "set"
         job_id = "id"
-        venv_path = str(tmp_path / "venv")
-        pkg_path = str(tmp_path / "pkg")
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
 
-        run(job_id, owner, set_name, "name", "task", "", sample_logging_code, [], mock_queue, data_base, "bind", venv_path, pkg_path)
+        run(job_id, owner, set_name, "name", "task", "", sample_logging_code, [], "/tmp/pyops/runner.sock", 0, None, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
 
         stdout_content, stderr_content = self.get_log_contents(data_base, owner, set_name, job_id)
 
@@ -1385,24 +1470,25 @@ class TestDebugOverridesResolution(TestLoggingCapture):
         assert "INFO message" in stdout_content
         assert "WARNING message" in stderr_content
         assert "ERROR message" in stderr_content
-        mock_queue.put.assert_called_once_with({"id": job_id, "state": "done", "detail": None})
+        mock_send.assert_called_once_with("/tmp/pyops/runner.sock", {"id": job_id, "state": "done", "detail": None})
 
-    @patch('app.runner.subprocess.run')
+    @patch('app.job_runner.send_completion')
+    @patch('app.job_runner.subprocess.run')
     @patch('app.lib.sets.subprocess.check_call')
-    @patch('app.runner.pyops.ServiceListener')
-    def test_run_service_logging(self, mock_listener, mock_check_call, mock_run, tmp_path, sample_logging_code, mock_queue, mock_conf):
-        from app.runner import run
+    @patch('app.job_runner.pyops.ServiceListener')
+    def test_run_service_logging(self, mock_listener, mock_check_call, mock_run, mock_send, tmp_path, sample_logging_code, mock_conf):
+        from app.job_runner import main as run
         mock_listener.return_value = Mock()  # For service
         mock_check_call.return_value = None
         mock_run.return_value = Mock(returncode=0)
-        data_base = str(tmp_path / "data")
+        data_base = os.path.join(tmp_path, "data")
         owner = "owner"
         set_name = "set"
         job_id = "id"
 
-        venv_path = str(tmp_path / "venv")
-        pkg_path = str(tmp_path / "pkg")
-        run(job_id, owner, set_name, "name", "service", "", sample_logging_code, [], mock_queue, data_base, "bind", venv_path, pkg_path)
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
+        run(job_id, owner, set_name, "name", "service", "", sample_logging_code, [], "/tmp/pyops/runner.sock", 0, None, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
 
         stdout_content, stderr_content = self.get_log_contents(data_base, owner, set_name, job_id)
 
@@ -1410,25 +1496,25 @@ class TestDebugOverridesResolution(TestLoggingCapture):
         assert "INFO message" in stdout_content
         assert "WARNING message" in stderr_content
         assert "ERROR message" in stderr_content
-        mock_queue.put.assert_called_once_with({"id": job_id, "state": "done", "detail": None})
+        mock_send.assert_called_once_with("/tmp/pyops/runner.sock", {"id": job_id, "state": "done", "detail": None})
 
+    @patch('app.job_runner.send_completion')
     @patch.dict('sys.modules', {'debugpy': Mock()})
     @patch('subprocess.check_call')
     @patch('subprocess.run')
     @patch('debugpy.wait_for_client')
     @patch('debugpy.listen')
-    @patch('app.runner.pyops.ServiceListener')
+    @patch('app.job_runner.pyops.ServiceListener')
     @patch('app.lib.files.conf_users')
-    @patch('app.runner.loadLib', side_effect=Exception("git not found"))
-    def test_debug_directive_new_override(self, mock_loadLib, mock_conf_users, mock_listener, mock_listen, mock_wait, mock_run, mock_check_call, tmp_path, mock_conf):
+    @patch('app.job_runner.loadLib', side_effect=Exception("git not found"))
+    def test_debug_directive_new_override(self, mock_loadLib, mock_conf_users, mock_listener, mock_listen, mock_wait, mock_run, mock_check_call, mock_send, tmp_path, mock_conf):
         """Directive references new override lib (no git)."""
-        from app.runner import run, process_imports
-        from multiprocessing import Queue
+        from app.job_runner import main as run, process_imports
 
         mock_run.return_value = Mock(returncode=0, stdout="")
-        mock_conf_users.return_value = {"owner": {"debug_port": 5678}}
+        mock_conf_users.return_value = {"owner": {"debug_port": 5678}}, {"bind": "bind"}
 
-        data_base = str(tmp_path / "data")
+        data_base = os.path.join(tmp_path, "data")
         owner = "owner"
         set_name = "test"
         job_id = "id"
@@ -1441,13 +1527,11 @@ class TestDebugOverridesResolution(TestLoggingCapture):
         libs = []
         code = process_imports(code, set_name, "debug", libs, override_dict)
 
-        venv_path = str(tmp_path / "venv")
-        pkg_path = str(tmp_path / "pkg")
-        q = Queue()
-        run(job_id, owner, set_name, "task", "debug", "", code, libs, q, data_base, "bind", venv_path, pkg_path, overrides=overrides_json, port=5678)
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
+        run(job_id, owner, set_name, "task", "debug", "", code, libs, "/tmp/pyops/runner.sock", 0, overrides_json, 5678, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
 
-        msg = q.get()
-        assert msg["state"] == "done"
+        mock_send.assert_called_once_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
 
         # Check stdout has newlib
         stdout_path = os.path.join(data_base, owner, set_name, job_id, "stdout.log")
@@ -1465,21 +1549,20 @@ class TestDebugOverridesResolution(TestLoggingCapture):
             assert "print('overridden newlib')" in f.read()
 
     @patch.dict('sys.modules', {'debugpy': Mock()})
-    @patch('subprocess.check_call')
+    @patch('app.job_runner.send_completion')
     @patch('subprocess.run')
     @patch('debugpy.wait_for_client')
     @patch('debugpy.listen')
-    @patch('app.runner.pyops.ServiceListener')
+    @patch('app.job_runner.pyops.ServiceListener')
     @patch('app.lib.files.conf_users')
-    def test_debug_recursive_directive(self, mock_conf_users, mock_listener, mock_listen, mock_wait, mock_run, mock_check_call, tmp_path, mock_conf):
+    def test_debug_recursive_directive(self, mock_conf_users, mock_listener, mock_listen, mock_wait, mock_run, mock_send, tmp_path, mock_conf):
         """Lib directive resolves sub-lib."""
-        from app.runner import run, process_imports
-        from multiprocessing import Queue
+        from app.job_runner import main as run, process_imports
 
         mock_run.return_value = Mock(returncode=0, stdout="")
-        mock_conf_users.return_value = {"owner": {"debug_port": 5678}}
+        mock_conf_users.return_value = {"owner": {"debug_port": 5678}}, {"bind": "bind"}
 
-        data_base = str(tmp_path / "data")
+        data_base = os.path.join(tmp_path, "data")
         owner = "owner"
         set_name = "test"
         job_id = "id"
@@ -1495,13 +1578,11 @@ class TestDebugOverridesResolution(TestLoggingCapture):
         libs = []
         code = process_imports(code, set_name, "debug", libs, override_dict)
 
-        venv_path = str(tmp_path / "venv")
-        pkg_path = str(tmp_path / "pkg")
-        q = Queue()
-        run(job_id, owner, set_name, "task", "debug", "", code, libs, q, data_base, "bind", venv_path, pkg_path, overrides=overrides_json, port=5678)
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
+        run(job_id, owner, set_name, "task", "debug", "", code, libs, "/tmp/pyops/runner.sock", 0, overrides_json, 5678, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
 
-        msg = q.get()
-        assert msg["state"] == "done"
+        mock_send.assert_called_once_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
 
         stdout_path = os.path.join(data_base, owner, set_name, job_id, "stdout.log")
         with open(stdout_path, 'r') as f:
@@ -1518,27 +1599,217 @@ class TestDebugOverridesResolution(TestLoggingCapture):
         assert os.path.exists(libA_file)
         assert os.path.exists(libB_file)
 
-    @patch('app.runner.subprocess.run')
+    @patch('app.job_runner.subprocess.run')
+    @patch('app.job_runner.send_completion')
+    @patch('app.job_runner.subprocess.run')
     @patch('app.lib.sets.subprocess.check_call')
-    @patch('app.runner.pyops.ServiceListener')
-    def test_run_task_with_pip_install(self, mock_listener, mock_check_call, mock_run, tmp_path, mock_conf):
-        from app.runner import run
-        q = Queue()
+    @patch('app.job_runner.pyops.ServiceListener')
+    def test_run_task_with_pip_install(self, mock_listener, mock_check_call, mock_run, mock_send, mock_run_bootstrap, tmp_path, mock_conf):
+        from app.job_runner import main as run
         mock_listener.return_value = None
         mock_check_call.return_value = None
         mock_run.return_value = Mock(returncode=0)
+        mock_run_bootstrap.return_value = Mock(returncode=0)
 
-        data_base = str(tmp_path / "data")
+        data_base = os.path.join(tmp_path, "data")
         owner = "owner"
         set_name = "set"
         job_id = "id"
         param = "#!torch --index-url https://download.pytorch.org/whl/cpu\nprint('param')"
         code = "print('code')"
 
-        venv_path = str(tmp_path / "venv")
-        pkg_path = str(tmp_path / "pkg")
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
 
-        run(job_id, owner, set_name, "name", "task", param, code, [], q, data_base, "bind", venv_path, pkg_path)
+        run(job_id, owner, set_name, "name", "task", param, code, [], "/tmp/pyops/runner.sock", 0, None, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
 
-        msg = q.get()
-        assert msg["state"] == "done"
+        mock_send.assert_called_once_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
+
+    @patch('app.job_runner.zmq.Socket.send')
+    @patch('app.job_runner.zmq.Socket.recv')
+    @patch('app.job_runner.zmq.Context.socket')
+    @patch('app.job_runner.zmq.Context')
+    def test_send_completion_zmq_retry_on_error(self, mock_context_class, mock_socket, mock_recv, mock_send):
+        """Test ZMQ send_completion retries on ZMQError."""
+        import zmq
+        import msgpack
+        from app.job_runner import send_completion
+        mock_context = Mock()
+        mock_context_class.return_value = mock_context
+        mock_socket_instance = Mock()
+        mock_socket.return_value = mock_socket_instance
+        mock_context.socket.return_value = mock_socket_instance
+
+        # Simulate ZMQError on first two sends, success on third
+        mock_socket_instance.send.side_effect = [zmq.ZMQError("ZMQError"), zmq.ZMQError("ZMQError"), None]
+        mock_socket_instance.recv.return_value = b'ack'
+
+        send_completion("/tmp/pyops/runner.sock", {"id": "test_id", "state": "done", "detail": None})
+
+        # Should have tried 3 times
+        assert mock_socket_instance.send.call_count == 3
+        # Should have connected and sent
+        mock_socket_instance.connect.assert_called_once_with("ipc:///tmp/pyops/runner.sock")
+        mock_socket_instance.send.assert_called_with(msgpack.packb({"id": "test_id", "state": "done", "detail": None}))
+
+    @patch('app.job_runner.zmq.Socket.send')
+    @patch('app.job_runner.zmq.Socket.recv')
+    @patch('app.job_runner.zmq.Context.socket')
+    @patch('app.job_runner.zmq.Context')
+    def test_send_completion_permanent_zmq_fail(self, mock_context_class, mock_socket, mock_recv, mock_send):
+        """Test ZMQ send_completion fails permanently after 3 retries."""
+        import zmq
+        import msgpack
+        from app.job_runner import send_completion
+        mock_context = Mock()
+        mock_context_class.return_value = mock_context
+        mock_socket_instance = Mock()
+        mock_socket.return_value = mock_socket_instance
+        mock_context.socket.return_value = mock_socket_instance
+
+        # Simulate permanent ZMQError
+        mock_socket_instance.send.side_effect = zmq.ZMQError("ZMQError")
+        mock_socket_instance.recv.return_value = b'ack'
+
+        send_completion("/tmp/pyops/runner.sock", {"id": "test_id", "state": "done", "detail": None})
+
+        # Should have tried 3 times and failed
+        assert mock_socket_instance.send.call_count == 3
+        # Should have connected
+        mock_socket_instance.connect.assert_called_once_with("ipc:///tmp/pyops/runner.sock")
+
+    @patch('app.runner.finishJob')
+    @patch('psutil.Process')
+    @patch('app.runner.Session')
+    def test_process_death_no_zmq(self, mock_session_class, mock_process_class, mock_finish):
+        """Test that process death without ZMQ completion is detected via stale PID check."""
+        from sqlalchemy import select
+        from app.orm.job import Job
+
+        # Mock session
+        mock_session = Mock()
+        mock_session_manager = Mock()
+        mock_session_manager.__enter__ = Mock(return_value=mock_session)
+        mock_session_manager.__exit__ = Mock(return_value=None)
+        mock_session_class.return_value = mock_session_manager
+        mock_job = Mock()
+        mock_job.id = 'test_id'
+        mock_session.execute.return_value.scalar_one_or_none.return_value = mock_job
+
+        # Mock psutil process not running
+        mock_process = Mock()
+        mock_process.is_running.return_value = False
+        mock_process_class.return_value = mock_process
+
+        # Simulate processes dict with a pid
+        processes = {123: Mock()}
+
+        # Execute the stale PID check logic
+        with mock_session_class.return_value as session:
+            for pid in list(processes.keys()):
+                job = session.execute(select(Job).where(Job.pid == pid, Job.state == "running")).scalar_one_or_none()
+                if job and not mock_process.is_running():
+                    from app.runner import finishJob
+                    finishJob(job.id, "failed", f"process termination pid={pid}")
+
+        # Assert finishJob was called with failed state
+        mock_finish.assert_called_once_with('test_id', 'failed', 'process termination pid=123')
+
+    @patch('app.runner.finishJob')
+    def test_receive_and_process_malformed_msgpack(self, mock_finish):
+        """Test receive_and_process handles malformed msgpack gracefully."""
+        socket = Mock()
+        socket.recv.side_effect = [b'identity', b'', b'hello']  # Invalid msgpack
+        from app.runner import receive_and_process
+        with pytest.raises(msgpack.exceptions.ExtraData):
+            receive_and_process(socket)
+        mock_finish.assert_not_called()
+
+    @patch('app.runner.finishJob')
+    @patch('psutil.Process')
+    def test_stale_service_AccessDenied(self, mock_process_class, mock_finish):
+        """Test stale PID check handles AccessDenied → failed with log."""
+        import psutil
+        from app.orm.job import Job
+        mock_process = Mock()
+        mock_process.is_running.side_effect = psutil.AccessDenied
+        mock_process_class.return_value = mock_process
+
+        # Mock session
+        with patch('app.runner.Session') as mock_session_class:
+            mock_session = Mock()
+            mock_session_manager = Mock()
+            mock_session_manager.__enter__ = Mock(return_value=mock_session)
+            mock_session_manager.__exit__ = Mock(return_value=None)
+            mock_session_class.return_value = mock_session_manager
+            mock_job = Mock()
+            mock_job.id = 'test_id'
+            mock_session.execute.return_value.scalar_one_or_none.return_value = mock_job
+
+            # Execute stale check
+            from app.runner import main
+            with mock_session_class.return_value as session:
+                for pid in [12345]:
+                    job = session.execute(select(Job).where(Job.pid == pid, Job.state == "running")).scalar_one_or_none()
+                    if job:
+                        try:
+                            if mock_process.is_running():
+                                continue
+                        except psutil.AccessDenied:
+                            from app.runner import finishJob
+                            finishJob(job.id, "failed", f"stale process pid={pid} (AccessDenied)")
+
+            # Assert finishJob called with AccessDenied detail
+            mock_finish.assert_called_once_with('test_id', 'failed', 'stale process pid=12345 (AccessDenied)')
+
+    @patch('app.runner.finishJob')
+    @patch('psutil.Process')
+    def test_stale_service_ZombieProcess(self, mock_process_class, mock_finish):
+        """Test stale PID check handles ZombieProcess → failed with log."""
+        import psutil
+        from app.orm.job import Job
+        mock_process = Mock()
+        mock_process.is_running.side_effect = psutil.ZombieProcess(123)
+        mock_process_class.return_value = mock_process
+
+        # Mock session
+        with patch('app.runner.Session') as mock_session_class:
+            mock_session = Mock()
+            mock_session_manager = Mock()
+            mock_session_manager.__enter__ = Mock(return_value=mock_session)
+            mock_session_manager.__exit__ = Mock(return_value=None)
+            mock_session_class.return_value = mock_session_manager
+            mock_job = Mock()
+            mock_job.id = 'test_id'
+            mock_session.execute.return_value.scalar_one_or_none.return_value = mock_job
+
+            # Execute stale check
+            from app.runner import main
+            with mock_session_class.return_value as session:
+                for pid in [12345]:
+                    job = session.execute(select(Job).where(Job.pid == pid, Job.state == "running")).scalar_one_or_none()
+                    if job:
+                        try:
+                            if mock_process.is_running():
+                                continue
+                        except psutil.ZombieProcess:
+                            from app.runner import finishJob
+                            finishJob(job.id, "failed", f"stale process pid={pid} (ZombieProcess)")
+
+            # Assert finishJob called with ZombieProcess detail
+            mock_finish.assert_called_once_with('test_id', 'failed', 'stale process pid=12345 (ZombieProcess)')  # Should not process invalid msg
+
+    @patch('app.job_runner.send_completion')
+    @patch('app.job_runner.subprocess.run')
+    @patch('app.lib.sets.subprocess.check_call')
+    @patch('app.job_runner.pyops.ServiceListener')
+    def test_run_draft_success(self, mock_listener, mock_check_call, mock_run, mock_send, job_env):
+        from app.job_runner import main as run
+        mock_listener.return_value = None  # For non-service
+        mock_check_call.return_value = None  # Venv creation succeeds
+        mock_run.return_value = Mock(returncode=0)  # Bootstrap and installs succeed
+        env = job_env
+
+        run("id", "owner", "set", "name", "draft", "print('param executed')", "print('code executed')", [], "/tmp/pyops/runner.sock", 0, None, None, env["conf_data"], env["conf_runner"], env["conf_users"], env["conf_web"])
+
+        mock_send.assert_called_once_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})

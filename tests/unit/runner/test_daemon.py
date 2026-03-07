@@ -413,25 +413,21 @@ class TestDaemon:
         mock_process.join.assert_called_once_with(timeout=1.0)
         # assert mock_session.call_count == 1  # manual simulation
 
-    @patch('app.lib.files.conf_users')
-    def test_validate_debug_prerequisites_valid(self, mock_conf_users):
+    @patch('app.job_runner._conf_users', {"owner": {"debug_port": 5678}})
+    def test_validate_debug_prerequisites_valid(self):
         from app.runner import validate_debug_prerequisites
-        mock_conf_users.return_value = {"owner": {"debug_port": 5678}}
         port = validate_debug_prerequisites("job_id", "owner")
         assert port == 5678
-        mock_conf_users.assert_called_once()
 
-    @patch('app.lib.files.conf_users')
-    def test_validate_debug_prerequisites_no_port(self, mock_conf_users):
+    @patch('app.job_runner._conf_users', {"owner": {}})
+    def test_validate_debug_prerequisites_no_port(self):
         from app.runner import validate_debug_prerequisites
-        mock_conf_users.return_value = {"owner": {}}
         with pytest.raises(Exception, match="Invalid or missing debug_port for user owner"):
             validate_debug_prerequisites("job_id", "owner")
 
-    @patch('app.lib.files.conf_users')
-    def test_validate_debug_prerequisites_invalid_port(self, mock_conf_users):
+    @patch('app.job_runner._conf_users', {"owner": {"debug_port": 1000}})
+    def test_validate_debug_prerequisites_invalid_port(self):
         from app.runner import validate_debug_prerequisites
-        mock_conf_users.return_value = {"owner": {"debug_port": 1000}}
         with pytest.raises(Exception, match="Invalid or missing debug_port for user owner"):
             validate_debug_prerequisites("job_id", "owner")
 

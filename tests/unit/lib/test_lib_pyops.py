@@ -495,35 +495,22 @@ class TestServiceListener:
         listener.close()
 
 class TestServiceClient:
-    @patch('app.lib.runner.find')
     @patch('zmq.Context')
     @patch('os.path.join')
-    def test_init_no_jobs(self, mock_join, mock_context, mock_find):
-        mock_find.return_value = []
-        with pytest.raises(Exception, match="No running service: test_set test_name"):
-            pyops.ServiceClient("anonymous", "test_set", "test_name")
-
-    @patch('app.lib.runner.find')
-    @patch('zmq.Context')
-    @patch('os.path.join')
-    def test_init_success(self, mock_join, mock_context, mock_find):
+    def test_init_success(self, mock_join, mock_context):
         mock_job = "123"
-        mock_find.return_value = [mock_job]
         mock_join.return_value = "/tmp/pyops/123.sock"
-        client = pyops.ServiceClient("user", "test_set", "test_name")
+        client = pyops.ServiceClient(mock_job)
         assert client.job_id == mock_job
         mock_context.assert_called_once()
         client.socket.connect.assert_called_once_with("ipc:///tmp/pyops/123.sock")
-        mock_find.assert_called_once_with(None, "test_set", "test_name", "service", ["running"])
 
-    @patch('app.lib.runner.find')
     @patch('msgpack.unpackb')
     @patch('msgpack.packb')
     @patch('zmq.Context')
-    def test_request_success(self, mock_context, mock_packb, mock_unpackb, mock_find):
+    def test_request_success(self, mock_context, mock_packb, mock_unpackb):
         mock_job = "123"
-        mock_find.return_value = [mock_job]
-        client = pyops.ServiceClient("anonymous", "test_set", "test_name")
+        client = pyops.ServiceClient(mock_job)
         test_msg = {"cmd": "test"}
         mock_packb.return_value = b'test_packed'
         mock_socket = client.socket
@@ -536,13 +523,11 @@ class TestServiceClient:
         mock_socket.recv.assert_called_once()
         mock_unpackb.assert_called_once_with(b'reply_packed')
 
-    @patch('app.lib.runner.find')
     @patch('msgpack.packb')
     @patch('zmq.Context')
-    def test_request_recv_error(self, mock_context, mock_packb, mock_find):
+    def test_request_recv_error(self, mock_context, mock_packb):
         mock_job = "123"
-        mock_find.return_value = [mock_job]
-        client = pyops.ServiceClient("anonymous", "test_set", "test_name")
+        client = pyops.ServiceClient(mock_job)
         mock_packb.return_value = b'test_packed'
         client.socket.recv.side_effect = zmq.ZMQError()
         with pytest.raises(zmq.ZMQError):

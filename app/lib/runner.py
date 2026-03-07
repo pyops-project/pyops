@@ -17,8 +17,6 @@ from app.lib import git
 import logging
 logger = logging.getLogger(__name__)
 
-
-
 def enqueue(set: str, name: str, owner: str, kind: str, drop_done: bool, param: str, max_retries: int = 0, overrides: str | None = None):
     """Enqueues a new job into the database.
 
