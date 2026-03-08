@@ -352,11 +352,16 @@ class TestServiceListener:
         mock_socket = Mock()
         mock_context.return_value.socket.return_value = mock_socket
         listener = pyops.ServiceListener("test_job", "test_owner")
+        listener.last_identity = b'test_identity'  # Simulate identity from poll/listen
         test_msg = {"response": "data"}
         mock_packb.return_value = b'test_packed'
         listener.response(test_msg)
         mock_packb.assert_called_once_with(test_msg)
-        mock_socket.send.assert_called_once_with(b'test_packed')
+        # Check multipart send
+        assert mock_socket.send.call_count == 3
+        mock_socket.send.assert_any_call(b'test_identity', zmq.SNDMORE)
+        mock_socket.send.assert_any_call(b'', zmq.SNDMORE)
+        mock_socket.send.assert_any_call(b'test_packed')
         listener.close()
 
     def test_exit_gracefully(self):
@@ -424,36 +429,88 @@ class TestServiceListener:
         listener.socket.recv.assert_not_called()
         listener.close()
 
-class TestServiceClient:
-    @patch('app.lib.runner.find')
+    @patch('os.remove')
+    @patch('atexit.register')
+    @patch('tempfile.gettempdir')
+    @patch('zmq.Poller')
     @patch('zmq.Context')
-    @patch('os.path.join')
-    def test_init_no_jobs(self, mock_join, mock_context, mock_find):
-        mock_find.return_value = []
-        with pytest.raises(Exception, match="No running service: test_set test_name"):
-            pyops.ServiceClient("anonymous", "test_set", "test_name")
+    def test_async_poll_no_messages(self, mock_context, mock_poller, mock_gettempdir, mock_atexit, mock_remove):
+        mock_atexit.side_effect = lambda *args: None
+        mock_remove.return_value = None
+        mock_gettempdir.return_value = '/tmp'
+        mock_socket = Mock()
+        mock_context.return_value.socket.return_value = mock_socket
+        listener = pyops.ServiceListener("test_job", "test_owner")
+        mock_poller.return_value.poll.return_value = []  # No events
+        result = listener.async_poll()
+        assert result == []
+        mock_poller.return_value.poll.assert_called_with(timeout=0)
+        mock_socket.recv.assert_not_called()
+        listener.close()
 
-    @patch('app.lib.runner.find')
+    @patch('os.remove')
+    @patch('atexit.register')
+    @patch('tempfile.gettempdir')
+    @patch('msgpack.unpackb')
+    @patch('zmq.Poller')
+    @patch('zmq.Context')
+    def test_async_poll_with_messages(self, mock_context, mock_poller, mock_unpackb, mock_gettempdir, mock_atexit, mock_remove):
+        mock_atexit.side_effect = lambda *args: None
+        mock_remove.return_value = None
+        mock_gettempdir.return_value = '/tmp'
+        mock_socket = Mock()
+        mock_context.return_value.socket.return_value = mock_socket
+        listener = pyops.ServiceListener("test_job", "test_owner")
+        # Simulate two messages
+        mock_poller.return_value.poll.side_effect = [[(mock_socket, zmq.POLLIN)], [(mock_socket, zmq.POLLIN)], []]
+        mock_socket.recv.side_effect = [b'identity1', b'', b'msg1', b'identity2', b'', b'msg2']
+        mock_unpackb.side_effect = [{'cmd': 'test1'}, {'cmd': 'test2'}]
+        result = listener.async_poll()
+        assert result == [(b'identity1', {'cmd': 'test1'}), (b'identity2', {'cmd': 'test2'})]
+        assert mock_socket.recv.call_count == 6  # 3 per message
+        listener.close()
+
+    @patch('os.remove')
+    @patch('atexit.register')
+    @patch('tempfile.gettempdir')
+    @patch('msgpack.packb')
+    @patch('zmq.Context')
+    def test_async_response(self, mock_context, mock_packb, mock_gettempdir, mock_atexit, mock_remove):
+        mock_atexit.side_effect = lambda *args: None
+        mock_remove.return_value = None
+        mock_gettempdir.return_value = '/tmp'
+        mock_socket = Mock()
+        mock_context.return_value.socket.return_value = mock_socket
+        listener = pyops.ServiceListener("test_job", "test_owner")
+        test_identity = b'test_identity'
+        test_msg = {"response": "async_data"}
+        mock_packb.return_value = b'packed_async'
+        listener.async_response(test_identity, test_msg)
+        mock_packb.assert_called_once_with(test_msg)
+        # Check multipart send
+        assert mock_socket.send.call_count == 3
+        mock_socket.send.assert_any_call(test_identity, zmq.SNDMORE)
+        mock_socket.send.assert_any_call(b'', zmq.SNDMORE)
+        mock_socket.send.assert_any_call(b'packed_async')
+        listener.close()
+
+class TestServiceClient:
     @patch('zmq.Context')
     @patch('os.path.join')
-    def test_init_success(self, mock_join, mock_context, mock_find):
+    def test_init_success(self, mock_join, mock_context):
         mock_job = "123"
-        mock_find.return_value = [mock_job]
         mock_join.return_value = "/tmp/pyops/123.sock"
-        client = pyops.ServiceClient("user", "test_set", "test_name")
+        client = pyops.ServiceClient(mock_job)
         assert client.job_id == mock_job
         mock_context.assert_called_once()
         client.socket.connect.assert_called_once_with("ipc:///tmp/pyops/123.sock")
-        mock_find.assert_called_once_with(None, "test_set", "test_name", "service", ["running"])
 
-    @patch('app.lib.runner.find')
     @patch('msgpack.unpackb')
     @patch('msgpack.packb')
     @patch('zmq.Context')
-    def test_request_success(self, mock_context, mock_packb, mock_unpackb, mock_find):
+    def test_request_success(self, mock_context, mock_packb, mock_unpackb):
         mock_job = "123"
-        mock_find.return_value = [mock_job]
-        client = pyops.ServiceClient("anonymous", "test_set", "test_name")
+        client = pyops.ServiceClient(mock_job)
         test_msg = {"cmd": "test"}
         mock_packb.return_value = b'test_packed'
         mock_socket = client.socket
@@ -466,13 +523,11 @@ class TestServiceClient:
         mock_socket.recv.assert_called_once()
         mock_unpackb.assert_called_once_with(b'reply_packed')
 
-    @patch('app.lib.runner.find')
     @patch('msgpack.packb')
     @patch('zmq.Context')
-    def test_request_recv_error(self, mock_context, mock_packb, mock_find):
+    def test_request_recv_error(self, mock_context, mock_packb):
         mock_job = "123"
-        mock_find.return_value = [mock_job]
-        client = pyops.ServiceClient("anonymous", "test_set", "test_name")
+        client = pyops.ServiceClient(mock_job)
         mock_packb.return_value = b'test_packed'
         client.socket.recv.side_effect = zmq.ZMQError()
         with pytest.raises(zmq.ZMQError):

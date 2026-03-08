@@ -1,6 +1,7 @@
 import pytest
 import subprocess
 import os
+from unittest.mock import Mock
 from app.lib import git
 from app.lib import files
 from app.lib import sets
@@ -11,8 +12,18 @@ def integration_repo(tmp_path, monkeypatch):
     # Mock config to use tmp_path for git base
     test_git_base = tmp_path / 'git_base'
     test_git_base.mkdir()
+    test_venv = tmp_path / 'venv'
+    test_pkg = tmp_path / 'pkg'
+    
+    # Mock the config global to avoid initialization check
+    mock_config = Mock()
+    mock_config.runner.return_value = {'git_pull_interval': 0, 'venv': str(test_venv), 'pkg': str(test_pkg)}
+    monkeypatch.setattr(files, 'config', mock_config)
     monkeypatch.setattr(files, 'conf_data', lambda: {'git': str(test_git_base)})
-    monkeypatch.setattr(files, 'conf_runner', lambda: {'git_pull_interval': 0})
+    monkeypatch.setattr(files, 'conf_runner', lambda: {'git_pull_interval': 0, 'venv': str(test_venv), 'pkg': str(test_pkg)})
+
+    # Mock ensure_set_environment to avoid venv/pip installs
+    monkeypatch.setattr('app.lib.sets.ensure_set_environment', lambda name: None)
 
     # Create local repo
     set_name = 'test_set'

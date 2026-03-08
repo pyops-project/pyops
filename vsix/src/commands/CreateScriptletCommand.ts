@@ -13,12 +13,14 @@ export class CreateScriptletCommand {
             { label: 'Library', description: 'Python library module' },
             { label: 'Controller', description: 'Python controller' },
             { label: 'View', description: 'HTML view template' },
+            { label: 'JS Library', description: 'JavaScript library module' },
             { label: 'Markdown', description: 'Markdown document (README only)' }
         ];
         const typePick = await vscode.window.showQuickPick(types, { placeHolder: 'Select scriptlet type' });
         if (!typePick) return;
 
-        const typeLower = typePick.label.toLowerCase();
+        let typeLower = typePick.label.toLowerCase();
+        if (typeLower === 'js library') typeLower = 'jslibrary';
 
         const pyopsConfig = vscode.workspace.getConfiguration('pyops');
         const serverUrl = pyopsConfig.get('serverUrl') as string || 'http://localhost:8000';

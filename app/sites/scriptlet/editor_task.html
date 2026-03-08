@@ -245,7 +245,7 @@
                 if(editor_dirty) {
                     save();
                     editor_dirty = false;
-                    checkStatus();
+                    $("#btn-save, #btn-revert").prop("disabled", false);
                 }
                 setTimeout(function() { save_draft(); }, 1000);
             }
@@ -321,7 +321,7 @@
 
                 editor.on("change", ()=>{
                     editor_dirty = true;
-                    checkStatus();
+                    $("#btn-save, #btn-revert").prop("disabled", false);
                 });
 
                 document.addEventListener('keydown', function(e) {

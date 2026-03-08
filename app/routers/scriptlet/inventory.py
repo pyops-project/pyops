@@ -66,6 +66,10 @@ async def item_put(cr: CreateArgument, user: str = Depends(get_current_user)):
 
         return {"set": cr.set, "name": cr.name, "type": cr.type}
 
+    except git.GitNotFoundError as ex:
+        raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail=str(ex))
+    except git.GitConflictError as ex:
+        raise HTTPException(status_code=HTTP_409_CONFLICT, detail=str(ex))
     except HTTPException as ex:
         raise ex
     except Exception as ex:
@@ -89,6 +93,10 @@ async def item_post(sa: SaveArgument, user: str = Depends(get_current_user)):
         await run_in_executor(git.write_content, repo, sa.name, type_, sa.code)
         file_path = await run_in_executor(git.get_file_path, repo, sa.name, type_)
         await run_in_executor(git.perform_git_add_commit_push, repo, file_path, f"Update {sa.name}.{type_} by {user}")
+    except git.GitNotFoundError as ex:
+        raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail=str(ex))
+    except git.GitConflictError as ex:
+        raise HTTPException(status_code=HTTP_409_CONFLICT, detail=str(ex))
     except HTTPException as ex:
         raise ex
     except Exception as ex:
@@ -112,6 +120,8 @@ async def draft_post(sa: SaveArgument):
 
         await run_in_executor(git.write_content, repo, sa.name, type_, sa.code)
         # No git add/commit/push: leaves unstaged for draft workflow.
+    except git.GitNotFoundError as ex:
+        raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail=str(ex))
     except HTTPException as ex:
         raise ex
     except Exception as ex:
@@ -132,6 +142,8 @@ async def item_del(set: str, name: str, user: str = Depends(get_current_user)):
         type_ = git.infer_type_from_filename(filename)
         file_path = await run_in_executor(git.get_file_path, repo, name, type_)
         await run_in_executor(git.delete_file_and_commit, repo, file_path, f"Delete {name}.{type_} by {user}")
+    except git.GitNotFoundError as ex:
+        raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail=str(ex))
     except HTTPException as ex:
         raise ex
     except Exception as ex:
@@ -177,6 +189,8 @@ async def draft_del(set: str = Query(..., description="Set"), name: str = Query(
             logger.error("File missing post-discard for %s::%s.%s", set, name, type_)
             raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail="File lost post-discard")
 
+    except git.GitNotFoundError as ex:
+        raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail=str(ex))
     except FileNotFoundError:
         logger.warning("No committed version for discard of %s::%s.%s", set, name, type_)
         raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail="No committed version to revert to")
@@ -197,6 +211,8 @@ async def code_get(set: str, name: str):
         type_ = git.infer_type_from_filename(filename)
         content = await run_in_executor(git.read_content, repo, name, type_, committed=False)
         return {"code": content}
+    except git.GitNotFoundError as ex:
+        raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail=str(ex))
     except HTTPException as ex:
         raise ex
     except Exception as ex:
@@ -243,6 +259,8 @@ async def status_get(set: str, name: str):
         has_unstaged = await run_in_executor(git.has_unstaged_changes, repo, name, type_)
         logger.debug(f"Status for {set}::{name}: {has_unstaged}")
         return {"has_unstaged": has_unstaged}
+    except git.GitNotFoundError as ex:
+        raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail=str(ex))
     except HTTPException as ex:
         raise ex
     except Exception as ex:

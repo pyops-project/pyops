@@ -24,6 +24,10 @@ describe('utils', () => {
       expect(inferExt('markdown')).toBe('md');
     });
 
+    it('returns js for jslibrary', () => {
+      expect(inferExt('jslibrary')).toBe('js');
+    });
+
     it('returns empty string for unknown type', () => {
       expect(inferExt('unknown')).toBe('');
     });

@@ -9,7 +9,8 @@ def client():
 
 def test_controller_proxy_path_backward_compat(client, mock_git_ops, mock_db):
     # Test backward compatibility: /q calls send path="/q"
-    with patch("app.lib.pyops.ServiceClient") as mock_service:
+    with patch("app.lib.runner.find", return_value=["mock_job_id"]) as mock_find, \
+         patch("app.lib.pyops.ServiceClient") as mock_service:
         mock_instance = MagicMock()
         mock_service.return_value = mock_instance
         mock_instance.request.return_value = {"success": True}
@@ -24,7 +25,8 @@ def test_controller_proxy_path_backward_compat(client, mock_git_ops, mock_db):
 
 def test_controller_proxy_path_subpath(client, mock_git_ops, mock_db):
     # Test subpath forwarding
-    with patch("app.lib.pyops.ServiceClient") as mock_service:
+    with patch("app.lib.runner.find", return_value=["mock_job_id"]) as mock_find, \
+         patch("app.lib.pyops.ServiceClient") as mock_service:
         mock_instance = MagicMock()
         mock_service.return_value = mock_instance
         mock_instance.request.return_value = {"received": "path"}
@@ -42,7 +44,8 @@ def test_controller_proxy_path_subpath(client, mock_git_ops, mock_db):
 
 def test_controller_proxy_path_query_params(client, mock_git_ops, mock_db):
     # Test query params with subpath
-    with patch("app.lib.pyops.ServiceClient") as mock_service:
+    with patch("app.lib.runner.find", return_value=["mock_job_id"]) as mock_find, \
+         patch("app.lib.pyops.ServiceClient") as mock_service:
         mock_instance = MagicMock()
         mock_service.return_value = mock_instance
         mock_instance.request.return_value = {"ok": True}
@@ -58,7 +61,8 @@ def test_controller_proxy_path_query_params(client, mock_git_ops, mock_db):
 
 def test_controller_proxy_path_empty_rest(client, mock_git_ops, mock_db):
     # Test empty rest (trailing /)
-    with patch("app.lib.pyops.ServiceClient") as mock_service:
+    with patch("app.lib.runner.find", return_value=["mock_job_id"]) as mock_find, \
+         patch("app.lib.pyops.ServiceClient") as mock_service:
         mock_instance = MagicMock()
         mock_service.return_value = mock_instance
         mock_instance.request.return_value = {"path": "/"}
@@ -72,7 +76,8 @@ def test_controller_proxy_path_empty_rest(client, mock_git_ops, mock_db):
 
 def test_controller_proxy_path_put_delete(client, mock_git_ops, mock_db):
     # Test PUT and DELETE with subpath
-    with patch("app.lib.pyops.ServiceClient") as mock_service:
+    with patch("app.lib.runner.find", return_value=["mock_job_id"]) as mock_find, \
+         patch("app.lib.pyops.ServiceClient") as mock_service:
         mock_instance = MagicMock()
         mock_service.return_value = mock_instance
         mock_instance.request.return_value = {"method": "PUT"}
@@ -116,7 +121,8 @@ def test_controller_proxy_path_exec_fail(client, mock_git_ops, mock_db):
 
 def test_controller_proxy_preserves_query_path(client, mock_git_ops, mock_db):
     # Test backward compatibility: preserves ?path= if present
-    with patch("app.lib.pyops.ServiceClient") as mock_service:
+    with patch("app.lib.runner.find", return_value=["mock_job_id"]) as mock_find, \
+         patch("app.lib.pyops.ServiceClient") as mock_service:
         mock_instance = MagicMock()
         mock_service.return_value = mock_instance
         mock_instance.request.return_value = {"path_preserved": True}

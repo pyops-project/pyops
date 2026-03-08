@@ -9,6 +9,8 @@ export function inferExt(type: string): string {
             return 'html';
         case 'markdown':
             return 'md';
+        case 'jslibrary':
+            return 'js';
         default:
             return '';
     }

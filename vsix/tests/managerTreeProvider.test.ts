@@ -105,6 +105,27 @@ describe('ManagerTreeDataProvider', () => {
       expect((children[0] as ScriptletTreeItem).set).toBe('set1');
     });
 
+    it('should return jslibrary items with correct contextValue', async () => {
+      require('./utils/helpers').setupConfigMock();
+      (global.fetch as jest.Mock).mockResolvedValueOnce({
+        ok: true,
+        json: jest.fn().mockResolvedValueOnce([
+          { set: 'set1', name: 'script1', type: 'jslibrary' },
+        ]),
+      });
+      (global.fetch as jest.Mock).mockResolvedValueOnce({
+        ok: true,
+        json: jest.fn().mockResolvedValue({ code: 'mockcode' }),
+      });
+      (require('fs').existsSync as jest.Mock).mockReturnValue(true);
+      (require('fs').readFileSync as jest.Mock).mockReturnValue('code');
+      await provider.refresh();
+      const element = { label: 'set1', contextValue: 'pyopsSet' };
+      const children = await provider.getChildren(element);
+      expect(children).toHaveLength(1);
+      expect((children[0] as ScriptletTreeItem).contextValue).toBe('pyopsItem-jslibrary');
+    });
+
     it('should return empty array for pyopsSet with no items', async () => {
       require('./utils/helpers').setupConfigMock();
       (global.fetch as jest.Mock).mockResolvedValueOnce({

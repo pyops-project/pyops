@@ -1,20 +1,34 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-set -x
+set -euo pipefail
 
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 REGISTRY="registry.ralph.or.at/pyops/pyops:dev"
 
-cd $DIR
+cd "$DIR"
 
-find . -type d -name __pycache__ -exec rm -fr {} \; > /dev/null 2>&1
+find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 
-# Ensure Buildx builder exists (run once, or add --bootstrap if needed)
-docker buildx create --use --name pyops-builder-dev || true
-docker buildx inspect --bootstrap
+# Check if builder exists; create/bootstrap only if needed
+if ! docker buildx inspect pyops-builder-dev >/dev/null 2>&1; then
+    docker buildx create --name pyops-builder-dev --use
+    docker buildx inspect --bootstrap pyops-builder-dev
+fi
 
-docker buildx build \
-  --provenance=false \
-  --platform linux/amd64,linux/arm64 \
-  --tag "$REGISTRY" \
-  --push .
+# Parse flag for full rebuild
+REBUILD="${1:-}"
+
+# Build arguments
+BUILD_ARGS=(
+    --provenance=false
+    --platform linux/amd64,linux/arm64
+    --tag "$REGISTRY"
+    --push
+    .
+)
+
+if [[ "$REBUILD" == "--rebuild" ]]; then
+    BUILD_ARGS=( --no-cache --pull "${BUILD_ARGS[@]}" )
+fi
+
+docker buildx build "${BUILD_ARGS[@]}"

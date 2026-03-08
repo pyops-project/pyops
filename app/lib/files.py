@@ -69,6 +69,20 @@ class Config:
             logger.error("Conf users access failed: %s", e)
             raise
 
+    def web(self):
+        try:
+            logger.debug("Accessing conf_web, _raw_conf type: %s", type(self._raw_conf))
+            if self._raw_conf is None:
+                raise ValueError("Config not initialized. Call Config.init(conf_path) first.")
+            web = {"bind": "127.0.0.1:8000"}
+            if "web" in self._raw_conf:
+                web.update(self._raw_conf["web"])
+            logger.debug("Conf web accessed successfully")
+            return web
+        except Exception as e:
+            logger.error("Conf web access failed: %s", e)
+            raise
+
     def log(self):
         try:
             logger.debug("Accessing conf_log, _raw_conf type: %s", type(self._raw_conf))
@@ -107,6 +121,12 @@ def conf_users():
     if config is None:
         raise ValueError("Config not initialized. Call Config.init(conf_path) first.")
     return config.users()
+
+def conf_web():
+    global config
+    if config is None:
+        raise ValueError("Config not initialized. Call Config.init(conf_path) first.")
+    return config.web()
 
 def conf_log():
     global config

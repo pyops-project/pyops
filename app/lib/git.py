@@ -1,5 +1,14 @@
 import os
 import time
+from typing import Dict
+
+_status_cache: Dict[str, tuple[float, Dict[str, bool]]] = {}
+
+def invalidate_status_cache(repo: str) -> None:
+    """Invalidate unstaged status cache for repo."""
+    _status_cache.pop(repo, None)
+    logger.debug(f"Invalidated status cache for {os.path.basename(repo)}")
+
 import os.path
 import shutil
 import subprocess
@@ -8,13 +17,18 @@ from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 
 from . import files
-from fastapi import HTTPException
 
 import logging
 logger = logging.getLogger(__name__)
 
 import fcntl
 from contextlib import contextmanager
+
+class GitNotFoundError(FileNotFoundError):
+    """Raised when a Git set or repository is not found."""
+
+class GitConflictError(RuntimeError):
+    """Raised for Git operation conflicts, e.g., committing on a tag."""
 
 def _retry_call(cmd: list, cwd, max_retries: int = 3) -> None:
     for attempt in range(max_retries):
@@ -79,7 +93,7 @@ def get_git_pull_interval() -> int:
     """
     return files.conf_runner()["git_pull_interval"]
 
-def pull_if_needed(repo: str) -> bool:
+def pull(repo: str) -> bool:
     """Syncs to origin/HEAD via soft reset if clean; skips if dirty to preserve unstaged changes.
     
     Args:
@@ -120,7 +134,16 @@ def pull_if_needed(repo: str) -> bool:
             
             branch = _check(["git", "branch", "--show-current"], repo)
             pre_head = _check(["git", "rev-parse", "HEAD"], repo)
-            
+
+            if remotes:
+                try:
+                    remote_ref = _check(["git", "ls-remote", "--heads", remotes[0], branch], repo).split()[0]
+                    if remote_ref == pre_head:
+                        logger.debug(f"Up-to-date: local HEAD matches origin/{branch} for {os.path.basename(repo)}")
+                        return True
+                except subprocess.CalledProcessError:
+                    logger.debug(f"ls-remote failed for {os.path.basename(repo)}; proceeding to fetch")
+
             _retry_call(["git", "fetch"], repo)
             _call(["git", "reset", "--soft", f"origin/{branch}"], repo)
             
@@ -132,20 +155,20 @@ def pull_if_needed(repo: str) -> bool:
                 # Add new files from HEAD not in working directory
                 try:
                     files_in_head = _check(["git", "ls-tree", "-r", "--name-only", "HEAD"], repo).splitlines()
-                    added_count = 0
-                    for f in files_in_head:
-                        full_path = os.path.join(repo, f)
-                        if not os.path.exists(full_path):
-                            _call(["git", "checkout", "HEAD", "--", f], repo)
-                            added_count += 1
-                    if added_count > 0:
+                    new_files = [f for f in files_in_head
+                                 if not os.path.exists(os.path.join(repo, f))
+                                 and (f.endswith(('.py', '.html', '.js')) or f == 'README.md')]
+                    added_count = len(new_files)
+                    if new_files:
+                        _call(["git", "checkout", "HEAD", "--"] + new_files, repo)
                         logger.info(f"Added {added_count} new files to {os.path.basename(repo)} working directory")
                 except subprocess.CalledProcessError as e:
                     logger.warning(f"Failed to add new files for {os.path.basename(repo)}: {e}")
 
             else:
                 logger.debug(f"No changes reset for {os.path.basename(repo)}")
-            
+
+            invalidate_status_cache(repo)
             return True
         
         except subprocess.CalledProcessError as e:
@@ -167,7 +190,7 @@ def get_repo_path(set: str) -> str:
     git_base = get_git_base()
     repo = os.path.abspath(os.path.join(git_base, set))
     if not os.path.exists(repo):
-        raise HTTPException(404, f"Set '{set}' does not exist")
+        raise GitNotFoundError(f"Set '{set}' does not exist")
     
     with repo_lock(git_base, set):
         git_dir = os.path.join(repo, ".git")
@@ -224,16 +247,16 @@ def get_file_path(repo: str, name: str, type_: str) -> str:
 
 def get_name_from_file(filename: str) -> str:
     """Extracts name from filename.
-    
-    Views/Markdown: Basename without extension (allows hyphens/multiples).
+
+    Views/Markdown/JS: Basename without extension (allows hyphens/multiples).
     Python: {name}.{type} → name; raise if no type dot.
-    
+
     Args:
-        filename (str): e.g., 'myscript.task.py', 'SimpleDog-Head.html', or 'README.md'.
-    
+        filename (str): e.g., 'myscript.task.py', 'SimpleDog-Head.html', 'mylib.js', or 'README.md'.
+
     Returns:
         str: Name.
-    
+
     Raises:
         ValueError: Invalid .py format.
     """
@@ -241,6 +264,8 @@ def get_name_from_file(filename: str) -> str:
         return "README"
     base = os.path.splitext(filename)[0]
     if filename.endswith('.html'):
+        return base
+    if filename.endswith('.js'):
         return base
     if '.' not in base:
         raise ValueError(f"Invalid filename: {filename}")
@@ -251,10 +276,11 @@ def infer_type_from_filename(filename: str) -> str:
     
     Views: .html → "view".
     Python: {name}.{type}.py → type (task/library/controller).
+    JS Libraries: .js → "jslibrary".
     Markdown: README.md → "markdown".
     
     Args:
-        filename (str): e.g., 'myscript.task.py' or 'myview.html'.
+        filename (str): e.g., 'myscript.task.py', 'myview.html', or 'mylib.js'.
     
     Returns:
         str: Type.
@@ -266,8 +292,10 @@ def infer_type_from_filename(filename: str) -> str:
         return "markdown"
     if filename.endswith('.html'):
         return "view"
+    if filename.endswith('.js'):
+        return "jslibrary"
     if not filename.endswith('.py'):
-        raise ValueError(f"Not a Python/HTML file: {filename}")
+        raise ValueError(f"Not a Python/HTML/JS file: {filename}")
     base = os.path.splitext(filename)[0]
     parts = base.rsplit('.', 1)
     if len(parts) < 2:
@@ -295,7 +323,7 @@ def list_scriptlets() -> List[Dict[str, str]]:
     for set in sorted(sets):
         repo = get_repo_path(set)
         for filename in os.listdir(repo):
-            if filename.endswith(('.py', '.html')) or filename == "README.md":
+            if filename.endswith(('.py', '.html', '.js')) or filename == "README.md":
                 try:
                     name = get_name_from_file(filename)
                     type_ = infer_type_from_filename(filename)
@@ -304,6 +332,71 @@ def list_scriptlets() -> List[Dict[str, str]]:
                     continue  # Skip invalid files.
     
     return sorted(scriptlets, key=lambda x: (x["set"], x["name"]))
+
+def list_scriptlet_files(repo: str, name: str) -> List[str]:
+    """Lists scriptlet files for a given name in repo.
+    
+    Args:
+        repo (str): Repo path.
+        name (str): Scriptlet name.
+    
+    Returns:
+        List[str]: Matching filenames.
+    """
+    files = []
+    for filename in os.listdir(repo):
+        try:
+            if get_name_from_file(filename) == name:
+                files.append(filename)
+        except ValueError:
+            continue
+    return files
+
+def compute_set_unstaged(repo: str) -> Dict[str, bool]:
+    """Batch unstaged status for all scriptlets via 1 git status."""
+    # Candidate scriptlets (matches list_scriptlets)
+    scriptlets: Dict[str, str] = {}
+    for filename in os.listdir(repo):
+        if filename.endswith(('.py', '.html', '.js')) or filename == 'README.md':
+            try:
+                name = get_name_from_file(filename)
+                scriptlets[name] = infer_type_from_filename(filename)
+            except ValueError:
+                continue
+    
+    # 1 subprocess: porcelain v1 (XY path | ?? path)
+    try:
+        status_out = subprocess.check_output(
+            ['git', 'status', '--porcelain', '--untracked-files=all'],
+            cwd=repo
+        ).decode('utf-8', errors='ignore')
+    except subprocess.CalledProcessError:
+        return {name: False for name in scriptlets}
+    
+    unstaged_names = set()
+    for line in status_out.splitlines():
+        if len(line) < 3:
+            continue
+        if line.startswith('?? '):
+            path = line[3:]
+            try:
+                name = get_name_from_file(os.path.basename(path))
+                if name in scriptlets:
+                    unstaged_names.add(name)
+            except ValueError:
+                pass
+        else:
+            # XY path (X=index[0], Y=worktree[1])
+            if len(line) >= 3 and line[1] != ' ':  # Y != ' '
+                path = line[3:]
+                try:
+                    name = get_name_from_file(os.path.basename(path))
+                    if name in scriptlets:
+                        unstaged_names.add(name)
+                except ValueError:
+                    pass
+    
+    return {name: name in unstaged_names for name in scriptlets}
 
 def check_name_unique(repo: str, name: str) -> bool:
     """Checks if name is unique (no existing {name}.*.py or {name}.html).
@@ -380,28 +473,28 @@ def write_content(repo: str, name: str, type_: str, content: str) -> None:  # Re
         file_path = get_file_path(repo, name, type_)
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(content)
+        invalidate_status_cache(repo)
 
 def perform_git_add_commit_push(repo: str, file_path: str, msg: str) -> None:
     """Adds file, commits, pushes (checks remote and not tag).
-    
+
     Args:
         repo (str): Repo path.
         file_path (str): Relative file path.
         msg (str): Commit message.
-    
+
     Raises:
-        HTTPException: 409 if on tag.
+        GitConflictError: If on tag.
         subprocess.CalledProcessError: Git failure.
-    """    
-    pull_if_needed(repo)
+    """
     rel_path = os.path.relpath(file_path, repo)
-    
+
     # Check not on tag.
     tags_output = subprocess.check_output(["git", "tag", "-l"], cwd=repo).decode().strip()
     if tags_output:
         try:
             _check(["git", "describe", "--tags", "--exact-match", "HEAD"], repo)
-            raise HTTPException(409, "Cannot commit on a tag.")
+            raise GitConflictError("Cannot commit on a tag.")
         except subprocess.CalledProcessError:
             pass  # Not a tag.
     # No tags, assume not on tag
@@ -416,27 +509,26 @@ def perform_git_add_commit_push(repo: str, file_path: str, msg: str) -> None:
         remotes = _check(["git", "remote"], repo)
         if remotes:
             _call(["git", "push"], repo)
+    invalidate_status_cache(repo)
 
 def batch_commit(repo: str, msg: str, rel_files: List[str] = None) -> None:
     """Batch adds files/all, commits, pushes (checks remote and not tag).
-    
+
     Args:
         repo (str): Repo path.
         msg (str): Commit message.
         rel_files (List[str], optional): Relative file paths to add; None=add all.
-    
+
     Raises:
-        HTTPException: 409 if on tag.
+        GitConflictError: If on tag.
         subprocess.CalledProcessError: Git failure.
     """
-    pull_if_needed(repo)
-    
     # Check not on tag.
     tags_output = subprocess.check_output(["git", "tag", "-l"], cwd=repo).decode().strip()
     if tags_output:
         try:
             _check(["git", "describe", "--tags", "--exact-match", "HEAD"], repo)
-            raise HTTPException(409, "Cannot commit on a tag.")
+            raise GitConflictError("Cannot commit on a tag.")
         except subprocess.CalledProcessError:
             pass  # Not a tag.
     # No tags, assume not on tag
@@ -446,8 +538,7 @@ def batch_commit(repo: str, msg: str, rel_files: List[str] = None) -> None:
     set_name = os.path.basename(repo)
     with repo_lock(git_base, set_name):
         if rel_files:
-            for rel_path in rel_files:
-                _call(["git", "add", rel_path], repo)
+            _call(["git", "add"] + rel_files, repo)
         else:
             _call(["git", "add", "."], repo)
         
@@ -456,6 +547,7 @@ def batch_commit(repo: str, msg: str, rel_files: List[str] = None) -> None:
         remotes = _check(["git", "remote"], repo)
         if remotes:
             _call(["git", "push"], repo)
+    invalidate_status_cache(repo)
 
 def delete_file_and_commit(repo: str, file_path: str, msg: str) -> None:
     """Removes file, commits, pushes.
@@ -469,7 +561,6 @@ def delete_file_and_commit(repo: str, file_path: str, msg: str) -> None:
         HTTPException: As in perform_git_add_commit_push.
         subprocess.CalledProcessError: Git failure.
     """
-    pull_if_needed(repo)
     rel_path = os.path.relpath(file_path, repo)
     git_base = get_git_base()
     set_name = os.path.basename(repo)
@@ -479,6 +570,7 @@ def delete_file_and_commit(repo: str, file_path: str, msg: str) -> None:
         remotes = _check(["git", "remote"], repo)
         if remotes:
             _call(["git", "push"], repo)
+        invalidate_status_cache(repo)
 
 def get_repo_status(set: str) -> Dict[str, any]:
     """Gets repo branch and tag status.
@@ -530,6 +622,7 @@ def rollback_staged(set: str, name: str, type_: str) -> None:
     git_base = get_git_base()
     with repo_lock(git_base, set):
         _call(["git", "checkout", "HEAD", "--", rel_path], repo)
+    invalidate_status_cache(repo)
 
 def rollback_committed(set: str, name: str, type_: str) -> None:
     """Directly checks out HEAD (discards unstaged).
@@ -548,54 +641,18 @@ def rollback_committed(set: str, name: str, type_: str) -> None:
     git_base = get_git_base()
     with repo_lock(git_base, set):
         _call(["git", "checkout", "HEAD", "--", rel_path], repo)
+    invalidate_status_cache(repo)
 
 
 def has_unstaged_changes(repo: str, name: str, type_: str) -> bool:
-    """Checks if the scriptlet file has unstaged changes vs committed HEAD.
-    
-    Args:
-        repo (str): Repo path.
-        name (str): Name.
-        type_ (str): Type.
-    
-    Returns:
-        bool: True if unstaged changes exist.
-    
-    Raises:
-        subprocess.CalledProcessError: Git failure.
-    """
-    file_path = get_file_path(repo, name, type_)
-    rel_path = os.path.relpath(file_path, repo)
     git_base = get_git_base()
     set_name = os.path.basename(repo)
+    now = time.time()
     with repo_lock(git_base, set_name):
-        # Check if committed (in HEAD)
-        try:
-            _check(["git", "show", f"HEAD:{rel_path}"], repo)
-            # Committed, check for unstaged changes
-            try:
-                result = subprocess.run(
-                    ["git", "diff", "--quiet", "HEAD", "--", rel_path],
-                    cwd=repo,
-                    capture_output=True,
-                    text=True
-                )
-                logger.debug(f"Diff returncode for {rel_path}: {result.returncode}, stderr: '{result.stderr.strip()}'")
-                if result.returncode == 0:
-                    return False
-                elif result.returncode == 1 and not result.stderr.strip():
-                    return True
-                else:
-                    logger.warning(f"Unexpected git diff result for {rel_path}: rc={result.returncode}, stderr='{result.stderr.strip()}'; treating as no changes")
-                    return False
-            except subprocess.CalledProcessError as e:
-                logger.error(f"Git diff failed for {rel_path}: {e}")
-                raise
-        except subprocess.CalledProcessError:
-            # Not committed (untracked or deleted): treat as unstaged changes if file exists
-            if os.path.exists(file_path):
-                logger.debug(f"File {rel_path} is not committed, considered as having unstaged changes")
-                return True
-            else:
-                # File doesn't exist on disk, no changes
-                return False
+        cache_entry = _status_cache.get(repo)
+        if cache_entry is None or now - cache_entry[0] > 10.0:  # TTL 10s
+            statuses = compute_set_unstaged(repo)
+            _status_cache[repo] = (now, statuses)
+        else:
+            statuses = cache_entry[1]
+    return statuses.get(name, False)

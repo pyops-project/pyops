@@ -165,9 +165,45 @@ export async function run(): Promise<void> {
     
     console.log('✓ Test 9 passed');
 
+    // Test 10: JS Library support
+    console.log('Test 10: JS Library support...');
+    const jsName = `jslib-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const jsTestPath = path.join(wsRoot, localPyopsDir, 'test', 'jslibrary', `${jsName}.js`);
+    fs.mkdirSync(path.dirname(jsTestPath), { recursive: true });
+    fs.writeFileSync(jsTestPath, 'console.log("JS Library test");');
+    await vscode.commands.executeCommand('pyops.refreshManager');
+    await helpers.pollTree(managerProvider, ['test']);
+    const expectedJsLabel = `${jsName} (jslibrary)`;
+    // Manual poll for diff-added icon
+    const pollTimeout10 = 5000;
+    const pollInterval10 = 200;
+    let jsTestItem: any = null;
+    const pollStart10 = Date.now();
+    while (Date.now() - pollStart10 < pollTimeout10) {
+      const test10ManagerChildren = await managerProvider.getChildren();
+      const test10TestSetItem = test10ManagerChildren.find((item: any) => item.label === 'test');
+      if (test10TestSetItem) {
+        const test10SetChildren = await managerProvider.getChildren(test10TestSetItem);
+        jsTestItem = test10SetChildren.find((item: any) => item.label === expectedJsLabel);
+        if (jsTestItem && (jsTestItem.iconPath as vscode.ThemeIcon).id === 'diff-added') {
+          break;
+        }
+      }
+      await new Promise(resolve => setTimeout(resolve, pollInterval10));
+    }
+    assert.ok(jsTestItem, `JS Library scriptlet timed out (label: ${expectedJsLabel})`);
+    assert.strictEqual(jsTestItem.contextValue, 'pyopsItem-jslibrary-local');
+    assert(jsTestItem.description!.endsWith('(local)'));
+    assert.strictEqual((jsTestItem.iconPath as vscode.ThemeIcon).id, 'diff-added');
+    // Verify contextValue supports sync menus (matches package.json when regex)
+    const jsWriteRegex = /^pyopsItem-(task|service|library|controller|view|markdown|jslibrary)(-local)?$/;
+    assert.ok(jsWriteRegex.test(jsTestItem.contextValue!), 'ContextValue must support writeLocalToRemoteDraft command');
+
+    console.log('✓ Test 10 passed');
 
     // Cleanup local
     fs.unlinkSync(localTestPath);
+    fs.unlinkSync(jsTestPath);
 
     console.log('All Manager Tests passed!');
   } finally {

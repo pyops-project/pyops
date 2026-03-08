@@ -13,6 +13,8 @@ def ensure_set_environment(name):
     Ensure per-set venv and pkg directories exist and venv is initialized.
     Creates directories and initializes venv if not present.
     """
+    if not name:
+        raise ValueError("Set name cannot be empty")
     runner_conf = conf_runner()
     venv_base = runner_conf.get("venv", "data/venv")
     pkg_base = runner_conf.get("pkg", "data/pkg")
@@ -21,12 +23,17 @@ def ensure_set_environment(name):
     os.makedirs(venv_path, exist_ok=True)
     if not os.path.exists(os.path.join(venv_path, 'bin', 'python')):
         subprocess.check_call([sys.executable, '-m', 'venv', venv_path])
+        pip_path = os.path.join(venv_path, 'bin', 'pip')
+        subprocess.check_call([pip_path, 'install', '--upgrade', 'pip', 'setuptools', 'wheel'])
+        subprocess.check_call([pip_path, 'install', 'pyzmq', 'msgpack', 'psutil', 'debugpy', 'requests'])
     os.makedirs(pkg_path, exist_ok=True)
 
 def remove_set_environment(name):
     """
     Remove per-set venv and pkg directories.
     """
+    if not name:
+        raise ValueError("Set name cannot be empty")
     runner_conf = conf_runner()
     venv_base = runner_conf.get("venv", "data/venv")
     pkg_base = runner_conf.get("pkg", "data/pkg")
@@ -202,5 +209,5 @@ def pull_set(git_dir, name):
 
     from . import git
     repo = git.get_repo_path(name)
-    git.pull_if_needed(repo)
+    git.pull(repo)
     return True

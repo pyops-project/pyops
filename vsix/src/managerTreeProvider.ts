@@ -225,7 +225,7 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
             const dirPath = path.join(baseLocalPath, dir);
             return fs.statSync(dirPath).isDirectory();
         }).sort();
-        const knownTypes = ['task', 'service', 'library', 'controller', 'view', 'markdown'];
+        const knownTypes = ['task', 'service', 'library', 'controller', 'view', 'markdown', 'jslibrary'];
         for (const set of setDirs) {
             const setPath = path.join(baseLocalPath, set);
             for (const type of knownTypes) {

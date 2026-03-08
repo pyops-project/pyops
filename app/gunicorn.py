@@ -49,9 +49,9 @@ if not os.path.exists(os.path.join(project_root, conf["data"]["git"])):
     os.makedirs(os.path.join(project_root, conf["data"]["git"]))
 
 venv_path = os.path.abspath(os.path.join(project_root, conf["runner"]["venv"]))
-if not os.path.exists(os.path.join(venv_path, "pyvenv.cfg")):
-    subprocess.check_call([sys.executable, '-m', 'venv', venv_path])
+os.makedirs(venv_path, exist_ok=True)
 pkg_path = os.path.abspath(os.path.join(project_root, conf["runner"]["pkg"]))
+os.makedirs(pkg_path, exist_ok=True)
 
 # Prepare isolated env for runner subprocess (manual venv activation: set VIRTUAL_ENV and prepend bin/ to PATH)
 runner_env = os.environ.copy()
