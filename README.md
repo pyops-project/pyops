@@ -10,8 +10,8 @@ flowchart LR
     B("View")
     C("Controller<br>FastAPI/AsyncIO<br>Uvicorn")
     D[(DB<br>SQLAlchemy)]
-    E("Runner<br>multiprocessing")
-    F("Scriptlet<br>Process")
+    E("Runner<br>ZMQ IPC")
+    F("Scriptlet<br>Isolated Venv Process")
 
     A <-->|"REST/Poll"| C
     B <-->|"REST/Poll"| C
@@ -22,52 +22,25 @@ flowchart LR
 ```
 
 ## Configuration
-`app/lib/files.py` defines the Config class for managing `etc/pyops.json`.
-
-### JSON Structure
 - `web`: `{"bind": "127.0.0.1:8000", "worker": 4, "timeout": 300}`
 - `data`: `{"jobs": "data/jobs", "git": "data/git", "db": "data/app.db"}`
 - `runner`: `{"venv": "data/venv", "pkg": "data/pkg", "git_pull_interval": 60, "drop_done_delay_seconds": 60}`
 - `log`: `{"loglevel": "debug"}`
 - `users`: `{"anonymous": {"debug_port": 15678}}`
 
-### Access Methods
-- `conf_data()`: Returns web, data, log sections
-- `conf_runner()`: Returns runner-specific config
-- `get(path)`: Serves static files
-- `conf_log()`: Provides log config with file handlers
-- `conf_users()`: Provides users section
+## Features
+PyOps supports various scriptlet types: task, service, schedule, controller, view, library, markdown, jslibrary.
 
-### Features
-- Supports dynamic reload on change
-- Defaults: web bind "0.0.0.0:80", jobs "data/jobs", no SSL
-- No built-in auth; proxy recommended
-- Log levels: debug, info, etc.
+In addition to WebUI it also includes a VSCode extension for direct use from VSCode and derrivates.
 
-## Scriptlets
-Scriptlets support types: task, library, controller, view, markdown, service, schedule.
-
-### Types
-#### Task
-One-time executed scriptlets, usually for debugging or batch operations.
-
-#### Service
-Persistent services that run continuously unless cancelled or fail 3 times.
-
-#### Schedule
-Cron-based scheduling of tasks.
-
-#### Controller
-Web controllers for dynamic UI generation.
-
-#### View
-HTML views for the web interface.
-
-#### Library
-Reusable code libraries.
-
-#### Markdown
-Documentation scriptlets.
+- **Task**: One-time executed scriptlets for debugging or batch operations
+- **Service**: Persistent services that run continuously
+- **Schedule**: Cron-based scheduling of tasks
+- **Controller**: Web controllers for dynamic UI generation
+- **View**: HTML views for the web interface
+- **Library**: Reusable code libraries
+- **Markdown**: Documentation scriptlets
+- **JSLibrary**: JavaScript libraries
 
 ## Setup
 ### Direct
@@ -165,6 +138,7 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Protocol https;
         proxy_set_header X-Original-Host $host;
+        proxy_set_header X-User $remote_user;
         proxy_read_timeout 300;
         proxy_connect_timeout 120;
         proxy_send_timeout 300;

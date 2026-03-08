@@ -21,8 +21,10 @@ graph TD
     B --> K[routers/ - API Endpoints]
     B --> L[orm/ - Database Models]
     B --> M[sites/ - HTML Views]
-    C --> N[src/ - Extension Source]
-    C --> O[tests/ - Extension Tests]
+    B --> N[job_runner.py - Subprocess Entry]
+    B --> O[files/ - Static Assets]
+    C --> P[src/ - Extension Source]
+    C --> Q[tests/ - Extension Tests]
 ```
 
 #### App Directory Structure
@@ -54,9 +56,9 @@ flowchart LR
     A("WebUI<br>Bootstrap/JS")
     B("View")
     C("Controller<br>FastAPI/AsyncIO<br>Uvicorn")
-    D[(DB<br>SQLAlchemy)]
-    E("Runner<br>subprocess.Popen")
-    F("Scriptlet<br>Process")
+    D[(DB<br>SQLAlchemy WAL)]
+    E("Runner<br>subprocess.Popen + ZMQ IPC")
+    F("Scriptlet<br>Isolated Venv Process")
 
     A <-->|"REST/Poll"| C
     B <-->|"REST/Poll"| C
@@ -95,12 +97,16 @@ graph TD
 ## Core Components
 
 ### Runner (`app/runner.py`)
-- Daemon that polls DB for todo jobs
-- Executes scriptlets in workspaces `data/jobs/{owner}/{set}/{id}/`
-- Handles job states: todo, dequeued, running, done, failed, cancelled, remove
+- Daemon that polls DB for todo jobs using subprocess.Popen for isolated execution in per-set venvs.
+- ZMQ IPC (ROUTER/REQ over /tmp/pyops/runner.sock) signals completion; json-serialized kwargs ensure config isolation.
+- Process checks: p.poll() for liveness; psutil for tree-kill (SIGTERM → SIGKILL after 15s).
+- Stale PID handling: After cleanProcesses, sync DB running jobs to 'failed' if !psutil.Process(pid).is_running().
+- Job states: todo, dequeued, running, done, failed, cancelled, remove, removed.
+- Debug mode: Always inject debugpy.listen(('0.0.0.0', port)) from conf_users(); appends wait_for_client() if '#>AWAIT_DEBUG' in param. Validates via /debug/port; terminates prior owner jobs.
 
 ### Web (`app/web.py`)
 - Serves /controller/{set}/{name}, /menu, and static /files/
+- GET /debug/port: Uses sanitize_owner(X-User default "anonymous") & returns {"port": int(port)} from conf_users()[owner]["debug_port"] or 400 if missing (e.g., for VSIX attach).
 
 ### PyOps (`app/lib/pyops.py`)
 - Provides `Control` for API calls
@@ -120,8 +126,9 @@ graph TD
 
 ### Access Methods
 
-- `conf_data()`: Returns web, data, log sections
+- `conf_data()`: Returns data section (jobs, git, db) with defaults merged from etc/pyops.json
 - `conf_runner()`: Returns runner-specific config
+- `conf_web()`: Returns web section (bind) with defaults
 - `get(path)`: Serves static files
 - `conf_log()`: Provides log config with file handlers
 - `conf_users()`: Provides users section
@@ -129,7 +136,7 @@ graph TD
 ### Features
 
 - Supports dynamic reload on change
-- Defaults: web bind "0.0.0.0:80", jobs "data/jobs", no SSL
+- Defaults: web bind "127.0.0.1:8000", jobs "data/jobs", no SSL
 - No built-in auth; proxy recommended
 - Log levels: debug, info, etc.
 
@@ -147,7 +154,8 @@ graph TD
 - `batch_commit()`: Batch operations
 - `delete_file_and_commit()`: Removes and commits
 - `get_repo_status()`: Returns git status
-- `has_unstaged_changes()`: Checks for drafts
+- `pull(repo)`: Syncs to origin/HEAD via soft reset if clean; skips if dirty to preserve unstaged changes.
+- `has_unstaged_changes()`: Cached git status --porcelain (TTL=10s, under repo_lock()). Batch compute_set_unstaged for scriptlets (paths like {name}.{type}.py → unstaged list). Invalidate cache on write_content/pull.
 - `rollback_staged/committed()`: Reverts changes
 
 #### Set-Scriptlet Management
@@ -155,20 +163,21 @@ graph TD
 - `get_repo_path(set)`: Returns `data/git/{set}/`
 - `list_scriptlets()`: Lists `{name}.{type}.py/html` from sets
 - `infer_type_from_filename()`: Derives type from filename
+  - JS Libraries: .js → 'jslibrary'.
 - `check_name_unique()`: Prevents duplicates
 
 #### Global Attributes
 
 - Sets are Git repos in `data/git/{set}/`
 - Scriptlets: `{name}.task.py`, `{name}.service.py`, etc.
-- Pull syncs at interval; skips dirty/tag, soft reset clean
+- Pull syncs on demand via pull(repo); skips dirty/tag, soft reset clean to origin/{branch}; adds new files (py/html/js/README) via checkout if missing in WD.
 - Unique lock per set prevents concurrent access
 - Commit-push checks remotes; skip if no remote
 
 #### Status Caching
 ```mermaid
 flowchart TD
-    A[Refresh] --> B[/list: FS only]
+    A[Refresh] --> B[list: FS only]
     B --> C[Loop /status per scriptlet]
     C --> D[has_unstaged_changes]
     D --> E{Set cache hit?}
@@ -179,7 +188,7 @@ flowchart TD
     I --> J[Cache & return]
 ```
 
-Global attributes: Cache serializes via lock; TTL refreshes on writes; matches existing logic.
+Global attributes: Cache under repo_lock(); TTL auto-refreshes on writes/pulls; FS-based for list_scriptlets().
 
 ### ZMQ Control
 
@@ -245,7 +254,7 @@ sequenceDiagram
 - Managed via /scriptlet/sets UI or API
 - VSIX supports clone/switch/remove via trees
 - Locking prevents conflicts
-- Auto-sync via pull_if_needed()
+- Sync via pull()
 
 ### ORM Models
 
@@ -258,8 +267,8 @@ sequenceDiagram
 
 #### Models
 
-- **Job**: Tracks id, owner, set, name, kind, state, drop_done, max_retries, param, pid, debugpy_pid, detail, overrides, start, end
-- **Schedule**: Tracks id, schedule, set, name, owner, active, drop_done, max_retries, param, last
+- **Job**: id (primary), owner, set, name, kind, state (todo/dequeued/running/done/failed/cancelled/remove/removed), drop_done, max_retries (default=0), param (JSON), pid, debugpy_pid, detail, overrides (JSON for debug/VSIX), start/end timestamps.
+- **Schedule**: id (primary), schedule (cron string), set, name, owner, active (bool), drop_done, max_retries (default=0), param (JSON), last (timestamp).
 
 #### Global Attributes
 
@@ -334,14 +343,14 @@ Distinguishes types by argument:
 
 ## Subprocess Execution Isolation
 
-- **Current Implementation**: Jobs executed via multiprocessing.Process in shared environment.
-- **Updated**: subprocess.Popen with set-specific venv Python interpreter for per-set isolation.
+Jobs executed via subprocess.Popen with set-specific venv Python interpreter for per-set isolation.
+
 - **Benefits**: Prevents package conflicts, ensures clean execution context.
 - **CLI Invocation**: job_runner.py accepts JSON-serialized kwargs via command-line for complex arg passing.
 - **Process Management**: Polling uses p.poll() is None (alive), termination via Popen.terminate() with psutil tree-kill.
-- **ZMQ IPC**: Unchanged; works across subprocess boundaries.
+- **ZMQ IPC**: Works across subprocess boundaries.
 - **Debug Handling**: Adapter checks and debugpy injection functional in venv context.
-- **Testing**: Mocks updated to subprocess.Popen; maintains >90% coverage.
+- **Testing**: Mocks use subprocess.Popen; maintains >90% coverage.
 
 ### Config Isolation via Kwargs
 - Subprocesses consume JSON-serialized config dicts passed from runner, no file reads or module patching.
@@ -351,11 +360,11 @@ Distinguishes types by argument:
 ### Call Flow
 ```mermaid
 graph TD
-    A[main] --> B[run_task_job(project_root, conf_data, conf_runner, conf_users)]
-    B --> C[setup_job_globals(..., project_root, conf_data, conf_runner)]
-    A --> D[run_debug_job(..., project_root, conf_data, conf_runner, conf_users)]
+    A[main] --> B["run_task_job(project_root, conf_data, conf_runner, conf_users)"]
+    B --> C["setup_job_globals(..., project_root, conf_data, conf_runner)"]
+    A --> D["run_debug_job(..., project_root, conf_data, conf_runner, conf_users)"]
     D --> C
-    D --> E[terminate_debugpy_adapter(conf_users, owner)]
+    D --> E["terminate_debugpy_adapter(conf_users, owner)"]
 ```
 
 ```mermaid
@@ -384,12 +393,12 @@ The runner uses ZMQ ROUTER/REQ over IPC sockets for reliable job completion sign
 ```mermaid
 flowchart TD
     A[Main Loop Start] --> B{Poll DB for todo jobs?}
-    B -->|Yes| C[Dequeue & Spawn Process<br/>(pass sock_path)]
-    C --> D[Poll ZMQ Socket<br/>(timeout=0)]
+    B -->|Yes| C["Dequeue & Spawn Process<br/>(pass sock_path)"]
+    C --> D["Poll ZMQ Socket<br/>(timeout=0)"]
     D --> E{Event?}
-    E -->|Yes| F[Recv Multipart Msg<br/>(identity + empty + packed)]
-    F --> G[Unpack msgpack<br/>Call finishJob]
-    G --> H[Send REP<br/>(identity + empty + b'ack')]
+    E -->|Yes| F["Recv Multipart Msg<br/>(identity + empty + packed)"]
+    F --> G["Unpack msgpack<br/>Call finishJob"]
+    G --> H["Send REP<br/>(identity + empty + b'ack')"]
     H --> I[Clean DB/Processes]
     E -->|No| I
     B -->|No| J[Schedule/Pull Git]
@@ -404,27 +413,27 @@ sequenceDiagram
     participant Child as Job Process
     participant ZMQ as REQ Socket
     participant Parent as Runner ROUTER
-    Child->>ZMQ: Context(); socket = REQ(); connect(ipc://runner.sock)
+    Child->>ZMQ: Create REQ socket and connect
     Note over Child,ZMQ: Execute job code
     alt Success
-        Child->>ZMQ: packb(msg); send(single frame)
-        ZMQ->>Parent: Multipart: identity + empty + packed
-        Parent->>ZMQ: Process finishJob; send REP: identity + empty + b'ack'
+        Child->>ZMQ: Send completion message
+        ZMQ->>Parent: Receive multipart message
+        Parent->>ZMQ: Process and send ACK
         ZMQ->>Child: Recv ACK
-        Child->>Child: Close socket; exit
+        Child->>Child: Close socket and exit
     else Failure
-        Child->>ZMQ: packb(failed msg); send/recv (retry 3x)
+        Child->>ZMQ: Send failure message
         Note over Child: Log if no ACK
     end
 ```
 
 ## Runner Process Lifecycle
 
-### Current
 - `app/runner.py` main: spawn `job_runner.py` → `assignJob(pid, "running")` → loop `cleanProcesses` (poll!=None → remove `Popen` dict).
 - Completion: ZMQ `ROUTER/REQ` → `receive_and_process` → `finishJob(state/detail, pid=None)` → `postTerm` (remove/cancelled).
 - Startup: `handleOddJobs` dequeued/running → todo/failed.
 - Debug: Post-spawn adapter poll (5s timeout → fail if no).
+- Stale PID Monitoring: Post-`cleanProcesses`, query DB `Job.pid` in former dict → if `!psutil.Process(pid).is_running()` → `finishJob("failed", "process termination pid={pid}")`. Ensures DB sync for silent deaths (e.g., segv).
 
 ```mermaid
 flowchart TD
@@ -432,18 +441,6 @@ flowchart TD
     Assign --> Loop[Loop cleanProcesses poll!=None rm dict]
     Loop --> ZMQ{ZMQ ROUTER recv?}
     ZMQ -->|yes| Finish[finishJob state/detail pid=None postTerm]
-    Loop --> NoZMQ[No ZMQ dead pid cleaned]
-```
-
-### Enhanced Stale PID Monitoring
-- Post-`cleanProcesses`: Query DB `Job.pid` in former dict → `!psutil.Process(pid).is_running()` → `finishJob("failed", "process termination pid={pid}")`.
-- Ensures DB sync for silent deaths (e.g., segv).
-
-**Updated Diagram**:
-```mermaid
-flowchart TD
-    Spawn --> Assign --> Loop
-    Loop --> ZMQ -->|yes| Finish
     Loop --> Stale[Stale: DB pid !psutil.running → finishJob failed term]
     Stale --> Finish
 ```
@@ -462,8 +459,13 @@ Runner treats debug kind specially for web preview/VSIX.
 
 #### Config Extension
 
-- `files.py` adds `conf_users()` for "users" {}
-- `pyops.json` example: `{"users": {"anonymous": {"debug_port": 5678}}}`
+- `app/lib/files.py`: Provides config access methods:
+  - conf_data() (data/jobs/git/db)
+  - conf_runner() (runner/git_pull_interval/drop_done_delay_seconds)
+  - conf_web() (web/bind)
+  - conf_log() (log/loglevel)
+  - conf_users() (users/debug_port)
+- Dynamic reload on change; no fixed defaults—validate per owner.
 
 #### Enqueue Logic
 
@@ -477,9 +479,10 @@ Runner treats debug kind specially for web preview/VSIX.
 
 #### Execution
 
-- Injects debugpy as first lib, compiles debug_bridge.py with listen and wait_for_client
-- Auto-installs debugpy if not present
-- Keeps listener/glob/logging
+- Injects debugpy.listen(('0.0.0.0', port)) as first import; compiles debug_bridge.py.
+- Appends wait_for_client() if '#>AWAIT_DEBUG' in param.
+- Auto-pip installs debugpy if missing.
+- Port fetched via /debug/port from conf_users(owner).
 
 #### Overrides
 
@@ -494,9 +497,9 @@ Runner treats debug kind specially for web preview/VSIX.
 
 #### Global Attributes
 
-- Debug enables VSCode attach to localhost:{port}
-- Allows second job by killing previous
-- Overrides enable custom code injection
+- Debug enables VSCode attach to host:{dynamic port}
+- Allows second job by killing previous per owner
+- Overrides enable custom code injection for {set}::{name} matches
 
 ## Web Interface
 
@@ -553,7 +556,17 @@ Runner treats debug kind specially for web preview/VSIX.
 #### Editor
 
 - `editor.py`: Code editing & Jedi completion
-- Supports task/md/view/library with Ace & preview
+- Supports task/md/view/library/jslibrary with Ace & preview
+
+#### Inventory
+
+- `inventory.py`: CRUD operations for scriptlets
+  - List, create, save, delete scriptlets
+
+#### JS Library
+
+- `jslib.py`: Serves JavaScript libraries
+  - GET /scriptlet/jslib/{set}/{name} for JS libraries
 
 #### Global Attributes
 

@@ -2,7 +2,7 @@
 
 PyOps is an "Execution Platform" for "Python Operations Scriptlets". It is licensed under GNU AGPLv3 and organized as a monorepo with core functionality in `app/`, a VSCode extension in `vsix/`, tests in `tests/`, and documentation in `doc/`.
 
-### Monorepo Structure
+## Monorepo Structure
 
 The project is structured as follows:
 
@@ -20,29 +20,11 @@ graph TD
     B --> K[routers/ - API Endpoints]
     B --> L[orm/ - Database Models]
     B --> M[sites/ - HTML Views]
-    C --> N[src/ - Extension Source]
-    C --> O[tests/ - Extension Tests]
+    B --> N[job_runner.py - Subprocess Entry]
+    B --> O[files/ - Static Assets]
+    C --> P[src/ - Extension Source]
+    C --> Q[tests/ - Extension Tests]
 ```
-
-#### App Directory Structure
-
-- `app/web.py`: Main FastAPI application server
-- `app/runner.py`: Background job execution daemon
-- `app/gunicorn.py`: WSGI server configuration
-- `app/routers/scriptlet/`: REST API endpoints for scriptlet operations
-- `app/orm/`: Database models for Job and Schedule
-- `app/sites/scriptlet/`: HTML views for the web interface
-
-#### Lib Directory
-
-- `app/lib/git.py`: Git operations for scriptlet management
-- `app/lib/pyops.py`: IPC and control classes
-- `app/lib/files.py`: Configuration management
-- `app/lib/sets.py`: Git repository set management
-- `app/lib/sites.py`: Site rendering utilities
-- `app/lib/async_utils.py`: Asynchronous utilities
-- `app/lib/auth.py`: Authentication utilities
-- `app/lib/runner.py`: Runner utilities
 
 ## Architecture
 
@@ -53,9 +35,9 @@ flowchart LR
     A("WebUI<br>Bootstrap/JS")
     B("View")
     C("Controller<br>FastAPI/AsyncIO<br>Uvicorn")
-    D[(DB<br>SQLAlchemy)]
-    E("Runner<br>multiprocessing")
-    F("Scriptlet<br>Process")
+    D[(DB<br>SQLAlchemy WAL)]
+    E("Runner<br>subprocess.Popen + ZMQ IPC")
+    F("Scriptlet<br>Isolated Venv Process")
 
     A <-->|"REST/Poll"| C
     B <-->|"REST/Poll"| C
@@ -94,12 +76,16 @@ graph TD
 ## Core Components
 
 ### Runner (`app/runner.py`)
-- Daemon that polls DB for todo jobs
-- Executes scriptlets in workspaces `data/jobs/{owner}/{set}/{id}/`
-- Handles job states: todo, dequeued, running, done, failed, cancelled, remove
+- Daemon that polls DB for todo jobs using subprocess.Popen for isolated execution in per-set venvs.
+- ZMQ IPC (ROUTER/REQ over /tmp/pyops/runner.sock) signals completion; json-serialized kwargs ensure config isolation.
+- Process checks: p.poll() for liveness; psutil for tree-kill (SIGTERM → SIGKILL after 15s).
+- Stale PID handling: After cleanProcesses, sync DB running jobs to 'failed' if !psutil.Process(pid).is_running().
+- Job states: todo, dequeued, running, done, failed, cancelled, remove, removed.
+- Debug mode: Always inject debugpy.listen(('0.0.0.0', port)) from conf_users(); appends wait_for_client() if '#>AWAIT_DEBUG' in param. Validates via /debug/port; terminates prior owner jobs.
 
 ### Web (`app/web.py`)
 - Serves /controller/{set}/{name}, /menu, and static /files/
+- GET /debug/port: Uses sanitize_owner(X-User default "anonymous") & returns {"port": int(port)} from conf_users()[owner]["debug_port"] or 400 if missing (e.g., for VSIX attach).
 
 ### PyOps (`app/lib/pyops.py`)
 - Provides `Control` for API calls
@@ -119,8 +105,9 @@ graph TD
 
 ### Access Methods
 
-- `conf_data()`: Returns web, data, log sections
+- `conf_data()`: Returns data section (jobs, git, db) with defaults merged from etc/pyops.json
 - `conf_runner()`: Returns runner-specific config
+- `conf_web()`: Returns web section (bind) with defaults
 - `get(path)`: Serves static files
 - `conf_log()`: Provides log config with file handlers
 - `conf_users()`: Provides users section
@@ -128,47 +115,11 @@ graph TD
 ### Features
 
 - Supports dynamic reload on change
-- Defaults: web bind "0.0.0.0:80", jobs "data/jobs", no SSL
+- Defaults: web bind "127.0.0.1:8000", jobs "data/jobs", no SSL
 - No built-in auth; proxy recommended
 - Log levels: debug, info, etc.
 
-## Core Functionality
-
-### Git Operations
-
-`app/lib/git.py` manages scriptlet code in Git sets with serialized access via `repo_lock()`.
-
-#### Operations
-
-- `read_content()`: Reads file content (committed or debug)
-- `write_content()`: Writes and stages changes
-- `perform_git_add_commit_push()`: Commits and pushes changes
-- `batch_commit()`: Batch operations
-- `delete_file_and_commit()`: Removes and commits
-- `get_repo_status()`: Returns git status
-- `has_unstaged_changes()`: Checks for drafts
-- `rollback_staged/committed()`: Reverts changes
-
-#### Set-Scriptlet Management
-
-- `get_repo_path(set)`: Returns `data/git/{set}/`
-- `list_scriptlets()`: Lists `{name}.{type}.py/html` from sets
-- `infer_type_from_filename()`: Derives type from filename
-- `check_name_unique()`: Prevents duplicates
-
-#### Global Attributes
-
-- Sets are Git repos in `data/git/{set}/`
-- Scriptlets: `{name}.task.py`, `{name}.service.py`, etc.
-- Pull syncs at interval; skips dirty/tag, soft reset clean
-- Unique lock per set prevents concurrent access
-- Commit-push checks remotes; skip if no remote
-
-### ZMQ Control
-
-`app/lib/pyops.py` provides IPC via ZMQ for scriptlets with HTTP proxy to FastAPI.
-
-#### IPC Flow
+### IPC
 
 ```mermaid
 sequenceDiagram
@@ -191,64 +142,22 @@ sequenceDiagram
     Control->>Scriptlet: Result
 ```
 
-#### Controls
+### Controls
 
 - **JobControl**: `list()`, `create()`, `get()`, `delete()`, `cancel()`, `download()`
 - **ScheduleControl**: `list()`, `create()`, `get()`, `delete()`, `activate()`, `deactivate()`
 
-#### Service Components
+### Service Components
 
-- **ServiceListener**: Listens for messages, handles TERM signals
+- **ServiceListener**: Listens for messages, handles TERM signals, supports both synchronous and asynchronous messaging
 - **ServiceClient**: Connects to running services
 - **Control Class**: Wraps controls, proxies to `/controller/{set}/{name}/q`
 
-#### Global Attributes
 
-- Available in scriptlet global namespace
-- Message format: `{"type": "GET/POST", "path": str, "cmd": query, "data": body, "data_type": "json/text/binary/none"}`
-- Uses msgpack for serialization
-- Listener poll uses zmq.Poller with timeout=0
-
-### Sets Management
-
-`app/lib/sets.py` handles Git repositories.
-
-#### Operations
-
-- `list_sets()`: Lists available sets
-- `clone_set()`: Clones remote to `data/git/{name}/` with .gitignore & README
-- `remove_set()`: Deletes directory
-- `switch_branch()`: Checks out branch
-
-#### Global Attributes
-
-- Sets group scriptlets in Git repos
-- Managed via /scriptlet/sets UI or API
-- VSIX supports clone/switch/remove via trees
-- Locking prevents conflicts
-- Auto-sync via pull_if_needed()
-
-### ORM Models
-
-`app/orm/` uses SQLAlchemy Base.
-
-#### Database
+### Database
 
 - `database.py`: `get_db_path()`, `init_db()`, `get_db_engine()`, `destroy_db()`
 - SQLite file-based DB, thread-safe WAL mode
-
-#### Models
-
-- **Job**: Tracks id, owner, set, name, kind, state, drop_done, max_retries, param, pid, debugpy_pid, detail, overrides, start, end
-- **Schedule**: Tracks id, schedule, set, name, owner, active, drop_done, max_retries, param, last
-
-#### Global Attributes
-
-- DB in data/ sqlite
-- init_db() creates tables on startup
-- Runner polls Jobs todo & Schedules cron
-- Job states: todo, dequeued, running, done, failed, cancelled, remove, removed
-- Schedule active/drop_done indexed
 
 ## Execution
 
@@ -305,63 +214,87 @@ Distinguishes types by argument:
 
 - `schedule()`: Enqueues from cron Schedules via croniter
 
-#### Global Attributes
+#### Subprocess Execution Isolation
 
-- Spawns isolated processes per job
-- Workspaces: `data/jobs/{owner}/{set}/{id}/`
-- States: todo, dequeued, running, done, failed, cancelled, remove
-- Supports debug mode & drop_done cleanup
-- GracefulKiller handles SIGTERM/SIGINT
+Jobs executed via subprocess.Popen with set-specific venv Python interpreter for per-set isolation.
 
-### Debug Implementation
+- **Benefits**: Prevents package conflicts, ensures clean execution context.
+- **CLI Invocation**: job_runner.py accepts JSON-serialized kwargs via command-line for complex arg passing.
+- **Process Management**: Polling uses p.poll() is None (alive), termination via Popen.terminate() with psutil tree-kill.
+- **ZMQ IPC**: Works across subprocess boundaries.
+- **Debug Handling**: Adapter checks and debugpy injection functional in venv context.
+- **Testing**: Mocks use subprocess.Popen; maintains >90% coverage.
 
-#### Debug Kind
 
-Runner treats debug kind specially for web preview/VSIX.
+#### Runner IPC
 
-- Web: no overrides, unstaged main code, committed libs
-- VSIX: overrides for local code
-- Injects debugpy.listen(('0.0.0.0', port)) always, +wait_for_client() if '#>AWAIT_DEBUG' in param
-- Requires user debug_port
-- Kills previous debug job for owner
+The runner uses ZMQ ROUTER/REQ over IPC sockets for reliable job completion signaling from child processes, replacing multiprocessing.Queue.
 
-#### Config Extension
+##### Pattern
 
-- `files.py` adds `conf_users()` for "users" {}
-- `pyops.json` example: `{"users": {"anonymous": {"debug_port": 5678}}} `
+- **Socket**: Runner binds ROUTER to `/tmp/pyops/runner.sock`; children connect REQ.
+- **Message Format**: `{"id": str, "state": str, "detail": str|None}` (msgpack-packed).
+- **Protocol**: Child sends REQ (single frame), runner receives multipart (identity + empty + packed), processes `finishJob`, replies empty REP (identity + empty + b'ack').
+- **Guarantees**: REQ/REP ensures delivery; no message loss like Queue.
+- **Polling**: Integrated in main loop with `zmq.Poller` timeout=0 for non-blocking.
+- **Cleanup**: `setsockopt(zmq.LINGER, 0)`; close on shutdown.
 
-#### Enqueue Logic
+#### Runner Main Loop with ZMQ Polling
 
-- `enqueue()` handles debug, kills existing running/dequeued for owner
-- Creates new todo
+```mermaid
+flowchart TD
+    A[Main Loop Start] --> B{Poll DB for todo jobs?}
+    B -->|Yes| C["Dequeue & Spawn Process<br/>(pass sock_path)"]
+    C --> D["Poll ZMQ Socket<br/>(timeout=0)"]
+    D --> E{Event?}
+    E -->|Yes| F["Recv Multipart Msg<br/>(identity + empty + packed)"]
+    F --> G["Unpack msgpack<br/>Call finishJob"]
+    G --> H["Send REP<br/>(identity + empty + b'ack')"]
+    H --> I[Clean DB/Processes]
+    E -->|No| I
+    B -->|No| J[Schedule/Pull Git]
+    J --> I
+    I --> A
+```
 
-#### Validation
+#### Child Completion Signaling
 
-- `validate_debug_prerequisites()` checks port
-- Fails job if invalid
+```mermaid
+sequenceDiagram
+    participant Child as Job Process
+    participant ZMQ as REQ Socket
+    participant Parent as Runner ROUTER
+    Child->>ZMQ: Create REQ socket and connect
+    Note over Child,ZMQ: Execute job code
+    alt Success
+        Child->>ZMQ: Send completion message
+        ZMQ->>Parent: Receive multipart message
+        Parent->>ZMQ: Process and send ACK
+        ZMQ->>Child: Recv ACK
+        Child->>Child: Close socket and exit
+    else Failure
+        Child->>ZMQ: Send failure message
+        Note over Child: Log if no ACK
+    end
+```
 
-#### Execution
+#### Process Lifecycle
 
-- Injects debugpy as first lib, compiles debug_bridge.py with listen and wait_for_client
-- Auto-installs debugpy if not present
-- Keeps listener/glob/logging
+- `app/runner.py` main: spawn `job_runner.py` → `assignJob(pid, "running")` → loop `cleanProcesses` (poll!=None → remove `Popen` dict).
+- Completion: ZMQ `ROUTER/REQ` → `receive_and_process` → `finishJob(state/detail, pid=None)` → `postTerm` (remove/cancelled).
+- Startup: `handleOddJobs` dequeued/running → todo/failed.
+- Debug: Post-spawn adapter poll (5s timeout → fail if no).
+- Stale PID Monitoring: Post-`cleanProcesses`, query DB `Job.pid` in former dict → if `!psutil.Process(pid).is_running()` → `finishJob("failed", "process termination pid={pid}")`. Ensures DB sync for silent deaths (e.g., segv).
 
-#### Overrides
-
-- VSIX `buildOverrides()` walks local pyops/set/*.py
-- Runner `run()` applies overrides to code/libs if matching {set}::{name}
-- Enables local code in debug jobs
-
-#### Tests
-
-- Unit tests for enqueue, validate, inject
-- Integration tests for full execution
-
-#### Global Attributes
-
-- Debug enables VSCode attach to localhost:{port}
-- Allows second job by killing previous
-- Overrides enable custom code injection
+```mermaid
+flowchart TD
+    Spawn[Spawn job_runner Popen] --> Assign[assignJob pid running DB]
+    Assign --> Loop[Loop cleanProcesses poll!=None rm dict]
+    Loop --> ZMQ{ZMQ ROUTER recv?}
+    ZMQ -->|yes| Finish[finishJob state/detail pid=None postTerm]
+    Loop --> Stale[Stale: DB pid !psutil.running → finishJob failed term]
+    Stale --> Finish
+```
 
 ## Web Interface
 
@@ -390,50 +323,6 @@ Runner treats debug kind specially for web preview/VSIX.
 - Dynamic UI with Bootstrap, Ace, jQuery
 - Supports light/dark theme
 
-#### Global Attributes
-
-- Async routes
-- Controllers proxy to services via ZMQ
-- Views use Ace for python/json/html modes
-
-### Scriptlet Routers
-
-`app/routers/scriptlet/` submounts to /scriptlet/.
-
-#### Job Routers
-
-- `job.py`: Manages job lifecycle
-  - Enqueues jobs with kind ("task", "service", "debug")
-  - For debug, accepts overrides
-  - Delete allows todo/cancelled/killed/failed/done states
-- `manager.py`: UI for bulk ops
-
-#### Monitor-Scheduler
-
-- `monitor.py`: Lists jobs/schedules by state
-- `schedule.py`: CRUD schedules
-- `scheduler.py`: Activates cron triggers
-- `sets.py`: Manages Git sets
-
-#### Editor
-
-- `editor.py`: Code editing & Jedi completion
-- Supports task/md/view/library with Ace & preview
-
-#### Global Attributes
-
-- FastAPI APIRouter
-- X-User header for owner (default anonymous)
-- Endpoints: /scriptlet/job/item POST, etc.
-- Integrates git.py for read/write
-- UI: manager.html, monitor.html, scheduler.html, sets.html
-
-### Sites
-
-`app/sites/` serves HTML views:
-- `root/`: Main application page (root.html)
-- `scriptlet/`: Scriptlet management interfaces
-
 ## Testing
 
 `tests/` uses pytest with >90% coverage.
@@ -450,17 +339,95 @@ Runner treats debug kind specially for web preview/VSIX.
 
 - `mock_db`: Temp SQLite
 - `mock_git_dir`: Mock sets/scriptlets
-- `mock_git_ops`: Overrides list_scriptlets, read/write
-- `mock_process`: Subprocess mock
+- `mock_git_ops(mock_git_dir)`: Temp FS ops via `mock_git_dir.tmp_path / repo` (repo="data/git/{set}" → `tmp_path/data/git/{set}/{name}.{ext}`).
+  - Covers `write_content`, `read_content`, `get_controller_code`, `get_view_content`, `delete_file_and_commit`.
+  - **Pitfall**: `Path(repo)` creates **real** `./data/git/{set}/` files (e.g., "test_set" tests → pollution; conflicts `testset/test_task.py` pytest collection despite `norecursedirs=data`).
+- `mock_popen`: Subprocess.Popen mock with pid, poll(), terminate(), wait()
+- `mock_zmq`: ZMQ Context/Socket mock for REQ/REP simulation (msgpack-packed messages, 3 retries on ZMQError)
 - `mock_croniter`, `mock_jedi`, `mock_datetime`
 - Overrides for controller_code, view_content, file_path
 
-### Global Attributes
+## VSIX Extension
 
-- Runtime in `.cache/`
-- No autouse fixtures
-- conftest.py custom_showwarning, pytest_configure
-- Integration tests prefix routers/, lib/, runner/
+The `vsix/` directory contains the VSCode extension for PyOps, providing a graphical interface for managing scriptlets and jobs.
+
+### Architecture
+
+```mermaid
+graph TD
+    A[VSCode Extension] --> B[Activation in extension.ts]
+    B --> C[AuthService.setupAuth]
+    B --> D[RemoteContentProvider]
+    B --> E[ConnectionStatusManager]
+    B --> F[ManagerTreeDataProvider]
+    B --> G[JobsTreeDataProvider]
+    B --> H[RefreshTimerManager]
+    B --> I[Services: JobService, ScriptletService, DebugService]
+    B --> J[Commands Registration]
+    B --> K[Debug Configuration Provider]
+```
+
+### Core Components
+
+- **`src/extension.ts`**: Main activation file that sets up the extension context and registers all providers and services.
+- **`src/jobsTreeProvider.ts`**: Provides the `JobsTreeDataProvider` for displaying job states in the tree view.
+- **`src/managerTreeProvider.ts`**: Provides the `ManagerTreeDataProvider` for managing scriptlets.
+- **`src/utils.ts`**: Contains shared utility functions like `inferExt` and `hasValidConfig`.
+- **`src/commands/CreateScriptletCommand.ts`**: Handles the logic for creating new scriptlets.
+
+### Configuration
+
+VSCode workspace settings set serverUrl, username, password (state), localPyopsDir, and autoRefreshInterval. Auth is optional (Basic if username/password set).
+
+### Functionality
+
+#### Auth Service
+
+`src/services/AuthService.ts` handles authentication setup for Basic Auth:
+
+- Prompts for password if username is configured but no password is stored.
+- Stores password securely in workspace state.
+- Unit tests in `tests/services/AuthService.test.ts`.
+
+#### Refresh Timer Manager
+
+`src/services/RefreshTimerManager.ts` manages auto-refresh timers for manager/jobs tree providers:
+
+- Starts/stops timers based on config validity.
+- Prevents duplicate timers.
+- Unit tests in `tests/services/RefreshTimerManager.test.ts`.
+
+#### Tree Providers
+
+- **ManagerTreeDataProvider** fetches scriptlets via API, downloads to local `.pyops/{set}/`, supports create/upload/save/diff/reset/delete/debug, has unit tests in `tests/managerTreeProvider.test.ts`.
+- **JobsTreeDataProvider** lists jobs by state, supports bulk cancel/delete & refresh.
+
+#### Content Provider
+
+RemoteContentProvider serves remote files; onDidChange events.
+
+#### Services
+
+- JobService, ScriptletService, DebugService, etc.
+
+#### Commands
+
+- Registration and execution.
+
+### Testing
+
+#### VSIX Tests
+
+- **Unit tests** in `tests/` use Jest with mocked vscode APIs & API client.
+- **Integration tests** in `tests/integration/` use @vscode/test-electron for real VS Code environment with simple assert-based testing.
+- Integration tests run against separately started localhost PyOps development server without authentication.
+- PyOps server must be started externally before running integration tests (not managed by test framework).
+- Run unit tests with `npm run test` or `npm run test:coverage`.
+- Run integration tests with `npm run test:integration` (requires running local development PyOps server on localhost:8000).
+- Integration tests excluded from CI/CD since VS Code not available.
+- Infrastructure set up with simple console-based test runner that works in VS Code extension host.
+- Tests verify extension activation, configuration (server URL only), views, and command registration.
+- No authentication testing in integration tests (development server runs without auth).
 
 ## Key Features
 
@@ -480,13 +447,4 @@ Runner treats debug kind specially for web preview/VSIX.
 
 Containerized deployment with Nginx reverse proxy
 
-### Global Attributes
-
-- **PyOps**: "IT Infrastructure Python Leveraging Tool"
-- **Web**: Mounts routers & static files
-- **Jobs**: States tracked with PID & logs
-- **Services**: Use listener.listen() or poll()
-- **Config**: Loads from etc/pyops.json
-- **Tests**: Store runtime in .cache/
-- **VSIX Tests**: VSIX tests use Mocha with >80% coverage
-- **VSIX**: Provides pyops-manager & pyops-monitor trees
+For detailed insights into specific components, configurations, and implementations, refer to the insights documentation and LLM context.

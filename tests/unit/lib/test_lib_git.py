@@ -58,7 +58,7 @@ def mock_logging():
         yield mock_instance
 
 class TestPullIfNeeded:
-    def test_pull_if_needed_happy_path(self, mock_repo, mock_subprocess, mock_files_conf, mock_logging, mock_fcntl):
+    def test_pull_happy_path(self, mock_repo, mock_subprocess, mock_files_conf, mock_logging, mock_fcntl):
         mock_run, mock_check = mock_subprocess
         # Calls: _check remote, direct check_output tag, _check status, _check branch, _check pre, _check ls-remote, run fetch, _check post, _check log, _check ls-tree
         mock_check.side_effect = [
@@ -82,7 +82,7 @@ class TestPullIfNeeded:
                 return subprocess.CompletedProcess(args=cmd, returncode=0)
             return subprocess.CompletedProcess(args=cmd, returncode=0)
         mock_run.side_effect = run_side_effect
-        result = git.pull_if_needed(mock_repo)
+        result = git.pull(mock_repo)
         assert result is True
         mock_logging.info.assert_any_call('Reset test_set to origin/HEAD: new commit msg')
         assert any(call.args[0] == ['git', 'fetch'] for call in mock_run.call_args_list)
@@ -93,7 +93,7 @@ class TestPullIfNeeded:
         assert checkout_calls[0].args[0] == ['git', 'checkout', 'HEAD', '--', 'file1.py', 'file2.html', 'newfile.py']
         mock_logging.info.assert_any_call('Added 3 new files to test_set working directory')
 
-    def test_pull_if_needed_no_changes(self, mock_repo, mock_subprocess, mock_files_conf, mock_logging):
+    def test_pull_no_changes(self, mock_repo, mock_subprocess, mock_files_conf, mock_logging):
         mock_run, mock_check = mock_subprocess
         # Calls: _check remote, direct tag, _check status, _check branch, _check pre, _check ls-remote (match), no fetch
         mock_check.side_effect = [
@@ -105,17 +105,17 @@ class TestPullIfNeeded:
             b'abc123\n',  # ls-remote
         ]
         mock_run.side_effect = lambda cmd, *args, **kwargs: subprocess.CompletedProcess(args=cmd, returncode=0)
-        result = git.pull_if_needed(mock_repo)
+        result = git.pull(mock_repo)
         assert result is True
 
-    def test_pull_if_needed_no_remote(self, mock_repo, mock_subprocess, mock_files_conf, mock_logging):
+    def test_pull_no_remote(self, mock_repo, mock_subprocess, mock_files_conf, mock_logging):
         mock_run, mock_check = mock_subprocess
         mock_check.side_effect = [b'']  # remote _check empty
-        result = git.pull_if_needed(mock_repo)
+        result = git.pull(mock_repo)
         assert result is False
         mock_logging.info.assert_called_with('No remote for test_set; skipping reset')
 
-    def test_pull_if_needed_on_tag(self, mock_repo, mock_subprocess, mock_files_conf, mock_logging):
+    def test_pull_on_tag(self, mock_repo, mock_subprocess, mock_files_conf, mock_logging):
         mock_run, mock_check = mock_subprocess
         # Calls: _check remote, direct tag non-empty, _check describe succeeds
         mock_check.side_effect = [
@@ -124,11 +124,11 @@ class TestPullIfNeeded:
             b'tag123\n',  # describe
         ]
         mock_run.side_effect = lambda cmd, *args, **kwargs: subprocess.CompletedProcess(args=cmd, returncode=0)
-        result = git.pull_if_needed(mock_repo)
+        result = git.pull(mock_repo)
         assert result is False
         mock_logging.info.assert_called_with('On tag in test_set; skipping reset')
 
-    def test_pull_if_needed_dirty_repo(self, mock_repo, mock_subprocess, mock_files_conf):
+    def test_pull_dirty_repo(self, mock_repo, mock_subprocess, mock_files_conf):
         # Note: Code always resets soft, preserves unstaged
         mock_run, mock_check = mock_subprocess
         # Calls: _check remote, direct tag, _check status dirty, _check branch, _check pre, _check ls-remote, run fetch, _check post, _check log, _check ls-tree (no new)
@@ -144,11 +144,11 @@ class TestPullIfNeeded:
             b'file1.py\n',  # ls-tree
         ]
         mock_run.side_effect = lambda cmd, *args, **kwargs: subprocess.CompletedProcess(args=cmd, returncode=0)
-        result = git.pull_if_needed(mock_repo)
+        result = git.pull(mock_repo)
         assert result is True
         # Reset still called despite dirty
 
-    def test_pull_if_needed_retry_success(self, mock_repo, mock_subprocess, mock_files_conf, mock_logging):
+    def test_pull_retry_success(self, mock_repo, mock_subprocess, mock_files_conf, mock_logging):
         mock_run, mock_check = mock_subprocess
         # Calls: _check remote, direct tag, _check status, _check branch, _check pre, _check ls-remote, run fetch (retry 2 fail, 3 success), _check post, _check log, _check ls-tree
         mock_check.side_effect = [
@@ -174,12 +174,12 @@ class TestPullIfNeeded:
                 return subprocess.CompletedProcess(args=cmd, returncode=0)
             return subprocess.CompletedProcess(args=cmd, returncode=0)
         mock_run.side_effect = run_side_effect
-        result = git.pull_if_needed(mock_repo)
+        result = git.pull(mock_repo)
         assert result is True
         assert fetch_count[0] == 3
         assert mock_logging.warning.call_count == 2  # 2 retries
 
-    def test_pull_if_needed_final_failure(self, mock_repo, mock_subprocess, mock_files_conf, mock_logging):
+    def test_pull_final_failure(self, mock_repo, mock_subprocess, mock_files_conf, mock_logging):
         mock_run, mock_check = mock_subprocess
         mock_check.side_effect = [
             b'origin\n',  # remote
@@ -198,11 +198,11 @@ class TestPullIfNeeded:
             return subprocess.CompletedProcess(args=cmd, returncode=0)
         mock_run.side_effect = run_side_effect
         with pytest.raises(subprocess.CalledProcessError):
-            git.pull_if_needed(mock_repo)
+            git.pull(mock_repo)
         assert fetch_count[0] == 3
         mock_logging.error.assert_called()
 
-    def test_pull_if_needed_new_file_failure(self, mock_repo, mock_subprocess, mock_files_conf, mock_logging):
+    def test_pull_new_file_failure(self, mock_repo, mock_subprocess, mock_files_conf, mock_logging):
         mock_run, mock_check = mock_subprocess
         # Calls: _check remote, direct tag, _check status, _check branch, _check pre, run fetch, _check post, _check log, _check ls-tree
         mock_check.side_effect = [
@@ -224,11 +224,11 @@ class TestPullIfNeeded:
                 raise subprocess.CalledProcessError(1, cmd, output=b'', stderr='checkout fail')
             return subprocess.CompletedProcess(args=cmd, returncode=0)
         mock_run.side_effect = run_side_effect
-        result = git.pull_if_needed(mock_repo)
+        result = git.pull(mock_repo)
         assert result is True
         mock_logging.warning.assert_called()
 
-    def test_pull_if_needed_skip_fetch_match(self, mock_repo, mock_subprocess, mock_files_conf, mock_logging):
+    def test_pull_skip_fetch_match(self, mock_repo, mock_subprocess, mock_files_conf, mock_logging):
         mock_run, mock_check = mock_subprocess
         mock_check.side_effect = [
             b'origin\n',  # remote
@@ -238,13 +238,13 @@ class TestPullIfNeeded:
             b'abc123\n',  # pre_head
             b'abc123 abc123\n',  # ls-remote --heads origin main
         ]
-        result = git.pull_if_needed(mock_repo)
+        result = git.pull(mock_repo)
         assert result is True
         # No fetch called
         assert not any('fetch' in str(call) for call in mock_run.call_args_list)
         mock_logging.debug.assert_any_call('Up-to-date: local HEAD matches origin/main for test_set')
 
-    def test_pull_if_needed_skip_fetch_mismatch(self, mock_repo, mock_subprocess, mock_files_conf, mock_logging):
+    def test_pull_skip_fetch_mismatch(self, mock_repo, mock_subprocess, mock_files_conf, mock_logging):
         mock_run, mock_check = mock_subprocess
         # Calls: _check remote, direct tag, _check status, _check branch, _check pre, _check ls-remote, run fetch, _check post, _check log, _check ls-tree
         mock_check.side_effect = [
@@ -260,11 +260,11 @@ class TestPullIfNeeded:
             b'file1.py\n',  # ls-tree
         ]
         mock_run.side_effect = lambda cmd, *args, **kwargs: subprocess.CompletedProcess(args=cmd, returncode=0)
-        result = git.pull_if_needed(mock_repo)
+        result = git.pull(mock_repo)
         assert result is True
         assert any('fetch' in str(call) for call in mock_run.call_args_list)
 
-    def test_pull_if_needed_skip_fetch_lsremote_error(self, mock_repo, mock_subprocess, mock_files_conf, mock_logging):
+    def test_pull_skip_fetch_lsremote_error(self, mock_repo, mock_subprocess, mock_files_conf, mock_logging):
         mock_run, mock_check = mock_subprocess
         # Calls: _check remote, direct tag, _check status, _check branch, _check pre, _check ls-remote fails, run fetch, _check post, _check log, _check ls-tree
         mock_check.side_effect = [
@@ -279,14 +279,14 @@ class TestPullIfNeeded:
             b'file1.py\n',  # ls-tree
         ]
         mock_run.side_effect = lambda cmd, *args, **kwargs: subprocess.CompletedProcess(args=cmd, returncode=0)
-        result = git.pull_if_needed(mock_repo)
+        result = git.pull(mock_repo)
         assert result is True
         assert any('fetch' in str(call) for call in mock_run.call_args_list)
         mock_logging.debug.assert_any_call('ls-remote failed for test_set; proceeding to fetch')
 
-    def test_pull_if_needed_no_git_dir(self, tmp_path, mock_files_conf):
+    def test_pull_no_git_dir(self, tmp_path, mock_files_conf):
         repo = str(tmp_path / 'no_git')
-        result = git.pull_if_needed(repo)
+        result = git.pull(repo)
         assert result is False
 
 class TestRepoPathAndFiles:
@@ -479,7 +479,7 @@ class TestCommitOps:
         # For perform: direct tag empty (no describe)
         mock_check.side_effect = [b'', b'origin\n']  # tag, remote
         file_path = os.path.join(mock_repo, 'test.py')
-        with patch('app.lib.git.pull_if_needed', return_value=True):
+        with patch('app.lib.git.pull', return_value=True):
             git.perform_git_add_commit_push(mock_repo, file_path, 'test commit')
             # Assert add, commit, push called
             assert any(call.args[0] == ['git', 'add', 'test.py'] for call in mock_run.call_args_list)
@@ -493,7 +493,7 @@ class TestCommitOps:
             b'tag123\n',  # tag
             b'tag123\n',  # describe
         ]
-        with patch('app.lib.git.pull_if_needed', return_value=True):
+        with patch('app.lib.git.pull', return_value=True):
             file_path = os.path.join(mock_repo, 'test.py')
             with pytest.raises(git.GitConflictError, match='Cannot commit on a tag.'):
                 git.perform_git_add_commit_push(mock_repo, file_path, 'test')
@@ -503,7 +503,7 @@ class TestCommitOps:
         # For batch: direct tag1 empty
         mock_check.side_effect = [b'', b'origin\n']  # tag, remote
         rel_files = ['file1.py', 'file2.html']
-        with patch('app.lib.git.pull_if_needed', return_value=True):
+        with patch('app.lib.git.pull', return_value=True):
             git.batch_commit(mock_repo, 'batch msg', rel_files)
             assert any(call.args[0] == ['git', 'add', 'file1.py', 'file2.html'] for call in mock_run.call_args_list)
             assert any(call.args[0] == ['git', 'commit', '-m', 'batch msg'] for call in mock_run.call_args_list)
@@ -513,7 +513,7 @@ class TestCommitOps:
         mock_run, mock_check = mock_subprocess
         mock_check.side_effect = [b'', b'origin\n']  # tag, remote
         rel_files = ['file1.py', 'file2.html']
-        with patch('app.lib.git.pull_if_needed', return_value=True):
+        with patch('app.lib.git.pull', return_value=True):
             git.batch_commit(mock_repo, 'batch msg', rel_files)
             # Assert single add call with both files
             assert any(call.args[0] == ['git', 'add', 'file1.py', 'file2.html'] for call in mock_run.call_args_list)
@@ -525,7 +525,7 @@ class TestCommitOps:
         mock_check.side_effect = [b'origin\n']  # remote for push check
         # No tag check in delete, only pull (patched)
         file_path = os.path.join(mock_repo, 'test.py')
-        with patch('app.lib.git.pull_if_needed', return_value=True):
+        with patch('app.lib.git.pull', return_value=True):
             git.delete_file_and_commit(mock_repo, file_path, 'delete msg')
             assert any(call.args[0] == ['git', 'rm', '-f', 'test.py'] for call in mock_run.call_args_list)
             assert any(call.args[0] == ['git', 'commit', '-m', 'delete msg'] for call in mock_run.call_args_list)
@@ -535,7 +535,7 @@ class TestCommitOps:
         mock_run, mock_check = mock_subprocess
         mock_check.side_effect = [b'']  # _check git remote empty
         file_path = os.path.join(mock_repo, 'test.py')
-        with patch('app.lib.git.pull_if_needed', return_value=True):
+        with patch('app.lib.git.pull', return_value=True):
             git.delete_file_and_commit(mock_repo, file_path, 'delete msg')
             assert any(call.args[0] == ['git', 'rm', '-f', 'test.py'] for call in mock_run.call_args_list)
             assert any(call.args[0] == ['git', 'commit', '-m', 'delete msg'] for call in mock_run.call_args_list)

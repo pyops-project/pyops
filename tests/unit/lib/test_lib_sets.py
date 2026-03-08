@@ -245,10 +245,10 @@ class TestSets:
         testset_dir.mkdir()
         (testset_dir / ".git").mkdir()
         with patch('app.lib.git.get_repo_path') as mock_get_repo_path, \
-             patch('app.lib.git.pull_if_needed') as mock_pull_if_needed:
+             patch('app.lib.git.pull') as mock_pull:
             mock_get_repo_path.return_value = str(testset_dir)
-            mock_pull_if_needed.return_value = True
+            mock_pull.return_value = True
             result = sets.pull_set(str(self.git_dir), "testset")
         assert result is True
         mock_get_repo_path.assert_called_once_with("testset")
-        mock_pull_if_needed.assert_called_once_with(str(testset_dir))
+        mock_pull.assert_called_once_with(str(testset_dir))

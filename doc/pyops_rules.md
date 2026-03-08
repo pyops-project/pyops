@@ -2,16 +2,16 @@
 
 ## Core Concepts
 
-- **Sets**: Remote repositories grouping scriptlets (e.g., "myops"). Managed via Sets Manager (clone from URL, switch branches, remove).
+- **Sets**: Remote repositories grouping scriptlets (e.g., "myops").
 - **Scriptlets**: Python files for execution:
   - **Tasks**: One-off runs (e.g., data fetch/process).
   - **Services**: Persistent handlers for requests (e.g., from UI/API).
   - **Libraries**: Reusable code (imported via directives).
 - **Controllers**: Python stubs defining UI structure and routing to services (e.g., /controller/{set}/{name}).
 - **Views**: HTML fragments (head for styles/JS, menu for nav, body for content) rendered by controllers.
-- **Markdown**: Documentation files in sets, editable via editor with preview.
-- **JS Libraries**: JavaScript modules for client-side code, served via /scriptlet/jslib/{set}/{name}, edited in Ace JS mode.
-- **Execution Model**: Isolated global dict (`glob`) with:
+- **Markdown**: Documentation files in sets.
+- **JS Libraries**: JavaScript modules for client-side code.
+- **Execution Model**: Jobs execute in isolated per-set venv subprocesses with global dict (`glob`) containing:
   - `control`: Pyops.Control for API calls (e.g., `control.job.list()` returns dict of jobs).
   - `listener`: For services (inbound requests; see Services).
   - `"__name__": "__main__" (enables `if __name__ == "__main__":` idiom: executes main logic in PyOps jobs; skips when imported locally for pytest testing without running main block).`
@@ -32,12 +32,8 @@
   - Git: Contains '://' or starts with 'git@'
   - Pip: Plain string not starting with '{' and not containing '::'
   - Library: Starts with '{' or contains '::'
-- **Param**: Optional pre-exec code string (enqueue via UI/API; supports directives). Vars/functions available in main.
-- **Debug Mode**: Enqueue as "debug" (uses draft files, no auto-cleanup). Use '#>AWAIT_DEBUG' in param to wait for debugger attach; debugpy listens on configured port.
-- **Enqueue/Run**: Via web UI (e.g., /scriptlet/manager.html) or API (PUT /scriptlet/job/item {set, name, kind="task"/"service"/"debug", param, drop_done, max_retries}); manage jobs in VSIX pyops-monitor. For task jobs, if max_retries > 0, the job will retry up to max_retries + 1 times on failure, sleeping 60 seconds between retries.
-- **Scheduling**: PUT /scriptlet/schedule/item {set, name, kind="task", schedule="cron_expr" (e.g., "* * * * *"), param, drop_done, max_retries}. Scheduled tasks follow the same retry behavior as enqueued tasks.
-- **Monitoring**: VSIX pyops-monitor or /scriptlet/monitor for jobs/schedules by state. Download logs/files.
-- **API Access**: HTTP to `/controller/{set}/{name}/{rest:path}` proxies (via controller globals service name) to service listener with ZMQ msg dict: `{"type": METHOD, "path": "/{rest:path}", **all query_params (e.g. ?cmd=run → "cmd": "run"), "data": body (parsed to dict if application/json, str if text/*, bytes otherwise), "data_type": "json"/"text"/"binary"/"none"}`. Convention: `/q?cmd=...` GET or POST `/q` body.
+- **Param**: Optional pre-exec code string (supports directives). Vars/functions available in main.
+
 
 ## Execution environment
 
@@ -49,7 +45,7 @@ Execution environment provides these globals:
 
 ## Scriptlet Types
 
-Precreate via VSIX; exec order: param → libraries (directives) → main.
+Exec order: param → libraries (directives) → main.
 
 ### Tasks (One-Off)
 Use: Run code once, produce output/files.
@@ -72,14 +68,10 @@ def main():
     # control: e.g., control.job.list()
     # workspace: job output dir
 
-    # Example: HTTP request
-    response = requests.get("https://api.example.com/data")
-    data = response.json()
-
     # Write output
     output_path = os.path.join(workspace, "result.txt")
     with open(output_path, "w") as f:
-        f.write(str(data))
+        f.write("Task completed")
 
     # Example: API call via control
     jobs = control.job.list()  # Returns dict
@@ -90,16 +82,6 @@ if __name__ == "__main__":
     main()
 ```
 
-Param Example (enqueue string):
-```python
-# Pre-setup with deps
-# #!pandas
-import pandas as pd
-df = pd.DataFrame({"col": [1, 2]})
-MY_DF = df  # Available in main
-```
-
-Run: Enqueue kind="task" via VSIX/API; outputs to workspace/logs; drop_done auto-removes.
 
 ### Services (Persistent)
 Service Tasks (kind="service" jobs) loop with listener for inbound requests.
@@ -290,7 +272,6 @@ if __name__ == "__main__":
   logger.info("Service stopped")
 ```
 
-Run: Enqueue kind="service" via VSIX/API; auto-restarts (<3 failures). Requests routed from UI/API.
 
 ### Libraries (Reusable)
 Use: Shared functions, imported via directives.
@@ -318,19 +299,15 @@ Template (`jslibrary/{name}.js`):
 // JS Library: Client-side module
 console.log('Hello from JS lib');
 
-// Available via GET /scriptlet/jslib/{set}/{name}
 ```
 
-Served: GET `/scriptlet/jslib/{set}/{name}` returns JS content (application/javascript).
-
-Edited: Via VSIX `editor_jslibrary`, Ace JS mode.
 
 ## Controllers and Views
 
 ### Controllers (UI Stubs)
 Use: Define UI and route to service.
 
-Precreate `controller/{name}.py` via VSIX (committed only).
+Create `controller/{name}.py`.
 
 Template:
 ```python
@@ -344,15 +321,10 @@ body = "my_body"               # Body view name
 name = "My Controller Title"   # Menu display
 ```
 
-Run:
-- UI: GET /controller/{set}/{name} (renders base HTML + views; Bootstrap/jQuery/Material Icons).
-- API: `/{set}/{name}/{rest:path}` proxies ALL methods (exec controller for service name) to service via ZMQ: path=/{rest:path}, all query_params as keys (e.g. cmd), body parsed to data/data_type by Content-Type. E.g., `/q?cmd=...`.
-- Menu: GET /menu lists controllers (uses "name").
-
 In views, use {{SET}}/{{NAME}} for dynamic routes ({{NAME}} = basename, e.g., 'os-dashboard-controller').
 
 ### Views (HTML Fragments)
-Precreate `view/{name}.html` via VSIX (committed only; raw HTML).
+Create `view/{name}.html` (raw HTML).
 
 Guidelines:
 - Global: Bootstrap 5 with automatic light/dark theme switching based on system preference (prefers-color-scheme), jQuery, Material Icons (e.g., `<i class="material-icons">add</i>`). No manual toggle buttons are provided; themes switch automatically.
@@ -492,8 +464,6 @@ Content with buttons/modals.
 - **Error Handling**: Services return {"status": "error", "message": "..."}; tasks use `logger.error()` for errors. Prefer `logging` over `print` for production code to enable level-based filtering and better error tracking.
 - **Security**: Sanitize untrusted params/cmds in services.
 - **Performance**: Efficient service loops (listener polls ~1s); keep tasks short.
-- **Cline Tips**: Provide full context (file + prompt); request iterative changes (e.g., "Refine previous: add logging"); ensure directives commented post-gen.
-- **Debug**: Use VSIX debug for quick tests; check logs in monitor.
 - **Views**: Rely on Bootstrap defaults; dynamic {{SET}}/{{NAME}}; JS in head only.
 
 ### Local Testing with Pytest
@@ -532,7 +502,6 @@ def test_main(capsys):
 
 Run: `pytest -v` (mock `control`/`listener`/`workspace` as needed for services).
 
-**Cline Usage**: Prompt "Refactor to `if __name__ == '__main__': main()` pattern for local pytest compatibility."
 
 ## Logging Best Practices
 

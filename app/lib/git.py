@@ -93,7 +93,7 @@ def get_git_pull_interval() -> int:
     """
     return files.conf_runner()["git_pull_interval"]
 
-def pull_if_needed(repo: str) -> bool:
+def pull(repo: str) -> bool:
     """Syncs to origin/HEAD via soft reset if clean; skips if dirty to preserve unstaged changes.
     
     Args:

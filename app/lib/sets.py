@@ -209,5 +209,5 @@ def pull_set(git_dir, name):
 
     from . import git
     repo = git.get_repo_path(name)
-    git.pull_if_needed(repo)
+    git.pull(repo)
     return True
