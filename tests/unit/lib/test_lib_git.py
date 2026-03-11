@@ -458,20 +458,7 @@ class TestContentOps:
         with open(file_path, 'r') as f:
             assert f.read() == content
 
-    def test_write_content_invalidates_cache(self, mock_repo, mock_files_conf):
-        content = 'written content'
-        with patch('os.path.exists', return_value=True), \
-             patch('builtins.open', mock_open()) as mock_file, \
-             patch('app.lib.git.compute_set_unstaged') as mock_compute, \
-             patch('app.lib.git.repo_lock') as mock_lock:
-            mock_lock.return_value.__enter__ = MagicMock()
-            mock_lock.return_value.__exit__ = MagicMock()
-            mock_compute.return_value = {'script': False}
-            git.write_content(mock_repo, 'script', 'task', content)
-            # Now call has_unstaged_changes, should call compute since cache invalidated
-            result = git.has_unstaged_changes(mock_repo, 'script', 'task')
-            mock_compute.assert_called_once()
-            assert result is False
+
 
 class TestCommitOps:
     def test_perform_git_add_commit_push(self, mock_repo, mock_subprocess, mock_files_conf, mock_fcntl, mock_logging):
@@ -596,65 +583,41 @@ class TestStatusAndRollback:
                     pass
 
     def test_has_unstaged_changes_clean(self, mock_repo, mock_subprocess, mock_files_conf):
-        git._status_cache.clear()
         mock_run, mock_check = mock_subprocess
-        with patch('os.listdir', return_value=['script.task.py']):
-            mock_check.return_value = b'  script.task.py\n'  # clean
-            result = git.has_unstaged_changes(mock_repo, 'script', 'task')
-            assert result is False
+        mock_check.return_value = b''  # clean
+        result = git.has_unstaged_changes(mock_repo, 'script', 'task')
+        assert result is False
 
     def test_has_unstaged_changes_dirty(self, mock_repo, mock_subprocess, mock_files_conf):
-        git._status_cache.clear()
         mock_run, mock_check = mock_subprocess
-        with patch('os.listdir', return_value=['script.task.py']):
-            mock_check.return_value = b' M script.task.py\n'  # modified
-            result = git.has_unstaged_changes(mock_repo, 'script', 'task')
-            assert result is True
+        mock_check.return_value = b' M script.task.py\n'  # modified
+        result = git.has_unstaged_changes(mock_repo, 'script', 'task')
+        assert result is True
 
     def test_has_unstaged_changes_error(self, mock_repo, mock_subprocess, mock_files_conf):
-        git._status_cache.clear()
         mock_run, mock_check = mock_subprocess
-        with patch('os.listdir', return_value=['script.task.py']):
-            mock_check.side_effect = subprocess.CalledProcessError(128, [], stderr='fatal error')
-            result = git.has_unstaged_changes(mock_repo, 'script', 'task')
-            assert result is False
+        mock_check.side_effect = subprocess.CalledProcessError(128, [], stderr='fatal error')
+        result = git.has_unstaged_changes(mock_repo, 'script', 'task')
+        assert result is False
 
     def test_has_unstaged_changes_new_file(self, mock_repo, mock_subprocess, mock_files_conf):
-        git._status_cache.clear()
         mock_run, mock_check = mock_subprocess
-        with patch('os.listdir', return_value=['newfile.task.py']):
-            mock_check.return_value = b'?? newfile.task.py\n'  # untracked
-            result = git.has_unstaged_changes(mock_repo, 'newfile', 'task')
-            assert result is True
+        mock_check.return_value = b'?? newfile.task.py\n'  # untracked
+        result = git.has_unstaged_changes(mock_repo, 'newfile', 'task')
+        assert result is True
 
     def test_has_unstaged_changes_unexpected_stderr(self, mock_repo, mock_subprocess, mock_files_conf):
-        git._status_cache.clear()
         mock_run, mock_check = mock_subprocess
-        with patch('os.listdir', return_value=['script.task.py']):
-            mock_check.side_effect = subprocess.CalledProcessError(1, [], stderr='pager error message')
-            result = git.has_unstaged_changes(mock_repo, 'script', 'task')
-            assert result is False
+        mock_check.side_effect = subprocess.CalledProcessError(1, [], stderr='pager error message')
+        result = git.has_unstaged_changes(mock_repo, 'script', 'task')
+        assert result is False
 
     def test_has_unstaged_changes_untracked_file(self, mock_repo, mock_subprocess, mock_files_conf):
-        git._status_cache.clear()
         mock_run, mock_check = mock_subprocess
-        with patch('os.listdir', return_value=['script.task.py']):
-            mock_check.return_value = b'?? script.task.py\n'  # untracked
-            result = git.has_unstaged_changes(mock_repo, 'script', 'task')
-            assert result is True
+        mock_check.return_value = b'?? script.task.py\n'  # untracked
+        result = git.has_unstaged_changes(mock_repo, 'script', 'task')
+        assert result is True
 
-    def test_compute_set_unstaged(self, mock_repo, mock_subprocess, mock_files_conf):
-        mock_run, mock_check = mock_subprocess
-        with patch('os.listdir', return_value=['script.task.py', 'view.html', 'README.md', 'new.task.py']):
-            mock_check.return_value = b' M view.html\n?? new.task.py\n'
-            result = git.compute_set_unstaged(mock_repo)
-            assert result == {'script': False, 'view': True, 'README': False, 'new': True}
 
-    def test_compute_set_unstaged_error(self, mock_repo, mock_subprocess, mock_files_conf):
-        mock_run, mock_check = mock_subprocess
-        mock_check.side_effect = subprocess.CalledProcessError(1, [])
-        with patch('os.listdir', return_value=['script.task.py']):
-            result = git.compute_set_unstaged(mock_repo)
-            assert result == {'script': False}
 
 # Additional edge cases can be added as needed

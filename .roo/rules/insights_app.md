@@ -174,21 +174,20 @@ graph TD
 - Unique lock per set prevents concurrent access
 - Commit-push checks remotes; skip if no remote
 
-#### Status Caching
+#### Status Detection
+- `has_unstaged_changes(repo, name, type_) -> bool`: Lock-free `git status --porcelain --untracked-files=all -- {rel_path}`; returns `bool(output.strip())`.
+- Retries: 3 attempts (2s sleep) on `CalledProcessError`.
+- No cache, batch compute, or repo_lock.
+
 ```mermaid
 flowchart TD
-    A[Refresh] --> B[list: FS only]
-    B --> C[Loop /status per scriptlet]
-    C --> D[has_unstaged_changes]
-    D --> E{Set cache hit?}
-    E -->|Yes| F[Return cached]
-    E -->|No| G[repo_lock]
-    G --> H[git status --porcelain]
-    H --> I[Parse unstaged]
-    I --> J[Cache & return]
+    A[has_unstaged_changes] --> B[get rel_path]
+    B --> C[3x: git status --porcelain -- rel_path]
+    C --> D{non-empty}
+    D -->|Yes| E[return True]
+    D -->|No| F[continue]
+    C -->|CalledProcessError| G[sleep(2); continue or return False]
 ```
-
-Global attributes: Cache under repo_lock(); TTL auto-refreshes on writes/pulls; FS-based for list_scriptlets().
 
 ### ZMQ Control
 

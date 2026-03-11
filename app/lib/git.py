@@ -2,13 +2,6 @@ import os
 import time
 from typing import Dict
 
-_status_cache: Dict[str, tuple[float, Dict[str, bool]]] = {}
-
-def invalidate_status_cache(repo: str) -> None:
-    """Invalidate unstaged status cache for repo."""
-    _status_cache.pop(repo, None)
-    logger.debug(f"Invalidated status cache for {os.path.basename(repo)}")
-
 import os.path
 import shutil
 import subprocess
@@ -168,7 +161,6 @@ def pull(repo: str) -> bool:
             else:
                 logger.debug(f"No changes reset for {os.path.basename(repo)}")
 
-            invalidate_status_cache(repo)
             return True
         
         except subprocess.CalledProcessError as e:
@@ -352,51 +344,7 @@ def list_scriptlet_files(repo: str, name: str) -> List[str]:
             continue
     return files
 
-def compute_set_unstaged(repo: str) -> Dict[str, bool]:
-    """Batch unstaged status for all scriptlets via 1 git status."""
-    # Candidate scriptlets (matches list_scriptlets)
-    scriptlets: Dict[str, str] = {}
-    for filename in os.listdir(repo):
-        if filename.endswith(('.py', '.html', '.js')) or filename == 'README.md':
-            try:
-                name = get_name_from_file(filename)
-                scriptlets[name] = infer_type_from_filename(filename)
-            except ValueError:
-                continue
-    
-    # 1 subprocess: porcelain v1 (XY path | ?? path)
-    try:
-        status_out = subprocess.check_output(
-            ['git', 'status', '--porcelain', '--untracked-files=all'],
-            cwd=repo
-        ).decode('utf-8', errors='ignore')
-    except subprocess.CalledProcessError:
-        return {name: False for name in scriptlets}
-    
-    unstaged_names = set()
-    for line in status_out.splitlines():
-        if len(line) < 3:
-            continue
-        if line.startswith('?? '):
-            path = line[3:]
-            try:
-                name = get_name_from_file(os.path.basename(path))
-                if name in scriptlets:
-                    unstaged_names.add(name)
-            except ValueError:
-                pass
-        else:
-            # XY path (X=index[0], Y=worktree[1])
-            if len(line) >= 3 and line[1] != ' ':  # Y != ' '
-                path = line[3:]
-                try:
-                    name = get_name_from_file(os.path.basename(path))
-                    if name in scriptlets:
-                        unstaged_names.add(name)
-                except ValueError:
-                    pass
-    
-    return {name: name in unstaged_names for name in scriptlets}
+
 
 def check_name_unique(repo: str, name: str) -> bool:
     """Checks if name is unique (no existing {name}.*.py or {name}.html).
@@ -473,7 +421,6 @@ def write_content(repo: str, name: str, type_: str, content: str) -> None:  # Re
         file_path = get_file_path(repo, name, type_)
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(content)
-        invalidate_status_cache(repo)
 
 def perform_git_add_commit_push(repo: str, file_path: str, msg: str) -> None:
     """Adds file, commits, pushes (checks remote and not tag).
@@ -509,7 +456,6 @@ def perform_git_add_commit_push(repo: str, file_path: str, msg: str) -> None:
         remotes = _check(["git", "remote"], repo)
         if remotes:
             _call(["git", "push"], repo)
-    invalidate_status_cache(repo)
 
 def batch_commit(repo: str, msg: str, rel_files: List[str] = None) -> None:
     """Batch adds files/all, commits, pushes (checks remote and not tag).
@@ -547,7 +493,6 @@ def batch_commit(repo: str, msg: str, rel_files: List[str] = None) -> None:
         remotes = _check(["git", "remote"], repo)
         if remotes:
             _call(["git", "push"], repo)
-    invalidate_status_cache(repo)
 
 def delete_file_and_commit(repo: str, file_path: str, msg: str) -> None:
     """Removes file, commits, pushes.
@@ -570,7 +515,6 @@ def delete_file_and_commit(repo: str, file_path: str, msg: str) -> None:
         remotes = _check(["git", "remote"], repo)
         if remotes:
             _call(["git", "push"], repo)
-        invalidate_status_cache(repo)
 
 def get_repo_status(set: str) -> Dict[str, any]:
     """Gets repo branch and tag status.
@@ -622,7 +566,6 @@ def rollback_staged(set: str, name: str, type_: str) -> None:
     git_base = get_git_base()
     with repo_lock(git_base, set):
         _call(["git", "checkout", "HEAD", "--", rel_path], repo)
-    invalidate_status_cache(repo)
 
 def rollback_committed(set: str, name: str, type_: str) -> None:
     """Directly checks out HEAD (discards unstaged).
@@ -641,18 +584,20 @@ def rollback_committed(set: str, name: str, type_: str) -> None:
     git_base = get_git_base()
     with repo_lock(git_base, set):
         _call(["git", "checkout", "HEAD", "--", rel_path], repo)
-    invalidate_status_cache(repo)
 
 
 def has_unstaged_changes(repo: str, name: str, type_: str) -> bool:
-    git_base = get_git_base()
-    set_name = os.path.basename(repo)
-    now = time.time()
-    with repo_lock(git_base, set_name):
-        cache_entry = _status_cache.get(repo)
-        if cache_entry is None or now - cache_entry[0] > 10.0:  # TTL 10s
-            statuses = compute_set_unstaged(repo)
-            _status_cache[repo] = (now, statuses)
-        else:
-            statuses = cache_entry[1]
-    return statuses.get(name, False)
+    file_path = get_file_path(repo, name, type_)
+    rel_path = os.path.relpath(file_path, repo)
+    for attempt in range(3):
+        try:
+            status_out = subprocess.check_output(
+                ['git', 'status', '--porcelain', '--untracked-files=all', '--', rel_path],
+                cwd=repo
+            ).decode('utf-8', errors='ignore').strip()
+            return bool(status_out)
+        except subprocess.CalledProcessError:
+            if attempt < 2:
+                time.sleep(2)
+                continue
+            return False
