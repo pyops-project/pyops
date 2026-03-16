@@ -413,25 +413,23 @@ class TestDaemon:
         mock_process.join.assert_called_once_with(timeout=1.0)
         # assert mock_session.call_count == 1  # manual simulation
 
-    @patch('app.job_runner._conf_users', {"owner": {"debug_port": 5678}})
-    def test_validate_debug_prerequisites_valid(self):
-        from app.runner import validate_debug_prerequisites
-        port = validate_debug_prerequisites("job_id", "owner")
+    @patch('app.lib.files.conf_users', return_value={"owner": {"debug_port": 5678}})
+    def test_validate_debug_prerequisites_valid(self, mock_conf_users):
+        from app.lib.job import validate_debug_prerequisites
+        port = validate_debug_prerequisites("owner")
         assert port == 5678
 
-    @patch('app.job_runner._conf_users', {"owner": {}})
-    def test_validate_debug_prerequisites_no_port(self):
-        from app.runner import validate_debug_prerequisites
+    @patch('app.lib.files.conf_users', return_value={"owner": {}})
+    def test_validate_debug_prerequisites_no_port(self, mock_conf_users):
+        from app.lib.job import validate_debug_prerequisites
         with pytest.raises(Exception, match="Invalid or missing debug_port for user owner"):
-            validate_debug_prerequisites("job_id", "owner")
+            validate_debug_prerequisites("owner")
 
-    @patch('app.job_runner._conf_users', {"owner": {"debug_port": 1000}})
-    def test_validate_debug_prerequisites_invalid_port(self):
-        from app.runner import validate_debug_prerequisites
+    @patch('app.lib.files.conf_users', return_value={"owner": {"debug_port": 1000}})
+    def test_validate_debug_prerequisites_invalid_port(self, mock_conf_users):
+        from app.lib.job import validate_debug_prerequisites
         with pytest.raises(Exception, match="Invalid or missing debug_port for user owner"):
-            validate_debug_prerequisites("job_id", "owner")
-
-
+            validate_debug_prerequisites("owner")
 
     def test_enqueue_debug_mark_existing_for_cancellation(self, mock_db):
         from app.lib.runner import enqueue
@@ -531,3 +529,4 @@ class TestDaemon:
                 mock_sleep.assert_not_called()
             finally:
                 session.commit = original_commit
+

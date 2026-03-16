@@ -88,13 +88,9 @@ class Config:
             logger.debug("Accessing conf_log, _raw_conf type: %s", type(self._raw_conf))
             if self._raw_conf is None:
                 raise ValueError("Config not initialized. Call Config.init(conf_path) first.")
-            # Log section with conditional paths
+            # Log section - no file paths, only loglevel
             log = {"loglevel": "info"}
             if "log" in self._raw_conf:
-                if "access" in self._raw_conf["log"]:
-                    log["access"] = self._raw_conf["log"]["access"]
-                if "info" in self._raw_conf["log"]:
-                    log["info"] = self._raw_conf["log"]["info"]
                 log["loglevel"] = self._raw_conf["log"].get("loglevel", "info")
             logger.debug("Conf log accessed successfully")
             return log

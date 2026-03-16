@@ -237,9 +237,9 @@ def test_config_log_with_log_section(tmp_path):
         f.write(mock_content)
     config = Config.init(str(conf_path))
     result = config.log()
-    assert result["info"] == "/custom/info.log"
     assert result["loglevel"] == "debug"
     assert "access" not in result  # No access if not in config
+    assert "info" not in result  # info path removed from log config
 
 def test_config_log_exception_in_update(tmp_path):
     from app.lib.files import Config
@@ -284,7 +284,7 @@ def test_config_log_access_only(tmp_path):
     config = Config.init(str(conf_path))
     result = config.log()
     assert result["loglevel"] == "info"
-    assert result["access"] == "log/access.log"
+    assert "access" not in result  # access path removed from log config
     assert "info" not in result
 
 def test_config_log_info_only(tmp_path):
@@ -296,7 +296,7 @@ def test_config_log_info_only(tmp_path):
     config = Config.init(str(conf_path))
     result = config.log()
     assert result["loglevel"] == "info"
-    assert result["info"] == "log/info.log"
+    assert "info" not in result  # info path removed from log config
     assert "access" not in result
 
 def test_config_log_full(tmp_path):
@@ -308,8 +308,8 @@ def test_config_log_full(tmp_path):
     config = Config.init(str(conf_path))
     result = config.log()
     assert result["loglevel"] == "debug"
-    assert result["info"] == "log/info.log"
-    assert result["access"] == "log/access.log"
+    assert "info" not in result  # info path removed from log config
+    assert "access" not in result  # access path removed from log config
 
 
 def test_conf_users_no_init():

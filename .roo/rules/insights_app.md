@@ -46,6 +46,7 @@ graph TD
 - `app/lib/async_utils.py`: Asynchronous utilities
 - `app/lib/auth.py`: Authentication utilities
 - `app/lib/runner.py`: Runner utilities
+- `app/lib/job.py`: Shared job execution utilities (send_completion, terminate_debugpy_adapter, process_imports, process_install_lines, process_code_installs, kill_proc_tree, get_process_tree, get_debug_port, get_debugpy_adapter_pid, validate_debug_prerequisites)
 
 ## Architecture
 
@@ -130,7 +131,7 @@ graph TD
 - `conf_runner()`: Returns runner-specific config
 - `conf_web()`: Returns web section (bind) with defaults
 - `get(path)`: Serves static files
-- `conf_log()`: Provides log config with file handlers
+- `conf_log()`: Provides log config with loglevel
 - `conf_users()`: Provides users section
 
 ### Features
@@ -182,11 +183,11 @@ graph TD
 ```mermaid
 flowchart TD
     A[has_unstaged_changes] --> B[get rel_path]
-    B --> C[3x: git status --porcelain -- rel_path]
+    B --> C["3x: git status --porcelain -- rel_path"]
     C --> D{non-empty}
     D -->|Yes| E[return True]
     D -->|No| F[continue]
-    C -->|CalledProcessError| G[sleep(2); continue or return False]
+    C -->|CalledProcessError| G["sleep(2); continue or return False"]
 ```
 
 ### ZMQ Control
@@ -682,3 +683,163 @@ The runner spawns isolated subprocesses per job in `data/jobs/{owner}/{set}/{id}
 ### Tests Debug Port
 
 tests/api/test_api_endpoints.py::test_debug_port mocks conf_users anonymous/testuser/missing -> 200/400.
+
+## Error Handling
+
+### Pre-Execution Error Logging
+
+`app/job_runner.py` implements comprehensive error logging for all pre-execution phases to prevent silent failures:
+
+#### Job Runner Functions
+
+Each job runner function (`run_task_job`, `run_service_job`, `run_debug_job`, `run_draft_job`) wraps setup operations in try-except blocks:
+
+1. **Workspace Setup** (`setup_workspace()`): Errors during directory creation are caught, logged with traceback to stderr files, and reported via ZMQ completion as "failed" state.
+
+2. **Environment Setup** (`setup_execution_environment()`): Errors creating stdout/stderr log files or changing working directory are caught and reported.
+
+3. **Install Processing** (`process_code_installs()`): pip/git install failures during job setup are caught, logged with traceback, and reported as "failed".
+
+#### Debug Job Specific Errors
+
+- **debugpy Installation**: `subprocess.run([pip_path, 'install', 'debugpy'])` failures are caught and reported with specific error message.
+- **Debug Adapter Execution**: `exec(debug_code)` errors (e.g., debugpy.listen() failures) are caught and reported.
+- **Override Parsing**: Invalid JSON in overrides is caught via `json.JSONDecodeError`, logged, and reported as "failed".
+
+#### Top-Level Error Handler
+
+The `if __name__ == "__main__":` block includes a catch-all error handler:
+
+```python
+if __name__ == "__main__":
+    import json
+    import sys
+    
+    try:
+        if len(sys.argv) != 2:
+            print("Usage: job_runner.py <json_kwargs>", file=sys.stderr)
+            sys.exit(1)
+        
+        kwargs = json.loads(sys.argv[1])
+        main(**kwargs)
+    except ValueError as e:
+        error_msg = f"Invalid arguments: {e}\n{traceback.format_exc()}"
+        print(error_msg, file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        error_msg = f"Unhandled error in job_runner.py: {e}\n{traceback.format_exc()}"
+        print(error_msg, file=sys.stderr)
+        sys.exit(1)
+```
+
+This ensures any exception escaping the individual job runner functions is caught, logged with full traceback to stderr, and exits with code 1.
+
+### Error Flow Diagram
+
+```mermaid
+flowchart TD
+    A[Job Runner Entry] --> B{setup_workspace}
+    B -->|Error| C[Log error + traceback]
+    C --> D[send_completion failed]
+    B -->|Success| E{setup_execution_environment}
+    E -->|Error| C
+    E -->|Success| F{process_code_installs}
+    F -->|Error| C
+    F -->|Success| G[Execute job code]
+    G --> H{Job success?}
+    H -->|Yes| I[send_completion done]
+    H -->|No| J[send_completion failed with traceback]
+```
+
+### Test Coverage
+
+Comprehensive tests in [`tests/integration/runner/test_error_logging.py`](tests/integration/runner/test_error_logging.py) verify:
+
+- **Workspace setup failures**: PermissionError, OSError, FileNotFoundError all result in "failed" state with error message.
+- **Environment setup failures**: Disk full errors during file creation are caught and reported.
+- **Install processing failures**: pip install failures for task/service/draft jobs are logged and reported.
+- **Debug job specific errors**: debugpy installation failures, adapter execution errors, invalid override JSON all result in "failed" state.
+- **Top-level handler**: Invalid JSON arguments and unhandled exceptions in main() are caught and logged.
+
+### Key Guarantees
+
+1. **No Silent Failures**: Every error path results in `send_completion()` being called with `"state": "failed"` and a descriptive `"detail"` message containing the error and traceback.
+
+2. **Traceback Logging**: All errors include full Python tracebacks for debugging.
+
+3. **stderr File Logging**: Errors are written to job workspace stderr.log files for persistent logging.
+
+4. **Consistent Exit Codes**: Top-level handler exits with code 1 on any error, enabling script-based failure detection.
+
+## Stdout/Stderr Handling
+
+### Overview
+PyOps components direct stdout/stderr output to unified streams managed by `app/gunicorn.py` (via `run.sh` with `--capture-output`), while job execution output is isolated to per-job files.
+
+### Top-Level Logging Flow
+
+```mermaid
+flowchart TD
+    A["run.sh: gunicorn --capture-output"] --> B["app/gunicorn.py: Spawn runner process"]
+    B --> C["app/runner.py: main() logging to sys.stdout/stderr"]
+    C --> D["Web/FastAPI logs via uvicorn worker to stdout/stderr"]
+    D --> E["Gunicorn captures unified stdout/stderr"]
+    C --> F[Spawn job_runner.py with stdout/stderr]
+    F --> E
+    style E fill:#90EE90
+```
+
+- **Gunicorn Integration**: `run.sh` invokes gunicorn with `--access-logfile - --error-logfile - --capture-output` to capture all stdout/stderr to unified streams
+- **Runner Logging**: `app/runner.py` `main()` configures logging with `StreamHandler(sys.stdout)` for info/debug and `StreamHandler(sys.stderr)` for warnings
+- **Job Output**: Runner spawns `job_runner.py` with `stdout=sys.stdout, stderr=sys.stderr, text=True` for direct output to gunicorn streams
+
+### Job-Specific Output Redirection
+
+```mermaid
+flowchart TD
+    A["app/job_runner.py: main() dispatch to run_*_job"] --> B["setup_workspace + setup_execution_environment: Open stdout.log/stderr.log"]
+    B --> C["with redirect_stdout(file) + redirect_stderr(file)"]
+    C --> D["setup_logging: Handlers to sys.stdout/sys.stderr → files"]
+    D --> E["process_code_installs: Subprocess pip/git with stdout/stderr=file"]
+    E --> F["exec(param/libs/code): Output to files"]
+    F --> G["Errors/retries: print/traceback to sys.stderr → file"]
+    G --> H["send_completion ZMQ: No output"]
+    H --> I["finally: Flush/close files"]
+    style B fill:#FFD700
+    style C fill:#FFD700
+    style I fill:#90EE90
+```
+
+- **File Setup**: `setup_execution_environment()` opens `stdout.log` and `stderr.log` in job workspace (`data/jobs/{owner}/{set}/{id}/`)
+- **Output Redirection**: All `run_*_job()` functions wrap execution in `with redirect_stdout(stdout_file): with redirect_stderr(stderr_file):`
+- **Logging Handlers**: `setup_logging()` creates handlers that write to `sys.stdout`/`sys.stderr` (redirected to files)
+- **Subprocess Piping**: `process_install_lines()` subprocesses (pip/git) use `stdout=stdout_file, stderr=stderr_file` to capture install output
+
+### Code Flow
+
+```mermaid
+flowchart TD
+    A["Runner spawns job_runner.py"] --> B["setup_execution_environment: Open files"]
+    B --> C["with redirect_stdout(file):"]
+    C --> D["with redirect_stderr(file):"]
+    D --> E["setup_logging: Handlers to files"]
+    E --> F["process_code_installs: pip/git to files"]
+    F --> G["exec(param/libs/code): Output to files"]
+    G --> H["send_completion: ZMQ only"]
+    H --> I["finally: Flush/close files"]
+```
+
+### Key Guarantees
+
+1. **Top-Level Capture**: All runner/web logs appear in gunicorn stdout/stderr via `--capture-output`
+2. **Job Isolation**: All job execution output (exec, logging, installs) goes to per-job `stdout.log`/`stderr.log`
+3. **No Leakage**: `redirect_stdout/stderr` blocks ensure no output escapes to top-level during exec
+4. **Testing**: Pytest only (no gunicorn); mocks verify file writes and no stdout/stderr leakage
+
+### Test Coverage
+
+Tests in `tests/integration/runner/` verify:
+- File contents match expected output (mock `open("stdout.log")`, assert writes)
+- Subprocesses pipe to files (mock `subprocess.run`, verify `stdout=stdout_file`)
+- No leakage (mock prints pre/post-`with`, assert only pre streams to top-level)
+- Error paths (mock exceptions, verify traceback in `stderr.log`)

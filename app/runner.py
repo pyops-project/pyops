@@ -41,7 +41,7 @@ def commit_with_retry(session, max_retries=5, backoff=0.1):
 
 from app.lib import pyops
 from app.lib.sets import ensure_set_environment
-from app.job_runner import get_debug_port, has_debugpy_adapter, get_debugpy_adapter_pid, kill_proc_tree, get_process_tree, process_imports, validate_debug_prerequisites
+from app.lib import job as job_lib
 
 import logging
 from contextlib import redirect_stdout, redirect_stderr
@@ -77,17 +77,17 @@ def terminate_job_processes(job_id: str, pid: int, is_debug: bool, owner: str, g
             return
 
     # Get target processes to terminate
-    target_processes = get_process_tree(pid)
+    target_processes = job_lib.get_process_tree(pid)
 
     # Send SIGTERM to targets
-    kill_proc_tree(target_processes, signal.SIGTERM)
+    job_lib.kill_proc_tree(target_processes, signal.SIGTERM)
 
     # Wait for graceful termination
     import time
     start_time = time.time()
     while (time.time() - start_time) < graceful_timeout:
         # Recreate target processes and check if any are still running
-        target_processes = get_process_tree(pid)
+        target_processes = job_lib.get_process_tree(pid)
         alive = False
         for proc in target_processes:
             logger.debug(f"from {job_id} polling pid={pid} alive={proc.is_running()}")
@@ -99,7 +99,7 @@ def terminate_job_processes(job_id: str, pid: int, is_debug: bool, owner: str, g
         time.sleep(1.0)
 
     # Force kill if still running
-    kill_proc_tree(target_processes, signal.SIGKILL)
+    job_lib.kill_proc_tree(target_processes, signal.SIGKILL)
     postTerm(job_id, killed=True)
     
 def setup_runner_socket(sock_path="/tmp/pyops/runner.sock"):
@@ -186,8 +186,8 @@ def assignJob(job_id: str, pid: int):
         old_pid = job.pid
         job.pid = pid
         if job.kind == "debug":
-            port = get_debug_port(job.owner)
-            debugpy_pid = get_debugpy_adapter_pid(port)
+            port = job_lib.get_debug_port(job.owner)
+            debugpy_pid = job_lib.get_debugpy_adapter_pid(port)
             job.debugpy_pid = debugpy_pid
             logger.debug(f"assignJob: debugpy_pid {debugpy_pid} for {job_id}")
         job.state = "running"
@@ -414,10 +414,6 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
     level_str = log_conf["loglevel"]
     level = logging.DEBUG if level_str.lower() == "debug" else logging.INFO
     handlers = [logging.StreamHandler(sys.stdout)]
-    if "info" in log_conf:
-        info_path = log_conf["info"]
-        os.makedirs(os.path.dirname(info_path), exist_ok=True)
-        handlers.append(logging.FileHandler(info_path))
     # Add stderr handler for warnings
     stderr_handler = logging.StreamHandler(sys.stderr)
     stderr_handler.setLevel(logging.WARNING)
@@ -427,10 +423,7 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
         format="%(asctime)s [%(name)s] %(levelname)s %(message)s",
         handlers=handlers
     )
-    if "info" in log_conf:
-        logger.info("Runner logging configured: level=%s info=%s", level_str, info_path)
-    else:
-        logger.info("Runner logging configured: level=%s (no file logging)", level_str)
+    logger.info("Runner logging configured: level=%s", level_str)
 
     os.environ = env
 
@@ -531,7 +524,7 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
                         port = None
                         if kind == "debug":
                             try:
-                                port = validate_debug_prerequisites(job_id, owner)
+                                port = job_lib.validate_debug_prerequisites(owner)
                             except Exception as e:
                                 finishJob(job_id, "failed", str(e))
                                 continue
@@ -541,15 +534,15 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
                         override_dict = json.loads(overrides) if overrides else None
 
                         if param:
-                            param = process_imports(param, set, kind, libs, override_dict)
-                        code = process_imports(code, set, kind, libs, override_dict)
+                            param = job_lib.process_imports(param, set, kind, libs, override_dict)
+                        code = job_lib.process_imports(code, set, kind, libs, override_dict)
 
                         logger.debug(f"Run job {job_id}")
                         ensure_set_environment(set)
                         venv_python = os.path.join(venv_path, set, 'bin', 'python')
                         json_kwargs = json.dumps({"job_id": job_id, "owner": owner, "set": set, "name": name, "kind": kind, "param": param, "code": code, "libs": libs, "overrides": overrides, "runner_sock_path": "/tmp/pyops/runner.sock", "max_retries": max_retries, "port": port, "conf_data": files.conf_data(), "conf_runner": files.conf_runner(), "conf_users": files.conf_users(), "conf_web": files.conf_web()})
                         try:
-                            p = subprocess.Popen([venv_python, os.path.abspath('app/job_runner.py'), json_kwargs], cwd=files.project_root)
+                            p = subprocess.Popen([venv_python, os.path.abspath('app/job_runner.py'), json_kwargs], cwd=files.project_root, stdout=sys.stdout, stderr=sys.stderr, text=True)
                         except Exception as e:
                             finishJob(job_id, "failed", f"Launch failed: {e}")
                             continue
@@ -560,7 +553,7 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
                                 if p.poll() is not None:
                                     logger.warning("Job process died before debugpy adapter appeared for job %s", job_id)
                                     break
-                                if has_debugpy_adapter(port):
+                                if job_lib.has_debugpy_adapter(port):
                                     adapter_up = True
                                     logger.debug("Debugpy adapter is up for job %s", job_id)
                                     break
@@ -581,6 +574,7 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
                         assignJob(job_id, p.pid)
                         processes[p.pid] = p
                         logger.debug(f"main: started process for {job_id}, pid {p.pid}")
+
                     except Exception as e:
                         logger.debug(f"main: exception loading/running {job_id}: {e}")
                         logger.exception("Error loading/running job %s: %s", job_id, e)
