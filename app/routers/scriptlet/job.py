@@ -151,7 +151,7 @@ async def job_del(id: str):
         if job is None:
             raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail=f"Job {id} not existing")
 
-        allowed_states = ["todo", "cancelled", "killed", "failed", "done"]
+        allowed_states = ["todo", "cancelled", "failed", "done"]
         if job.state not in allowed_states:
             raise HTTPException(status_code=400, detail=f"Job {id} is in state '{job.state}' and cannot be deleted. Allowed states: {', '.join(allowed_states)}")
 

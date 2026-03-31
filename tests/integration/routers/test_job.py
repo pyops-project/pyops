@@ -373,7 +373,7 @@ class TestJobRouter:
             assert response.status_code == 500
             assert "remove error" in response.json()["detail"]
 
-    @pytest.mark.parametrize("state", ["todo", "cancelled", "killed", "failed", "done"])
+    @pytest.mark.parametrize("state", ["todo", "cancelled", "failed", "done"])
     def test_delete_job_item_allowed_states(self, mock_client, mock_db, state, test_temp_dir, patch_tempfile, mock_datetime):
         with Session(get_db_engine()) as session:
             job_id = str(uuid.uuid4().hex)
@@ -389,7 +389,7 @@ class TestJobRouter:
             updated_job = session.query(Job).filter_by(id=job_id).first()
             assert updated_job.state == "remove"
 
-    @pytest.mark.parametrize("state", ["dequeued", "running", "cancel", "remove", "removed"])
+    @pytest.mark.parametrize("state", ["killed", "dequeued", "running", "cancel", "remove", "removed"])
     def test_delete_job_item_invalid_states(self, mock_client, mock_db, state, test_temp_dir, patch_tempfile, mock_datetime):
         with Session(get_db_engine()) as session:
             job_id = str(uuid.uuid4().hex)
@@ -400,7 +400,7 @@ class TestJobRouter:
         response = mock_client.delete(f"/scriptlet/job/item?id={job_id}", headers={"X-User": "testuser"})
         assert response.status_code == 400
         assert f"is in state '{state}' and cannot be deleted" in response.json()["detail"]
-        assert "Allowed states: todo, cancelled, killed, failed, done" in response.json()["detail"]
+        assert "Allowed states: todo, cancelled, failed, done" in response.json()["detail"]
 
     def test_get_job_cancel_exception(self, mock_client, test_temp_dir, patch_tempfile, mock_datetime):
         with patch("app.lib.runner.cancel", side_effect=Exception("cancel error")):

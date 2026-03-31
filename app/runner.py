@@ -240,7 +240,7 @@ def loadJob(job_id: str):
         job.start = datetime.now()
 
         commit_with_retry(session)
-        logger.debug(f"loadJob: after commit, session ID {id(session)}, committed 'running' for {job_id} at {datetime.now()}")
+        logger.debug(f"loadJob: after commit, session ID {id(session)}, committed 'loading' for {job_id} at {datetime.now()}")
 
         return job.owner, job.set, job.name, job.kind, job.param, code, job.overrides, job.max_retries
 

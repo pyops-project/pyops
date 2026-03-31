@@ -12,7 +12,6 @@ from app.orm.database import get_db_engine
 from app.orm.job import Job
 
 from app.lib import files
-from app.lib import git
 
 import logging
 logger = logging.getLogger(__name__)
@@ -175,60 +174,3 @@ def drop(id: str, owner: str, set: str):
     except Exception as e:
         logger.exception("Error dropping job %s: %s", id, e)
         return False
-
-def loadLib(set: str, name: str, kind: str):
-    """Loads library code from Git (unstaged if kind=="debug", else committed).
-
-    Args:
-        set (str): Set.
-        name (str): Name.
-        kind (str): Job kind, determines unstaged if "debug".
-
-    Returns:
-        str: Code content.
-
-    Raises:
-        Exception: If library not found.
-    """
-    print(f"loadLib(set={set}, name={name}, kind={kind})")
-    repo = git.get_repo_path(set)
-    files_list = [f for f in os.listdir(repo) if f.startswith(name) and f.endswith('.py')]
-    if not files_list:
-        raise Exception(f"Library {set}::{name} not existing")
-    filename = files_list[0]
-    type_ = git.infer_type_from_filename(filename)
-    committed = kind not in ("debug", "draft") # if debug/draft job prefer unstaged changes
-    return git.read_content(repo, name, type_, committed=committed)
-
-def loadJob(id: str):
-    """Loads job details and code from Git/DB (unstaged if kind=="debug", else committed).
-
-    Args:
-        id (str): Job ID.
-
-    Returns:
-        tuple: (owner, set, name, kind, param, code).
-
-    Raises:
-        Exception: If scriptlet not found or no code.
-    """
-    print(f"loadJob(id={id})")
-
-    with Session(get_db_engine()) as session:
-        job = session.get(Job, id)
-        if job is None:
-            raise Exception(f"Job {id} not existing")
-        repo = git.get_repo_path(job.set)
-        files_list = [f for f in os.listdir(repo) if f.startswith(job.name) and f.endswith('.py')]
-        if not files_list:
-            raise Exception(f"Scriptlet {job.set}::{job.name} not existing")
-        filename = files_list[0]
-        type_ = git.infer_type_from_filename(filename)
-        committed = job.kind not in ("debug", "draft") # if debug/draft job prefer unstaged changes
-        code = git.read_content(repo, job.name, type_, committed=committed)
-
-        job.state = "running"
-        job.start = datetime.now()
-        session.commit()
-
-        return job.owner, job.set, job.name, job.kind, job.param, code
