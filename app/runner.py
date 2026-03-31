@@ -37,7 +37,6 @@ def commit_with_retry(session, max_retries=5, backoff=0.1):
                     raise
             else:
                 raise
-        time.sleep(1.0)
 
 from app.lib import pyops
 from app.lib.sets import ensure_set_environment
@@ -166,7 +165,7 @@ def getNextToDo():
 
         job = session.scalar(stmt)
 
-        if job != None:
+        if job is not None:
             logger.debug(f"getNextToDo: before commit, session ID {id(session)}, job.state '{job.state}' at {datetime.now()}")
             job.state = "dequeued"
             commit_with_retry(session)
@@ -278,7 +277,7 @@ def finishJob(job_id: str, state: str, detail: str):
         logger.debug(f"finishJob: session ID {id(session)} at {datetime.now()}")
         job = session.get(Job, job_id)
 
-        if job != None:
+        if job is not None:
             old_state = job.state
             if job.kind == "service" and state == "done" and job.drop_done:
                 new_state = "remove"  # Immediately remove done services
@@ -332,7 +331,7 @@ def getNextToTerm():
         )
 
         job = session.scalar(stmt)
-        return {"id": job.id, "pid": job.pid} if job != None else None
+        return {"id": job.id, "pid": job.pid} if job is not None else None
 
 def postTerm(job_id: str, killed: bool = False):
     logger.debug(f"postTerm({job_id}, killed={killed})")
@@ -341,7 +340,7 @@ def postTerm(job_id: str, killed: bool = False):
         logger.debug(f"postTerm: session ID {id(session)} at {datetime.now()}")
         job = session.get(Job, job_id)
 
-        if job != None:
+        if job is not None:
             old_state = job.state
             if job.state == "remove":
                 logger.debug(f"postTerm: before delete, session ID {id(session)}, deleting {job_id} (state '{old_state}') at {datetime.now()}")
@@ -407,8 +406,6 @@ def schedule():
         logger.debug(f"schedule: completed at {datetime.now()}")
 
 def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
-    import time
-
     from app.lib import files
     log_conf = files.conf_log()
     level_str = log_conf["loglevel"]
@@ -425,7 +422,8 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
     )
     logger.info("Runner logging configured: level=%s", level_str)
 
-    os.environ = env
+    os.environ.clear()
+    os.environ.update(env)
 
     # Init config early for subprocess isolation
     conf_path = os.path.join(files.project_root, "etc/pyops.json")
@@ -487,7 +485,7 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
                 job = getNextToTerm()
                 logger.debug(f"main: getNextToTerm returned {job}")
 
-                if job != None:
+                if job is not None:
                     if job["pid"] in processes:
                         logger.debug(f"Trying to term job {job}")
                         # Get job kind for termination
@@ -516,7 +514,7 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
                 job_id = getNextToDo()
                 logger.debug(f"main: job_id from getNextToDo = '{job_id}'")
 
-                if job_id != None:
+                if job_id is not None:
                     try:
                         logger.debug(f"main: loading job {job_id}")
                         owner, set, name, kind, param, code, overrides, max_retries = loadJob(job_id)
@@ -609,18 +607,6 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
                 p.wait(timeout=1.0)
             except subprocess.TimeoutExpired:
                 p.terminate()
-
-    # handle finished or failed jobs
-    events = runner_poller.poll(0)
-    while events:
-        for sock, _ in events:
-            receive_and_process(runner_socket)
-        events = runner_poller.poll(0)
-
-    # dispose already remove jobs
-    logger.debug("main: final disposeJobs in shutdown")
-    disposeJobs()
-    logger.debug("main: final disposeJobs completed")
 
     # handle finished or failed jobs
     events = runner_poller.poll(0)
