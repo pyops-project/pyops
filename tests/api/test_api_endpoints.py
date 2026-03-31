@@ -312,12 +312,31 @@ def test_root_exception(mock_client):
         assert response.status_code == 500
         assert "site error" in response.json()["detail"]
 
+def test_favicon_content_type(mock_client):
+    with patch("app.lib.files.get", return_value=b"\x00\x00\x01\x00"):
+        response = mock_client.get("/favicon.ico")
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "image/x-icon"
+
 def test_favicon_exception(mock_client):
     # Test favicon endpoint exception handling
     with patch("app.lib.files.get", side_effect=Exception("file error")):
         response = mock_client.get("/favicon.ico")
         assert response.status_code == 500
         assert "file error" in response.json()["detail"]
+
+@pytest.mark.parametrize("path,expected_type", [
+    ("style.css", "text/css"),
+    ("app.js", "text/javascript"),
+    ("logo.png", "image/png"),
+    ("data.json", "application/json"),
+    ("unknown.bin", "application/octet-stream"),
+])
+def test_file_content_type(mock_client, path, expected_type):
+    with patch("app.lib.files.get", return_value=b"content"):
+        response = mock_client.get(f"/files/{path}")
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith(expected_type)
 
 def test_file_exception(mock_client):
     # Test file endpoint exception handling

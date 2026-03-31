@@ -1,11 +1,12 @@
 import asyncio, traceback
+import mimetypes
 import os
 import subprocess
 import logging
 import json
 
 from fastapi import FastAPI, Request, HTTPException, Query
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from starlette.status import HTTP_200_OK, HTTP_404_NOT_FOUND, HTTP_405_METHOD_NOT_ALLOWED, HTTP_500_INTERNAL_SERVER_ERROR
 
 from .routers.scriptlet import job
@@ -71,8 +72,9 @@ async def root():
 @app.get("/favicon.ico")
 async def favicon():
     try:
-        return HTMLResponse(
+        return Response(
             content=files.get("favicon.ico"),
+            media_type="image/x-icon",
             status_code=HTTP_200_OK
         )
     except Exception as ex:
@@ -82,8 +84,10 @@ async def favicon():
 @app.get("/files/{path:path}")
 async def file(path: str):
     try:
-        return HTMLResponse(
+        media_type, _ = mimetypes.guess_type(path)
+        return Response(
             content=files.get(path),
+            media_type=media_type or "application/octet-stream",
             status_code=HTTP_200_OK
         )
     except Exception as ex:
