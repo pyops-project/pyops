@@ -66,10 +66,10 @@ class JobControl:
         return self.rq.delete("scriptlet/job/item", params={"id":id})
     
     def cancel(self, id: str):
-        return self.rq.get("scriptlet/job/item", params={"id":id})
-    
+        return self.rq.get("scriptlet/job/cancel", params={"id": id})
+
     def download(self, id: str):
-        return self.rq.get("scriptlet/job/item", params={"id":id})
+        return self.rq.get("scriptlet/job/download", params={"id": id})
 
 class ScheduleControl:
     def __init__(self, rq: ControlRequest):

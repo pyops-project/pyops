@@ -149,7 +149,7 @@ class TestJobControl:
         job_control = pyops.JobControl(mock_rq)
         result = job_control.cancel("123")
         assert result == {"cancelled": True}
-        mock_rq.get.assert_called_once_with("scriptlet/job/item", params={"id": "123"})
+        mock_rq.get.assert_called_once_with("scriptlet/job/cancel", params={"id": "123"})
 
     def test_download(self, mock_control_request):
         mock_rq = Mock()
@@ -157,7 +157,7 @@ class TestJobControl:
         job_control = pyops.JobControl(mock_rq)
         result = job_control.download("123")
         assert result == {"download": "url"}
-        mock_rq.get.assert_called_once_with("scriptlet/job/item", params={"id": "123"})
+        mock_rq.get.assert_called_once_with("scriptlet/job/download", params={"id": "123"})
 
 class TestScheduleControl:
     def test_list(self, mock_control_request):
