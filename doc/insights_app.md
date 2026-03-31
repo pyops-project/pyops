@@ -102,12 +102,12 @@ graph TD
 - ZMQ IPC (ROUTER/REQ over /tmp/pyops/runner.sock) signals completion; json-serialized kwargs ensure config isolation.
 - Process checks: p.poll() for liveness; psutil for tree-kill (SIGTERM → SIGKILL after 15s).
 - Stale PID handling: After cleanProcesses, sync DB running jobs to 'failed' if !psutil.Process(pid).is_running().
-- Job states: todo, dequeued, running, done, failed, cancelled, remove, removed.
+- Job states: todo, dequeued, loading, running, done, failed, cancelled, remove, removed.
 - Debug mode: Always inject debugpy.listen(('0.0.0.0', port)) from conf_users(); appends wait_for_client() if '#>AWAIT_DEBUG' in param. Validates via /debug/port; terminates prior owner jobs.
 
 ### Web (`app/web.py`)
 - Serves /controller/{set}/{name}, /menu, and static /files/
-- GET /debug/port: Uses sanitize_owner(X-User default "anonymous") & returns {"port": int(port)} from conf_users()[owner]["debug_port"] or 400 if missing (e.g., for VSIX attach).
+- GET /debug/port: Uses sanitize_owner(X-User default "anonymous") & returns {"port": int(port)} from conf_users()[owner]["debug_port"] or 400 if missing (e.g., for VSIX attach). Port validation: must be int in range 1025-65535.
 
 ### PyOps (`app/lib/pyops.py`)
 - Provides `Control` for API calls
@@ -156,7 +156,7 @@ graph TD
 - `delete_file_and_commit()`: Removes and commits
 - `get_repo_status()`: Returns git status
 - `pull(repo)`: Syncs to origin/HEAD via soft reset if clean; skips if dirty to preserve unstaged changes.
-- `has_unstaged_changes()`: Cached git status --porcelain (TTL=10s, under repo_lock()). Batch compute_set_unstaged for scriptlets (paths like {name}.{type}.py → unstaged list). Invalidate cache on write_content/pull.
+- `has_unstaged_changes()`: No cache, batch compute, or repo_lock. Retries: 3 attempts (2s sleep) on `CalledProcessError`.
 - `rollback_staged/committed()`: Reverts changes
 
 #### Set-Scriptlet Management
@@ -267,7 +267,7 @@ sequenceDiagram
 
 #### Models
 
-- **Job**: id (primary), owner, set, name, kind, state (todo/dequeued/running/done/failed/cancelled/remove/removed), drop_done, max_retries (default=0), param (JSON), pid, debugpy_pid, detail, overrides (JSON for debug/VSIX), start/end timestamps.
+- **Job**: id (primary), owner, set, name, kind, state (todo/dequeued/loading/running/done/failed/cancelled/remove/removed), drop_done, max_retries (default=0), param (JSON), pid, debugpy_pid, detail, overrides (JSON for debug/VSIX), start/end timestamps.
 - **Schedule**: id (primary), schedule (cron string), set, name, owner, active (bool), drop_done, max_retries (default=0), param (JSON), last (timestamp).
 
 #### Global Attributes
@@ -275,7 +275,7 @@ sequenceDiagram
 - DB in data/ sqlite
 - init_db() creates tables on startup
 - Runner polls Jobs todo & Schedules cron
-- Job states: todo, dequeued, running, done, failed, cancelled, remove, removed
+- Job states: todo, dequeued, loading, running, done, failed, cancelled, remove, removed
 - Schedule active/drop_done indexed
 
 ## Execution
@@ -541,9 +541,9 @@ Runner treats debug kind specially for web preview/VSIX.
 #### Job Routers
 
 - `job.py`: Manages job lifecycle
-  - Enqueues jobs with kind ("task", "service", "debug")
+  - Enqueues jobs with kind ("task", "service", "debug", "draft")
   - For debug, accepts overrides
-  - Delete allows todo/cancelled/killed/failed/done states
+  - Delete allows todo/cancelled/failed/done states
 - `manager.py`: UI for bulk ops
 
 #### Monitor-Scheduler
