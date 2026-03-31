@@ -3,7 +3,7 @@ import os
 import subprocess
 from datetime import datetime
 
-from fastapi import APIRouter, HTTPException, Depends, Header
+from fastapi import APIRouter, HTTPException, Depends
 from starlette.status import HTTP_404_NOT_FOUND, HTTP_400_BAD_REQUEST, HTTP_500_INTERNAL_SERVER_ERROR
 from pydantic import BaseModel
 from typing import Optional
@@ -17,13 +17,10 @@ from app.orm.schedule import Schedule
 from app.lib import runner
 from app.lib import git
 from app.lib.async_utils import run_in_executor
-from app.lib.auth import sanitize_owner
+from app.lib.auth import get_current_user
 
 import logging
 logger = logging.getLogger(__name__)
-
-async def get_current_user(x_user: str = Header(default=None, alias="X-User")):
-    return sanitize_owner(x_user)
 
 router = APIRouter()
 

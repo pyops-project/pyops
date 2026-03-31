@@ -84,7 +84,7 @@ graph TD
 
 ## Configuration (`app/lib/files.py`)
 
-`Config` class manages `etc/pyops.json` with dynamic reload on change. No built-in auth; proxy recommended.
+`Config` class manages `etc/pyops.json`; loaded once at startup via `Config.init()`. No built-in auth; proxy recommended.
 
 ### JSON Structure
 

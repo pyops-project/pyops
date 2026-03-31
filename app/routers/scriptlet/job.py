@@ -3,7 +3,7 @@ import subprocess
 import json
 import re
 
-from fastapi import APIRouter, HTTPException, Depends, Header, Query
+from fastapi import APIRouter, HTTPException, Depends, Query
 from fastapi.responses import StreamingResponse
 from starlette.status import HTTP_404_NOT_FOUND, HTTP_500_INTERNAL_SERVER_ERROR
 from pydantic import BaseModel
@@ -17,15 +17,12 @@ from app.orm.job import Job
 
 from app.lib import runner, files, git
 from app.lib.async_utils import run_in_executor
-from app.lib.auth import sanitize_owner
+from app.lib.auth import get_current_user
 
 from zipstream import ZipStream, ZIP_DEFLATED
 
 import logging
 logger = logging.getLogger(__name__)
-
-async def get_current_user(x_user: str = Header(default=None, alias="X-User")):
-    return sanitize_owner(x_user)
 
 router = APIRouter()
 
