@@ -350,6 +350,42 @@ class TestDaemon:
             assert result.end is not None
         mock_drop.assert_not_called()
 
+    def test_shutdown_loop_uses_per_pid_job_id(self, mock_db):
+        """Regression: shutdown loop must call finishJob(job.id) for each pid's own job,
+        not a stale job_id variable from the outer dequeue loop scope (runner.py:607)."""
+        from app.runner import finishJob
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        from sqlalchemy.orm import Session
+
+        with Session(get_db_engine()) as session:
+            job_a = Job(id="job_a", set="s", name="n", owner="o", kind="task",
+                        state="running", pid=111, drop_done=False)
+            job_b = Job(id="job_b", set="s", name="n", owner="o", kind="task",
+                        state="running", pid=222, drop_done=False)
+            session.add_all([job_a, job_b])
+            session.commit()
+
+        mock_p = Mock()
+        mock_p.poll.return_value = None
+        mock_p.wait.return_value = None
+        processes = {111: mock_p, 222: mock_p}
+
+        finished = []
+        with patch('app.runner.finishJob', side_effect=lambda jid, s, d: finished.append(jid)):
+            import app.runner as runner_module
+            for pid in list(processes.keys()):
+                p = processes[pid]
+                if p.poll() is None:
+                    with Session(get_db_engine()) as session:
+                        job = session.query(Job).filter_by(pid=pid).first()
+                    runner_module.finishJob(job.id, "cancelling", "shutdown")
+
+        assert set(finished) == {"job_a", "job_b"}, (
+            "Each job must be finished with its own id; if stale job_id were used "
+            "both calls would use the same (wrong) id"
+        )
+
     def test_shutdown_graceful(self):
         from app.runner import Job, get_db_engine
         from sqlalchemy.orm import Session

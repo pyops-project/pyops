@@ -604,7 +604,7 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
                 owner = job.owner if job else None
 
             logger.debug(f"Terminating process tree {pid} on shutdown")
-            finishJob(job_id, "cancelling", "shutdown")
+            finishJob(job.id, "cancelling", "shutdown")
             try:
                 p.wait(timeout=1.0)
             except subprocess.TimeoutExpired:

@@ -8,3 +8,4 @@ pyrightconfig.json
 /data/
 /pyops/
 /htmlcov/
+/.tmp/
