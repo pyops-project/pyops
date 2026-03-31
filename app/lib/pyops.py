@@ -107,16 +107,16 @@ class Control:
         self.schedule = ScheduleControl(self.rq)
 
     def get(self, set: str, name: str, params = {}):
-        return self.rq.get(f"controller/{set}/{name}/get", params=params)
-    
+        return self.rq.get(f"controller/{set}/{name}", params=params)
+
     def delete(self, set: str, name: str, params = {}):
-        return self.rq.get(f"controller/{set}/{name}/delete", params=params)
-    
+        return self.rq.delete(f"controller/{set}/{name}", params=params)
+
     def put(self, set: str, name: str, json = {}):
-        return self.rq.get(f"controller/{set}/{name}/put", json=json)
-    
+        return self.rq.put(f"controller/{set}/{name}", json=json)
+
     def post(self, set: str, name: str, json = {}):
-        return self.rq.get(f"controller/{set}/{name}/post", json=json)
+        return self.rq.post(f"controller/{set}/{name}", json=json)
 
 class ServiceListener:
     def __init__(self, owner: str, job_id: str):

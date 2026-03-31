@@ -429,7 +429,7 @@ sequenceDiagram
 
 - `control.job`: `list()`, `create()`, `get()`, `delete()`, `cancel()`, `download()`
 - `control.schedule`: `list()`, `create()`, `get()`, `delete()`, `activate()`, `deactivate()`
-- `control.get/post/put/delete(set, name, ...)`: proxy to `/controller/{set}/{name}/`
+- `control.get/post/put/delete(set, name, ...)`: proxy to `/controller/{set}/{name}` using matching HTTP method
 
 ---
 

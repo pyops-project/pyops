@@ -223,34 +223,34 @@ class TestControl:
         control.rq = mock_rq  # Patch for test
         result = control.get("test_set", "test_name", params={"p": "v"})
         assert result == {"data": "value"}
-        mock_rq.get.assert_called_once_with("controller/test_set/test_name/get", params={"p": "v"})
+        mock_rq.get.assert_called_once_with("controller/test_set/test_name", params={"p": "v"})
 
     def test_delete(self, mock_control_request):
         mock_rq = Mock()
-        mock_rq.get.return_value = {"deleted": True}
+        mock_rq.delete.return_value = {"deleted": True}
         control = pyops.Control("test_user", "127.0.0.1:8000")
         control.rq = mock_rq
         result = control.delete("test_set", "test_name")
         assert result == {"deleted": True}
-        mock_rq.get.assert_called_once_with("controller/test_set/test_name/delete", params={})
+        mock_rq.delete.assert_called_once_with("controller/test_set/test_name", params={})
 
     def test_put(self, mock_control_request):
         mock_rq = Mock()
-        mock_rq.get.return_value = {"put": "success"}
+        mock_rq.put.return_value = {"put": "success"}
         control = pyops.Control("test_user", "127.0.0.1:8000")
         control.rq = mock_rq
         result = control.put("test_set", "test_name", json={"data": "value"})
         assert result == {"put": "success"}
-        mock_rq.get.assert_called_once_with("controller/test_set/test_name/put", json={"data": "value"})
+        mock_rq.put.assert_called_once_with("controller/test_set/test_name", json={"data": "value"})
 
     def test_post(self, mock_control_request):
         mock_rq = Mock()
-        mock_rq.get.return_value = {"posted": True}
+        mock_rq.post.return_value = {"posted": True}
         control = pyops.Control("test_user", "127.0.0.1:8000")
         control.rq = mock_rq
         result = control.post("test_set", "test_name", json={"data": "value"})
         assert result == {"posted": True}
-        mock_rq.get.assert_called_once_with("controller/test_set/test_name/post", json={"data": "value"})
+        mock_rq.post.assert_called_once_with("controller/test_set/test_name", json={"data": "value"})
 
 class TestServiceListener:
     @patch('os.remove')
