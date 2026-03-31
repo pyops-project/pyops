@@ -72,7 +72,7 @@ def terminate_job_processes(job_id: str, pid: int, is_debug: bool, owner: str, g
     # Guard: Skip if job already in terminal state or pid None
     with Session(get_db_engine()) as session:
         job = session.get(Job, job_id)
-        if job and (job.state in ['failed', 'done', 'cancelled', 'remove'] or job.pid is None):
+        if job and job.state in ['failed', 'done', 'cancelled', 'remove']:
             logger.debug("terminate_job_processes: skip %s state=%s pid=%s", job_id, job.state, job.pid)
             return
 
