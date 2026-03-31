@@ -89,16 +89,16 @@ class ScheduleControl:
         })["schedule"]
 
     def get(self, id: int):
-        return self.rq.get("scriptlet/schedule/item", params={id:id})
-    
+        return self.rq.get("scriptlet/schedule/item", params={"id": id})
+
     def delete(self, id: int):
-        return self.rq.delete("scriptlet/schedule/item", params={id:id})
-    
+        return self.rq.delete("scriptlet/schedule/item", params={"id": id})
+
     def activate(self, id: int):
-        return self.rq.get("scriptlet/schedule/activate", params={id:id})
-    
+        return self.rq.get("scriptlet/schedule/activate", params={"id": id})
+
     def deactivate(self, id: int):
-        return self.rq.get("scriptlet/schedule/deactivate", params={id:id})
+        return self.rq.get("scriptlet/schedule/deactivate", params={"id": id})
 
 class Control:
     def __init__(self, owner: str, web_bind: str):

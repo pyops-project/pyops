@@ -189,7 +189,7 @@ class TestScheduleControl:
         schedule_control = pyops.ScheduleControl(mock_rq)
         result = schedule_control.get(1)
         assert result == {"schedule": {"active": True}}
-        mock_rq.get.assert_called_once_with("scriptlet/schedule/item", params={1: 1})
+        mock_rq.get.assert_called_once_with("scriptlet/schedule/item", params={"id": 1})
 
     def test_delete(self, mock_control_request):
         mock_rq = Mock()
@@ -197,7 +197,7 @@ class TestScheduleControl:
         schedule_control = pyops.ScheduleControl(mock_rq)
         result = schedule_control.delete(1)
         assert result == {"deleted": True}
-        mock_rq.delete.assert_called_once_with("scriptlet/schedule/item", params={1: 1})
+        mock_rq.delete.assert_called_once_with("scriptlet/schedule/item", params={"id": 1})
 
     def test_activate(self, mock_control_request):
         mock_rq = Mock()
@@ -205,7 +205,7 @@ class TestScheduleControl:
         schedule_control = pyops.ScheduleControl(mock_rq)
         result = schedule_control.activate(1)
         assert result == {"activated": True}
-        mock_rq.get.assert_called_once_with("scriptlet/schedule/activate", params={1: 1})
+        mock_rq.get.assert_called_once_with("scriptlet/schedule/activate", params={"id": 1})
 
     def test_deactivate(self, mock_control_request):
         mock_rq = Mock()
@@ -213,7 +213,7 @@ class TestScheduleControl:
         schedule_control = pyops.ScheduleControl(mock_rq)
         result = schedule_control.deactivate(1)
         assert result == {"deactivated": True}
-        mock_rq.get.assert_called_once_with("scriptlet/schedule/deactivate", params={1: 1})
+        mock_rq.get.assert_called_once_with("scriptlet/schedule/deactivate", params={"id": 1})
 
 class TestControl:
     def test_get(self, mock_control_request):
