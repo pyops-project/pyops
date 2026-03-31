@@ -1,11 +1,10 @@
-## PyOps
+# PyOps App — Technical Reference
 
-### Overview
-PyOps is an "Execution Platform" for "Python Operations Scriptlets". It is licensed under GNU AGPLv3 and organized as a monorepo with core functionality in `app/`, a VSCode extension in `vsix/`, tests in `tests/`, and documentation in `doc/`.
+## Overview
 
-### Monorepo Structure
+PyOps is an "Execution Platform" for "Python Operations Scriptlets". Licensed under GNU AGPLv3, organized as a monorepo: core app in `app/`, VSCode extension in `vsix/`, tests in `tests/`, documentation in `doc/`.
 
-The project is structured as follows:
+### Monorepo Layout
 
 ```mermaid
 graph TD
@@ -23,34 +22,9 @@ graph TD
     B --> M[sites/ - HTML Views]
     B --> N[job_runner.py - Subprocess Entry]
     B --> O[files/ - Static Assets]
-    C --> P[src/ - Extension Source]
-    C --> Q[tests/ - Extension Tests]
 ```
 
-#### App Directory Structure
-
-- `app/web.py`: Main FastAPI application server
-- `app/runner.py`: Background job execution daemon
-- `app/gunicorn.py`: WSGI server configuration
-- `app/routers/scriptlet/`: REST API endpoints for scriptlet operations
-- `app/orm/`: Database models for Job and Schedule
-- `app/sites/scriptlet/`: HTML views for the web interface
-
-#### Lib Directory
-
-- `app/lib/git.py`: Git operations for scriptlet management
-- `app/lib/pyops.py`: IPC and control classes
-- `app/lib/files.py`: Configuration management
-- `app/lib/sets.py`: Git repository set management
-- `app/lib/sites.py`: Site rendering utilities
-- `app/lib/async_utils.py`: Asynchronous utilities
-- `app/lib/auth.py`: Authentication utilities
-- `app/lib/runner.py`: Runner utilities
-- `app/lib/job.py`: Shared job execution utilities (send_completion, terminate_debugpy_adapter, process_imports, process_install_lines, process_code_installs, kill_proc_tree, get_process_tree, get_debug_port, get_debugpy_adapter_pid, validate_debug_prerequisites)
-
-## Architecture
-
-### High-Level System Architecture
+### System Architecture
 
 ```mermaid
 flowchart LR
@@ -69,9 +43,7 @@ flowchart LR
     E <--> F
 ```
 
-### Layers
-
-The architecture is layered as follows:
+### Architecture Layers
 
 ```mermaid
 graph TD
@@ -81,41 +53,38 @@ graph TD
     D --> E[Execution Layer<br/>Isolated venv & process directives]
 ```
 
-### Layers
-
-- **Presentation Layer**: FastAPI routes and static HTML with Ace Editor, Bootstrap 5, jQuery
-- **API Layer**: CRUD operations via scriptlet routers
-- **Business Layer**: Git sets, ZMQ IPC, job execution
-- **Persistence Layer**: SQLite via SQLAlchemy
-- **Execution Layer**: Isolated venv and process directives
-
 ### Technology Stack
 
 - **Backend**: Python 3.12, FastAPI, SQLAlchemy 2.x, ZMQ, msgpack
-- **Database**: SQLite (thread-safe)
+- **Database**: SQLite (thread-safe WAL mode)
 - **Frontend**: Bootstrap 5, jQuery 3.6, Ace Editor, Material Icons
 
-## Core Components
+### Key Module Map
 
-### Runner (`app/runner.py`)
-- Daemon that polls DB for todo jobs using subprocess.Popen for isolated execution in per-set venvs.
-- ZMQ IPC (ROUTER/REQ over /tmp/pyops/runner.sock) signals completion; json-serialized kwargs ensure config isolation.
-- Process checks: p.poll() for liveness; psutil for tree-kill (SIGTERM → SIGKILL after 15s).
-- Stale PID handling: After cleanProcesses, sync DB running jobs to 'failed' if !psutil.Process(pid).is_running().
-- Job states: todo, dequeued, loading, running, done, failed, cancelled, remove, removed.
-- Debug mode: Always inject debugpy.listen(('0.0.0.0', port)) from conf_users(); appends wait_for_client() if '#>AWAIT_DEBUG' in param. Validates via /debug/port; terminates prior owner jobs.
+| File | Role |
+|------|------|
+| `app/web.py` | FastAPI app, routes, controller proxy |
+| `app/runner.py` | Background daemon: polls DB, spawns jobs, handles ZMQ |
+| `app/job_runner.py` | Subprocess entry point: executes inside per-set venv |
+| `app/gunicorn.py` | WSGI config; also spawns the runner process |
+| `app/lib/files.py` | Config access (`etc/pyops.json`) |
+| `app/lib/git.py` | Scriptlet storage in Git repos |
+| `app/lib/runner.py` | DB-level job utilities: `enqueue`, `query`, `find`, `cancel`, `remove`, `drop` |
+| `app/lib/job.py` | Execution utilities: `send_completion`, `terminate_debugpy_adapter`, `process_imports`, `process_install_lines`, `process_code_installs`, `kill_proc_tree`, `get_process_tree`, `get_debug_port`, `get_debugpy_adapter_pid`, `has_debugpy_adapter`, `validate_debug_prerequisites`, `loadLib`, `install_git_repo` |
+| `app/lib/pyops.py` | `Control` (API proxy), `ServiceListener`, `ServiceClient` |
+| `app/lib/sets.py` | Git set management (clone, remove, switch branch) |
+| `app/lib/sites.py` | Site rendering utilities |
+| `app/lib/async_utils.py` | Async helper utilities |
+| `app/lib/auth.py` | `sanitize_owner()` for `X-User` header normalization |
+| `app/orm/` | SQLAlchemy models: `Job`, `Schedule` |
+| `app/routers/scriptlet/` | REST API routers |
+| `app/sites/` | Static HTML templates: `root/root.html`, `scriptlet/` views |
 
-### Web (`app/web.py`)
-- Serves /controller/{set}/{name}, /menu, and static /files/
-- GET /debug/port: Uses sanitize_owner(X-User default "anonymous") & returns {"port": int(port)} from conf_users()[owner]["debug_port"] or 400 if missing (e.g., for VSIX attach). Port validation: must be int in range 1025-65535.
+---
 
-### PyOps (`app/lib/pyops.py`)
-- Provides `Control` for API calls
-- Provides `ServiceListener` for services
+## Configuration (`app/lib/files.py`)
 
-## Configuration
-
-`app/lib/files.py` defines the Config class for managing `etc/pyops.json`.
+`Config` class manages `etc/pyops.json` with dynamic reload on change. No built-in auth; proxy recommended.
 
 ### JSON Structure
 
@@ -127,719 +96,425 @@ graph TD
 
 ### Access Methods
 
-- `conf_data()`: Returns data section (jobs, git, db) with defaults merged from etc/pyops.json
-- `conf_runner()`: Returns runner-specific config
-- `conf_web()`: Returns web section (bind) with defaults
-- `get(path)`: Serves static files
-- `conf_log()`: Provides log config with loglevel
-- `conf_users()`: Provides users section
+- `conf_data()`: data section (jobs, git, db)
+- `conf_runner()`: runner section (venv, pkg, git_pull_interval, drop_done_delay_seconds)
+- `conf_web()`: web section (bind)
+- `conf_log()`: log section (loglevel)
+- `conf_users()`: users section (per-user debug_port)
+- `get(path)`: serves static files from `app/files/`
 
-### Features
+---
 
-- Supports dynamic reload on change
-- Defaults: web bind "127.0.0.1:8000", jobs "data/jobs", no SSL
-- No built-in auth; proxy recommended
-- Log levels: debug, info, etc.
+## Data Models (`app/orm/`)
 
-## Core Functionality
+SQLite file-based DB in `data/app.db`, thread-safe WAL mode.
 
-### Git Operations
+`app/orm/database.py`: `get_db_path()`, `init_db()` (creates tables on startup), `get_db_engine()`, `destroy_db()`.
 
-`app/lib/git.py` manages scriptlet code in Git sets with serialized access via `repo_lock()`.
+### Job
 
-#### Operations
+| Column | Type | Notes |
+|--------|------|-------|
+| id | String PK | `{owner}_{set}_{name}_{timestamp}` |
+| owner, set, name, kind | String | indexed |
+| state | String | indexed; see state machine below |
+| drop_done | Boolean | auto-remove on completion |
+| max_retries | Integer | default=0 |
+| param | String | job parameter/code snippet |
+| pid | Integer | set when running |
+| debugpy_pid | Integer | debug jobs only |
+| detail | String | error message or traceback |
+| overrides | String | JSON dict for debug/VSIX local code |
+| start, end | DateTime | timestamps |
 
-- `read_content()`: Reads file content (committed or debug)
-- `write_content()`: Writes and stages changes
-- `perform_git_add_commit_push()`: Commits and pushes changes
-- `batch_commit()`: Batch operations
-- `delete_file_and_commit()`: Removes and commits
-- `get_repo_status()`: Returns git status
-- `pull(repo)`: Syncs to origin/HEAD via soft reset if clean; skips if dirty to preserve unstaged changes.
-- `has_unstaged_changes()`: No cache, batch compute, or repo_lock. Retries: 3 attempts (2s sleep) on `CalledProcessError`.
-- `rollback_staged/committed()`: Reverts changes
+**State machine**: `todo → dequeued → loading → running → done/failed/cancel/cancelling/cancelled/remove/removed`
 
-#### Set-Scriptlet Management
+- `cancel`: requested by API
+- `cancelling`: runner is actively terminating the process
+- `cancelled`: termination complete
+- `remove`: marked for workspace deletion
+- `removed`: workspace deleted, pending DB cleanup
 
-- `get_repo_path(set)`: Returns `data/git/{set}/`
-- `list_scriptlets()`: Lists `{name}.{type}.py/html` from sets
-- `infer_type_from_filename()`: Derives type from filename
-  - JS Libraries: .js → 'jslibrary'.
-- `check_name_unique()`: Prevents duplicates
+### Schedule
 
-#### Global Attributes
+| Column | Type | Notes |
+|--------|------|-------|
+| id | Integer PK | autoincrement |
+| schedule | String | cron expression for tasks; empty string for persistent services |
+| set, name, owner | String | indexed |
+| active | Boolean | indexed |
+| drop_done | Boolean | default=True |
+| max_retries | Integer | default=0 |
+| param | String | |
+| last | DateTime | last trigger time; indexed |
 
-- Sets are Git repos in `data/git/{set}/`
-- Scriptlets: `{name}.task.py`, `{name}.service.py`, etc.
-- Pull syncs on demand via pull(repo); skips dirty/tag, soft reset clean to origin/{branch}; adds new files (py/html/js/README) via checkout if missing in WD.
-- Unique lock per set prevents concurrent access
-- Commit-push checks remotes; skip if no remote
+---
 
-#### Status Detection
-- `has_unstaged_changes(repo, name, type_) -> bool`: Lock-free `git status --porcelain --untracked-files=all -- {rel_path}`; returns `bool(output.strip())`.
-- Retries: 3 attempts (2s sleep) on `CalledProcessError`.
-- No cache, batch compute, or repo_lock.
+## Git Operations (`app/lib/git.py`)
+
+Manages scriptlet files as Git repos in `data/git/{set}/`. All mutating operations are serialized via `repo_lock(git_base, set_name)` (fcntl advisory lock per set).
+
+### Scriptlet File Conventions
+
+- Tasks/libraries/controllers: `{name}.{type}.py`
+- Views: `{name}.html`
+- JS libraries: `{name}.js`
+- Markdown: `README.md`
+- Types inferred by `infer_type_from_filename()`
+
+### Operations
+
+- `get_repo_path(set)`: resolves `data/git/{set}/`; initializes `.git`, `.gitignore`, `README.md` if missing
+- `read_content(repo, name, type_, committed, strict)`: reads working tree (default) or `git show HEAD:` for committed; `strict=True` raises if no committed version
+- `write_content(repo, name, type_, content)`: writes file under `repo_lock`
+- `perform_git_add_commit_push(repo, file_path, msg)`: add + commit + push (skips push if no remote; raises `GitConflictError` on tag)
+- `batch_commit(repo, msg, rel_files)`: add all or specific files + commit + push
+- `delete_file_and_commit(repo, file_path, msg)`: `git rm` + commit + push
+- `list_scriptlets()`: scans all sets, returns `[{"set", "name", "type"}, ...]` sorted
+- `get_repo_status(set)`: returns `{"branch", "is_tag", "flag"}`
+- `rollback_staged(set, name, type_)`: backs up to `.bck`, then `git checkout HEAD`
+- `rollback_committed(set, name, type_)`: `git checkout HEAD` (discards unstaged)
+- `check_name_unique(repo, name)`: prevents duplicate scriptlet names
+- `pull(repo)`: soft-reset to `origin/{branch}` if clean; skips if dirty or on tag; adds new `.py/.html/.js/README` files from HEAD if missing in working directory; retries fetch on `CalledProcessError`
+
+### Sets Management (`app/lib/sets.py`)
+
+Groups scriptlets in Git repos. Managed via `/scriptlet/sets` UI/API or VSIX trees.
+
+- `list_sets()`: lists available sets (`data/git/` subdirectories)
+- `clone_set(name, remote)`: clones remote to `data/git/{name}/`; creates `.gitignore` and `README.md`
+- `remove_set(name)`: deletes `data/git/{name}/` directory
+- `switch_branch(name, branch)`: checks out branch in set repo; uses `repo_lock`
+
+### Status Detection
+
+`has_unstaged_changes(repo, name, type_) -> bool`: lock-free `git status --porcelain --untracked-files=all -- {rel_path}`; 3 attempts with 2s sleep on `CalledProcessError`.
 
 ```mermaid
 flowchart TD
     A[has_unstaged_changes] --> B[get rel_path]
     B --> C["3x: git status --porcelain -- rel_path"]
-    C --> D{non-empty}
+    C --> D{non-empty?}
     D -->|Yes| E[return True]
-    D -->|No| F[continue]
-    C -->|CalledProcessError| G["sleep(2); continue or return False"]
+    D -->|No| F[return False]
+    C -->|CalledProcessError| G["sleep(2); retry or return False"]
 ```
 
-### ZMQ Control
+---
 
-`app/lib/pyops.py` provides IPC via ZMQ for scriptlets with HTTP proxy to FastAPI.
+## Job Execution
 
-#### IPC Flow
+The execution pipeline spans three components: `app/runner.py` (daemon), `app/job_runner.py` (subprocess entry), and `app/lib/job.py` (shared utilities).
 
-```mermaid
-sequenceDiagram
-    participant Scriptlet
-    participant Control
-    participant ControlRequest
-    participant FastAPI
-    participant ServiceListener
-    participant ServiceClient
+### Runner Daemon (`app/runner.py`)
 
-    Scriptlet->>Control: API call (e.g., control.job.list())
-    Control->>ControlRequest: HTTP request to FastAPI
-    ControlRequest->>FastAPI: Proxy request
-    FastAPI->>ServiceListener: ZMQ message to service
-    ServiceListener->>ServiceClient: Process request
-    ServiceClient->>ServiceListener: Response
-    ServiceListener->>FastAPI: ZMQ response
-    FastAPI->>ControlRequest: HTTP response
-    ControlRequest->>Control: Return result
-    Control->>Scriptlet: Result
-```
+Background daemon spawned by `app/gunicorn.py`. Polls DB, spawns subprocesses, handles ZMQ completion signals.
 
-#### Controls
+#### Startup Sequence
 
-- **JobControl**: `list()`, `create()`, `get()`, `delete()`, `cancel()`, `download()`
-- **ScheduleControl**: `list()`, `create()`, `get()`, `delete()`, `activate()`, `deactivate()`
-
-#### Service Components
-
-- **ServiceListener**: Listens for messages, handles TERM signals, supports both synchronous and asynchronous messaging
-- **ServiceClient**: Connects to running services
-- **Control Class**: Wraps controls, proxies to `/controller/{set}/{name}/q`
-
-#### Global Attributes
-
-- Available in scriptlet global namespace
-- Message format: `{"type": "GET/POST", "path": str, "cmd": query, "data": body, "data_type": "json/text/binary/none"}`
-- Uses msgpack for serialization
-- Listener poll uses zmq.Poller with timeout=0
-- Supports both synchronous (`listen()`, `poll()`, `response()`) and asynchronous (`async_poll()`, `async_response()`) messaging
-- Asynchronous methods enable concurrent request handling
-
-### Sets Management
-
-`app/lib/sets.py` handles Git repositories.
-
-#### Operations
-
-- `list_sets()`: Lists available sets
-- `clone_set()`: Clones remote to `data/git/{name}/` with .gitignore & README
-- `remove_set()`: Deletes directory
-- `switch_branch()`: Checks out branch
-
-#### Global Attributes
-
-- Sets group scriptlets in Git repos
-- Managed via /scriptlet/sets UI or API
-- VSIX supports clone/switch/remove via trees
-- Locking prevents conflicts
-- Sync via pull()
-
-### ORM Models
-
-`app/orm/` uses SQLAlchemy Base.
-
-#### Database
-
-- `database.py`: `get_db_path()`, `init_db()`, `get_db_engine()`, `destroy_db()`
-- SQLite file-based DB, thread-safe WAL mode
-
-#### Models
-
-- **Job**: id (primary), owner, set, name, kind, state (todo/dequeued/loading/running/done/failed/cancelled/remove/removed), drop_done, max_retries (default=0), param (JSON), pid, debugpy_pid, detail, overrides (JSON for debug/VSIX), start/end timestamps.
-- **Schedule**: id (primary), schedule (cron string), set, name, owner, active (bool), drop_done, max_retries (default=0), param (JSON), last (timestamp).
-
-#### Global Attributes
-
-- DB in data/ sqlite
-- init_db() creates tables on startup
-- Runner polls Jobs todo & Schedules cron
-- Job states: todo, dequeued, loading, running, done, failed, cancelled, remove, removed
-- Schedule active/drop_done indexed
-
-## Execution
-
-### Runner Daemon
-
-`app/runner.py` implements background job executor with GracefulKiller for signals.
+1. `handleOddJobs()`: dequeued→todo, running→failed (crash recovery)
+2. `purgeLeftoverServiceJobs()`: deletes stale service jobs (dequeued/running/failed/done)
+3. `cleanup_drop_done_jobs()`: marks expired `drop_done` done-jobs as `remove`
 
 #### Main Loop
 
 ```mermaid
 flowchart TD
-    A[Runner Main Loop] --> B{Poll DB for todo jobs}
-    B --> C[Load Job Details]
-    C --> D[Execute Job in Subprocess]
-    D --> E{Job State}
-    E -->|Done| F[Finish Job - Success]
-    E -->|Failed| G[Finish Job - Error]
-    E -->|Cancelled| H[Terminate Processes]
-    F --> I[Update DB]
-    G --> I
-    H --> I
-    I --> A
+    A[Main Loop Start] --> B[disposeJobs: delete removed]
+    B --> C[cleanProcesses: prune dead Popen dict]
+    C --> D[Stale PID check: running jobs with dead PIDs → finishJob failed]
+    D --> E{getNextToTerm?}
+    E -->|cancel/remove| F[finishJob cancelling → terminate_job_processes thread]
+    E -->|none| G[Poll ZMQ ROUTER]
+    G --> H{Event?}
+    H -->|yes| I[receive_and_process → finishJob]
+    H -->|no| J[cleanup_drop_done_jobs]
+    J --> K{getNextToDo?}
+    K -->|job| L[loadJob → spawn Popen → assignJob]
+    K -->|none| M[schedule → sleep 0.5s]
+    L --> A
+    M --> A
 ```
 
-#### Job Execution
-
-- `loadJob()`: Fetches from DB, returns owner, set, name, kind, param, code, overrides
-- `run()`: Processes param, libs, code in subprocess with venv activation
-- Handles directives: pip packages, git repos, libraries
-- For debug: uses unstaged code (preview) or overrides (VSIX)
-- Compiles with custom filenames for accurate stacktraces
-- `finishJob()`: Sets state, end, detail, pid=None
-
-#### Directive Processing
-
-- `process_imports()`: Handles pip, git, library directives
-- Installs pip -q, clones git repos to pkg/, pip installs -e, exec libs
-- Uses committed code for libs
-- `process_install_lines()`: Executes installs
-
-#### Directive Logic
-
-Distinguishes types by argument:
-- git: contains '://' or starts with 'git@'
-- pip: plain string not starting with '{' and not containing '::'
-- library: starts with '{' or contains '::'
-
-#### Post-Termination
-
-- `postTerm()`: Updates state to cancelled if not done/failed, deletes if remove
-- `terminate_job_processes()`: Kills full process tree with SIGTERM then SIGKILL
-
-#### Scheduling
-
-- `schedule()`: Enqueues from cron Schedules via croniter
-
-#### Global Attributes
-
-- Spawns isolated processes per job
-- Workspaces: `data/jobs/{owner}/{set}/{id}/`
-- States: todo, dequeued, running, done, failed, cancelled, remove
-- Supports debug mode & drop_done cleanup
-- GracefulKiller handles SIGTERM/SIGINT
-
-## Subprocess Execution Isolation
-
-Jobs executed via subprocess.Popen with set-specific venv Python interpreter for per-set isolation.
-
-- **Benefits**: Prevents package conflicts, ensures clean execution context.
-- **CLI Invocation**: job_runner.py accepts JSON-serialized kwargs via command-line for complex arg passing.
-- **Process Management**: Polling uses p.poll() is None (alive), termination via Popen.terminate() with psutil tree-kill.
-- **ZMQ IPC**: Works across subprocess boundaries.
-- **Debug Handling**: Adapter checks and debugpy injection functional in venv context.
-- **Testing**: Mocks use subprocess.Popen; maintains >90% coverage.
-
-### Config Isolation via Kwargs
-- Subprocesses consume JSON-serialized config dicts passed from runner, no file reads or module patching.
-- Relative paths (e.g., "data/git") resolved with locally computed project_root.
-- Functions refactored to accept conf dicts: run_*_job, setup_job_globals, terminate_debugpy_adapter.
-
-### Call Flow
-```mermaid
-graph TD
-    A[main] --> B["run_task_job(project_root, conf_data, conf_runner, conf_users)"]
-    B --> C["setup_job_globals(..., project_root, conf_data, conf_runner)"]
-    A --> D["run_debug_job(..., project_root, conf_data, conf_runner, conf_users)"]
-    D --> C
-    D --> E["terminate_debugpy_adapter(conf_users, owner)"]
-```
+#### Job Spawn Flow
 
 ```mermaid
 graph TD
     A[Runner] --> B[ensure_set_environment]
     B --> C[venv/bin/python]
-    C --> D[Popen: python job_runner.py json_kwargs]
+    C --> D["Popen: python job_runner.py json_kwargs"]
     D --> E[Isolated Job Execution in Workspace]
 ```
 
-## Runner IPC Mechanism
+- `loadJob(job_id)`: fetches from DB, sets state `loading`, returns owner, set, name, kind, param, code, overrides, max_retries
+- `assignJob(job_id, pid)`: sets state `running`, start timestamp, pid; for debug also resolves and stores `debugpy_pid`
+- `finishJob(job_id, state, detail)`: sets state/end/detail/pid=None; service jobs with drop_done and state "done" → immediately sets "remove"; spawns daemon thread to call `terminate_job_processes`
+- `postTerm(job_id)`: if state "remove" → delete job + workspace; else → set state "cancelled"
+- `terminate_job_processes(job_id, pid, is_debug, owner)`: SIGTERM to full process tree; waits up to 15s; SIGKILL if still alive; calls `postTerm`
 
-The runner uses ZMQ ROUTER/REQ over IPC sockets for reliable job completion signaling from child processes, replacing multiprocessing.Queue.
+#### Scheduling
 
-### IPC Pattern
+`schedule()` is called each main loop iteration when no job is queued:
+- **Cron tasks** (non-empty `schedule` string): enqueues `task` job when `next_run ≤ now`; skips if one already running
+- **Persistent services** (empty `schedule` string): enqueues `service` job if none active and failed count < 3
 
-- **Socket**: Runner binds ROUTER to `/tmp/pyops/runner.sock`; children connect REQ.
-- **Message Format**: `{"id": str, "state": str, "detail": str|None}` (msgpack-packed).
-- **Protocol**: Child sends REQ (single frame), runner receives multipart (identity + empty + packed), processes `finishJob`, replies empty REP (identity + empty + b'ack').
-- **Guarantees**: REQ/REP ensures delivery; no message loss like Queue.
-- **Polling**: Integrated in main loop with `zmq.Poller` timeout=0 for non-blocking.
-- **Cleanup**: `setsockopt(zmq.LINGER, 0)`; close on shutdown.
+#### Debug Spawn
 
-### Runner Main Loop with ZMQ Polling
+1. `validate_debug_prerequisites(owner)` — resolves port from `conf_users`
+2. Spawn subprocess
+3. Poll `has_debugpy_adapter(port)` up to 50×0.1s (5s); if adapter absent and process alive → `finishJob("failed", ...)`
+4. `assignJob` only called after adapter confirmed up
+
+### Job Runner (`app/job_runner.py`)
+
+Subprocess entry point; runs inside per-set venv. Receives all config as JSON kwargs on command line (no file reads). Dispatches to `run_task_job`, `run_service_job`, `run_debug_job`, `run_draft_job`.
+
+#### Config Isolation
+
+Config dicts (`conf_data`, `conf_runner`, `conf_users`, `conf_web`) are passed as kwargs from the runner at spawn time and stored as module-level globals (`_conf_data`, etc.). Relative paths resolved using locally computed `_project_root`.
+
+```mermaid
+graph TD
+    A[main kwargs] --> B["_conf_data/_conf_runner/_conf_users/_conf_web = kwargs"]
+    B --> C["run_task_job / run_service_job / run_debug_job / run_draft_job"]
+    C --> D["setup_workspace(data_jobs, owner, set, job_id)"]
+    D --> E["setup_execution_environment → open stdout.log/stderr.log"]
+    E --> F["with redirect_stdout/redirect_stderr"]
+    F --> G["process_code_installs → pip/git installs to files"]
+    G --> H["compile code objects"]
+    H --> I["setup_job_globals → setup_logging"]
+    I --> J["execute_job_code → exec(param/libs/code)"]
+    J --> K["send_completion ZMQ"]
+    K --> L["finally: flush/close files"]
+```
+
+#### Job Globals
+
+`setup_job_globals()` injects into the scriptlet execution namespace:
+
+| Name | Value |
+|------|-------|
+| `owner` | job owner |
+| `set`, `name` | scriptlet identity |
+| `workspace` | `data/jobs/{owner}/{set}/{id}/` |
+| `userspace` | `data/jobs/{owner}/` |
+| `setspace` | `data/jobs/{owner}/{set}/` |
+| `gitspace` | `data/git/` |
+| `pkgspace` | `data/pkg/` |
+| `jobsspace` | `data/jobs/` |
+| `control` | `pyops.Control(owner, web_bind)` |
+| `listener` | `pyops.ServiceListener(owner, job_id)` (service/debug only) |
+
+#### Output Isolation
+
+All job output is redirected to per-job files in the workspace:
+
+- `setup_execution_environment()` opens `stdout.log` and `stderr.log`
+- `run_*_job()` wraps execution in `with redirect_stdout(stdout_file): with redirect_stderr(stderr_file):`
+- `setup_logging()` adds handlers pointing to `sys.stdout`/`sys.stderr` (which are redirected)
+- `process_install_lines()` subprocesses use `stdout=stdout_file, stderr=stderr_file`
+- `finally:` block flushes and closes files
+
+#### Error Handling
+
+All `run_*_job()` functions follow the same pattern: every setup phase is wrapped in try-except; any exception calls `send_completion` with `state="failed"` and full traceback as detail. No silent failures.
 
 ```mermaid
 flowchart TD
-    A[Main Loop Start] --> B{Poll DB for todo jobs?}
-    B -->|Yes| C["Dequeue & Spawn Process<br/>(pass sock_path)"]
-    C --> D["Poll ZMQ Socket<br/>(timeout=0)"]
-    D --> E{Event?}
-    E -->|Yes| F["Recv Multipart Msg<br/>(identity + empty + packed)"]
-    F --> G["Unpack msgpack<br/>Call finishJob"]
-    G --> H["Send REP<br/>(identity + empty + b'ack')"]
-    H --> I[Clean DB/Processes]
-    E -->|No| I
-    B -->|No| J[Schedule/Pull Git]
-    J --> I
-    I --> A
+    A[run_*_job entry] --> B{setup_workspace}
+    B -->|Error| Z[send_completion failed + traceback]
+    B -->|OK| C{setup_execution_environment}
+    C -->|Error| Z
+    C -->|OK| D{process_code_installs}
+    D -->|Error| Z
+    D -->|OK| E[execute_job_code]
+    E -->|Success| F[send_completion done]
+    E -->|Error| Z
 ```
 
-### Child Completion Signaling
+Top-level `__main__` block catches any uncaught exception, prints to stderr, and exits with code 1.
+
+### Directives (`app/lib/job.py`)
+
+Directives in scriptlet code control installs and library imports.
+
+#### Library Imports: `process_imports()`
+
+Pattern: `#!{[set::]name}` at line start. Recursively loads library code (committed unless debug/draft), appends to `libs` list in topological order. Cycle-safe via `seen_libs` set and `depth` limit (10).
+
+Directive type detection:
+- **git**: arg contains `://` or starts with `git@`
+- **library**: starts with `{` or contains `::`
+- **pip**: anything else
+
+#### Install Processing: `process_install_lines()` / `process_code_installs()`
+
+`process_code_installs()` applies `process_install_lines()` to param, libs, and code in order. `process_install_lines()` bootstraps pip/setuptools/wheel first, then for each `#!` line:
+- **pip**: `pip install --no-cache-dir --upgrade --upgrade-strategy eager {args}`
+- **git**: clones to `data/pkg/{set}/{repo}/` or pulls if exists; then `pip install -e`
+- **library**: skipped (handled by `process_imports`)
+
+### Debug Mode
+
+Debug jobs are launched by the runner with `kind="debug"`.
+
+#### Runner-Side (before spawn)
+
+1. `validate_debug_prerequisites(owner)` resolves port from `conf_users()[owner]["debug_port"]` (must be int 1025–65535)
+2. `enqueue()` (in `lib/runner.py`): marks any existing dequeued/running debug job for the owner as `state="cancel"` before creating the new todo job
+3. After spawn: polls `has_debugpy_adapter(port)` for up to 5s; fails job if adapter doesn't appear
+
+#### job_runner-Side (inside subprocess)
+
+1. `terminate_debugpy_adapter(owner, port)`: kills any existing debugpy adapter process on the port
+2. `pip install debugpy` in the set venv
+3. Execs: `debugpy.log_to('.debug/adapter'); debugpy.listen(('0.0.0.0', port))`
+   - If `#>AWAIT_DEBUG` in param: also execs `debugpy.wait_for_client(); debugpy.breakpoint()`
+4. Creates `.debug/src/{set}/task/{name}.py` and `.debug/src/{set}/library/{lib}.py` from code; compiles objects from these files for accurate breakpoint line mapping
+5. Applies overrides: VSIX `buildOverrides()` walks local `pyops/{set}/*.py`; runner applies override code if `{set}::{name}` matches
+
+**`debugpy.listen` binds `('0.0.0.0', port)` intentionally** — required for Docker remote debugging (VSCode on host connects to container via port-forward). Never change this binding without explicit instruction.
+
+#### Retry Behavior
+
+`execute_job_code()` in `app/job_runner.py`:
+- **task**: loops `max_retries + 1` times; on exception sleeps 60s and retries; final failure → `send_completion failed`
+- **service/debug/draft**: no retry; single failure → `send_completion failed`
+
+---
+
+## IPC & Services (`app/lib/pyops.py`)
+
+Two distinct ZMQ channels in the system:
+
+| Channel | Socket | Purpose |
+|---------|--------|---------|
+| Runner completion | ROUTER/REQ at `/tmp/pyops/runner.sock` | Job → Runner: signal done/failed |
+| Service requests | ROUTER/REQ at `/tmp/pyops/{job_id}.sock` | FastAPI → Service: proxy HTTP |
+
+### Runner Completion IPC
+
+`send_completion(runner_sock_path, msg)` in `app/lib/job.py`: connects REQ, sends `{"id", "state", "detail"}` (msgpack-packed), blocks for ACK. No retries — IPC in same container is reliable.
+
+Runner receives multipart `(identity + empty + packed)`, calls `finishJob`, replies `(identity + empty + b'ack')`.
 
 ```mermaid
 sequenceDiagram
     participant Child as Job Process
-    participant ZMQ as REQ Socket
-    participant Parent as Runner ROUTER
-    Child->>ZMQ: Create REQ socket and connect
-    Note over Child,ZMQ: Execute job code
-    alt Success
-        Child->>ZMQ: Send completion message
-        ZMQ->>Parent: Receive multipart message
-        Parent->>ZMQ: Process and send ACK
-        ZMQ->>Child: Recv ACK
-        Child->>Child: Close socket and exit
-    else Failure
-        Child->>ZMQ: Send failure message
-        Note over Child: Log if no ACK
-    end
+    participant Runner as Runner ROUTER
+    Child->>Runner: REQ: msgpack({id, state, detail})
+    Runner->>Runner: finishJob(id, state, detail)
+    Runner->>Child: REP: b'ack'
+    Child->>Child: close socket and exit
 ```
 
-## Runner Process Lifecycle
+### Service IPC
 
-- `app/runner.py` main: spawn `job_runner.py` → `assignJob(pid, "running")` → loop `cleanProcesses` (poll!=None → remove `Popen` dict).
-- Completion: ZMQ `ROUTER/REQ` → `receive_and_process` → `finishJob(state/detail, pid=None)` → `postTerm` (remove/cancelled).
-- Startup: `handleOddJobs` dequeued/running → todo/failed.
-- Debug: Post-spawn adapter poll (5s timeout → fail if no).
-- Stale PID Monitoring: Post-`cleanProcesses`, query DB `Job.pid` in former dict → if `!psutil.Process(pid).is_running()` → `finishJob("failed", "process termination pid={pid}")`. Ensures DB sync for silent deaths (e.g., segv).
+`ServiceListener` (in service/debug scriptlets) binds a ROUTER socket at `/tmp/pyops/{job_id}.sock`. `ServiceClient` (in `controller_proxy`) connects REQ and calls `request(params)`.
 
-```mermaid
-flowchart TD
-    Spawn[Spawn job_runner Popen] --> Assign[assignJob pid running DB]
-    Assign --> Loop[Loop cleanProcesses poll!=None rm dict]
-    Loop --> ZMQ{ZMQ ROUTER recv?}
-    ZMQ -->|yes| Finish[finishJob state/detail pid=None postTerm]
-    Loop --> Stale[Stale: DB pid !psutil.running → finishJob failed term]
-    Stale --> Finish
-```
+**Message format** (scriptlet → FastAPI): `{"type": "GET/POST/...", "path": str, "user": str, "data": body, "data_type": "json/text/binary/none"}`
 
-### Debug Implementation
+**Response format**: `[status: int, data]` (msgpack-packed `[status, msg]`)
 
-#### Debug Kind
+`ServiceListener` API (all use `zmq.Poller` with `timeout=0` for non-blocking polls):
+- `listen()`: blocks until message received or SIGTERM (returns `"TERM"`); polls with 1000ms timeout
+- `poll()`: non-blocking (timeout=0); returns message dict, `None`, or `"TERM"`
+- `response(msg, status=200)`: sends reply to last received identity
+- `async_poll()`: returns list of all pending `(identity, message)` tuples
+- `async_response(identity, msg, status=200)`: sends reply to specific client identity
 
-Runner treats debug kind specially for web preview/VSIX.
+### Control API (scriptlet-side)
 
-- Web: no overrides, unstaged main code, committed libs
-- VSIX: overrides for local code
-- Injects debugpy.listen(('0.0.0.0', port)) always, +wait_for_client() if '#>AWAIT_DEBUG' in param
-- Requires user debug_port
-- Kills previous debug job for owner
+`Control(owner, web_bind)` is injected into every scriptlet's global namespace. Proxies to FastAPI via HTTP:
 
-#### Config Extension
+- `control.job`: `list()`, `create()`, `get()`, `delete()`, `cancel()`, `download()`
+- `control.schedule`: `list()`, `create()`, `get()`, `delete()`, `activate()`, `deactivate()`
+- `control.get/post/put/delete(set, name, ...)`: proxy to `/controller/{set}/{name}/`
 
-- `app/lib/files.py`: Provides config access methods:
-  - conf_data() (data/jobs/git/db)
-  - conf_runner() (runner/git_pull_interval/drop_done_delay_seconds)
-  - conf_web() (web/bind)
-  - conf_log() (log/loglevel)
-  - conf_users() (users/debug_port)
-- Dynamic reload on change; no fixed defaults—validate per owner.
+---
 
-#### Enqueue Logic
+## Web Layer (`app/web.py`)
 
-- `enqueue()` handles debug, kills existing running/dequeued for owner
-- Creates new todo
+FastAPI application; mounts all routers; serves static files.
 
-#### Validation
+### Routes
 
-- `validate_debug_prerequisites()` checks port
-- Fails job if invalid
+- `GET /` → `root.html`
+- `GET /favicon.ico`
+- `GET /files/{path}` → static files
+- `GET /debug/port` → `{"port": int}` from `conf_users()[owner]["debug_port"]`; 400 if missing; owner from `X-User` header (default `anonymous`)
+- `GET /controller/{set}/{name}` → executes controller.py draft, renders head/menu/body views with `{{SET}}`/`{{NAME}}` injection
+- `ANY /controller/{set}/{name}/{rest:path}` → `controller_proxy`: executes controller to find running service/debug job, forwards via `ServiceClient.request()`
+- `GET /menu` → `{"menu": [...], "failures": [...]}` — hardcoded Scriptlet group (Manager, Scheduler, Monitor, Sets) + dynamic per-set controller groups from Git; exec failures collected rather than raised
 
-#### Execution
+### Controller Proxy Detail
 
-- Injects debugpy.listen(('0.0.0.0', port)) as first import; compiles debug_bridge.py.
-- Appends wait_for_client() if '#>AWAIT_DEBUG' in param.
-- Auto-pip installs debugpy if missing.
-- Port fetched via /debug/port from conf_users(owner).
+`controller_proxy` determines kind (`debug` if `glob.get("debug")` else `service`); for debug kind filters by requesting user (`X-User`). Finds running job via `runner.find()`, creates `ServiceClient(job_id)`, forwards request with `data_type` inferred from `Content-Type`.
 
-#### Overrides
+### Scriptlet Routers (`app/routers/scriptlet/`)
 
-- VSIX `buildOverrides()` walks local pyops/set/*.py
-- Runner `run()` applies overrides to code/libs if matching {set}::{name}
-- Enables local code in debug jobs
+All routers mount under `/scriptlet/`. Owner resolved from `X-User` header (default `anonymous`).
 
-#### Tests
+| Router | Path | Purpose |
+|--------|------|---------|
+| `job.py` | `/scriptlet/job/` | Job lifecycle: enqueue (task/service/debug/draft), cancel, delete, download |
+| `inventory.py` | `/scriptlet/inventory/` | Scriptlet CRUD: list, create, save, delete |
+| `editor.py` | `/scriptlet/editor/` | Code editing, Jedi completion, preview |
+| `schedule.py` | `/scriptlet/schedule/` | Schedule CRUD |
+| `scheduler.py` | `/scriptlet/scheduler/` | Activate cron triggers; UI |
+| `manager.py` | `/scriptlet/manager/` | Bulk ops UI |
+| `monitor.py` | `/scriptlet/monitor/` | Job/schedule state listing UI |
+| `sets.py` | `/scriptlet/sets/` | Git set management (clone, switch branch, remove) |
+| `jslib.py` | `/scriptlet/jslib/{set}/{name}` | Serve JS libraries |
 
-- Unit tests for enqueue, validate, inject
-- Integration tests for full execution
-
-#### Global Attributes
-
-- Debug enables VSCode attach to host:{dynamic port}
-- Allows second job by killing previous per owner
-- Overrides enable custom code injection for {set}::{name} matches
-
-## Web Interface
-
-### FastAPI App
-
-`app/web.py` creates FastAPI application mounting routers and static files.
-
-#### Root Routes
-
-- `root()`: Serves root.html
-- `favicon()`: Serves favicon.ico
-- `file(path)`: Serves static /files/{path}
-
-#### Controller Proxy
-
-- `controller(set, name)`: Renders UI via `get_controller_code` & `get_view_content`
-- Injects {{SET}} {{NAME}} in views
-- `controller_proxy()`: Handles HTTP methods to /controller/{set}/{name}/{rest:path}
-- Sends ZMQ msg to service with type, path, query, body, data_type
-- `menu()`: Lists controllers from Git
-
-#### View Rendering
-
-- `get_controller_code()`: Reads controller.py
-- `get_view_content()`: Reads html views (head, menu, body)
-- Dynamic UI with Bootstrap, Ace, jQuery
-- Supports light/dark theme
-
-#### Global Attributes
-
-- Async routes
-- Controllers proxy to services via ZMQ
-- Views use Ace for python/json/html modes
-
-### Scriptlet Routers
-
-`app/routers/scriptlet/` submounts to /scriptlet/.
-
-#### Job Routers
-
-- `job.py`: Manages job lifecycle
-  - Enqueues jobs with kind ("task", "service", "debug", "draft")
-  - For debug, accepts overrides
-  - Delete allows todo/cancelled/failed/done states
-- `manager.py`: UI for bulk ops
-
-#### Monitor-Scheduler
-
-- `monitor.py`: Lists jobs/schedules by state
-- `schedule.py`: CRUD schedules
-- `scheduler.py`: Activates cron triggers
-- `sets.py`: Manages Git sets
-
-#### Editor
-
-- `editor.py`: Code editing & Jedi completion
-- Supports task/md/view/library/jslibrary with Ace & preview
-
-#### Inventory
-
-- `inventory.py`: CRUD operations for scriptlets
-  - List, create, save, delete scriptlets
-
-#### JS Library
-
-- `jslib.py`: Serves JavaScript libraries
-  - GET /scriptlet/jslib/{set}/{name} for JS libraries
-
-#### Global Attributes
-
-- FastAPI APIRouter
-- X-User header for owner (default anonymous)
-- Endpoints: /scriptlet/job/item POST, etc.
-- Integrates git.py for read/write
-- UI: manager.html, monitor.html, scheduler.html, sets.html
-
-### Sites
-
-`app/sites/` serves HTML views:
-- `root/`: Main application page (root.html)
-- `scriptlet/`: Scriptlet management interfaces
+---
 
 ## Testing
 
-`tests/` uses pytest with >90% coverage.
+`tests/` uses pytest with >90% coverage target.
 
 ### Structure
 
-- `conftest.py`: Fixtures mock_conf, mock_db, mock_client, mock_git_dir, mock_git_ops, etc.
-- unit/lib/: Tests lib_files, lib_git, lib_pyops, lib_runner_utils, lib_sets, lib_sites
-- unit/orm/: Tests job, schedule
-- integration/: Tests git, orm, routers, runner execution, zmq_integration
-- api/: Tests api_editor, api_endpoints, api_job, api_schedule, api_sets
+- `conftest.py`: shared fixtures
+- `tests/unit/lib/`: lib_files, lib_git, lib_pyops, lib_runner_utils, lib_sets, lib_sites
+- `tests/unit/orm/`: job, schedule
+- `tests/integration/`: git, orm, routers, runner execution, zmq_integration, error_logging
+- `tests/api/`: api_editor, api_endpoints, api_job, api_schedule, api_sets
 
-### Fixtures-Mocks
+### Key Fixtures
 
-- `mock_db`: Temp SQLite
-- `mock_git_dir`: Mock sets/scriptlets
-- `mock_git_ops(mock_git_dir)`: Temp FS ops via `mock_git_dir.tmp_path / repo` (repo="data/git/{set}" → `tmp_path/data/git/{set}/{name}.{ext}`).
-  - Covers `write_content`, `read_content`, `get_controller_code`, `get_view_content`, `delete_file_and_commit`.
-  - **Pitfall**: `Path(repo)` creates **real** `./data/git/{set}/` files (e.g., "test_set" tests → pollution; conflicts `testset/test_task.py` pytest collection despite `norecursedirs=data`).
-- `mock_popen`: Subprocess.Popen mock with pid, poll(), terminate(), wait()
-- `mock_zmq`: ZMQ Context/Socket mock for REQ/REP simulation (msgpack-packed messages, 3 retries on ZMQError)
+- `mock_db`: temp SQLite DB
+- `mock_git_dir`: mock set/scriptlet directory tree
+- `mock_git_ops(mock_git_dir)`: temp FS ops; covers `write_content`, `read_content`, `get_controller_code`, `get_view_content`, `delete_file_and_commit`
+  - **Pitfall**: `Path(repo)` creates real `./data/git/{set}/` files; can pollute test output and conflict with pytest collection despite `norecursedirs=data`
+- `mock_popen`: `subprocess.Popen` mock with pid, `poll()`, `terminate()`, `wait()`
+- `mock_zmq`: ZMQ Context/Socket mock; `send_completion` sends once and blocks for ACK (no retries)
 - `mock_croniter`, `mock_jedi`, `mock_datetime`
-- Overrides for controller_code, view_content, file_path
 
-### Global Attributes
+Rules: no `autouse` fixtures; runtime files in `.cache/`; test-body-only imports from `app`.
 
-- Runtime in `.cache/`
-- No autouse fixtures
-- conftest.py custom_showwarning, pytest_configure
-- Integration tests prefix routers/, lib/, runner/
-
-## Key Features
-
-- Scriptlets support types: task, library, controller, view, markdown
-- Support directives for pip packages, git repos, libraries
-- Scheduling via croniter
-- Monitoring and bulk operations
-- VSIX trees for manager and jobs
+---
 
 ## Deployment
 
-### Development Server
+### Development
 
-`run.sh` starts development server using Gunicorn and Uvicorn
+`run_dev.sh` starts server with hot reload via Gunicorn + Uvicorn workers.
 
-### Docker Support
+### Production
 
-Containerized deployment with Nginx reverse proxy
+`run.sh` invokes gunicorn with `--access-logfile - --error-logfile - --capture-output`, unifying all stdout/stderr. `app/gunicorn.py` also spawns the runner process as a subprocess.
 
-### Global Attributes
-
-- **PyOps**: "IT Infrastructure Python Leveraging Tool"
-- **Web**: Mounts routers & static files
-- **Jobs**: States tracked with PID & logs
-- **Services**: Use listener.listen() or poll()
-- **Config**: Loads from etc/pyops.json
-- **Tests**: Store runtime in .cache/
-- **VSIX Tests**: VSIX tests use Mocha with >80% coverage
-- **VSIX**: Provides pyops-manager & pyops-monitor trees
-
-## Additional Features
-
-### Job Max Retries
-
-Job & Schedule models add max_retries Column(Integer, default=0, nullable=False).
-
-#### Runner Retries
-
-- `execute_job_code()` accepts max_retries: int = 0
-- For task kind: attempt up to max_retries + 1 times
-- On error: if attempt < max_retries, log warning, sleep 60s, retry
-- Else: set failed with traceback
-
-#### JobControl.create
-
-Adds max_retries: int = 0 to sig, json adds "max_retries": max_retries.
-
-#### UI Scheduler
-
-- `scheduler.html` createModal adds #createModal-maxRetries input type=number min=0 value=0 after drop_done
-- `clearCreateModal` val("0")
-- `onCreate` parseInt || 0 sends PUT /scriptlet/schedule/item
-
-### Runner Execution Details
-
-The runner spawns isolated subprocesses per job in `data/jobs/{owner}/{set}/{id}/` workspaces. It executes `job.param` as Python code via `exec(compiled_param, glob)`. For task jobs, it retries up to `max_retries + 1` times on error, sleeping 60s between retries, then sets state to `'failed'` with traceback.
-
-### Debugpy Config
-
-- debugpy.listen binds ('0.0.0.0', port) intentionally for Docker remote debugging (VSCode on host to container port-forward)
-- Never change debugpy.listen host/port binding without explicit user instruction
-
-### Debug Port Endpoint
-
-- app/web.py GET /debug/port uses sanitize_owner(X-User default "anonymous") & files.conf_users()[owner]["debug_port"]
-- Returns {"port": int(port)}
-- 400 "No debug_port configured for user '{owner}'" if missing.
-
-### Tests Debug Port
-
-tests/api/test_api_endpoints.py::test_debug_port mocks conf_users anonymous/testuser/missing -> 200/400.
-
-## Error Handling
-
-### Pre-Execution Error Logging
-
-`app/job_runner.py` implements comprehensive error logging for all pre-execution phases to prevent silent failures:
-
-#### Job Runner Functions
-
-Each job runner function (`run_task_job`, `run_service_job`, `run_debug_job`, `run_draft_job`) wraps setup operations in try-except blocks:
-
-1. **Workspace Setup** (`setup_workspace()`): Errors during directory creation are caught, logged with traceback to stderr files, and reported via ZMQ completion as "failed" state.
-
-2. **Environment Setup** (`setup_execution_environment()`): Errors creating stdout/stderr log files or changing working directory are caught and reported.
-
-3. **Install Processing** (`process_code_installs()`): pip/git install failures during job setup are caught, logged with traceback, and reported as "failed".
-
-#### Debug Job Specific Errors
-
-- **debugpy Installation**: `subprocess.run([pip_path, 'install', 'debugpy'])` failures are caught and reported with specific error message.
-- **Debug Adapter Execution**: `exec(debug_code)` errors (e.g., debugpy.listen() failures) are caught and reported.
-- **Override Parsing**: Invalid JSON in overrides is caught via `json.JSONDecodeError`, logged, and reported as "failed".
-
-#### Top-Level Error Handler
-
-The `if __name__ == "__main__":` block includes a catch-all error handler:
-
-```python
-if __name__ == "__main__":
-    import json
-    import sys
-    
-    try:
-        if len(sys.argv) != 2:
-            print("Usage: job_runner.py <json_kwargs>", file=sys.stderr)
-            sys.exit(1)
-        
-        kwargs = json.loads(sys.argv[1])
-        main(**kwargs)
-    except ValueError as e:
-        error_msg = f"Invalid arguments: {e}\n{traceback.format_exc()}"
-        print(error_msg, file=sys.stderr)
-        sys.exit(1)
-    except Exception as e:
-        error_msg = f"Unhandled error in job_runner.py: {e}\n{traceback.format_exc()}"
-        print(error_msg, file=sys.stderr)
-        sys.exit(1)
-```
-
-This ensures any exception escaping the individual job runner functions is caught, logged with full traceback to stderr, and exits with code 1.
-
-### Error Flow Diagram
+### Stdout/Stderr Flow
 
 ```mermaid
 flowchart TD
-    A[Job Runner Entry] --> B{setup_workspace}
-    B -->|Error| C[Log error + traceback]
-    C --> D[send_completion failed]
-    B -->|Success| E{setup_execution_environment}
-    E -->|Error| C
-    E -->|Success| F{process_code_installs}
-    F -->|Error| C
-    F -->|Success| G[Execute job code]
-    G --> H{Job success?}
-    H -->|Yes| I[send_completion done]
-    H -->|No| J[send_completion failed with traceback]
+    A["run.sh: gunicorn --capture-output"] --> B["app/gunicorn.py: spawn runner"]
+    B --> C["runner.py: StreamHandler(sys.stdout/stderr)"]
+    C --> D["Gunicorn: unified stdout/stderr stream"]
+    B --> E["Spawn job_runner.py stdout=sys.stdout stderr=sys.stderr"]
+    E --> F["job_runner: redirect_stdout/stderr → stdout.log/stderr.log"]
+    F --> G["Job workspace: isolated per-job output files"]
 ```
 
-### Test Coverage
-
-Comprehensive tests in [`tests/integration/runner/test_error_logging.py`](tests/integration/runner/test_error_logging.py) verify:
-
-- **Workspace setup failures**: PermissionError, OSError, FileNotFoundError all result in "failed" state with error message.
-- **Environment setup failures**: Disk full errors during file creation are caught and reported.
-- **Install processing failures**: pip install failures for task/service/draft jobs are logged and reported.
-- **Debug job specific errors**: debugpy installation failures, adapter execution errors, invalid override JSON all result in "failed" state.
-- **Top-level handler**: Invalid JSON arguments and unhandled exceptions in main() are caught and logged.
-
-### Key Guarantees
-
-1. **No Silent Failures**: Every error path results in `send_completion()` being called with `"state": "failed"` and a descriptive `"detail"` message containing the error and traceback.
-
-2. **Traceback Logging**: All errors include full Python tracebacks for debugging.
-
-3. **stderr File Logging**: Errors are written to job workspace stderr.log files for persistent logging.
-
-4. **Consistent Exit Codes**: Top-level handler exits with code 1 on any error, enabling script-based failure detection.
-
-## Stdout/Stderr Handling
-
-### Overview
-PyOps components direct stdout/stderr output to unified streams managed by `app/gunicorn.py` (via `run.sh` with `--capture-output`), while job execution output is isolated to per-job files.
-
-### Top-Level Logging Flow
-
-```mermaid
-flowchart TD
-    A["run.sh: gunicorn --capture-output"] --> B["app/gunicorn.py: Spawn runner process"]
-    B --> C["app/runner.py: main() logging to sys.stdout/stderr"]
-    C --> D["Web/FastAPI logs via uvicorn worker to stdout/stderr"]
-    D --> E["Gunicorn captures unified stdout/stderr"]
-    C --> F[Spawn job_runner.py with stdout/stderr]
-    F --> E
-    style E fill:#90EE90
-```
-
-- **Gunicorn Integration**: `run.sh` invokes gunicorn with `--access-logfile - --error-logfile - --capture-output` to capture all stdout/stderr to unified streams
-- **Runner Logging**: `app/runner.py` `main()` configures logging with `StreamHandler(sys.stdout)` for info/debug and `StreamHandler(sys.stderr)` for warnings
-- **Job Output**: Runner spawns `job_runner.py` with `stdout=sys.stdout, stderr=sys.stderr, text=True` for direct output to gunicorn streams
-
-### Job-Specific Output Redirection
-
-```mermaid
-flowchart TD
-    A["app/job_runner.py: main() dispatch to run_*_job"] --> B["setup_workspace + setup_execution_environment: Open stdout.log/stderr.log"]
-    B --> C["with redirect_stdout(file) + redirect_stderr(file)"]
-    C --> D["setup_logging: Handlers to sys.stdout/sys.stderr → files"]
-    D --> E["process_code_installs: Subprocess pip/git with stdout/stderr=file"]
-    E --> F["exec(param/libs/code): Output to files"]
-    F --> G["Errors/retries: print/traceback to sys.stderr → file"]
-    G --> H["send_completion ZMQ: No output"]
-    H --> I["finally: Flush/close files"]
-    style B fill:#FFD700
-    style C fill:#FFD700
-    style I fill:#90EE90
-```
-
-- **File Setup**: `setup_execution_environment()` opens `stdout.log` and `stderr.log` in job workspace (`data/jobs/{owner}/{set}/{id}/`)
-- **Output Redirection**: All `run_*_job()` functions wrap execution in `with redirect_stdout(stdout_file): with redirect_stderr(stderr_file):`
-- **Logging Handlers**: `setup_logging()` creates handlers that write to `sys.stdout`/`sys.stderr` (redirected to files)
-- **Subprocess Piping**: `process_install_lines()` subprocesses (pip/git) use `stdout=stdout_file, stderr=stderr_file` to capture install output
-
-### Code Flow
-
-```mermaid
-flowchart TD
-    A["Runner spawns job_runner.py"] --> B["setup_execution_environment: Open files"]
-    B --> C["with redirect_stdout(file):"]
-    C --> D["with redirect_stderr(file):"]
-    D --> E["setup_logging: Handlers to files"]
-    E --> F["process_code_installs: pip/git to files"]
-    F --> G["exec(param/libs/code): Output to files"]
-    G --> H["send_completion: ZMQ only"]
-    H --> I["finally: Flush/close files"]
-```
-
-### Key Guarantees
-
-1. **Top-Level Capture**: All runner/web logs appear in gunicorn stdout/stderr via `--capture-output`
-2. **Job Isolation**: All job execution output (exec, logging, installs) goes to per-job `stdout.log`/`stderr.log`
-3. **No Leakage**: `redirect_stdout/stderr` blocks ensure no output escapes to top-level during exec
-4. **Testing**: Pytest only (no gunicorn); mocks verify file writes and no stdout/stderr leakage
-
-### Test Coverage
-
-Tests in `tests/integration/runner/` verify:
-- File contents match expected output (mock `open("stdout.log")`, assert writes)
-- Subprocesses pipe to files (mock `subprocess.run`, verify `stdout=stdout_file`)
-- No leakage (mock prints pre/post-`with`, assert only pre streams to top-level)
-- Error paths (mock exceptions, verify traceback in `stderr.log`)
+Docker deployment uses Nginx as reverse proxy.

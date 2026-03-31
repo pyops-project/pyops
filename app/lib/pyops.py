@@ -177,9 +177,9 @@ class ServiceListener:
         else:
             return "TERM"
 
-    def response(self, msg):
+    def response(self, msg, status: int = 200):
         if self.last_identity is not None:
-            b = msgpack.packb(msg)
+            b = msgpack.packb([status, msg])
             self.socket.send(self.last_identity, zmq.SNDMORE)
             self.socket.send(b'', zmq.SNDMORE)
             self.socket.send(b)
@@ -198,9 +198,9 @@ class ServiceListener:
             messages.append((identity, message))
         return messages
 
-    def async_response(self, identity, msg):
+    def async_response(self, identity, msg, status: int = 200):
         """Send response to a specific client identity."""
-        b = msgpack.packb(msg)
+        b = msgpack.packb([status, msg])
         self.socket.send(identity, zmq.SNDMORE)
         self.socket.send(b'', zmq.SNDMORE)
         self.socket.send(b)
@@ -227,4 +227,5 @@ class ServiceClient:
     def request(self, msg):
         b = msgpack.packb(msg)
         self.socket.send(b)
-        return msgpack.unpackb(self.socket.recv())
+        status, data = msgpack.unpackb(self.socket.recv())
+        return status, data

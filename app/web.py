@@ -283,7 +283,10 @@ async def controller_proxy(set: str, name: str, rest: str, request: Request):
             params["data"] = None
             params["data_type"] = "none"
 
-        return s.request(params)
+        status, data = s.request(params)
+        if status != 200:
+            raise HTTPException(status_code=status, detail=data)
+        return data
     except HTTPException:
         raise
     except Exception as ex:

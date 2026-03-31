@@ -13,7 +13,7 @@ def test_controller_proxy_path_backward_compat(client, mock_git_ops, mock_db):
          patch("app.lib.pyops.ServiceClient") as mock_service:
         mock_instance = MagicMock()
         mock_service.return_value = mock_instance
-        mock_instance.request.return_value = {"success": True}
+        mock_instance.request.return_value = (200, {"success": True})
 
         response = client.get("/controller/testset/testname/q?cmd=foo", headers={"X-User": "testuser"})
         assert response.status_code == 200
@@ -29,7 +29,7 @@ def test_controller_proxy_path_subpath(client, mock_git_ops, mock_db):
          patch("app.lib.pyops.ServiceClient") as mock_service:
         mock_instance = MagicMock()
         mock_service.return_value = mock_instance
-        mock_instance.request.return_value = {"received": "path"}
+        mock_instance.request.return_value = (200, {"received": "path"})
 
         # POST with JSON body
         json_data = {"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}]}
@@ -48,7 +48,7 @@ def test_controller_proxy_path_query_params(client, mock_git_ops, mock_db):
          patch("app.lib.pyops.ServiceClient") as mock_service:
         mock_instance = MagicMock()
         mock_service.return_value = mock_instance
-        mock_instance.request.return_value = {"ok": True}
+        mock_instance.request.return_value = (200, {"ok": True})
 
         response = client.get("/controller/testset/testname/api/models?limit=10&after=gpt", headers={"X-User": "testuser"})
         assert response.status_code == 200
@@ -65,7 +65,7 @@ def test_controller_proxy_path_empty_rest(client, mock_git_ops, mock_db):
          patch("app.lib.pyops.ServiceClient") as mock_service:
         mock_instance = MagicMock()
         mock_service.return_value = mock_instance
-        mock_instance.request.return_value = {"path": "/"}
+        mock_instance.request.return_value = (200, {"path": "/"})
 
         response = client.get("/controller/testset/testname/", headers={"X-User": "testuser"})
         assert response.status_code == 200
@@ -80,7 +80,7 @@ def test_controller_proxy_path_put_delete(client, mock_git_ops, mock_db):
          patch("app.lib.pyops.ServiceClient") as mock_service:
         mock_instance = MagicMock()
         mock_service.return_value = mock_instance
-        mock_instance.request.return_value = {"method": "PUT"}
+        mock_instance.request.return_value = (200, {"method": "PUT"})
 
         # PUT
         response = client.put("/controller/testset/testname/items/123", json={"name": "test"}, headers={"X-User": "testuser"})
@@ -119,13 +119,35 @@ def test_controller_proxy_path_exec_fail(client, mock_git_ops, mock_db):
         assert "error" in data
         assert "controller syntax error" in data["error"]
 
+def test_controller_proxy_service_error_status(client, mock_git_ops, mock_db):
+    # Test that non-200 status from service raises HTTPException with correct code
+    with patch("app.lib.runner.find", return_value=["mock_job_id"]), \
+         patch("app.lib.pyops.ServiceClient") as mock_service:
+        mock_instance = MagicMock()
+        mock_service.return_value = mock_instance
+        mock_instance.request.return_value = (404, "resource not found")
+
+        response = client.get("/controller/testset/testname/missing", headers={"X-User": "testuser"})
+        assert response.status_code == 404
+
+def test_controller_proxy_service_error_status_422(client, mock_git_ops, mock_db):
+    # Test that 422 from service is propagated
+    with patch("app.lib.runner.find", return_value=["mock_job_id"]), \
+         patch("app.lib.pyops.ServiceClient") as mock_service:
+        mock_instance = MagicMock()
+        mock_service.return_value = mock_instance
+        mock_instance.request.return_value = (422, "validation failed")
+
+        response = client.post("/controller/testset/testname/submit", json={}, headers={"X-User": "testuser"})
+        assert response.status_code == 422
+
 def test_controller_proxy_preserves_query_path(client, mock_git_ops, mock_db):
     # Test backward compatibility: preserves ?path= if present
     with patch("app.lib.runner.find", return_value=["mock_job_id"]) as mock_find, \
          patch("app.lib.pyops.ServiceClient") as mock_service:
         mock_instance = MagicMock()
         mock_service.return_value = mock_instance
-        mock_instance.request.return_value = {"path_preserved": True}
+        mock_instance.request.return_value = (200, {"path_preserved": True})
 
         response = client.get("/controller/testset/testname/?path=/custom&cmd=foo", headers={"X-User": "testuser"})
         assert response.status_code == 200
@@ -138,7 +160,7 @@ def test_controller_proxy_service_client_args(client, mock_git_ops, mock_db):
     # Test that ServiceClient is called with correct arguments from controller globals
     with patch("app.lib.runner.find", return_value=["mock_job_id"]) as mock_find, \
          patch("zmq.Context") as mock_zmq_context, \
-         patch("msgpack.unpackb", return_value={"test": "response"}) as mock_unpackb:
+         patch("msgpack.unpackb", return_value=[200, {"test": "response"}]) as mock_unpackb:
 
         mock_socket = MagicMock()
         mock_context = MagicMock()

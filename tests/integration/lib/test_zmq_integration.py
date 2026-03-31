@@ -42,14 +42,15 @@ class TestZMQIntegration:
 
             # Send sync message
             test_data = "hello world"
-            response = client.request({
+            status, data = client.request({
                 "type": "POST",
                 "path": "/test",
                 "data": test_data,
                 "data_type": "text"
             })
 
-            assert response["result"] == f"echoed:{test_data}"
+            assert status == 200
+            assert data["result"] == f"echoed:{test_data}"
 
         finally:
             # Cleanup
@@ -93,13 +94,14 @@ class TestZMQIntegration:
             responses = []
 
             for msg_data in test_messages:
-                response = client.request({
+                status, data = client.request({
                     "type": "POST",
                     "path": "/test",
                     "data": msg_data,
                     "data_type": "text"
                 })
-                responses.append(response["result"])
+                assert status == 200
+                responses.append(data["result"])
 
             # Verify all responses received
             expected = [f"async_echoed:{msg}" for msg in test_messages]
@@ -114,3 +116,50 @@ class TestZMQIntegration:
             if hasattr(client, 'close'):
                 client.close()
 
+    def test_error_status_propagation(self):
+        """Test that non-200 status codes are propagated from listener to client"""
+        owner = "test_user"
+        job_id = "test_job_error"
+
+        listener = ServiceListener(owner, job_id)
+        stop_event = threading.Event()
+
+        def service_loop():
+            while not stop_event.is_set():
+                msg = listener.poll()
+                if msg == "TERM":
+                    break
+                if msg:
+                    if msg.get("path") == "/forbidden":
+                        listener.response("access denied", 403)
+                    elif msg.get("path") == "/missing":
+                        listener.response("not found", 404)
+                    else:
+                        listener.response({"ok": True})
+
+        service_thread = threading.Thread(target=service_loop, daemon=True)
+        service_thread.start()
+
+        try:
+            time.sleep(0.1)
+            client = ServiceClient(job_id)
+
+            status, data = client.request({"path": "/forbidden"})
+            assert status == 403
+            assert data == "access denied"
+
+            status, data = client.request({"path": "/missing"})
+            assert status == 404
+            assert data == "not found"
+
+            status, data = client.request({"path": "/ok"})
+            assert status == 200
+            assert data == {"ok": True}
+
+        finally:
+            stop_event.set()
+            listener.kill_now = True
+            service_thread.join(timeout=1.0)
+            listener.close()
+            if hasattr(client, 'close'):
+                client.close()

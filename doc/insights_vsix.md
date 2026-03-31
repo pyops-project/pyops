@@ -1,185 +1,394 @@
-## PyOps VSIX Extension
+## PyOps VSIX Extension — Technical Reference
 
 ### Overview
 
-The `vsix/` directory contains the VSCode extension for PyOps, providing a graphical interface for managing scriptlets and jobs.
+The `vsix/` directory contains the VSCode extension for PyOps. It provides a graphical interface for managing scriptlets and jobs, supporting create/sync/diff/debug workflows against a running PyOps server.
 
 ### Architecture
 
 ```mermaid
-graph TD
-    A[VSCode Extension] --> B[Activation in extension.ts]
-    B --> C[AuthService.setupAuth]
-    B --> D[RemoteContentProvider]
-    B --> E[ConnectionStatusManager]
-    B --> F[ManagerTreeDataProvider]
-    B --> G[JobsTreeDataProvider]
-    B --> H[RefreshTimerManager]
-    B --> I[Services: JobService, ScriptletService, DebugService]
-    B --> J[Commands Registration]
-    B --> K[Debug Configuration Provider]
+flowchart TD
+    A["VSCode Extension\nextension.ts"] --> B["AuthService\n(Basic Auth setup)"]
+    A --> C["ApiClient\n(fetch + auth headers)"]
+    A --> D["ConnectionStatusManager\n(status bar)"]
+    A --> E["ManagerTreeDataProvider\n(sets / scriptlets)"]
+    A --> F["JobsTreeDataProvider\n(jobs by state)"]
+    A --> G["RefreshTimerManager\n(auto-refresh)"]
+    A --> H["Services\nJobService / ScriptletService\nDebugService / DebugOutputMonitor"]
+    A --> I["PyOpsPythonDebugConfigProvider\n(debug intercept)"]
+    A --> J["RemoteContentProvider\n(pyops-remote:// URIs)"]
+    A --> K["Commands\n(20+ registered)"]
 ```
 
-### Core Components
+**Activation events**: `onView:pyops-manager`, `onView:pyops-monitor`.
 
-- **`src/extension.ts`**: Main activation file that sets up the extension context and registers all providers and services.
-- **`src/jobsTreeProvider.ts`**: Provides the `JobsTreeDataProvider` for displaying job states in the tree view.
-- **`src/managerTreeProvider.ts`**: Provides the `ManagerTreeDataProvider` for managing scriptlets.
-- **`src/utils.ts`**: Contains shared utility functions like `inferExt` and `hasValidConfig`.
-- **`src/commands/CreateScriptletCommand.ts`**: Handles the logic for creating new scriptlets.
+### Key Module Map
 
-### Configuration
+| File | Role |
+|------|------|
+| `src/extension.ts` | Main activation: initializes all services, registers providers/commands, handles deactivation |
+| `src/apiClient.ts` | Shared HTTP client: `getServerUrl()`, `getAuthHeaders()`, `hasValidConfig()` |
+| `src/utils.ts` | `inferExt(type)`: maps scriptlet type → file extension |
+| `src/ConnectionStatusManager.ts` | Status bar item showing server connectivity |
+| `src/managerTreeProvider.ts` | `ManagerTreeDataProvider`: sets → scriptlets hierarchy, sync status, local-only discovery |
+| `src/jobsTreeProvider.ts` | `JobsTreeDataProvider`: jobs grouped by state, sorted by start time |
+| `src/providers/RemoteContentProvider.ts` | `TextDocumentContentProvider` for `pyops-remote://` scheme |
+| `src/commands/CreateScriptletCommand.ts` | Create new scriptlet: prompts type/set/name, writes template, opens editor |
+| `src/services/AuthService.ts` | Static: prompts and stores Basic Auth password |
+| `src/services/JobService.ts` | Job lifecycle: cancel, delete, download, view, bulk ops, polling |
+| `src/services/ScriptletService.ts` | Scriptlet sync: local↔remote draft, diff, delete, open |
+| `src/services/DebugService.ts` | Debug enqueue: build overrides, fetch port, attach config |
+| `src/services/DebugOutputMonitor.ts` | Polls job stdout/stderr; streams to output channel |
+| `src/services/RefreshTimerManager.ts` | Starts/stops auto-refresh timers for tree providers |
+| `src/services/PyOpsPythonDebugConfigProvider.ts` | `DebugConfigurationProvider` intercept for Python task launches |
 
-VSCode workspace settings set serverUrl, username, password (state), localPyopsDir, and autoRefreshInterval. Auth is optional (Basic if username/password set).
+---
 
-### Functionality
+## Configuration (`pyops.*` workspace settings)
 
-#### Auth Service
+| Key | Type | Default | Purpose |
+|-----|------|---------|---------|
+| `serverUrl` | string | `http://localhost:8000` | PyOps server base URL |
+| `username` | string | — | Basic Auth username (optional) |
+| `timeout` | number | 30 | HTTP request timeout in seconds |
+| `useRemoteLinter` | boolean | true | Enable Jedi completion via server |
+| `localPyopsDir` | string | `pyops` | Workspace-relative path to local scriptlet directory |
+| `autoRefreshInterval` | number | 10 | Tree auto-refresh interval in seconds |
+| `excludedSets` | string[] | `[]` | Sets excluded from Manager tree |
+| `debugPort` | number | 5678 | Debug port used for Python debugpy attach |
 
-`src/services/AuthService.ts` handles authentication setup for Basic Auth:
+`hasValidConfig()` (in `apiClient.ts`) returns false if `serverUrl` is empty/undefined — it does **not** check any other config keys. Auth is optional: `getAuthHeaders()` returns Basic Auth header only if both `username` and a stored password exist.
 
-- Prompts for password if username is configured but no password is stored.
-- Stores password securely in workspace state.
-- Unit tests in `tests/services/AuthService.test.ts`.
+---
 
-#### Refresh Timer Manager
+## Tree Providers
 
-`src/services/RefreshTimerManager.ts` manages auto-refresh timers for manager/jobs tree providers:
+### ManagerTreeDataProvider
 
-- Starts/stops timers based on config validity.
-- Prevents duplicate timers.
-- Unit tests in `tests/services/RefreshTimerManager.test.ts`.
+Displays scriptlet sets with their scriptlets. Each refresh:
 
-#### Tree Providers
+1. `fetchScriptlets()` — `GET /scriptlet/inventory/list` → `ScriptletInfo[]`
+2. `scanLocalScriptlets()` — walks `{localPyopsDir}/pyops/{set}/{type}/` for files matching `inferExt(type)`; marks `isLocalOnly: true`
+3. Merges remote and local lists; applies `excludedSets` filter
+4. Downloads remote-only scriptlets to `{localPyopsDir}/pyops/{set}/{type}/{name}{ext}`
+5. Checks `has_unstaged_changes` per scriptlet to set sync status icon
 
-- **ManagerTreeDataProvider** fetches scriptlets via API, downloads to local `.pyops/{set}/`, supports create/upload/save/diff/reset/delete/debug, has unit tests in `tests/managerTreeProvider.test.ts`.
-- **JobsTreeDataProvider** lists jobs by state, supports bulk cancel/delete & refresh.
+**ScriptletInfo interface:**
 
-#### Content Provider
+```typescript
+interface ScriptletInfo {
+    set: string;
+    name: string;
+    type: string;            // 'task' | 'service' | 'library' | 'controller' | 'view' | 'markdown' | 'jslibrary'
+    isLocalOnly?: boolean;
+}
+```
 
-RemoteContentProvider serves remote files; onDidChange events.
+**Tree item display:**
 
-#### Services
+| Condition | Icon | `contextValue` | Description |
+|-----------|------|---------------|-------------|
+| Local-only | diff-added | `pyopsItem-{type}-local` | `{ext} (local)` |
+| Remote, synced | check | `pyopsItem-{type}` | sync status |
+| Remote, dirty | warning | `pyopsItem-{type}` | sync status |
 
-- JobService, ScriptletService, DebugService, etc.
+**Context menu visibility** (from `package.json` `when` clauses):
+- `resetLocalFromRemote`, `saveRemoteDraft`, `diffLocalRemote` — excluded from `-local` items
+- `writeLocalToRemoteDraft`, `deleteScriptlet` — available on all `pyopsItem-*` including `-local`
+- `startDebugJob`, `stopDebugJob` — available on `/^pyopsItem-task(-local)?$/`
 
-#### Commands
+### JobsTreeDataProvider
 
-- Registration and execution.
+Lists jobs grouped by state, sorted by `start` timestamp descending. Fetches `GET /scriptlet/job/list`.
 
-### Testing
+**Job interface:**
 
-#### VSIX Tests
+```typescript
+interface Job {
+    id: string;
+    kind: string;            // 'task' | 'service' | 'debug' | 'draft'
+    name: string;
+    set: string;
+    owner?: string;
+    start: string;           // ISO datetime
+    state: string;           // 'todo' | 'dequeued' | 'running' | 'done' | 'failed' | 'cancelled' | 'killed'
+    detail?: string;
+    end: string;
+    param?: string;
+}
+```
 
-- **Unit tests** in `tests/` use Jest with mocked vscode APIs & API client.
-- **Integration tests** in `tests/integration/` use @vscode/test-electron for real VS Code environment with simple assert-based testing.
-- Integration tests run against separately started localhost PyOps development server without authentication.
-- PyOps server must be started externally before running integration tests (not managed by test framework).
-- Run unit tests with `npm run test` or `npm run test:coverage`.
-- Run integration tests with `npm run test:integration` (requires running local development PyOps server on localhost:8000).
-- Integration tests excluded from CI/CD since VS Code not available.
-- Infrastructure set up with simple console-based test runner that works in VS Code extension host.
-- Tests verify extension activation, configuration (server URL only), views, and command registration.
-- No authentication testing in integration tests (development server runs without auth).
+---
 
-#### Service Tests
+## File Type Mapping (`src/utils.ts`)
 
-- **JobService.test.ts**: Tests CRUD operations, bulk cancel/delete, viewJob polling with stdout/stderr updates and state transitions (done/failed/cancelled/remove/404), error handling for all async methods, handling of undefined provider, and timer cleanup.
-- **ScriptletService.test.ts**: Tests local/remote sync operations, network error handling, filesystem branch tests (existsSync conditions), and multi-step error scenarios.
-- **DebugService.test.ts**: Tests buildOverrides and enqueueDebugJob functionality.
-- **DebugOutputMonitor.test.ts**: Tests start/stop monitoring and polling, including incremental stdout/stderr append, channel display, stopping on job completion states (done/failed/cancelled/remove/404), and fetching error logs.
-- **RefreshTimerManager.test.ts**: Tests ensureRunning and stopIfRunning methods.
-- **AuthService.test.ts**: Tests setupAuth for prompts and storage.
-- **PyOpsPythonDebugConfigProvider.test.ts**: Tests configuration provision.
+`inferExt(type: string): string`:
 
-#### Provider Tests
+| Type | Extension |
+|------|-----------|
+| `task`, `service`, `library`, `controller` | `.py` |
+| `view` | `.html` |
+| `markdown` | `.md` |
+| `jslibrary` | `.js` |
+| unknown | `.py` (fallback) |
 
-- **managerTreeProvider.test.ts**: Tests getTreeItem/Children API fetch/download, error handling for fetchScriptlets/downloadScriptlets, and refresh graceful failure.
-- **jobsTreeProvider.test.ts**: Tests job states and bulk operations.
-- **RemoteContentProvider.test.ts**: Tests provideTextDocumentContent, registerRemoteLanguageModeSetter conditional logic, missing language mappings, and event emitter access.
+---
 
-#### Utility Tests
+## Remote Content Provider (`src/providers/RemoteContentProvider.ts`)
 
-- **utils.test.ts**: Tests `inferExt` for all switch cases including unknown types, and `hasValidConfig` for false paths (empty/undefined/null serverUrl).
+Serves `pyops-remote://{set}/{name}?type={type}` URIs. Content is decoded from the URI fragment (base64). Language mode is set via `registerRemoteLanguageModeSetter()`:
 
-#### Other Tests
+| Type | Language ID |
+|------|-------------|
+| `task`, `service`, `library`, `controller` | `python` |
+| `view` | `html` |
+| `markdown` | `markdown` |
+| `jslibrary` | `javascript` |
 
-- **apiClient.test.ts**: Tests API calls with authentication.
-- **ConnectionStatusManager.test.ts**: Tests status bar updates.
-- **CreateScriptletCommand.test.ts**: Tests command execution.
+Used by `diffLocalRemote` to show the remote version read-only in the VSCode diff editor.
 
-#### Test Mocking
+---
 
-- Uses hoisted `jest.mock('../src/services/*')` with mockImplementation for instances/methods.
-- Dynamic require for overrides.
-- VSCode mocks: `window.createOutputChannel`, `workspace.getConfiguration`, etc.
-- `global.fetch` for API calls, `fs`/`path` mocks for filesystem operations.
+## Services
 
-#### Integration Tests
+### AuthService (`src/services/AuthService.ts`)
 
-- VSIX Integration Monitor
-- VSIX Integration Manager
-- VSIX-Integration-Commands
+`static setupAuth(context, outputChannel)`:
+- Skips if `username` not configured
+- Prompts for password if none stored in workspace state
+- Stores password via `context.workspaceState.update()`
 
-### Key Features
+### JobService (`src/services/JobService.ts`)
 
-- Trees: pyops-manager (sets/scriptlets), pyops-monitor (jobs).
-- Actions: enqueue debug download view.
-- Checks hasValidConfig() for serverUrl only.
-- Status bar shows connection.
-- Integrates Cline for code gen.
+Manages job lifecycle operations used by Monitor view commands.
 
-### Global Attributes
+**Key public methods:**
 
-- Tests use `beforeAll` for shared activate/setup; `beforeEach(jest.clearAllMocks())`.
-- No autouse fixtures; isolation via mocks/clear.
-- Run tests with: `npm run test --prefix vsix/`.
-- Focus on error paths, edge cases, and complex conditional logic for branch coverage.
+| Method | Description |
+|--------|-------------|
+| `listJobs()` | Fetches all jobs; used by `attachDebugJob` command |
+| `cancelJob(item)` | `PUT /scriptlet/job/item` state=cancel |
+| `deleteJob(item)` | `DELETE /scriptlet/job/item` (confirmation required) |
+| `downloadJob(item)` | Downloads job workspace as ZIP |
+| `viewJob(item)` | Opens output channel; polls stdout/stderr until terminal state |
+| `copyJobParam(item)` | Copies job `param` to clipboard |
+| `cancelAllJobs()` | Cancels all non-terminal jobs |
+| `deleteAllDone()` | Deletes all `done`/`cancelled` jobs |
+| `deleteAllFailed()` | Deletes all `failed`/`killed` jobs |
+| `dispose()` | Clears active polling intervals |
 
-### Additional Features
+`viewJob` polls at 1s intervals; stops on terminal states: `done`, `failed`, `cancelled`, `killed`, `remove`, or HTTP 404.
 
-#### Debug Features
+### ScriptletService (`src/services/ScriptletService.ts`)
 
-- DebugService: `src/services/DebugService.ts` provides buildOverrides (recursive FS walk local pyops/set/*.py) & enqueueDebugJob (API POST /job/item kind=debug)
-- getDebugHost() parses hostname from pyops.serverUrl ; fallback localhost on invalid URL
-- used by PyOpsPythonDebugConfigProvider & pyops.startDebugJob & pyops.attachDebugJob
-- unit tests `tests/services/debugService.test.ts` >90% coverage.
+Manages local↔remote synchronization for scriptlets.
 
-#### Local-Only Support
+| Method | Description |
+|--------|-------------|
+| `resetLocalFromRemote(item)` | `GET /scriptlet/inventory/item` → writes local file |
+| `writeLocalToRemoteDraft(item)` | Reads local file → `PUT /scriptlet/inventory/item` (creates if 404) → `POST /scriptlet/editor/draft` |
+| `saveRemoteDraft(item)` | `POST /scriptlet/inventory/item` (commit draft) |
+| `diffLocalRemote(item)` | Opens VSCode diff: `pyops-remote://` URI vs local file |
+| `deleteScriptlet(item)` | `DELETE /scriptlet/inventory/item` + removes local file |
+| `openLocalFile(item)` | Opens local file in editor |
 
-- ManagerTreeProvider defines interface ScriptletInfo {set: string; name: string; type: string; isLocalOnly?: boolean}
-- _scriptlets: ScriptletInfo[]; fetchScriptlets(): Promise<ScriptletInfo[]> /scriptlet/inventory/list
-- scanLocalScriptlets(): Promise<ScriptletInfo[]> discovers pyops/{set}/{type}/*.{inferExt(type)} isLocalOnly:true
-- refresh merges remote & localOnly; filters excludedSets; downloads remoteOnly sets _syncStatus.
-- Local-only display: diff-added icon & contextValue pyopsItem-{type}-local & tooltip 'Local only - Set: {set}, Name: {name}, Type: {type}' & description .ext (local)
-- Remote: check/warning syncStatus icon & contextValue pyopsItem-{type} & tooltip sync status.
-- Local-only task scriptlets support pyops.startDebugJob & pyops.stopDebugJob context menus via package.json when /^pyopsItem-task(-local)?$/; sync commands resetLocalFromRemote/saveRemoteDraft/diffLocalRemote restricted excluding -local; writeLocalToRemoteDraft & deleteScriptlet available via /^pyopsItem-(task|service|library|controller|view|markdown)(-local)?$/; writeLocalToRemoteDraft auto-creates remote via PUT /inventory/item if 404 then POST /draft & handles network errors on check/create with specific try-catch showErrorMessages; integration test9 tests write on local-only -> auto-create + draft success.
+`writeLocalToRemoteDraft` auto-creates the remote scriptlet via `PUT` if it doesn't exist (HTTP 404), then posts the draft. Network errors on check/create are caught with specific `showErrorMessage` calls.
 
-#### Debug Integration
+### DebugService (`src/services/DebugService.ts`)
 
-- Debug-Job-Enqueue-SkipCheck: `app/routers/scriptlet/job.py` PUT /scriptlet/job/item skips `git.read_content` existence check for `kind=="debug"` if `overrides[f"{ru.set}::{ru.name}"]` exists - Enables VSIX local-only debug jobs without requiring remote scriptlet file.
-- Runner-LoadJob-SkipCheck: `app/runner.py` loadJob skips `os.listdir/files_list` existence check for `kind=="debug"` if `job.overrides` valid JSON & `f"{job.set}::{job.name}" in parsed dict - Sets `code = override_dict[main_key]` - Fallback git.read_content if no main override or invalid JSON (logs warning) - `committed=False` for debug fallback - Enables full local-only debug lifecycle (enqueue->dequeue->load->run).
-- Debug-Await-Directive: Runner.run_debug_job checks '#>AWAIT_DEBUG' in job.param - Injects debugpy bridge with listen(('0.0.0.0', port)) always - Appends wait_for_client() if directive present. - VSIX.DebugService.enqueuDebugJob sets param='#>AWAIT_DEBUG'. - Enables waiting for VSIX debugger attach; non-VSIX enqueues non-blocking by default. - Tests: tests/integration/runner/test_execution.py test_run_debug_inject (with directive); vsix/tests/services/debugService.test.ts.
-- Debug-Port-Endpoint: app/web.py GET /debug/port uses sanitize_owner(X-User default "anonymous") & files.conf_users()[owner]["debug_port"] - Returns {"port": int(port)} - 400 "No debug_port configured for user '{owner}'" if missing.
-- VSIX-Debug-Port-Fetch: DebugService.enqueueDebugJob fetches /debug/port first with auth headers if set - Logs [DEBUG getDebugPort] Success: {port} / Failed: {error} - Validates number & range(1,65536) throws "Invalid port" else - Returns port with jobId for vscode debug attach localhost:{port}.
-- Tests-Debug-Port: tests/api/test_api_endpoints.py::test_debug_port mocks conf_users anonymous/testuser/missing -> 200/400. vsix/tests/services/debugService.test.ts mocks fetch /debug/port success/auth-noauth/job-fail/network/invalid-port/throw.
-- VSIX-AttachDebug: VSIX adds "Attach Debug" title bar button in pyops-manager panel executes pyops.attachDebugJob command - Lists jobs via JobService.listJobs() filters kind="debug" state="running"|"dequeued" - Requires exactly one running debug job - Fetches port DebugService.getDebugPort() - Launches vscode.debug.startDebugging folder config=debugpy attach localhost:port justMyCode=false - Name=`Attach to PyOps Debug (${set||'unknown'}::${name||'unknown'})` - Logs "Attaching to job {id} ({set||?}::{name||?}) at port {port}" - Handles no/missing/multiple/port fail gracefully.
-- JobService-listJobs: JobService adds public async listJobs(): Promise<Job[]> { return this.fetchJobs(); } - Enables pyops.attachDebugJob access.
-- DebugService-getDebugPort: DebugService adds public async getDebugPort(): Promise<number> extracts `/debug/port` fetch/auth/logic - Refactors enqueueDebugJob to call it - Unit tests in debugService.test.ts success/throw-fetch-fail/invalid-port/no-auth.
-- Global-AttachDebug: pyops.attachDebugJob enables reattach to detached VSIX PyOps debugpy sessions on running jobs without reenqueue or restart.
+Handles PyOps debug job enqueueing and Python debugpy attach config.
 
-#### JS Library Support
+```mermaid
+sequenceDiagram
+    participant VSIX as DebugService
+    participant Server as PyOps Server
+    participant VSCode as VSCode Debug
 
-- `utils.ts inferExt()`: Added case 'jslibrary' → '.js'.
-- `RemoteContentProvider.ts getLanguageId()`: Added case 'jslibrary' → 'javascript' for Ace/IntelliSense.
-- `CreateScriptletCommand.ts`: Added 'JS Library' quickpick option, maps to 'jslibrary' type.
-- `package.json menus`: Extended contextValue regex /^pyopsItem-(task|service|library|controller|view|markdown|jslibrary)(-local)?$/ for sync commands (resetLocalFromRemote, writeLocalToRemoteDraft, saveRemoteDraft, diffLocalRemote, deleteScriptlet).
-- Manager tree displays jslibrary with .js ext, sync status icons, local-only support.
-- Tests: Added inferExt('jslibrary') → 'js'; getLanguageId('jslibrary') → 'javascript'; >80% coverage maintained.
+    VSIX->>Server: GET /debug/port (auth headers if set)
+    Server-->>VSIX: {"port": N}
+    VSIX->>VSIX: buildOverrides(set, workspaceRoot)
+    VSIX->>Server: PUT /scriptlet/job/item kind=debug + overrides JSON
+    Server-->>VSIX: {"id": jobId}
+    VSIX->>VSCode: startDebugging(attach, localhost:port)
+```
 
-#### Build and Development
+**Public methods:**
 
-- Build Process Insights: TypeScript compilation requires strict output directory discipline. Compiled JavaScript files must only exist in `out/` directories. Any JS files in source directories indicate misconfiguration.
-- Integration Test Compilation: Integration tests require a separate TypeScript configuration from the main extension. They cannot share the same `tsconfig.json` due to different include patterns and output requirements. The `rootDir` must exactly match the directory containing all source files being compiled. Include patterns must explicitly list both test suite files and utility files.
-- Output Directory Management: Incorrect `rootDir` in `tsconfig.json` leads to nested or misplaced output directories. The `outDir` path must be calculated relative to `rootDir`, not the `tsconfig.json` location. Verify compilation output matches the expected structure before running tests.
-- Test Architecture Access: Integration tests in the VS Code environment access extension services through global objects. Use `(global as any).serviceName` for service access, not direct TypeScript imports. Static methods are accessed via `serviceInstance.constructor.methodName` or the class name. Do not assume instance methods exist where only static methods are defined.
+| Method | Description |
+|--------|-------------|
+| `static buildOverrides(set, workspaceRoot)` | Walks `{localPyopsDir}/pyops/{set}/*.py`; returns `{set}::{name}: code}` overrides dict + debugpy path mappings |
+| `enqueueDebugJob(set, name, overrides)` | Fetches port, enqueues debug job with overrides, returns `{jobId, port}` |
+| `getDebugPort()` | `GET /debug/port`; validates int in range 1–65535 |
+| `getDebugHost()` | Parses hostname from `pyops.serverUrl`; falls back to `'localhost'` |
+
+### DebugOutputMonitor (`src/services/DebugOutputMonitor.ts`)
+
+Polls job output (stdout/stderr) and streams it to a named output channel.
+
+| Method | Description |
+|--------|-------------|
+| `startMonitoring(key, jobId)` | Begins 1s polling cycle; appends new output incrementally |
+| `stopMonitoring(key)` | Stops polling; cancels the job |
+| `isMonitoring(key)` | Returns true if actively polling |
+| `dispose()` | Clears all active timeouts |
+
+Auto-stops when job reaches a terminal state: `done`, `failed`, `cancelled`, `killed`, `remove`, or HTTP 404. On stop it also fetches any available `stderr` error log.
+
+### RefreshTimerManager (`src/services/RefreshTimerManager.ts`)
+
+Manages setInterval-based auto-refresh for both tree providers.
+
+- `ensureRunning()` — starts timers using `pyops.autoRefreshInterval` (default 10s); skips if already running
+- `stopIfRunning()` — clears both manager and monitor timers
+- `dispose()` → calls `stopIfRunning()`
+
+---
+
+## PyOpsPythonDebugConfigProvider (`src/services/PyOpsPythonDebugConfigProvider.ts`)
+
+Implements VSCode `DebugConfigurationProvider` for Python debug launches from task scriptlet files.
+
+On `resolveDebugConfiguration`:
+1. Validates that the active file is inside `pyops/{set}/task/`
+2. Calls `DebugService.buildOverrides(set, workspaceRoot)`
+3. Calls `DebugService.enqueueDebugJob(set, name, overrides)`
+4. Returns an attach-mode debug configuration targeting `localhost:{port}` with `justMyCode: false`
+5. Injects `jobId` into the config to prevent re-triggering on the same session
+
+Used by `pyops.startDebugJob` command and the attach-on-launch flow.
+
+---
+
+## Debug Integration
+
+Full debug lifecycle connects VSIX, PyOps server, and the runner:
+
+### Enqueue with Overrides
+
+`PUT /scriptlet/job/item` with `kind="debug"` skips `git.read_content` existence check if `overrides["{set}::{name}"]` is present — enables local-only debug jobs without a committed remote scriptlet.
+
+### Runner Override Injection
+
+`app/runner.py loadJob()` skips the `os.listdir` file check for `kind="debug"` when `job.overrides` contains a valid JSON dict with `"{set}::{name}"` key. Sets `code = override_dict[main_key]`. Falls back to `git.read_content` on missing override or invalid JSON (logs warning). `committed=False` for debug fallback.
+
+### `#>AWAIT_DEBUG` Directive
+
+`app/job_runner.py run_debug_job()` always injects `debugpy.listen(('0.0.0.0', port))`. Appends `debugpy.wait_for_client()` only if `'#>AWAIT_DEBUG' in job.param`. VSIX `DebugService.enqueueDebugJob` sets `param='#>AWAIT_DEBUG'` to enable client-wait on the attach workflow.
+
+### Attach Debug Command (`pyops.attachDebugJob`)
+
+Title bar button in `pyops-manager` panel:
+1. `JobService.listJobs()` — filters `kind="debug"` and `state` in `["running", "dequeued"]`
+2. Requires exactly one matching job; warns on zero or multiple
+3. `DebugService.getDebugPort()` — fetches port for the job's owner
+4. `vscode.debug.startDebugging()` — debugpy attach to `localhost:{port}`, `justMyCode: false`
+5. Session name: `Attach to PyOps Debug ({set}::{name})`
+
+Enables re-attach to a detached debug session without reenqueue.
+
+### Debug Port Endpoint
+
+`GET /debug/port` uses `sanitize_owner(X-User, default "anonymous")` and reads `conf_users()[owner]["debug_port"]`. Returns `{"port": int}`. Returns 400 if `debug_port` not configured for the user.
+
+---
+
+## Commands
+
+All commands registered in `extension.ts`. 20 total:
+
+| Command | Description |
+|---------|-------------|
+| `pyops.refreshManager` | Refresh Manager tree |
+| `pyops.createScriptlet` | Create new scriptlet (type/set/name prompt) |
+| `pyops.resetLocalFromRemote` | Download remote version to local file |
+| `pyops.writeLocalToRemoteDraft` | Upload local file to remote draft (auto-create if missing) |
+| `pyops.saveRemoteDraft` | Commit remote draft to main version |
+| `pyops.diffLocalRemote` | Open VSCode diff: remote vs local |
+| `pyops.deleteScriptlet` | Delete remote + local scriptlet |
+| `pyops.openLocalFile` | Open local scriptlet file in editor |
+| `pyops.startDebugJob` | Enqueue debug job with local overrides, launch debugger |
+| `pyops.stopDebugJob` | Stop active debug job |
+| `pyops.attachDebugJob` | Attach debugger to existing running debug job |
+| `pyops.refreshMonitor` | Refresh Monitor tree |
+| `pyops.copyJobParam` | Copy job param to clipboard |
+| `pyops.cancelJob` | Cancel a single job |
+| `pyops.downloadJob` | Download job workspace as ZIP |
+| `pyops.deleteJob` | Delete a job (confirmation required) |
+| `pyops.viewJob` | Open job stdout/stderr in output channel with polling |
+| `pyops.cancelAllJobs` | Cancel all non-terminal jobs |
+| `pyops.deleteAllDone` | Delete all done/cancelled jobs |
+| `pyops.deleteAllFailed` | Delete all failed/killed jobs |
+
+---
+
+## Testing
+
+### Unit Tests (`vsix/tests/`, Jest)
+
+Coverage targets: branches 80%, functions 80%, lines 90%, statements 80%.
+
+| Test file | Covers |
+|-----------|--------|
+| `apiClient.test.ts` | `getServerUrl`, `getAuthHeaders`, auth/noauth paths |
+| `ConnectionStatusManager.test.ts` | Status bar updates, auth retry logic |
+| `extension.test.ts` | Activation, command registration |
+| `utils.test.ts` | `inferExt` all cases including unknown type |
+| `managerTreeProvider.test.ts` | `getTreeItem`/`getChildren`, fetch/download, error handling, refresh graceful failure |
+| `jobsTreeProvider.test.ts` | Job state display, bulk operations |
+| `providers/RemoteContentProvider.test.ts` | `provideTextDocumentContent`, `registerRemoteLanguageModeSetter` conditional logic, missing language mappings, event emitter |
+| `commands/createScriptletCommand.test.ts` | Dialog flow, type/set/name validation, template write |
+| `services/AuthService.test.ts` | `setupAuth` prompts and storage |
+| `services/JobService.test.ts` | CRUD operations, bulk cancel/delete, `viewJob` polling with stdout/stderr updates, terminal state transitions, error handling, undefined provider handling, timer cleanup |
+| `services/ScriptletService.test.ts` | Local/remote sync, network error handling, `existsSync` filesystem branches, multi-step error scenarios |
+| `services/DebugService.test.ts` | `buildOverrides`, `enqueueDebugJob`, `getDebugPort` success/auth/noauth/fail/invalid-port/throw |
+| `services/DebugOutputMonitor.test.ts` | Start/stop monitoring, incremental stdout/stderr append, channel display, stop on terminal states, error log fetch |
+| `services/RefreshTimerManager.test.ts` | `ensureRunning`, `stopIfRunning` |
+| `services/PyOpsPythonDebugConfigProvider.test.ts` | Config provision for task files |
+
+**Mock patterns:**
+- Hoisted `jest.mock('../src/services/*')` with `mockImplementation` for instances/methods
+- `global.fetch` for all API calls
+- `fs`/`path` mocks for filesystem operations
+- VSCode API mocks: `window.createOutputChannel`, `workspace.getConfiguration`, etc.
+- `beforeEach(jest.clearAllMocks())` for isolation; `beforeAll` for shared activation
+
+### Integration Tests (`vsix/tests/integration/`, VSCode electron)
+
+Run with `npm run test:integration --prefix vsix/`. Requires a running PyOps server on `localhost:8000` without authentication. Excluded from CI/CD (no VSCode available in CI).
+
+Uses `@vscode/test-electron` and a simple console-based test runner. Test suites:
+
+| Suite file | Covers |
+|------------|--------|
+| `suite/core.test.ts` | Extension activation, view presence, command registration |
+| `suite/command_integration.test.ts` | Command execution end-to-end |
+| `suite/manager.test.ts` | Manager tree interactions |
+| `suite/monitor.test.ts` | Job monitoring |
+| `suite/debug.test.ts` | Debug job lifecycle |
+| `suite/content.test.ts` | Content provider functionality |
+| `suite/helpers.test.ts` | Helper utility verification |
+
+Extension services accessed via `(global as any).serviceName` — not direct TypeScript imports. Static methods accessed via `serviceInstance.constructor.methodName` or class name.
+
+### Integration Test TypeScript Config
+
+Integration tests use a **separate** `tests/integration/tsconfig.json` from the main extension `tsconfig.json`:
+- Different `rootDir` and `include` patterns (must list both suite files and utility files explicitly)
+- Separate `outDir` (`tests/integration/out/`)
+- `rootDir` must exactly match the directory containing all compiled source files
+
+---
+
+## Build and Compilation
+
+| Script | Purpose |
+|--------|---------|
+| `npm run compile` | `tsc -p ./` — compiles `src/` → `out/` |
+| `npm run watch` | `tsc -watch -p ./` |
+| `npm run test` | Jest unit tests |
+| `npm run test:coverage` | Jest with coverage report |
+| `npm run test:integration` | Compile + compile integration tests + run electron |
+| `npm run lint` | ESLint on `src/` |
+| `vscode:prepublish` | `compile` |
+
+**TypeScript config**: `target: ES2020`, `module: CommonJS`, `strict: true`, `outDir: out/`, `rootDir: src/`. Compiled JS files must only exist in `out/` — any `.js` in `src/` indicates misconfiguration.

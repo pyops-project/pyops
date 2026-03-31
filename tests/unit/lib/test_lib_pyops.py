@@ -356,12 +356,32 @@ class TestServiceListener:
         test_msg = {"response": "data"}
         mock_packb.return_value = b'test_packed'
         listener.response(test_msg)
-        mock_packb.assert_called_once_with(test_msg)
+        mock_packb.assert_called_once_with([200, test_msg])
         # Check multipart send
         assert mock_socket.send.call_count == 3
         mock_socket.send.assert_any_call(b'test_identity', zmq.SNDMORE)
         mock_socket.send.assert_any_call(b'', zmq.SNDMORE)
         mock_socket.send.assert_any_call(b'test_packed')
+        listener.close()
+
+    @patch('os.remove')
+    @patch('atexit.register')
+    @patch('tempfile.gettempdir')
+    @patch('msgpack.packb')
+    @patch('zmq.Context')
+    def test_response_with_status(self, mock_context, mock_packb, mock_gettempdir, mock_atexit, mock_remove):
+        mock_atexit.side_effect = lambda *args: None
+        mock_remove.return_value = None
+        mock_gettempdir.return_value = '/tmp'
+        mock_socket = Mock()
+        mock_context.return_value.socket.return_value = mock_socket
+        listener = pyops.ServiceListener("test_job", "test_owner")
+        listener.last_identity = b'test_identity'
+        test_msg = "resource not found"
+        mock_packb.return_value = b'test_packed'
+        listener.response(test_msg, 404)
+        mock_packb.assert_called_once_with([404, test_msg])
+        assert mock_socket.send.call_count == 3
         listener.close()
 
     def test_exit_gracefully(self):
@@ -486,12 +506,32 @@ class TestServiceListener:
         test_msg = {"response": "async_data"}
         mock_packb.return_value = b'packed_async'
         listener.async_response(test_identity, test_msg)
-        mock_packb.assert_called_once_with(test_msg)
+        mock_packb.assert_called_once_with([200, test_msg])
         # Check multipart send
         assert mock_socket.send.call_count == 3
         mock_socket.send.assert_any_call(test_identity, zmq.SNDMORE)
         mock_socket.send.assert_any_call(b'', zmq.SNDMORE)
         mock_socket.send.assert_any_call(b'packed_async')
+        listener.close()
+
+    @patch('os.remove')
+    @patch('atexit.register')
+    @patch('tempfile.gettempdir')
+    @patch('msgpack.packb')
+    @patch('zmq.Context')
+    def test_async_response_with_status(self, mock_context, mock_packb, mock_gettempdir, mock_atexit, mock_remove):
+        mock_atexit.side_effect = lambda *args: None
+        mock_remove.return_value = None
+        mock_gettempdir.return_value = '/tmp'
+        mock_socket = Mock()
+        mock_context.return_value.socket.return_value = mock_socket
+        listener = pyops.ServiceListener("test_job", "test_owner")
+        test_identity = b'test_identity'
+        test_msg = "forbidden"
+        mock_packb.return_value = b'packed_async'
+        listener.async_response(test_identity, test_msg, 403)
+        mock_packb.assert_called_once_with([403, test_msg])
+        assert mock_socket.send.call_count == 3
         listener.close()
 
 class TestServiceClient:
@@ -515,13 +555,28 @@ class TestServiceClient:
         mock_packb.return_value = b'test_packed'
         mock_socket = client.socket
         mock_socket.recv.return_value = b'reply_packed'
-        mock_unpackb.return_value = {"reply": "ok"}
-        result = client.request(test_msg)
-        assert result == {"reply": "ok"}
+        mock_unpackb.return_value = [200, {"reply": "ok"}]
+        status, data = client.request(test_msg)
+        assert status == 200
+        assert data == {"reply": "ok"}
         mock_packb.assert_called_once_with(test_msg)
         mock_socket.send.assert_called_once_with(b'test_packed')
         mock_socket.recv.assert_called_once()
         mock_unpackb.assert_called_once_with(b'reply_packed')
+
+    @patch('msgpack.unpackb')
+    @patch('msgpack.packb')
+    @patch('zmq.Context')
+    def test_request_error_status(self, mock_context, mock_packb, mock_unpackb):
+        mock_job = "123"
+        client = pyops.ServiceClient(mock_job)
+        mock_packb.return_value = b'test_packed'
+        mock_socket = client.socket
+        mock_socket.recv.return_value = b'reply_packed'
+        mock_unpackb.return_value = [422, "validation failed"]
+        status, data = client.request({"cmd": "test"})
+        assert status == 422
+        assert data == "validation failed"
 
     @patch('msgpack.packb')
     @patch('zmq.Context')
