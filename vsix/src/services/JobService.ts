@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { ApiClient } from '../apiClient';
 import { JobsTreeDataProvider, JobTreeItem, Job } from '../jobsTreeProvider';
+import { appendIncrementalOutput } from '../utils';
 
 export class JobService {
     private activeJobs = new Map<string, { interval: NodeJS.Timeout; jobId: string; prevStdoutLen: number; prevStderrLen: number }>();
@@ -144,24 +145,7 @@ export class JobService {
                             this.jobViewOutputChannel.appendLine(`\n--- Parameters ---`);
                             this.jobViewOutputChannel.appendLine(jobObj.param);
                         }
-                        // Append stdout
-                        if (jobObj.stdout) {
-                            const newOut = jobObj.stdout.slice(active.prevStdoutLen);
-                            if (newOut.length > 0 && this.jobViewOutputChannel) {
-                                this.jobViewOutputChannel.appendLine(`[STDOUT]`);
-                                this.jobViewOutputChannel.append(newOut);
-                            }
-                            active.prevStdoutLen = jobObj.stdout.length;
-                        }
-                        // Append stderr
-                        if (jobObj.stderr) {
-                            const newErr = jobObj.stderr.slice(active.prevStderrLen);
-                            if (newErr.length > 0 && this.jobViewOutputChannel) {
-                                this.jobViewOutputChannel.appendLine(`[STDERR]`);
-                                this.jobViewOutputChannel.append(newErr);
-                            }
-                            active.prevStderrLen = jobObj.stderr.length;
-                        }
+                        appendIncrementalOutput(this.jobViewOutputChannel, jobObj, active);
                         // Update state
                         this.jobViewOutputChannel.appendLine(`\n--- State: ${jobObj.state} ---`);
                         if (['done', 'failed', 'cancelled', 'remove'].includes(jobObj.state)) {
