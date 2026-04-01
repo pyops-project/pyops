@@ -1,9 +1,6 @@
 import pytest
 from unittest.mock import patch, MagicMock
-from app.web import app
-from app.lib.runner import enqueue
 from datetime import datetime
-from app.orm.database import get_db_engine
 from sqlalchemy.orm import Session
 
 @pytest.fixture
@@ -12,6 +9,7 @@ def mock_enqueue(mock_db):
         def enqueue_side_effect(set_, name, owner, kind, drop_done, param, max_retries=0, overrides=None):
             # Mock DB insert and return ID
             from app.orm.job import Job
+            from app.orm.database import get_db_engine
             job = Job(
                 owner=owner,
                 set=set_,

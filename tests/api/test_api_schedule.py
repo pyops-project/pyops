@@ -1,8 +1,5 @@
 import pytest
 from unittest.mock import patch, MagicMock
-from app.web import app
-from unittest.mock import Mock
-from app.orm.database import get_db_engine
 from sqlalchemy.orm import Session
 
 
@@ -24,7 +21,7 @@ def test_put_schedule_item_create(mock_client, mock_db, mock_git_ops, mock_croni
         )
         assert enqueue_resp.status_code == 200
         job_id = enqueue_resp.json()["job"]
-    
+
     # Test PUT /scriptlet/schedule/item to create schedule
     with patch("subprocess.check_output", return_value=b"pass\n"):
         response = mock_client.put(
@@ -46,8 +43,9 @@ def test_put_schedule_item_create(mock_client, mock_db, mock_git_ops, mock_croni
         assert isinstance(schedule_id, int)
 
     # Verify DB state
+    from app.orm.database import get_db_engine
+    from app.orm.schedule import Schedule
     with Session(get_db_engine()) as session:
-        from app.orm.schedule import Schedule
         sched = session.get(Schedule, schedule_id)
         assert sched is not None
         assert sched.set == "testset"
@@ -108,7 +106,7 @@ def test_get_schedule_list(mock_client, mock_db, mock_git_ops, mock_croniter, te
             headers={"X-User": "testuser"}
         )
         assert enqueue_resp.status_code == 200
-    
+
     # Then create a schedule
     create_resp = mock_client.put(
         "/scriptlet/schedule/item",
@@ -123,7 +121,7 @@ def test_get_schedule_list(mock_client, mock_db, mock_git_ops, mock_croniter, te
     )
     assert create_resp.status_code == 200
     schedule_id = create_resp.json()["schedule"]
-    
+
     response = mock_client.get("/scriptlet/schedule/list", headers={"X-User": "testuser"})
     assert response.status_code == 200
     data = response.json()
@@ -135,8 +133,9 @@ def test_get_schedule_list(mock_client, mock_db, mock_git_ops, mock_croniter, te
     assert data[0]["active"] == True
 
     # Verify owner via DB since not in response
+    from app.orm.database import get_db_engine
+    from app.orm.schedule import Schedule
     with Session(get_db_engine()) as session:
-        from app.orm.schedule import Schedule
         sched = session.get(Schedule, schedule_id)
         assert sched.owner == "testuser"
         assert sched.name == unique_name
@@ -158,7 +157,7 @@ def test_post_schedule_activate(mock_client, mock_db, mock_git_ops, mock_cronite
             headers={"X-User": "testuser"}
         )
         assert enqueue_resp.status_code == 200
-    
+
     # Then create schedule
     create_resp = mock_client.put(
         "/scriptlet/schedule/item",
@@ -173,13 +172,14 @@ def test_post_schedule_activate(mock_client, mock_db, mock_git_ops, mock_cronite
         headers={"X-User": "testuser"}
     )
     schedule_id = create_resp.json()["schedule"]
-    
+
     response = mock_client.get(f"/scriptlet/schedule/activate?id={schedule_id}", headers={"X-User": "testuser"})
     assert response.status_code == 200
 
     # Verify DB state
+    from app.orm.database import get_db_engine
+    from app.orm.schedule import Schedule
     with Session(get_db_engine()) as session:
-        from app.orm.schedule import Schedule
         sched = session.get(Schedule, schedule_id)
         assert sched.active == True
         assert sched.last is not None
@@ -202,7 +202,7 @@ def test_post_schedule_deactivate(mock_client, mock_db, mock_git_ops, mock_croni
             headers={"X-User": "testuser"}
         )
         assert enqueue_resp.status_code == 200
-    
+
     # Then create schedule active
     create_resp = mock_client.put(
         "/scriptlet/schedule/item",
@@ -217,13 +217,14 @@ def test_post_schedule_deactivate(mock_client, mock_db, mock_git_ops, mock_croni
         headers={"X-User": "testuser"}
     )
     schedule_id = create_resp.json()["schedule"]
-    
+
     response = mock_client.get(f"/scriptlet/schedule/deactivate?id={schedule_id}", headers={"X-User": "testuser"})
     assert response.status_code == 200
 
     # Verify DB state
+    from app.orm.database import get_db_engine
+    from app.orm.schedule import Schedule
     with Session(get_db_engine()) as session:
-        from app.orm.schedule import Schedule
         sched = session.get(Schedule, schedule_id)
         assert sched.active == False
         assert sched.name == unique_name
@@ -245,7 +246,7 @@ def test_post_schedule_run(mock_client, mock_db, mock_git_ops, mock_croniter, te
             headers={"X-User": "testuser"}
         )
         assert enqueue_resp.status_code == 200
-    
+
     # Then create schedule
     create_resp = mock_client.put(
         "/scriptlet/schedule/item",
@@ -259,7 +260,7 @@ def test_post_schedule_run(mock_client, mock_db, mock_git_ops, mock_croniter, te
         headers={"X-User": "testuser"}
     )
     schedule_id = create_resp.json()["schedule"]
-    
+
     with patch("app.lib.runner.enqueue") as mock_enqueue:
         mock_enqueue.return_value = "mock_job_id"
         response = mock_client.get(f"/scriptlet/schedule/run?id={schedule_id}", headers={"X-User": "testuser"})
@@ -290,7 +291,7 @@ def test_delete_schedule_item(mock_client, mock_db, mock_git_ops, mock_croniter,
             headers={"X-User": "testuser"}
         )
         assert enqueue_resp.status_code == 200
-    
+
     # Then create schedule
     create_resp = mock_client.put(
         "/scriptlet/schedule/item",
@@ -304,16 +305,16 @@ def test_delete_schedule_item(mock_client, mock_db, mock_git_ops, mock_croniter,
         headers={"X-User": "testuser"}
     )
     schedule_id = create_resp.json()["schedule"]
-    
+
     response = mock_client.delete(f"/scriptlet/schedule/item?id={schedule_id}", headers={"X-User": "testuser"})
     assert response.status_code == 200
 
     # Verify DB state
+    from app.orm.database import get_db_engine
+    from app.orm.schedule import Schedule
     with Session(get_db_engine()) as session:
-        from app.orm.schedule import Schedule
         sched = session.get(Schedule, schedule_id)
         assert sched is None
-        # Note: Deleted, so None; name check not applicable
 
 def test_delete_schedule_item_not_found(mock_client, mock_db, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
     response = mock_client.delete("/scriptlet/schedule/item/999", headers={"X-User": "testuser"})
@@ -343,7 +344,7 @@ def test_schedule_create_parametrized(mock_client, mock_db, mock_git_ops, mock_c
                 headers={"X-User": "testuser"}
             )
             assert enqueue_resp.status_code == 200
-        
+
         # Then create schedule
         with patch("subprocess.check_output", return_value=b"pass\n"):
             response = mock_client.put(
@@ -359,11 +360,12 @@ def test_schedule_create_parametrized(mock_client, mock_db, mock_git_ops, mock_c
             )
             assert response.status_code == 200
 
-            # Verify DB state for each
-            with Session(get_db_engine()) as session:
-                from app.orm.schedule import Schedule
-                sched = session.query(Schedule).filter(Schedule.name == name).first()
-                assert sched is not None
-                assert sched.schedule == cron
-                assert sched.param == '{"test": "param"}'
-                assert sched.set == "paramset"
+        # Verify DB state for each
+        from app.orm.database import get_db_engine
+        from app.orm.schedule import Schedule
+        with Session(get_db_engine()) as session:
+            sched = session.query(Schedule).filter(Schedule.name == name).first()
+            assert sched is not None
+            assert sched.schedule == cron
+            assert sched.param == '{"test": "param"}'
+            assert sched.set == "paramset"
