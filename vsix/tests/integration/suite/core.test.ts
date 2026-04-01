@@ -1,5 +1,6 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
+import { getExtensionState } from '../../../src/extension';
 
 export async function run(): Promise<void> {
   console.log('Running Core Tests...');
@@ -29,7 +30,7 @@ export async function run(): Promise<void> {
   await config.update('serverUrl', 'http://localhost:8000', vscode.ConfigurationTarget.Global);
 
   // Ensure manager is refreshed with the new config to load existing sets
-  const managerProvider = (global as any).managerTreeProvider;
+  const managerProvider = getExtensionState()?.managerTreeProvider;
   if (managerProvider) {
     await managerProvider.refresh();
   }
@@ -49,7 +50,7 @@ export async function run(): Promise<void> {
 
   // Test 3: Status bar connection
   console.log('Test 3: Status bar connection...');
-  assert.ok((global as any).connectionStatusManager, 'ConnectionStatusManager must be available');
+  assert.ok(getExtensionState()?.connectionStatusManager, 'ConnectionStatusManager must be available');
   console.log('✓ Test 3 passed');
 
   // Test 4: Can access PyOps views

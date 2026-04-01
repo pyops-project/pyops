@@ -3,6 +3,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as helpers from '../utils/helpers';
+import { getExtensionState } from '../../../src/extension';
 
 export async function run(): Promise<void> {
   console.log('Running Debug Tests...');
@@ -19,10 +20,11 @@ export async function run(): Promise<void> {
       throw new Error('Extension not active');
     }
 
-    const debugService = (global as any).debugService;
-    const debugOutputMonitor = (global as any).debugOutputMonitor;
-    const managerProvider = (global as any).managerTreeProvider;
-    const jobsProvider = (global as any).jobsTreeProvider;
+    const state = getExtensionState();
+    const debugService = state?.debugService;
+    const debugOutputMonitor = state?.debugOutputMonitor;
+    const managerProvider = state?.managerTreeProvider;
+    const jobsProvider = state?.jobsTreeProvider;
     assert.ok(debugService && debugOutputMonitor && managerProvider && jobsProvider, 'Debug services and providers must exist');
 
     // Cleanup leftover jobs
@@ -52,7 +54,7 @@ export async function run(): Promise<void> {
     fs.writeFileSync(path.join(taskDir, 'mytask.py'), taskContent);
     fs.writeFileSync(path.join(serviceDir, 'myservice.py'), serviceContent);
 
-    const DebugService = (global as any).DebugService;
+    const DebugService = state!.DebugService;
     const buildResult = DebugService.buildOverrides('test', vscode.workspace.workspaceFolders![0].uri.fsPath);
     assert.strictEqual(Object.keys(buildResult.overrides).length, 2, 'Should have 2 overrides');
     assert.strictEqual(buildResult.overrides['test::mytask'], taskContent, 'Task override correct');

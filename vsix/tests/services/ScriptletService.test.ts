@@ -1,7 +1,6 @@
 import { ScriptletService } from '../../src/services/ScriptletService';
 import { ApiClient } from '../../src/apiClient';
 import { ManagerTreeDataProvider, ScriptletTreeItem } from '../../src/managerTreeProvider';
-
 import { createMockVscodeWindow, createMockApiClient, createMockTreeProvider } from '../utils/helpers';
 
 jest.mock('vscode');
@@ -18,6 +17,7 @@ const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation();
 describe('ScriptletService', () => {
   let mockApiClient: jest.Mocked<ApiClient>;
   let mockManagerTreeProvider: jest.Mocked<ManagerTreeDataProvider>;
+  let mockRemoteProvider: any;
   let mockVscode: any;
   let service: ScriptletService;
 
@@ -48,7 +48,9 @@ describe('ScriptletService', () => {
 
     mockManagerTreeProvider = createMockTreeProvider('manager');
 
-    service = new ScriptletService(mockApiClient, mockManagerTreeProvider);
+    mockRemoteProvider = { setContent: jest.fn() } as any;
+
+    service = new ScriptletService(mockApiClient, mockManagerTreeProvider, mockRemoteProvider);
   });
 
   describe('resetLocalFromRemote', () => {

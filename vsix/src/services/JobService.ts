@@ -132,50 +132,43 @@ export class JobService {
         }
         this.jobViewOutputChannel.clear();
         this.jobViewOutputChannel.show(true);
-        const pollInterval = setInterval(async () => {
+        const entry = { interval: null as unknown as NodeJS.Timeout, jobId: id, prevStdoutLen: 0, prevStderrLen: 0 };
+        this.activeJobs.set(key, entry);
+        this.jobViewOutputChannel.appendLine(`Viewing job ${id} details...\n`);
+        entry.interval = setInterval(async () => {
             try {
                 const jobResponse = await this.apiClient.fetch(`/scriptlet/job/item?id=${id}`);
                 if (jobResponse.ok) {
                     const jobData = await jobResponse.json() as unknown;
-                    const jobObj = jobData as { param?: string; stdout?: string; stderr?: string; state: string };
+                    const jobObj = jobData as { stdout?: string; stderr?: string; state: string };
                     const active = this.activeJobs.get(key);
                     if (active) {
-                        // Append param if available
-                        if (jobObj.param && this.jobViewOutputChannel) {
-                            this.jobViewOutputChannel.appendLine(`\n--- Parameters ---`);
-                            this.jobViewOutputChannel.appendLine(jobObj.param);
-                        }
                         appendIncrementalOutput(this.jobViewOutputChannel, jobObj, active);
-                        // Update state
                         this.jobViewOutputChannel.appendLine(`\n--- State: ${jobObj.state} ---`);
                         if (['done', 'failed', 'cancelled', 'remove'].includes(jobObj.state)) {
-                            clearInterval(pollInterval);
+                            clearInterval(entry.interval);
                             this.activeJobs.delete(key);
                             this.jobViewOutputChannel.appendLine('\n--- Job ended ---');
                         }
                     }
                 } else if (jobResponse.status === 404) {
-                    // Job deleted
-                    const active = this.activeJobs.get(key);
-                    if (active) {
-                        clearInterval(pollInterval);
-                        this.activeJobs.delete(key);
-                        this.jobViewOutputChannel.appendLine('\n--- Job no longer exists ---');
-                    }
+                    clearInterval(entry.interval);
+                    this.activeJobs.delete(key);
+                    this.jobViewOutputChannel.appendLine('\n--- Job no longer exists ---');
                 }
             } catch (error: unknown) {
                 const errorMessage = error instanceof Error ? error.message : String(error);
                 this.jobViewOutputChannel.appendLine(`Error polling job: ${errorMessage}`);
             }
         }, 1000);
-        this.activeJobs.set(key, { interval: pollInterval, jobId: id, prevStdoutLen: 0, prevStderrLen: 0 });
-        this.jobViewOutputChannel.appendLine(`Viewing job ${id} details...\n`);
         vscode.window.showInformationMessage(`Viewing details for job ${id}`);
     }
 
     private async performBulkAction(action: 'cancel' | 'delete', filterStates: string[]): Promise<void> {
         const jobs = await this.fetchJobs();
-        const jobsToAct = jobs.filter(j => filterStates.includes(j.state) || (action === 'cancel' && !['done', 'failed', 'cancelled'].includes(j.state)));
+        const jobsToAct = action === 'cancel'
+            ? jobs.filter(j => !['done', 'failed', 'cancelled'].includes(j.state))
+            : jobs.filter(j => filterStates.includes(j.state));
         if (jobsToAct.length === 0) {
             vscode.window.showInformationMessage(`No jobs to ${action} matching criteria.`);
             return;

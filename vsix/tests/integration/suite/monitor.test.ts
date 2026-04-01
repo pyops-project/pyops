@@ -1,6 +1,7 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
 import * as helpers from '../utils/helpers';
+import { getExtensionState } from '../../../src/extension';
 
 export async function run(): Promise<void> {
   console.log('Running Monitor Tests...');
@@ -18,8 +19,9 @@ export async function run(): Promise<void> {
       throw new Error('Extension not active');
     }
 
-    const jobsProvider = (global as any).jobsTreeProvider;
-    const jobService = (global as any).jobService;
+    const state = getExtensionState();
+    const jobsProvider = state?.jobsTreeProvider;
+    const jobService = state?.jobService;
     assert.ok(jobsProvider && jobService, 'Jobs provider and service must exist');
 
     // Cleanup leftover jobs

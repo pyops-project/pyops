@@ -1,4 +1,4 @@
-import { activate, deactivate } from '../src/extension';
+import { activate, deactivate, getExtensionState } from '../src/extension';
 import { createMockApiClient, createMockTreeProvider } from './utils/helpers';
 
 jest.mock('vscode');
@@ -389,11 +389,12 @@ describe('Extension', () => {
       const extension = require('../src/extension');
       await extension.activate(mockContext);
 
-      // Capture instances from globals
-      jobServiceInstance = (global as any).jobService;
-      scriptletServiceInstance = (global as any).scriptletService;
-      debugServiceInstance = (global as any).debugService;
-      debugOutputMonitorInstance = (global as any).debugOutputMonitor;
+      // Capture instances from extension state
+      const state = getExtensionState()!;
+      jobServiceInstance = state.jobService;
+      scriptletServiceInstance = state.scriptletService;
+      debugServiceInstance = state.debugService;
+      debugOutputMonitorInstance = state.debugOutputMonitor;
 
       // Get providers from mock instances and spy on methods
       connectionStatusManager = require('../src/ConnectionStatusManager').ConnectionStatusManager.mock.instances[0];
@@ -616,7 +617,7 @@ describe('Extension', () => {
       });
       const handler = commandHandlers.get('pyops.attachDebugJob');
       await handler!();
-      expect((global as any).outputChannel.appendLine).toHaveBeenCalledWith('Attaching to job debug123 (foo::bar) at port 5678');
+      expect(getExtensionState()!.outputChannel.appendLine).toHaveBeenCalledWith('Attaching to job debug123 (foo::bar) at port 5678');
       expect(require('vscode').debug.startDebugging).toHaveBeenCalled();
       expect(require('vscode').window.showInformationMessage).toHaveBeenCalledWith('Attached to debug job debug123');
     });
@@ -631,7 +632,7 @@ describe('Extension', () => {
       });
       const handler = commandHandlers.get('pyops.attachDebugJob');
       await handler!();
-      expect((global as any).outputChannel.appendLine).toHaveBeenCalledWith('Attaching to job debug456 (?::?) at port 5678');
+      expect(getExtensionState()!.outputChannel.appendLine).toHaveBeenCalledWith('Attaching to job debug456 (?::?) at port 5678');
       expect(require('vscode').debug.startDebugging).toHaveBeenCalled();
     });
 

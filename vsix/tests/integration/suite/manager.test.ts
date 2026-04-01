@@ -3,6 +3,7 @@ import * as vscode from 'vscode';
 import * as helpers from '../utils/helpers';
 import * as fs from 'fs';
 import * as path from 'path';
+import { getExtensionState } from '../../../src/extension';
 
 export async function run(): Promise<void> {
   console.log('Running Manager Tests...');
@@ -21,8 +22,9 @@ export async function run(): Promise<void> {
     const wsRoot = vscode.workspace.workspaceFolders![0].uri.fsPath;
     const localPyopsDir = 'pyops';
 
-    const managerProvider = (global as any).managerTreeProvider;
-    const scriptletService = (global as any).scriptletService;
+    const state = getExtensionState();
+    const managerProvider = state?.managerTreeProvider;
+    const scriptletService = state?.scriptletService;
     assert.ok(managerProvider && scriptletService, 'ManagerTreeDataProvider and ScriptletService must exist');
 
     // Test 1: Create test scriptlet & visibility

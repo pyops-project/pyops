@@ -1,6 +1,7 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
 import * as helpers from '../utils/helpers';
+import { getExtensionState } from '../../../src/extension';
 
 export async function run(): Promise<void> {
   console.log('Running Command Integration Tests...');
@@ -15,10 +16,11 @@ export async function run(): Promise<void> {
       throw new Error('Extension not active');
     }
 
-    const jobService = (global as any).jobService;
-    const scriptletService = (global as any).scriptletService;
-    const jobsProvider = (global as any).jobsTreeProvider;
-    const managerProvider = (global as any).managerTreeProvider;
+    const state = getExtensionState();
+    const jobService = state?.jobService;
+    const scriptletService = state?.scriptletService;
+    const jobsProvider = state?.jobsTreeProvider;
+    const managerProvider = state?.managerTreeProvider;
     assert.ok(jobService && scriptletService && jobsProvider && managerProvider, 'Services and providers must exist');
 
     // Create test data for command testing
@@ -92,7 +94,7 @@ export async function run(): Promise<void> {
 
     // Test 6: refreshConnectionStatus command
     console.log('Test 6: refreshConnectionStatus command...');
-    const connectionStatusManager = (global as any).connectionStatusManager;
+    const connectionStatusManager = getExtensionState()?.connectionStatusManager;
     assert.ok(connectionStatusManager, 'ConnectionStatusManager must exist');
 
     // Mock the update method to verify it's called

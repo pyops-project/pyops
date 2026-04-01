@@ -3,11 +3,16 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { ApiClient } from '../apiClient';
 import { ManagerTreeDataProvider, ScriptletTreeItem } from '../managerTreeProvider';
+import { RemoteContentProvider } from '../providers/RemoteContentProvider';
 import { inferExt } from '../utils';
 
 
 export class ScriptletService {
-    constructor(private apiClient: ApiClient, private managerTreeProvider: ManagerTreeDataProvider) {}
+    constructor(private apiClient: ApiClient, private managerTreeProvider: ManagerTreeDataProvider, private remoteProvider: RemoteContentProvider) {}
+
+    private getWorkspaceRoot(): string | undefined {
+        return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    }
 
     private getLocalPath(treeItem: ScriptletTreeItem, workspaceRoot: string, localPyopsDir: string): string {
         const ext = inferExt(treeItem.scriptletType!);
@@ -23,7 +28,11 @@ export class ScriptletService {
             if (response.ok) {
                 const responseData = await response.json();
                 const code = (responseData as { code?: string }).code || '';
-                const workspaceRoot = vscode.workspace.workspaceFolders![0].uri.fsPath;
+                const workspaceRoot = this.getWorkspaceRoot();
+                if (!workspaceRoot) {
+                    vscode.window.showWarningMessage('No workspace folder open');
+                    return;
+                }
                 const pyopsConfig = vscode.workspace.getConfiguration('pyops');
                 const localPyopsDir = pyopsConfig.get('localPyopsDir', 'pyops') as string;
                 const localPath = this.getLocalPath(treeItem, workspaceRoot, localPyopsDir);
@@ -52,7 +61,11 @@ export class ScriptletService {
         const set = treeItem.set!;
         const name = treeItem.scriptletName!;
         const pyopsConfig = vscode.workspace.getConfiguration('pyops');
-        const workspaceRoot = vscode.workspace.workspaceFolders![0].uri.fsPath;
+        const workspaceRoot = this.getWorkspaceRoot();
+        if (!workspaceRoot) {
+            vscode.window.showWarningMessage('No workspace folder open');
+            return;
+        }
         const localPyopsDir = pyopsConfig.get('localPyopsDir', 'pyops') as string;
         const localPath = this.getLocalPath(treeItem, workspaceRoot, localPyopsDir);
         if (!fs.existsSync(localPath)) {
@@ -177,7 +190,11 @@ export class ScriptletService {
             if (response.ok) {
                 const responseData = await response.json();
                 const code = (responseData as { code: string }).code;
-                const workspaceRoot = vscode.workspace.workspaceFolders![0].uri.fsPath;
+                const workspaceRoot = this.getWorkspaceRoot();
+                if (!workspaceRoot) {
+                    vscode.window.showWarningMessage('No workspace folder open');
+                    return;
+                }
                 const pyopsConfig = vscode.workspace.getConfiguration('pyops');
                 const localPyopsDir = pyopsConfig.get('localPyopsDir', 'pyops') as string;
                 const localPath = this.getLocalPath(treeItem, workspaceRoot, localPyopsDir);
@@ -185,8 +202,9 @@ export class ScriptletService {
                     vscode.window.showWarningMessage('Local file not found; create first');
                     return;
                 }
-                const encodedCode = encodeURIComponent(code);
-                const remoteUri = vscode.Uri.parse(`pyops-remote:/${set}/${name}?type=${treeItem.scriptletType!}#${encodedCode}`);
+                const uriPath = `/${set}/${name}`;
+                this.remoteProvider.setContent(uriPath, code);
+                const remoteUri = vscode.Uri.parse(`pyops-remote:${uriPath}?type=${treeItem.scriptletType!}`);
                 const localUri = vscode.Uri.file(localPath);
                 await vscode.commands.executeCommand('vscode.diff', remoteUri, localUri, 'Remote vs Local');
             } else {
@@ -213,7 +231,11 @@ export class ScriptletService {
             'Delete'
         );
         if (confirm !== 'Delete') return;
-        const workspaceRoot = vscode.workspace.workspaceFolders![0].uri.fsPath;
+        const workspaceRoot = this.getWorkspaceRoot();
+        if (!workspaceRoot) {
+            vscode.window.showWarningMessage('No workspace folder open');
+            return;
+        }
         const pyopsConfig = vscode.workspace.getConfiguration('pyops');
         const localPyopsDir = pyopsConfig.get('localPyopsDir', 'pyops') as string;
         const localPath = this.getLocalPath(treeItem, workspaceRoot, localPyopsDir);
@@ -256,7 +278,11 @@ export class ScriptletService {
 
     async openLocalFile(treeItem?: ScriptletTreeItem): Promise<void> {
         if (!treeItem || !treeItem.set || !treeItem.scriptletName || !treeItem.scriptletType) return;
-        const workspaceRoot = vscode.workspace.workspaceFolders![0].uri.fsPath;
+        const workspaceRoot = this.getWorkspaceRoot();
+        if (!workspaceRoot) {
+            vscode.window.showWarningMessage('No workspace folder open');
+            return;
+        }
         const pyopsConfig = vscode.workspace.getConfiguration('pyops');
         const localPyopsDir = pyopsConfig.get('localPyopsDir', 'pyops') as string;
         const localPath = this.getLocalPath(treeItem, workspaceRoot, localPyopsDir);
