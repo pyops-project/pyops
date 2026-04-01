@@ -7,8 +7,6 @@ jest.mock('../../src/apiClient', () => ({ ApiClient: jest.fn() }));
 
 const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation();
 
-const flushPromises = () => new Promise(resolve => process.nextTick(resolve));
-
 describe('DebugOutputMonitor', () => {
   let mockApiClient: jest.Mocked<ApiClient>;
   let mockOutputChannel: any;

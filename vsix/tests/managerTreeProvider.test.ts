@@ -446,6 +446,171 @@ describe('ManagerTreeDataProvider', () => {
     });
   });
 
+  describe('scanLocalScriptlets', () => {
+    it('returns empty if base path does not exist', async () => {
+      require('./utils/helpers').setupConfigMock();
+      const mockFs = require('fs');
+      mockFs.existsSync.mockReturnValue(false);
+
+      const result = await (provider as any).scanLocalScriptlets();
+      expect(result).toEqual([]);
+    });
+
+    it('discovers local-only .py files in type directories', async () => {
+      require('./utils/helpers').setupConfigMock();
+      const mockFs = require('fs');
+      const mockPath = require('path');
+
+      mockPath.join.mockImplementation((...args: string[]) => args.join('/'));
+      mockPath.extname = jest.fn((f: string) => {
+        const idx = f.lastIndexOf('.');
+        return idx >= 0 ? f.substring(idx) : '';
+      });
+      mockPath.basename.mockImplementation((f: string, ext?: string) => {
+        const base = f.split('/').pop() || '';
+        return ext ? base.replace(new RegExp(ext.replace(/\./g, '\\.') + '$'), '') : base;
+      });
+
+      // Base path exists
+      mockFs.existsSync.mockImplementation((p: string) => {
+        if (p === '/test/workspace/pyops') return true;
+        if (p === '/test/workspace/pyops/set1') return true;
+        if (p === '/test/workspace/pyops/set1/task') return true;
+        return false;
+      });
+      mockFs.readdirSync.mockImplementation((p: string) => {
+        if (p === '/test/workspace/pyops') return ['set1'];
+        if (p === '/test/workspace/pyops/set1/task') return ['myscript.py'];
+        return [];
+      });
+      mockFs.statSync.mockImplementation((p: string) => ({
+        isDirectory: () => p === '/test/workspace/pyops/set1' || p === '/test/workspace/pyops/set1/task',
+      }));
+
+      const result = await (provider as any).scanLocalScriptlets();
+      expect(result).toEqual([{ set: 'set1', name: 'myscript', type: 'task', isLocalOnly: true }]);
+    });
+
+    it('ignores files with wrong extension', async () => {
+      require('./utils/helpers').setupConfigMock();
+      const mockFs = require('fs');
+      const mockPath = require('path');
+
+      mockPath.join.mockImplementation((...args: string[]) => args.join('/'));
+      mockPath.extname = jest.fn((f: string) => {
+        const idx = f.lastIndexOf('.');
+        return idx >= 0 ? f.substring(idx) : '';
+      });
+
+      mockFs.existsSync.mockImplementation((p: string) => {
+        if (p === '/test/workspace/pyops') return true;
+        if (p === '/test/workspace/pyops/set1/task') return true;
+        return false;
+      });
+      mockFs.readdirSync.mockImplementation((p: string) => {
+        if (p === '/test/workspace/pyops') return ['set1'];
+        if (p === '/test/workspace/pyops/set1/task') return ['notes.txt'];
+        return [];
+      });
+      mockFs.statSync.mockImplementation((p: string) => ({
+        isDirectory: () => p === '/test/workspace/pyops/set1' || p === '/test/workspace/pyops/set1/task',
+      }));
+
+      const result = await (provider as any).scanLocalScriptlets();
+      expect(result).toEqual([]);
+    });
+  });
+
+  describe('downloadScriptlet', () => {
+    it('downloads and writes a single scriptlet', async () => {
+      require('./utils/helpers').setupConfigMock();
+      const mockFs = require('fs');
+      mockFs.existsSync.mockReturnValue(false);
+      mockApiClient.fetch.mockResolvedValueOnce({
+        ok: true,
+        json: jest.fn().mockResolvedValue({ code: 'downloaded code' }),
+      });
+
+      const treeItem = { set: 'set1', scriptletName: 'script1', scriptletType: 'task' } as any;
+      await provider.downloadScriptlet(treeItem);
+
+      expect(mockFs.writeFileSync).toHaveBeenCalledWith(
+        '/test/workspace/pyops/set1/task/script1.py',
+        'downloaded code'
+      );
+    });
+
+    it('does nothing for invalid treeItem', async () => {
+      jest.clearAllMocks();
+      const treeItem = { set: undefined, scriptletName: undefined, scriptletType: undefined } as any;
+      await provider.downloadScriptlet(treeItem);
+      expect(mockApiClient.fetch).not.toHaveBeenCalled();
+    });
+
+    it('handles fetch error', async () => {
+      require('./utils/helpers').setupConfigMock();
+      const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation();
+      mockApiClient.fetch.mockRejectedValueOnce(new Error('Network error'));
+
+      const treeItem = { set: 'set1', scriptletName: 'script1', scriptletType: 'task' } as any;
+      await provider.downloadScriptlet(treeItem);
+
+      expect(consoleErrorSpy).toHaveBeenCalledWith('Error downloading set1::script1:', 'Network error');
+      consoleErrorSpy.mockRestore();
+    });
+
+    it('handles non-ok response', async () => {
+      require('./utils/helpers').setupConfigMock();
+      const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation();
+      mockApiClient.fetch.mockResolvedValueOnce({
+        ok: false,
+        statusText: 'Not Found',
+      });
+
+      const treeItem = { set: 'set1', scriptletName: 'script1', scriptletType: 'task' } as any;
+      await provider.downloadScriptlet(treeItem);
+
+      expect(consoleErrorSpy).toHaveBeenCalledWith('Failed to fetch set1::script1: Not Found');
+      consoleErrorSpy.mockRestore();
+    });
+  });
+
+  describe('getChildren with local-only items', () => {
+    it('shows local-only items with diff-added icon', async () => {
+      require('./utils/helpers').setupConfigMock();
+
+      // Make refresh return a local-only item
+      (provider as any)._scriptlets = [
+        { set: 'set1', name: 'localscript', type: 'task', isLocalOnly: true },
+      ];
+
+      const element = { label: 'set1', contextValue: 'pyopsSet' };
+      const children = await provider.getChildren(element);
+
+      expect(children).toHaveLength(1);
+      expect(children[0].iconPath).toEqual(new (require('vscode').ThemeIcon)('diff-added'));
+      expect((children[0] as any).contextValue).toBe('pyopsItem-task-local');
+      expect((children[0] as any).tooltip).toContain('Local only');
+    });
+  });
+
+  describe('getChildren root with no scriptlets', () => {
+    it('shows no scriptlets available message', async () => {
+      require('./utils/helpers').setupConfigMock();
+      (provider as any)._scriptlets = [];
+
+      // Mock refresh to keep scriptlets empty
+      mockApiClient.fetch.mockResolvedValue({
+        ok: true,
+        json: jest.fn().mockResolvedValue([]),
+      });
+
+      const children = await provider.getChildren();
+      expect(children).toHaveLength(1);
+      expect(children[0].label).toBe('No scriptlets available');
+    });
+  });
+
   describe('fetchScriptlets error handling', () => {
     it('should handle non-ok responses with error message throttling', async () => {
       require('./utils/helpers').setupConfigMock();

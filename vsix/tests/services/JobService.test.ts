@@ -6,10 +6,6 @@ import { createMockOutputChannel, createMockVscodeWindow, createMockApiClient, c
 jest.mock('vscode');
 jest.mock('../../src/apiClient', () => ({ ApiClient: jest.fn() }));
 
-const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation();
-
-let fetchCallCount = 0;
-
 describe('JobService', () => {
   let mockApiClient: jest.Mocked<ApiClient>;
   let mockJobsTreeProvider: jest.Mocked<JobsTreeDataProvider>;
@@ -18,7 +14,6 @@ describe('JobService', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    fetchCallCount = 0;
     const mockVscode = require('vscode');
     createMockVscodeWindow();
     mockVscode.workspace = { fs: { writeFile: jest.fn() } };
@@ -211,7 +206,7 @@ describe('JobService', () => {
     });
   });
 
-  describe('cancelJob', () => {
+  describe('cancelJob error handling', () => {
     it('handles network errors', async () => {
       const mockVscode = require('vscode');
       const treeItem = { job: { id: 'job1' } } as JobTreeItem;
@@ -223,10 +218,22 @@ describe('JobService', () => {
       expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith('Error canceling job: Network error');
     });
 
+    it('handles non-ok cancel responses', async () => {
+      const mockVscode = require('vscode');
+      const treeItem = { job: { id: 'job1' } } as JobTreeItem;
 
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
+        ok: false,
+        statusText: 'Forbidden',
+      } as Response);
+
+      await service.cancelJob(treeItem);
+
+      expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith('Failed to cancel job: Forbidden');
+    });
   });
 
-  describe('downloadJob', () => {
+  describe('downloadJob error handling', () => {
     it('handles network errors', async () => {
       const mockVscode = require('vscode');
       const treeItem = { job: { id: 'job1' } } as JobTreeItem;
@@ -252,9 +259,23 @@ describe('JobService', () => {
 
       expect(mockVscode.workspace.fs.writeFile).not.toHaveBeenCalled();
     });
+
+    it('handles non-ok download responses', async () => {
+      const mockVscode = require('vscode');
+      const treeItem = { job: { id: 'job1' } } as JobTreeItem;
+
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
+        ok: false,
+        statusText: 'Not Found',
+      } as Response);
+
+      await service.downloadJob(treeItem);
+
+      expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith('Failed to download job: Not Found');
+    });
   });
 
-  describe('deleteJob', () => {
+  describe('deleteJob error handling', () => {
     it('handles network errors', async () => {
       const mockVscode = require('vscode');
       const treeItem = { job: { id: 'job1' } } as JobTreeItem;
@@ -265,6 +286,32 @@ describe('JobService', () => {
       await service.deleteJob(treeItem);
 
       expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith('Error deleting job: Network error');
+    });
+
+    it('handles delete confirmation rejection', async () => {
+      const mockVscode = require('vscode');
+      const treeItem = { job: { id: 'job1' } } as JobTreeItem;
+
+      mockVscode.window.showWarningMessage.mockResolvedValue('Cancel');
+
+      await service.deleteJob(treeItem);
+
+      expect(mockApiClient.fetch).not.toHaveBeenCalled();
+    });
+
+    it('handles non-ok delete responses', async () => {
+      const mockVscode = require('vscode');
+      const treeItem = { job: { id: 'job1' } } as JobTreeItem;
+
+      mockVscode.window.showWarningMessage.mockResolvedValue('Delete');
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
+        ok: false,
+        text: () => Promise.resolve('Delete forbidden'),
+      } as Response);
+
+      await service.deleteJob(treeItem);
+
+      expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith('Failed to delete job: Delete forbidden');
     });
   });
 
@@ -520,68 +567,6 @@ describe('JobService', () => {
     });
   });
 
-  describe('cancelJob error handling', () => {
-    it('handles non-ok cancel responses', async () => {
-      const mockVscode = require('vscode');
-      const treeItem = { job: { id: 'job1' } } as JobTreeItem;
-
-      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
-        ok: false,
-        statusText: 'Forbidden',
-      } as Response);
-
-      await service.cancelJob(treeItem);
-
-      expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith('Failed to cancel job: Forbidden');
-    });
-  });
-
-  describe('downloadJob error handling', () => {
-    it('handles non-ok download responses', async () => {
-      const mockVscode = require('vscode');
-      const treeItem = { job: { id: 'job1' } } as JobTreeItem;
-
-      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
-        ok: false,
-        statusText: 'Not Found',
-      } as Response);
-
-      await service.downloadJob(treeItem);
-
-      expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith('Failed to download job: Not Found');
-    });
-  });
-
-  describe('deleteJob confirmation handling', () => {
-    it('handles delete confirmation rejection', async () => {
-      const mockVscode = require('vscode');
-      const treeItem = { job: { id: 'job1' } } as JobTreeItem;
-
-      mockVscode.window.showWarningMessage.mockResolvedValue('Cancel');
-
-      await service.deleteJob(treeItem);
-
-      expect(mockApiClient.fetch).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('deleteJob error handling', () => {
-    it('handles non-ok delete responses', async () => {
-      const mockVscode = require('vscode');
-      const treeItem = { job: { id: 'job1' } } as JobTreeItem;
-
-      mockVscode.window.showWarningMessage.mockResolvedValue('Delete');
-      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
-        ok: false,
-        text: () => Promise.resolve('Delete forbidden'),
-      } as Response);
-
-      await service.deleteJob(treeItem);
-
-      expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith('Failed to delete job: Delete forbidden');
-    });
-  });
-
   describe('viewJob polling edge cases', () => {
     beforeEach(() => {
       jest.useFakeTimers();
@@ -596,9 +581,10 @@ describe('JobService', () => {
       jest.useRealTimers();
       const treeItem = { job: { id: 'job1' } } as JobTreeItem;
 
+      let callCount = 0;
       (mockApiClient.fetch as jest.Mock).mockImplementation(() => {
-        fetchCallCount++;
-        if (fetchCallCount === 1) {
+        callCount++;
+        if (callCount === 1) {
           return Promise.resolve({
             ok: true,
             json: () => Promise.resolve({
@@ -618,13 +604,12 @@ describe('JobService', () => {
 
       await service.viewJob(treeItem);
 
-      // Wait for polling to complete
-      await new Promise(resolve => setTimeout(resolve, 2100));
+      // Wait for two poll intervals: first returns 'running', second returns 'done'
+      await new Promise(resolve => setTimeout(resolve, 2500));
 
       // Check that job ended and activeJobs was cleared
       expect((service as any).activeJobs.size).toBe(0);
       expect(mockJobViewOutputChannel.appendLine).toHaveBeenCalledWith('\n--- State: done ---');
-
       jest.useFakeTimers();
     });
   });

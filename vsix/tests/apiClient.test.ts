@@ -59,6 +59,84 @@ describe('ApiClient', () => {
     });
   });
 
+  describe('hasValidConfig', () => {
+    it('delegates to hasValidConfigStatic', () => {
+      require('./utils/helpers').setupConfigMock();
+      expect(apiClient.hasValidConfig()).toBe(true);
+    });
+  });
+
+  describe('fetch', () => {
+    beforeEach(() => {
+      global.fetch = jest.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({}) });
+    });
+
+    afterEach(() => {
+      delete (global as any).fetch;
+    });
+
+    it('constructs URL from serverUrl and path', async () => {
+      await apiClient.fetch('/test/path');
+      expect(global.fetch).toHaveBeenCalledWith(
+        'http://localhost:8000/test/path',
+        expect.objectContaining({ headers: expect.any(Object) })
+      );
+    });
+
+    it('merges auth headers with provided init headers', async () => {
+      await apiClient.fetch('/test', { headers: { 'Content-Type': 'application/json' } });
+      const callArgs = (global.fetch as jest.Mock).mock.calls[0];
+      expect(callArgs[1].headers).toEqual(expect.objectContaining({
+        'Authorization': expect.stringContaining('Basic'),
+        'Content-Type': 'application/json',
+      }));
+    });
+
+    it('passes method and body through', async () => {
+      await apiClient.fetch('/test', { method: 'POST', body: '{"key":"val"}' });
+      const callArgs = (global.fetch as jest.Mock).mock.calls[0];
+      expect(callArgs[1].method).toBe('POST');
+      expect(callArgs[1].body).toBe('{"key":"val"}');
+    });
+
+    it('works with no init parameter', async () => {
+      await apiClient.fetch('/test');
+      expect(global.fetch).toHaveBeenCalledWith(
+        'http://localhost:8000/test',
+        expect.objectContaining({ headers: expect.any(Object) })
+      );
+    });
+  });
+
+  describe('fetchJson', () => {
+    beforeEach(() => {
+      global.fetch = jest.fn();
+    });
+
+    afterEach(() => {
+      delete (global as any).fetch;
+    });
+
+    it('returns parsed JSON on success', async () => {
+      (global.fetch as jest.Mock).mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ data: 'test' }),
+      });
+      const result = await apiClient.fetchJson('/test');
+      expect(result).toEqual({ data: 'test' });
+    });
+
+    it('throws on non-ok response', async () => {
+      (global.fetch as jest.Mock).mockResolvedValue({
+        ok: false,
+        status: 404,
+        statusText: 'Not Found',
+        json: () => Promise.resolve({}),
+      });
+      await expect(apiClient.fetchJson('/test')).rejects.toThrow('404 Not Found');
+    });
+  });
+
   describe('hasValidConfigStatic', () => {
     it('returns true when serverUrl is configured', () => {
       require('./utils/helpers').setupConfigMock();

@@ -9,8 +9,6 @@ jest.mock('path', () => require('../utils/helpers').pathMockFactory());
 
 
 
-const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation();
-
 describe('DebugService', () => {
   let mockApiClient: any;
   let mockOutputChannel: any;
