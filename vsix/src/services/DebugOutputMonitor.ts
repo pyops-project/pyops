@@ -16,11 +16,8 @@ export class DebugOutputMonitor {
             return false;
         }
 
-        const serverUrl = this.apiClient.getServerUrl();
-        const headers = await this.apiClient.getHeaders();
-
         try {
-            const jobResponse = await fetch(`${serverUrl}/scriptlet/job/item?id=${active.jobId}`, { headers });
+            const jobResponse = await this.apiClient.fetch(`/scriptlet/job/item?id=${active.jobId}`);
             if (jobResponse.ok) {
                 const jobData = await jobResponse.json() as unknown;
                 const jobObj = jobData as { stdout?: string; stderr?: string; state: string };
@@ -95,11 +92,9 @@ export class DebugOutputMonitor {
             return;
         }
 
-        const serverUrl = this.apiClient.getServerUrl();
-        const headers = await this.apiClient.getHeaders();
         const jobId = active.jobId;
         try {
-            const cancelResponse = await fetch(`${serverUrl}/scriptlet/job/cancel?id=${jobId}`, { headers });
+            const cancelResponse = await this.apiClient.fetch(`/scriptlet/job/cancel?id=${jobId}`);
             if (cancelResponse.ok) {
                 if (active.timeout) clearTimeout(active.timeout);
                 this.activeJobs.delete(key);

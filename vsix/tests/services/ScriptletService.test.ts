@@ -8,8 +8,6 @@ jest.mock('vscode');
 jest.mock('../../src/utils');
 jest.mock('../../src/apiClient', () => ({ ApiClient: jest.fn() }));
 
-global.fetch = jest.fn();
-
 jest.mock('fs', () => require('../utils/helpers').fsMockFactory());
 jest.mock('path', () => require('../utils/helpers').pathMockFactory());
 
@@ -57,7 +55,7 @@ describe('ScriptletService', () => {
     it('resets local from remote successfully', async () => {
       const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
 
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
         ok: true,
         json: () => Promise.resolve({ code: 'test code' }),
       } as Response);
@@ -69,9 +67,7 @@ describe('ScriptletService', () => {
 
       await service.resetLocalFromRemote(treeItem);
 
-      expect(global.fetch).toHaveBeenCalledWith('http://localhost:8000/scriptlet/inventory/code?set=testSet&name=testName', {
-        headers: { 'Authorization': 'Basic test' },
-      });
+      expect(mockApiClient.fetch).toHaveBeenCalledWith('/scriptlet/inventory/code?set=testSet&name=testName');
       expect(mockFs.mkdirSync).toHaveBeenCalledWith('/workspace/pyops/testSet/task', { recursive: true });
       expect(mockFs.writeFileSync).toHaveBeenCalledWith('/workspace/pyops/testSet/task/testName.py', 'test code');
       expect(mockManagerTreeProvider.refresh).toHaveBeenCalled();
@@ -80,7 +76,7 @@ describe('ScriptletService', () => {
     it('handles fetch failure', async () => {
       const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
 
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
         ok: false,
         statusText: 'Not Found',
       } as Response);
@@ -99,17 +95,17 @@ describe('ScriptletService', () => {
       mockFs.existsSync.mockReturnValue(true);
       mockFs.readFileSync.mockReturnValue('test code');
 
-      (global.fetch as jest.MockedFunction<typeof fetch>)
+      (mockApiClient.fetch as jest.Mock)
         .mockResolvedValueOnce({ ok: true } as Response)  // check exists
         .mockResolvedValueOnce({ ok: true } as Response); // draft
 
       await service.writeLocalToRemoteDraft(treeItem);
 
-      expect(global.fetch).toHaveBeenCalledTimes(2);
-      expect(global.fetch).toHaveBeenNthCalledWith(1, expect.stringContaining('/inventory/code?set=testSet&name=testName'), expect.any(Object));
-      expect(global.fetch).toHaveBeenNthCalledWith(2, 'http://localhost:8000/scriptlet/inventory/draft', {
+      expect(mockApiClient.fetch).toHaveBeenCalledTimes(2);
+      expect(mockApiClient.fetch).toHaveBeenNthCalledWith(1, expect.stringContaining('/inventory/code?set=testSet&name=testName'));
+      expect(mockApiClient.fetch).toHaveBeenNthCalledWith(2, '/scriptlet/inventory/draft', {
         method: 'POST',
-        headers: { 'Authorization': 'Basic test', 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ set: 'testSet', name: 'testName', code: 'test code' }),
       });
       expect(mockManagerTreeProvider.refresh).toHaveBeenCalled();
@@ -122,7 +118,7 @@ describe('ScriptletService', () => {
       mockFs.existsSync.mockReturnValue(true);
       mockFs.readFileSync.mockReturnValue('test code');
 
-      (global.fetch as jest.MockedFunction<typeof fetch>)
+      (mockApiClient.fetch as jest.Mock)
         .mockResolvedValueOnce({
           status: 404,
           ok: false,
@@ -136,14 +132,14 @@ describe('ScriptletService', () => {
 
       await service.writeLocalToRemoteDraft(treeItem);
 
-      expect(global.fetch).toHaveBeenCalledTimes(3);
-      expect(global.fetch).toHaveBeenNthCalledWith(1, expect.stringContaining('/inventory/code?set=testSet&name=testName'), expect.any(Object));
-      expect(global.fetch).toHaveBeenNthCalledWith(2, 'http://localhost:8000/scriptlet/inventory/item', expect.objectContaining({
+      expect(mockApiClient.fetch).toHaveBeenCalledTimes(3);
+      expect(mockApiClient.fetch).toHaveBeenNthCalledWith(1, expect.stringContaining('/inventory/code?set=testSet&name=testName'));
+      expect(mockApiClient.fetch).toHaveBeenNthCalledWith(2, '/scriptlet/inventory/item', expect.objectContaining({
         method: 'PUT',
         headers: expect.objectContaining({ 'Content-Type': 'application/json' }),
         body: expect.stringContaining('"type":"task"'),
       }));
-      expect(global.fetch).toHaveBeenNthCalledWith(3, 'http://localhost:8000/scriptlet/inventory/draft', expect.objectContaining({
+      expect(mockApiClient.fetch).toHaveBeenNthCalledWith(3, '/scriptlet/inventory/draft', expect.objectContaining({
         method: 'POST',
         body: JSON.stringify({ set: 'testSet', name: 'testName', code: 'test code' }),
       }));
@@ -152,7 +148,7 @@ describe('ScriptletService', () => {
     });
 
     it('shows warning if no valid config', async () => {
-      (ApiClient.hasValidConfigStatic as jest.MockedFunction<typeof ApiClient.hasValidConfigStatic>).mockReturnValue(false);
+      mockApiClient.hasValidConfig.mockReturnValue(false);
 
       const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
 
@@ -167,7 +163,7 @@ describe('ScriptletService', () => {
     it('saves remote draft successfully', async () => {
       const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
 
-      (global.fetch as jest.MockedFunction<typeof fetch>)
+      (mockApiClient.fetch as jest.Mock)
         .mockResolvedValueOnce({
           ok: true,
           json: () => Promise.resolve({ has_unstaged: true }),
@@ -182,14 +178,14 @@ describe('ScriptletService', () => {
 
       await service.saveRemoteDraft(treeItem);
 
-      expect(global.fetch).toHaveBeenCalledTimes(3);
+      expect(mockApiClient.fetch).toHaveBeenCalledTimes(3);
       expect(mockManagerTreeProvider.refresh).toHaveBeenCalled();
     });
 
     it('does nothing if no unstaged changes', async () => {
       const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
 
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
         ok: true,
         json: () => Promise.resolve({ has_unstaged: false }),
       } as Response);
@@ -207,7 +203,7 @@ describe('ScriptletService', () => {
       const mockFs = require('fs');
       mockFs.existsSync.mockReturnValue(true);
 
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
         ok: true,
         json: () => Promise.resolve({ code: 'remote code' }),
       } as Response);
@@ -229,16 +225,15 @@ describe('ScriptletService', () => {
       mockFs.existsSync.mockReturnValue(true);
       mockFs.unlinkSync = jest.fn();
 
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
         ok: true,
         text: () => Promise.resolve(''),
       } as Response);
 
       await service.deleteScriptlet(treeItem);
 
-      expect(global.fetch).toHaveBeenCalledWith('http://localhost:8000/scriptlet/inventory/item?set=testSet&name=testName', {
+      expect(mockApiClient.fetch).toHaveBeenCalledWith('/scriptlet/inventory/item?set=testSet&name=testName', {
         method: 'DELETE',
-        headers: { 'Authorization': 'Basic test' },
       });
       expect(mockFs.unlinkSync).toHaveBeenCalled();
       expect(mockManagerTreeProvider.refresh).toHaveBeenCalled();
@@ -252,7 +247,7 @@ describe('ScriptletService', () => {
 
       await service.deleteScriptlet(treeItem);
 
-      expect(global.fetch).not.toHaveBeenCalled();
+      expect(mockApiClient.fetch).not.toHaveBeenCalled();
     });
   });
 
@@ -261,7 +256,7 @@ describe('ScriptletService', () => {
       const mockVscode = require('vscode');
       const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
 
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockRejectedValueOnce(new Error('Network error'));
+      (mockApiClient.fetch as jest.Mock).mockRejectedValueOnce(new Error('Network error'));
 
       await service.resetLocalFromRemote(treeItem);
 
@@ -272,7 +267,7 @@ describe('ScriptletService', () => {
       const mockVscode = require('vscode');
       const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
 
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
         ok: false,
         statusText: 'Not Found',
       } as Response);
@@ -291,7 +286,7 @@ describe('ScriptletService', () => {
       mockFs.existsSync.mockReturnValue(true);
       mockFs.readFileSync.mockReturnValue('test code');
 
-      (global.fetch as jest.MockedFunction<typeof fetch>)
+      (mockApiClient.fetch as jest.Mock)
         .mockResolvedValueOnce({ ok: true } as Response)  // check exists
         .mockRejectedValueOnce(new Error('Network error')); // draft fetch
 
@@ -308,7 +303,7 @@ describe('ScriptletService', () => {
       mockFs.existsSync.mockReturnValue(true);
       mockFs.readFileSync.mockReturnValue('test code');
 
-      (global.fetch as jest.MockedFunction<typeof fetch>)
+      (mockApiClient.fetch as jest.Mock)
         .mockResolvedValueOnce({ ok: true } as Response)  // check exists
         .mockResolvedValueOnce({
           ok: false,
@@ -326,7 +321,7 @@ describe('ScriptletService', () => {
       const mockVscode = require('vscode');
       const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
 
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockRejectedValueOnce(new Error('Network error'));
+      (mockApiClient.fetch as jest.Mock).mockRejectedValueOnce(new Error('Network error'));
 
       await service.saveRemoteDraft(treeItem);
 
@@ -337,7 +332,7 @@ describe('ScriptletService', () => {
       const mockVscode = require('vscode');
       const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
 
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
         ok: false,
       } as Response);
 
@@ -350,7 +345,7 @@ describe('ScriptletService', () => {
       const mockVscode = require('vscode');
       const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
 
-      (global.fetch as jest.MockedFunction<typeof fetch>)
+      (mockApiClient.fetch as jest.Mock)
         .mockResolvedValueOnce({
           ok: true,
           json: () => Promise.resolve({ has_unstaged: true }),
@@ -366,7 +361,7 @@ describe('ScriptletService', () => {
       const mockVscode = require('vscode');
       const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
 
-      (global.fetch as jest.MockedFunction<typeof fetch>)
+      (mockApiClient.fetch as jest.Mock)
         .mockResolvedValueOnce({
           ok: true,
           json: () => Promise.resolve({ has_unstaged: true }),
@@ -384,7 +379,7 @@ describe('ScriptletService', () => {
       const mockVscode = require('vscode');
       const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
 
-      (global.fetch as jest.MockedFunction<typeof fetch>)
+      (mockApiClient.fetch as jest.Mock)
         .mockResolvedValueOnce({
           ok: true,
           json: () => Promise.resolve({ has_unstaged: true }),
@@ -404,7 +399,7 @@ describe('ScriptletService', () => {
       const mockVscode = require('vscode');
       const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
 
-      (global.fetch as jest.MockedFunction<typeof fetch>)
+      (mockApiClient.fetch as jest.Mock)
         .mockResolvedValueOnce({
           ok: true,
           json: () => Promise.resolve({ has_unstaged: true }),
@@ -432,7 +427,7 @@ describe('ScriptletService', () => {
       const mockFs = require('fs');
       mockFs.existsSync.mockReturnValue(true);
 
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockRejectedValueOnce(new Error('Network error'));
+      (mockApiClient.fetch as jest.Mock).mockRejectedValueOnce(new Error('Network error'));
 
       await service.diffLocalRemote(treeItem);
 
@@ -446,7 +441,7 @@ describe('ScriptletService', () => {
       const mockFs = require('fs');
       mockFs.existsSync.mockReturnValue(true);
 
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
         ok: false,
         statusText: 'Not Found',
       } as Response);
@@ -467,7 +462,7 @@ describe('ScriptletService', () => {
       const mockFs = require('fs');
       mockFs.existsSync.mockReturnValue(true);
 
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockRejectedValueOnce(new Error('Network error'));
+      (mockApiClient.fetch as jest.Mock).mockRejectedValueOnce(new Error('Network error'));
 
       await service.deleteScriptlet(treeItem);
 
@@ -483,7 +478,7 @@ describe('ScriptletService', () => {
       const mockFs = require('fs');
       mockFs.existsSync.mockReturnValue(true);
 
-      (global.fetch as jest.MockedFunction<typeof fetch>)
+      (mockApiClient.fetch as jest.Mock)
         .mockResolvedValueOnce({
           ok: false,
           text: () => Promise.resolve('Delete failed'),
@@ -525,7 +520,7 @@ describe('ScriptletService', () => {
       const mockVscode = require('vscode');
       const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
 
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
         ok: true,
         json: () => Promise.resolve({}),
       } as Response);
@@ -545,7 +540,7 @@ describe('ScriptletService', () => {
       const mockVscode = require('vscode');
       const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
 
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockRejectedValueOnce(new Error('Network error'));
+      (mockApiClient.fetch as jest.Mock).mockRejectedValueOnce(new Error('Network error'));
 
       await service.resetLocalFromRemote(treeItem);
 
@@ -571,7 +566,7 @@ describe('ScriptletService', () => {
       const mockVscode = require('vscode');
       const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
 
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
         ok: true,
         json: () => Promise.reject(new Error('Invalid JSON')),
       } as Response);
@@ -588,7 +583,7 @@ describe('ScriptletService', () => {
       const mockFs = require('fs');
       mockFs.existsSync.mockReturnValue(false);
 
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
         ok: true,
         json: () => Promise.resolve({ code: 'remote code' }),
       } as Response);
@@ -610,7 +605,7 @@ describe('ScriptletService', () => {
         throw new Error('Unlink failed');
       });
 
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
         ok: true,
         text: () => Promise.resolve(''),
       } as Response);

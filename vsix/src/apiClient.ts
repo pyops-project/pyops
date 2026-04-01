@@ -20,6 +20,18 @@ export class ApiClient {
         return pyopsConfig.get('serverUrl') as string || defaultUrl;
     }
 
+    async fetch(path: string, init?: RequestInit): Promise<Response> {
+        const url = `${this.getServerUrl()}${path}`;
+        const headers = await this.getHeaders();
+        return fetch(url, { ...init, headers: { ...headers, ...init?.headers as Record<string, string> } });
+    }
+
+    async fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
+        const response = await this.fetch(path, init);
+        if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+        return response.json() as Promise<T>;
+    }
+
     hasValidConfig(): boolean {
         return ApiClient.hasValidConfigStatic();
     }

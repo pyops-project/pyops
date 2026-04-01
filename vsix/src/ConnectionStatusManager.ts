@@ -1,11 +1,12 @@
 import * as vscode from 'vscode';
 
 import { AuthService } from './services/AuthService';
+import { ApiClient } from './apiClient';
 
 export class ConnectionStatusManager {
     private statusBarItem: vscode.StatusBarItem | undefined;
 
-    constructor(private context: vscode.ExtensionContext, private outputChannel: vscode.OutputChannel) {}
+    constructor(private apiClient: ApiClient, private context: vscode.ExtensionContext, private outputChannel: vscode.OutputChannel) {}
 
     createStatusBarItem(): vscode.StatusBarItem {
         this.statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
@@ -16,10 +17,7 @@ export class ConnectionStatusManager {
     async update(): Promise<void> {
         if (!this.statusBarItem) throw new Error('StatusBarItem not created');
 
-        const pyopsConfig = vscode.workspace.getConfiguration('pyops');
-        const serverUrl = pyopsConfig.get('serverUrl') as string || '';
-        const username = pyopsConfig.get('username') as string;
-        const password = this.context.workspaceState.get('pyops.password') as string;
+        const serverUrl = this.apiClient.getServerUrl('');
 
         let isValid = false;
 
@@ -30,9 +28,7 @@ export class ConnectionStatusManager {
             this.outputChannel.appendLine('Status: No serverUrl available');
         } else {
             try {
-                const url = new URL('/', serverUrl).toString();
-                const headers = this.getAuthHeaders(username, password);
-                const response = await fetch(url, { headers });
+                const response = await this.apiClient.fetch('/');
                 if (response.ok) {
                     this.statusBarItem.text = `$(check) PyOps: Connected`;
                     this.statusBarItem.color = new vscode.ThemeColor('statusBarItem.foreground');
@@ -45,8 +41,7 @@ export class ConnectionStatusManager {
                         await this.context.workspaceState.update('pyops.password', undefined);
                         await AuthService.setupAuth(this.context, this.outputChannel);
                         // retry
-                        const headers2 = this.getAuthHeaders(username, password);
-                        const response2 = await fetch(url, { headers: headers2 });
+                        const response2 = await this.apiClient.fetch('/');
                         if (response2.ok) {
                             this.statusBarItem.text = `$(check) PyOps: Connected`;
                             this.statusBarItem.color = new vscode.ThemeColor('statusBarItem.foreground');
@@ -77,14 +72,5 @@ export class ConnectionStatusManager {
 
         await vscode.commands.executeCommand('setContext', 'pyops.hasValidConfig', isValid);
         this.statusBarItem.show();
-    }
-
-    private getAuthHeaders(username: string | undefined, password: string | undefined): Record<string, string> {
-        const headers: Record<string, string> = {};
-        if (username && password) {
-            const auth = Buffer.from(`${username}:${password}`).toString('base64');
-            headers['Authorization'] = `Basic ${auth}`;
-        }
-        return headers;
     }
 }

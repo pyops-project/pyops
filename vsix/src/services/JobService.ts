@@ -11,19 +11,9 @@ export class JobService {
         return await this.fetchJobs();
     }
 
-    private async getHeaders(): Promise<Record<string, string>> {
-        return this.apiClient.getHeaders();
-    }
-
-    private getServerUrl(): string {
-        return this.apiClient.getServerUrl();
-    }
-
     protected async fetchJobs(): Promise<Job[]> {
-        const serverUrl = this.getServerUrl();
-        const headers = await this.getHeaders();
         try {
-            const response = await fetch(`${serverUrl}/scriptlet/job/list`, { headers });
+            const response = await this.apiClient.fetch('/scriptlet/job/list');
             if (response.ok) {
                 return await response.json() as Job[];
             } else {
@@ -52,11 +42,9 @@ export class JobService {
             vscode.window.showWarningMessage('No job selected');
             return;
         }
-        const serverUrl = this.getServerUrl();
         const id = treeItem.job.id;
-        const headers = await this.getHeaders();
         try {
-            const response = await fetch(`${serverUrl}/scriptlet/job/cancel?id=${id}`, { headers });
+            const response = await this.apiClient.fetch(`/scriptlet/job/cancel?id=${id}`);
             if (response.ok) {
                 if (this.jobsTreeProvider) {
                     this.jobsTreeProvider.refresh();
@@ -76,11 +64,9 @@ export class JobService {
             vscode.window.showWarningMessage('No job selected');
             return;
         }
-        const serverUrl = this.getServerUrl();
         const id = treeItem.job.id;
-        const headers = await this.getHeaders();
         try {
-            const response = await fetch(`${serverUrl}/scriptlet/job/download?id=${id}`, { headers });
+            const response = await this.apiClient.fetch(`/scriptlet/job/download?id=${id}`);
             if (response.ok) {
                 const blob = await response.blob();
                 const defaultUri = vscode.Uri.file(`${id}.zip`);
@@ -113,12 +99,9 @@ export class JobService {
             'Delete'
         );
         if (confirm !== 'Delete') return;
-        const serverUrl = this.getServerUrl();
-        const headers = await this.getHeaders();
         try {
-            const response = await fetch(`${serverUrl}/scriptlet/job/item?id=${id}`, {
-                method: 'DELETE',
-                headers
+            const response = await this.apiClient.fetch(`/scriptlet/job/item?id=${id}`, {
+                method: 'DELETE'
             });
             if (response.ok) {
                 if (this.jobsTreeProvider) {
@@ -146,13 +129,11 @@ export class JobService {
             vscode.window.showWarningMessage('Job details already being viewed');
             return;
         }
-        const serverUrl = this.getServerUrl();
-        const headers = await this.getHeaders();
         this.jobViewOutputChannel.clear();
         this.jobViewOutputChannel.show(true);
         const pollInterval = setInterval(async () => {
             try {
-                const jobResponse = await fetch(`${serverUrl}/scriptlet/job/item?id=${id}`, { headers });
+                const jobResponse = await this.apiClient.fetch(`/scriptlet/job/item?id=${id}`);
                 if (jobResponse.ok) {
                     const jobData = await jobResponse.json() as unknown;
                     const jobObj = jobData as { param?: string; stdout?: string; stderr?: string; state: string };
@@ -218,17 +199,15 @@ export class JobService {
         const confirmMsg = `Perform ${action} on ${jobsToAct.length} job(s)?`;
         const confirm = await vscode.window.showWarningMessage(confirmMsg, { modal: true }, 'Yes');
         if (confirm !== 'Yes') return;
-        const serverUrl = this.getServerUrl();
-        const headers = await this.getHeaders();
         let successCount = 0;
         let errorCount = 0;
         for (const job of jobsToAct) {
             try {
                 let response;
                 if (action === 'cancel') {
-                    response = await fetch(`${serverUrl}/scriptlet/job/cancel?id=${job.id}`, { headers });
+                    response = await this.apiClient.fetch(`/scriptlet/job/cancel?id=${job.id}`);
                 } else {
-                    response = await fetch(`${serverUrl}/scriptlet/job/item?id=${job.id}`, { method: 'DELETE', headers });
+                    response = await this.apiClient.fetch(`/scriptlet/job/item?id=${job.id}`, { method: 'DELETE' });
                 }
                 if (response.ok) {
                     successCount++;

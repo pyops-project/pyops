@@ -5,8 +5,6 @@ import { createMockOutputChannel, createMockVscodeWindow, createMockApiClient } 
 jest.mock('vscode');
 jest.mock('../../src/apiClient', () => ({ ApiClient: jest.fn() }));
 
-global.fetch = jest.fn();
-
 const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation();
 
 const flushPromises = () => new Promise(resolve => process.nextTick(resolve));
@@ -15,7 +13,6 @@ describe('DebugOutputMonitor', () => {
   let mockApiClient: jest.Mocked<ApiClient>;
   let mockOutputChannel: any;
   let monitor: DebugOutputMonitor;
-  let mockFetch: jest.MockedFunction<typeof global.fetch>;
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -24,8 +21,7 @@ describe('DebugOutputMonitor', () => {
 
     mockApiClient = createMockApiClient(ApiClient, { headers: { 'Authorization': 'Basic test' }, serverUrl: 'http://localhost:8000' }) as any;
 
-    mockFetch = global.fetch as jest.MockedFunction<typeof global.fetch>;
-    mockFetch.mockResolvedValue({ ok: true, json: jest.fn().mockResolvedValue({ state: 'running' }) } as any);
+    (mockApiClient.fetch as jest.Mock).mockResolvedValue({ ok: true, json: jest.fn().mockResolvedValue({ state: 'running' }) } as any);
 
     mockOutputChannel = createMockOutputChannel();
 
@@ -58,7 +54,7 @@ describe('DebugOutputMonitor', () => {
     it('appends incremental stdout', async () => {
       const firstJobData = { stdout: 'hello', stderr: '', state: 'running' };
       const firstResponse = { ok: true, json: jest.fn().mockResolvedValue(firstJobData) } as any;
-      mockFetch.mockResolvedValueOnce(firstResponse);
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce(firstResponse);
 
       await monitor.startMonitoring('key1', 'job1');
 
@@ -68,7 +64,7 @@ describe('DebugOutputMonitor', () => {
 
       const secondJobData = { stdout: 'hello world', stderr: '', state: 'running' };
       const secondResponse = { ok: true, json: jest.fn().mockResolvedValue(secondJobData) } as any;
-      mockFetch.mockResolvedValueOnce(secondResponse);
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce(secondResponse);
 
       await new Promise(resolve => setTimeout(resolve, 1100));
 
@@ -80,7 +76,7 @@ describe('DebugOutputMonitor', () => {
     it('appends incremental stderr', async () => {
       const firstJobData = { stdout: '', stderr: 'error line 1', state: 'running' };
       const firstResponse = { ok: true, json: jest.fn().mockResolvedValue(firstJobData) } as any;
-      mockFetch.mockResolvedValueOnce(firstResponse);
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce(firstResponse);
 
       await monitor.startMonitoring('key1', 'job1');
 
@@ -90,7 +86,7 @@ describe('DebugOutputMonitor', () => {
 
       const secondJobData = { stdout: '', stderr: 'error line 1\\nerror line 2', state: 'running' };
       const secondResponse = { ok: true, json: jest.fn().mockResolvedValue(secondJobData) } as any;
-      mockFetch.mockResolvedValueOnce(secondResponse);
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce(secondResponse);
 
       await new Promise(resolve => setTimeout(resolve, 1100));
 
@@ -102,14 +98,14 @@ describe('DebugOutputMonitor', () => {
     it('does not append if no new output', async () => {
       const jobData = { stdout: 'hello', stderr: '', state: 'running' };
       const response = { ok: true, json: jest.fn().mockResolvedValue(jobData) } as any;
-      mockFetch.mockResolvedValueOnce(response);
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce(response);
 
       await monitor.startMonitoring('key1', 'job1');
 
       // First poll happens immediately
       expect(mockOutputChannel.append).toHaveBeenCalledTimes(1);
 
-      mockFetch.mockResolvedValueOnce(response); // same length
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce(response); // same length
 
       await new Promise(resolve => setTimeout(resolve, 1100));
 
@@ -120,7 +116,7 @@ describe('DebugOutputMonitor', () => {
 
     it('handles missing stdout/stderr', async () => {
       const response = { ok: true, json: jest.fn().mockResolvedValue({ state: 'running' }) } as any;
-      mockFetch.mockResolvedValueOnce(response);
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce(response);
 
       await monitor.startMonitoring('key1', 'job1');
 
@@ -132,7 +128,7 @@ describe('DebugOutputMonitor', () => {
 
     it('stops polling on job done state', async () => {
       const initialResponse = { ok: true, json: jest.fn().mockResolvedValue({ state: 'running' }) } as any;
-      mockFetch.mockResolvedValueOnce(initialResponse);
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce(initialResponse);
 
       await monitor.startMonitoring('key1', 'job1');
 
@@ -140,7 +136,7 @@ describe('DebugOutputMonitor', () => {
       expect(monitor.isMonitoring('key1')).toBe(true);
 
       const doneResponse = { ok: true, json: jest.fn().mockResolvedValue({ state: 'done' }) } as any;
-      mockFetch.mockResolvedValueOnce(doneResponse);
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce(doneResponse);
 
       await new Promise(resolve => setTimeout(resolve, 1100));
 
@@ -149,7 +145,7 @@ describe('DebugOutputMonitor', () => {
 
     it('stops polling on 404', async () => {
       const initialResponse = { ok: true, json: jest.fn().mockResolvedValue({ state: 'running' }) } as any;
-      mockFetch.mockResolvedValueOnce(initialResponse);
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce(initialResponse);
 
       await monitor.startMonitoring('key1', 'job1');
 
@@ -157,7 +153,7 @@ describe('DebugOutputMonitor', () => {
       expect(monitor.isMonitoring('key1')).toBe(true);
 
       const notFoundResponse = { ok: false, status: 404 } as Response;
-      mockFetch.mockResolvedValueOnce(notFoundResponse);
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce(notFoundResponse);
 
       await new Promise(resolve => setTimeout(resolve, 1100));
 
@@ -166,14 +162,14 @@ describe('DebugOutputMonitor', () => {
 
     it('logs error on fetch failure during poll', async () => {
       const initialResponse = { ok: true, json: jest.fn().mockResolvedValue({ state: 'running' }) } as any;
-      mockFetch.mockResolvedValueOnce(initialResponse);
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce(initialResponse);
 
       await monitor.startMonitoring('key1', 'job1');
 
       // First poll happens immediately
       expect(monitor.isMonitoring('key1')).toBe(true);
 
-      mockFetch.mockRejectedValueOnce(new Error('fetch failed'));
+      (mockApiClient.fetch as jest.Mock).mockRejectedValueOnce(new Error('fetch failed'));
 
       await new Promise(resolve => setTimeout(resolve, 1100));
 
@@ -185,7 +181,7 @@ describe('DebugOutputMonitor', () => {
 
     it('continues polling on non-404 error response', async () => {
       const initialResponse = { ok: true, json: jest.fn().mockResolvedValue({ state: 'running' }) } as any;
-      mockFetch.mockResolvedValueOnce(initialResponse);
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce(initialResponse);
 
       await monitor.startMonitoring('key1', 'job1');
 
@@ -193,7 +189,7 @@ describe('DebugOutputMonitor', () => {
       expect(monitor.isMonitoring('key1')).toBe(true);
 
       const errorResponse = { ok: false, status: 500 } as Response;
-      mockFetch.mockResolvedValueOnce(errorResponse);
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce(errorResponse);
 
       await new Promise(resolve => setTimeout(resolve, 1100));
 
@@ -204,14 +200,14 @@ describe('DebugOutputMonitor', () => {
 
     it('logs error on fetch failure with non-Error', async () => {
       const initialResponse = { ok: true, json: jest.fn().mockResolvedValue({ state: 'running' }) } as any;
-      mockFetch.mockResolvedValueOnce(initialResponse);
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce(initialResponse);
 
       await monitor.startMonitoring('key1', 'job1');
 
       // First poll happens immediately
       expect(monitor.isMonitoring('key1')).toBe(true);
 
-      mockFetch.mockRejectedValueOnce('network error');
+      (mockApiClient.fetch as jest.Mock).mockRejectedValueOnce('network error');
 
       await new Promise(resolve => setTimeout(resolve, 1100));
 
@@ -228,15 +224,13 @@ describe('DebugOutputMonitor', () => {
 
       await monitor.startMonitoring('key1', 'job1');
 
-      mockFetch.mockResolvedValueOnce({
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
         ok: true,
       } as Response);
 
       await monitor.stopMonitoring('key1');
 
-      expect(global.fetch).toHaveBeenCalledWith('http://localhost:8000/scriptlet/job/cancel?id=job1', {
-        headers: { 'Authorization': 'Basic test' },
-      });
+      expect(mockApiClient.fetch).toHaveBeenCalledWith('/scriptlet/job/cancel?id=job1');
       expect(mockOutputChannel.appendLine).toHaveBeenCalledWith('\n--- Job stopped ---\n');
       expect(mockVscode.window.showInformationMessage).toHaveBeenCalledWith('Stopped debug job job1');
       expect(monitor.isMonitoring('key1')).toBe(false);
@@ -247,7 +241,7 @@ describe('DebugOutputMonitor', () => {
 
       await monitor.startMonitoring('key1', 'job1');
 
-      mockFetch.mockResolvedValueOnce({
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
         ok: false,
         statusText: 'Not Found',
       } as Response);
@@ -268,7 +262,7 @@ describe('DebugOutputMonitor', () => {
     it('handles fetch error during cancel', async () => {
       const mockVscode = require('vscode');
       await monitor.startMonitoring('key1', 'job1');
-      mockFetch.mockRejectedValueOnce(new Error('network error'));
+      (mockApiClient.fetch as jest.Mock).mockRejectedValueOnce(new Error('network error'));
       await monitor.stopMonitoring('key1');
       expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith('Error stopping debug: network error');
       expect(monitor.isMonitoring('key1')).toBe(true);

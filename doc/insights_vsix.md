@@ -27,7 +27,7 @@ flowchart TD
 | File | Role |
 |------|------|
 | `src/extension.ts` | Main activation: initializes all services, registers providers/commands, handles deactivation |
-| `src/apiClient.ts` | Shared HTTP client: `getServerUrl()`, `getAuthHeaders()`, `hasValidConfig()` |
+| `src/apiClient.ts` | Shared HTTP client: `fetch(path, init?)`, `fetchJson<T>(path, init?)`, `getServerUrl()`, `getHeaders()`, `hasValidConfig()` |
 | `src/utils.ts` | `inferExt(type)`: maps scriptlet type → file extension |
 | `src/ConnectionStatusManager.ts` | Status bar item showing server connectivity |
 | `src/managerTreeProvider.ts` | `ManagerTreeDataProvider`: sets → scriptlets hierarchy, sync status, local-only discovery |
@@ -57,7 +57,9 @@ flowchart TD
 | `excludedSets` | string[] | `[]` | Sets excluded from Manager tree |
 | `debugPort` | number | 5678 | Debug port used for Python debugpy attach |
 
-`hasValidConfig()` (in `apiClient.ts`) returns false if `serverUrl` is empty/undefined — it does **not** check any other config keys. Auth is optional: `getAuthHeaders()` returns Basic Auth header only if both `username` and a stored password exist.
+`hasValidConfig()` (in `apiClient.ts`) returns false if `serverUrl` is empty/undefined — it does **not** check any other config keys. Auth is optional: `getHeaders()` returns Basic Auth header only if both `username` and a stored password exist.
+
+`ApiClient.fetch(path, init?)` is the primary HTTP method: prepends `getServerUrl()` to the path, merges auth headers from `getHeaders()` with any headers in `init`, and delegates to `global.fetch()`. `fetchJson<T>()` adds response-ok validation and JSON parsing. All services (`DebugService`, `JobService`, `ScriptletService`, `DebugOutputMonitor`, `ConnectionStatusManager`, `CreateScriptletCommand`) and tree providers use `apiClient.fetch()` — no service builds its own URL/header combination.
 
 ---
 
@@ -347,7 +349,7 @@ Coverage targets: branches 80%, functions 80%, lines 90%, statements 80%.
 
 **Mock patterns:**
 - Hoisted `jest.mock('../src/services/*')` with `mockImplementation` for instances/methods
-- `global.fetch` for all API calls
+- `mockApiClient.fetch` for all API calls (via `createMockApiClient` helper which provides `fetch`, `fetchJson`, `getHeaders`, `getServerUrl`, `hasValidConfig` mocks)
 - `fs`/`path` mocks for filesystem operations
 - VSCode API mocks: `window.createOutputChannel`, `workspace.getConfiguration`, etc.
 - `beforeEach(jest.clearAllMocks())` for isolation; `beforeAll` for shared activation

@@ -37,14 +37,6 @@ class JobsTreeDataProvider implements TreeDataProvider<JobTreeItem> {
         this.refresh();
     }
 
-    private async getHeaders(): Promise<Record<string, string>> {
-        return this._apiClient.getHeaders();
-    }
-
-    private getServerUrl(): string {
-        return this._apiClient.getServerUrl();
-    }
-
     getTreeItem(element: JobTreeItem): TreeItem {
         return element;
     }
@@ -123,11 +115,8 @@ class JobsTreeDataProvider implements TreeDataProvider<JobTreeItem> {
     }
 
     private async fetchJobs(): Promise<Job[]> {
-        const serverUrl = this.getServerUrl();
-        const headers = await this.getHeaders();
-
         try {
-            const response = await fetch(`${serverUrl}/scriptlet/job/list`, { headers });
+            const response = await this._apiClient.fetch('/scriptlet/job/list');
             if (response.ok) {
                 this._lastJobsErrorShown = 0;
                 return await response.json() as unknown[] as Job[];

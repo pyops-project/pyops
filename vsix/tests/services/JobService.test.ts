@@ -6,8 +6,6 @@ import { createMockOutputChannel, createMockVscodeWindow, createMockApiClient, c
 jest.mock('vscode');
 jest.mock('../../src/apiClient', () => ({ ApiClient: jest.fn() }));
 
-global.fetch = jest.fn();
-
 const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation();
 
 let fetchCallCount = 0;
@@ -59,15 +57,13 @@ describe('JobService', () => {
       const mockVscode = require('vscode');
       const treeItem = { job: { id: 'job1' } } as JobTreeItem;
 
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
         ok: true,
       } as Response);
 
       await service.cancelJob(treeItem);
 
-      expect(global.fetch).toHaveBeenCalledWith('http://localhost:8000/scriptlet/job/cancel?id=job1', {
-        headers: { 'Authorization': 'Basic test' },
-  });
+      expect(mockApiClient.fetch).toHaveBeenCalledWith('/scriptlet/job/cancel?id=job1');
       expect(mockJobsTreeProvider.refresh).toHaveBeenCalled();
       expect(mockVscode.window.showInformationMessage).toHaveBeenCalledWith('Canceled job job1');
 });
@@ -76,7 +72,7 @@ describe('JobService', () => {
       const mockVscode = require('vscode');
       const treeItem = { job: { id: 'job1' } } as JobTreeItem;
 
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
         ok: false,
         statusText: 'Not Found',
       } as Response);
@@ -93,7 +89,7 @@ describe('JobService', () => {
       const treeItem = { job: { id: 'job1' } } as JobTreeItem;
       const mockUri = { fsPath: '/path/to/job1.zip' };
 
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
         ok: true,
         blob: () => Promise.resolve(new Blob(['test'])),
       } as Response);
@@ -117,16 +113,13 @@ describe('JobService', () => {
       const treeItem = { job: { id: 'job1' } } as JobTreeItem;
 
       mockVscode.window.showWarningMessage.mockResolvedValue('Delete');
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
         ok: true,
       } as Response);
 
       await service.deleteJob(treeItem);
 
-      expect(global.fetch).toHaveBeenCalledWith('http://localhost:8000/scriptlet/job/item?id=job1', {
-        method: 'DELETE',
-        headers: { 'Authorization': 'Basic test' },
-      });
+      expect(mockApiClient.fetch).toHaveBeenCalledWith('/scriptlet/job/item?id=job1', { method: 'DELETE' });
       expect(mockJobsTreeProvider.refresh).toHaveBeenCalled();
       expect(mockVscode.window.showInformationMessage).toHaveBeenCalledWith('Deleted job job1');
     });
@@ -139,7 +132,7 @@ describe('JobService', () => {
 
       await service.deleteJob(treeItem);
 
-      expect(global.fetch).not.toHaveBeenCalled();
+      expect(mockApiClient.fetch).not.toHaveBeenCalled();
     });
   });
 
@@ -168,15 +161,13 @@ describe('JobService', () => {
         { id: 'job2', state: 'done' },
       ]);
       mockVscode.window.showWarningMessage.mockResolvedValue('Yes');
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValue({
+      (mockApiClient.fetch as jest.Mock).mockResolvedValue({
         ok: true,
       } as Response);
 
       await service.cancelAllJobs();
 
-      expect(global.fetch).toHaveBeenCalledWith('http://localhost:8000/scriptlet/job/cancel?id=job1', {
-        headers: { 'Authorization': 'Basic test' },
-      });
+      expect(mockApiClient.fetch).toHaveBeenCalledWith('/scriptlet/job/cancel?id=job1');
       expect(mockJobsTreeProvider.refresh).toHaveBeenCalled();
     });
 
@@ -188,23 +179,20 @@ describe('JobService', () => {
         { id: 'job2', state: 'running' },
       ]);
       mockVscode.window.showWarningMessage.mockResolvedValue('Yes');
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValue({
+      (mockApiClient.fetch as jest.Mock).mockResolvedValue({
         ok: true,
       } as Response);
 
       await service.deleteAllDone();
 
-      expect(global.fetch).toHaveBeenCalledWith('http://localhost:8000/scriptlet/job/item?id=job1', {
-        method: 'DELETE',
-        headers: { 'Authorization': 'Basic test' },
-      });
+      expect(mockApiClient.fetch).toHaveBeenCalledWith('/scriptlet/job/item?id=job1', { method: 'DELETE' });
       expect(mockJobsTreeProvider.refresh).toHaveBeenCalled();
     });
   });
 
   describe('fetchJobs', () => {
     it('handles network errors', async () => {
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockRejectedValueOnce(new Error('Network error'));
+      (mockApiClient.fetch as jest.Mock).mockRejectedValueOnce(new Error('Network error'));
 
       const result = await (service as any).fetchJobs();
 
@@ -212,7 +200,7 @@ describe('JobService', () => {
     });
 
     it('handles non-ok responses', async () => {
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
         ok: false,
         statusText: 'Server Error',
       } as Response);
@@ -228,7 +216,7 @@ describe('JobService', () => {
       const mockVscode = require('vscode');
       const treeItem = { job: { id: 'job1' } } as JobTreeItem;
 
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockRejectedValueOnce(new Error('Network error'));
+      (mockApiClient.fetch as jest.Mock).mockRejectedValueOnce(new Error('Network error'));
 
       await service.cancelJob(treeItem);
 
@@ -243,7 +231,7 @@ describe('JobService', () => {
       const mockVscode = require('vscode');
       const treeItem = { job: { id: 'job1' } } as JobTreeItem;
 
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockRejectedValueOnce(new Error('Network error'));
+      (mockApiClient.fetch as jest.Mock).mockRejectedValueOnce(new Error('Network error'));
 
       await service.downloadJob(treeItem);
 
@@ -254,7 +242,7 @@ describe('JobService', () => {
       const mockVscode = require('vscode');
       const treeItem = { job: { id: 'job1' } } as JobTreeItem;
 
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
         ok: true,
         blob: () => Promise.resolve(new Blob(['test'])),
       } as Response);
@@ -272,7 +260,7 @@ describe('JobService', () => {
       const treeItem = { job: { id: 'job1' } } as JobTreeItem;
 
       mockVscode.window.showWarningMessage.mockResolvedValue('Delete');
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockRejectedValueOnce(new Error('Network error'));
+      (mockApiClient.fetch as jest.Mock).mockRejectedValueOnce(new Error('Network error'));
 
       await service.deleteJob(treeItem);
 
@@ -308,7 +296,7 @@ describe('JobService', () => {
       const treeItem = { job: { id: 'job1' } } as JobTreeItem;
 
       // Mock successful fetch responses for polling
-      (global.fetch as jest.MockedFunction<typeof fetch>)
+      (mockApiClient.fetch as jest.Mock)
         .mockResolvedValueOnce({
           ok: true,
           json: () => Promise.resolve({
@@ -357,7 +345,7 @@ describe('JobService', () => {
     it('handles job not found (404)', async () => {
       const treeItem = { job: { id: 'job1' } } as JobTreeItem;
 
-      (global.fetch as jest.MockedFunction<typeof fetch>)
+      (mockApiClient.fetch as jest.Mock)
         .mockResolvedValueOnce({
           ok: true,
           json: () => Promise.resolve({ state: 'running' }),
@@ -378,7 +366,7 @@ describe('JobService', () => {
     it('handles polling errors gracefully', async () => {
       const treeItem = { job: { id: 'job1' } } as JobTreeItem;
 
-      (global.fetch as jest.MockedFunction<typeof fetch>)
+      (mockApiClient.fetch as jest.Mock)
         .mockResolvedValueOnce({
           ok: true,
           json: () => Promise.resolve({ state: 'running' }),
@@ -404,16 +392,13 @@ describe('JobService', () => {
         { id: 'job3', state: 'done' },
       ]);
       mockVscode.window.showWarningMessage.mockResolvedValue('Yes');
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValue({
+      (mockApiClient.fetch as jest.Mock).mockResolvedValue({
         ok: true,
       } as Response);
 
       await service.deleteAllFailed();
 
-      expect(global.fetch).toHaveBeenCalledWith('http://localhost:8000/scriptlet/job/item?id=job1', {
-        method: 'DELETE',
-        headers: { 'Authorization': 'Basic test' },
-      });
+      expect(mockApiClient.fetch).toHaveBeenCalledWith('/scriptlet/job/item?id=job1', { method: 'DELETE' });
       expect(mockJobsTreeProvider.refresh).toHaveBeenCalled();
     });
 
@@ -424,16 +409,13 @@ describe('JobService', () => {
         { id: 'jobKilled', state: 'killed' },
       ]);
       mockVscode.window.showWarningMessage.mockResolvedValue('Yes');
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValue({
+      (mockApiClient.fetch as jest.Mock).mockResolvedValue({
         ok: true,
       } as Response);
 
       await service.deleteAllFailed();
 
-      expect(global.fetch).toHaveBeenCalledWith('http://localhost:8000/scriptlet/job/item?id=jobKilled', {
-        method: 'DELETE',
-        headers: { 'Authorization': 'Basic test' },
-      });
+      expect(mockApiClient.fetch).toHaveBeenCalledWith('/scriptlet/job/item?id=jobKilled', { method: 'DELETE' });
       expect(mockJobsTreeProvider.refresh).toHaveBeenCalled();
     });
 
@@ -483,7 +465,7 @@ describe('JobService', () => {
 
       await service.cancelAllJobs();
 
-      expect(global.fetch).not.toHaveBeenCalled();
+      expect(mockApiClient.fetch).not.toHaveBeenCalled();
     });
 
     it('bulk actions handle partial failures', async () => {
@@ -494,7 +476,7 @@ describe('JobService', () => {
         { id: 'job2', state: 'running' },
       ]);
       mockVscode.window.showWarningMessage.mockResolvedValue('Yes');
-      (global.fetch as jest.MockedFunction<typeof fetch>)
+      (mockApiClient.fetch as jest.Mock)
         .mockResolvedValueOnce({ ok: true } as Response)
         .mockRejectedValueOnce(new Error('Network error'));
 
@@ -513,7 +495,7 @@ describe('JobService', () => {
       const mockVscode = require('vscode');
       const treeItem = { job: { id: 'job1' } } as JobTreeItem;
 
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
         ok: true,
       } as Response);
 
@@ -528,7 +510,7 @@ describe('JobService', () => {
       const treeItem = { job: { id: 'job1' } } as JobTreeItem;
 
       mockVscode.window.showWarningMessage.mockResolvedValue('Delete');
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
         ok: true,
       } as Response);
 
@@ -543,7 +525,7 @@ describe('JobService', () => {
       const mockVscode = require('vscode');
       const treeItem = { job: { id: 'job1' } } as JobTreeItem;
 
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
         ok: false,
         statusText: 'Forbidden',
       } as Response);
@@ -559,7 +541,7 @@ describe('JobService', () => {
       const mockVscode = require('vscode');
       const treeItem = { job: { id: 'job1' } } as JobTreeItem;
 
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
         ok: false,
         statusText: 'Not Found',
       } as Response);
@@ -579,7 +561,7 @@ describe('JobService', () => {
 
       await service.deleteJob(treeItem);
 
-      expect(global.fetch).not.toHaveBeenCalled();
+      expect(mockApiClient.fetch).not.toHaveBeenCalled();
     });
   });
 
@@ -589,7 +571,7 @@ describe('JobService', () => {
       const treeItem = { job: { id: 'job1' } } as JobTreeItem;
 
       mockVscode.window.showWarningMessage.mockResolvedValue('Delete');
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
         ok: false,
         text: () => Promise.resolve('Delete forbidden'),
       } as Response);
@@ -614,7 +596,7 @@ describe('JobService', () => {
       jest.useRealTimers();
       const treeItem = { job: { id: 'job1' } } as JobTreeItem;
 
-      const fetchSpy = jest.spyOn(global, 'fetch').mockImplementation(() => {
+      (mockApiClient.fetch as jest.Mock).mockImplementation(() => {
         fetchCallCount++;
         if (fetchCallCount === 1) {
           return Promise.resolve({
@@ -643,7 +625,6 @@ describe('JobService', () => {
       expect((service as any).activeJobs.size).toBe(0);
       expect(mockJobViewOutputChannel.appendLine).toHaveBeenCalledWith('\n--- State: done ---');
 
-      fetchSpy.mockRestore();
       jest.useFakeTimers();
     });
   });
@@ -674,7 +655,7 @@ describe('JobService', () => {
       ]);
 
       mockVscode.window.showWarningMessage.mockResolvedValue('Yes');
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockRejectedValue(new Error('Operation failed'));
+      (mockApiClient.fetch as jest.Mock).mockRejectedValue(new Error('Operation failed'));
 
       await service.cancelAllJobs();
 

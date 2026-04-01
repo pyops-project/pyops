@@ -76,6 +76,8 @@ export function createMockApiClient(
     getHeaders: jest.fn().mockResolvedValue(options.headers || { 'Authorization': 'Basic dGVzdHVzZXI6dGVzdHBhc3M=' }),
     getServerUrl: jest.fn().mockReturnValue(options.serverUrl || 'http://localhost:8000'),
     hasValidConfig: jest.fn().mockReturnValue(options.validConfig ?? true),
+    fetch: jest.fn(),
+    fetchJson: jest.fn(),
   };
 
   ApiClientClass.mockImplementation(() => mockInstance);

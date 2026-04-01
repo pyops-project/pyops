@@ -51,8 +51,10 @@ export async function activate(context: vscode.ExtensionContext) {
         // Set language mode for remote diff documents
         context.subscriptions.push(registerRemoteLanguageModeSetter());
 
+    const apiClient = new ApiClient(context);
+
         // Create status bar item for connection state
-        const statusManager = new ConnectionStatusManager(context, outputChannel);
+        const statusManager = new ConnectionStatusManager(apiClient, context, outputChannel);
         statusBarItem = statusManager.createStatusBarItem();
         context.subscriptions.push(statusBarItem);
 
@@ -88,14 +90,12 @@ export async function activate(context: vscode.ExtensionContext) {
         });
         context.subscriptions.push(refreshStatusDisposable);
 
-    const apiClient = new ApiClient(context);
-
     // Register tree view for manager
     managerTreeProvider = new ManagerTreeDataProvider(context, outputChannel, apiClient);
     context.subscriptions.push(vscode.window.registerTreeDataProvider('pyops-manager', managerTreeProvider));
 
     context.subscriptions.push(vscode.commands.registerCommand('pyops.createScriptlet', async () => {
-        await CreateScriptletCommand.execute(context, outputChannel, managerTreeProvider!);
+        await CreateScriptletCommand.execute(apiClient, outputChannel, managerTreeProvider!);
     }));
 
     // Register native tree view for monitor (repurposing existing ID)
@@ -112,7 +112,7 @@ export async function activate(context: vscode.ExtensionContext) {
     const scriptletService = new ScriptletService(apiClient, managerTreeProvider!);
 
     // Create debug service
-    const debugService = new DebugService(context, outputChannel);
+    const debugService = new DebugService(apiClient, outputChannel);
 
     // Assign to global for testing
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -238,14 +238,12 @@ export async function activate(context: vscode.ExtensionContext) {
                     await debugOutputMonitor.startMonitoring(key, result.jobId);
 
                     // Wait for job to be running
-                    const serverUrl = apiClient.getServerUrl();
-                    const headers = await apiClient.getHeaders();
                     const jobTimeoutMs = 15000;
                     const pollIntervalMs = 1000;
                     const jobStartTime = Date.now();
                     let jobRunning = false;
                     while (Date.now() - jobStartTime < jobTimeoutMs) {
-                        const response = await fetch(`${serverUrl}/scriptlet/job/item?id=${result.jobId}`, { headers });
+                        const response = await apiClient.fetch(`/scriptlet/job/item?id=${result.jobId}`);
                         if (!response.ok) {
                             if (response.status === 404) {
                                 throw new Error(`Job ${result.jobId} not found`);
