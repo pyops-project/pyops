@@ -10,8 +10,10 @@ describe('ApiClient', () => {
   beforeEach(() => {
     require('./utils/helpers').setupConfigMock({serverUrl: 'http://localhost:8000', username: 'testuser'});
     context = {
-      workspaceState: {
-        get: jest.fn((key) => key === 'pyops.password' ? 'testpassword' : undefined),
+      secrets: {
+        get: jest.fn((key: string) => key === 'pyops.password' ? Promise.resolve('testpassword') : Promise.resolve(undefined)),
+        store: jest.fn(),
+        delete: jest.fn(),
       },
     };
     apiClient = new ApiClient(context);
@@ -51,7 +53,7 @@ describe('ApiClient', () => {
     });
 
     it('should return empty headers when password is not set', async () => {
-      (context.workspaceState.get as jest.Mock).mockReturnValue(undefined);
+      (context.secrets.get as jest.Mock).mockResolvedValue(undefined);
       const headers = await apiClient.getHeaders();
       expect(headers).toEqual({});
     });

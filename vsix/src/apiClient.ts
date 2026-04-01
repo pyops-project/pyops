@@ -6,7 +6,7 @@ export class ApiClient {
     async getHeaders(): Promise<Record<string, string>> {
         const pyopsConfig = vscode.workspace.getConfiguration('pyops');
         const username = pyopsConfig.get('username') as string;
-        const password = this.context.workspaceState.get('pyops.password') as string;
+        const password = await this.context.secrets.get('pyops.password');
         const headers: Record<string, string> = {};
         if (username && password) {
             const auth = Buffer.from(`${username}:${password}`).toString('base64');

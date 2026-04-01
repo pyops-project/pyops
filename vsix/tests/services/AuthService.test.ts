@@ -16,9 +16,10 @@ describe('AuthService', () => {
     mockVscode.workspace.getConfiguration = jest.fn();
 
     mockContext = {
-      workspaceState: {
+      secrets: {
         get: jest.fn(),
-        update: jest.fn(),
+        store: jest.fn(),
+        delete: jest.fn(),
       },
     };
 
@@ -34,7 +35,7 @@ describe('AuthService', () => {
       await AuthService.setupAuth(mockContext, mockOutputChannel);
 
       expect(mockVscode.window.showInputBox).not.toHaveBeenCalled();
-      expect(mockContext.workspaceState.update).not.toHaveBeenCalled();
+      expect(mockContext.secrets.store).not.toHaveBeenCalled();
       expect(mockOutputChannel.appendLine).not.toHaveBeenCalled();
     });
 
@@ -44,24 +45,24 @@ describe('AuthService', () => {
       await AuthService.setupAuth(mockContext, mockOutputChannel);
 
       expect(mockVscode.window.showInputBox).not.toHaveBeenCalled();
-      expect(mockContext.workspaceState.update).not.toHaveBeenCalled();
+      expect(mockContext.secrets.store).not.toHaveBeenCalled();
       expect(mockOutputChannel.appendLine).not.toHaveBeenCalled();
     });
 
     it('logs found credentials when username and password exist', async () => {
       require('../utils/helpers').setupConfigMock();
-      mockContext.workspaceState.get.mockReturnValue('testpass');
+      mockContext.secrets.get.mockResolvedValue('testpass');
 
       await AuthService.setupAuth(mockContext, mockOutputChannel);
 
       expect(mockVscode.window.showInputBox).not.toHaveBeenCalled();
-      expect(mockContext.workspaceState.update).not.toHaveBeenCalled();
-      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith('Auth credentials found in workspace state');
+      expect(mockContext.secrets.store).not.toHaveBeenCalled();
+      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith('Auth credentials found in secret storage');
     });
 
     it('prompts for password, stores it, and logs success when user provides password', async () => {
       require('../utils/helpers').setupConfigMock();
-      mockContext.workspaceState.get.mockReturnValue(undefined);
+      mockContext.secrets.get.mockResolvedValue(undefined);
       (require('vscode').window.showInputBox as jest.Mock).mockResolvedValue('newpass');
 
       await AuthService.setupAuth(mockContext, mockOutputChannel);
@@ -70,14 +71,14 @@ describe('AuthService', () => {
         prompt: 'Enter PyOps password for Basic Auth (will be stored securely for this workspace)',
         password: true,
       });
-      expect(mockContext.workspaceState.update).toHaveBeenCalledWith('pyops.password', 'newpass');
-      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith('Auth password stored in workspace state');
+      expect(mockContext.secrets.store).toHaveBeenCalledWith('pyops.password', 'newpass');
+      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith('Auth password stored in secret storage');
       expect(mockOutputChannel.appendLine).not.toHaveBeenCalledWith('No auth password provided; Basic Auth may fail');
     });
 
     it('prompts for password and logs failure when user cancels', async () => {
       require('../utils/helpers').setupConfigMock();
-      mockContext.workspaceState.get.mockReturnValue(undefined);
+      mockContext.secrets.get.mockResolvedValue(undefined);
       (require('vscode').window.showInputBox as jest.Mock).mockResolvedValue(undefined);
 
       await AuthService.setupAuth(mockContext, mockOutputChannel);
@@ -86,9 +87,9 @@ describe('AuthService', () => {
         prompt: 'Enter PyOps password for Basic Auth (will be stored securely for this workspace)',
         password: true,
       });
-      expect(mockContext.workspaceState.update).not.toHaveBeenCalled();
+      expect(mockContext.secrets.store).not.toHaveBeenCalled();
       expect(mockOutputChannel.appendLine).toHaveBeenCalledWith('No auth password provided; Basic Auth may fail');
-      expect(mockOutputChannel.appendLine).not.toHaveBeenCalledWith('Auth password stored in workspace state');
+      expect(mockOutputChannel.appendLine).not.toHaveBeenCalledWith('Auth password stored in secret storage');
     });
   });
 });

@@ -38,7 +38,7 @@ export class ConnectionStatusManager {
                 } else {
                     if (response.status === 401) {
                         this.outputChannel.appendLine('[AUTH] Invalid credentials (401), clearing stored password and prompting for new one.');
-                        await this.context.workspaceState.update('pyops.password', undefined);
+                        await this.context.secrets.delete('pyops.password');
                         await AuthService.setupAuth(this.context, this.outputChannel);
                         // retry
                         const response2 = await this.apiClient.fetch('/');

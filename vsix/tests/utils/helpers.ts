@@ -44,6 +44,11 @@ export function createMockContext() {
       get: jest.fn(),
       update: jest.fn(),
     },
+    secrets: {
+      get: jest.fn(),
+      store: jest.fn(),
+      delete: jest.fn(),
+    },
   } as any;
 }
 
