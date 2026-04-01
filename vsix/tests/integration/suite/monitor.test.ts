@@ -29,7 +29,7 @@ export async function run(): Promise<void> {
 
     // Test 1: Create test job
     console.log('Test 1: Create test job...');
-    testScriptletName = `test-scriptlet-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    testScriptletName = `test-scriptlet-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
     await helpers.createTestScriptlet('test', testScriptletName!, 'task', 'print("Hello from test")');
     testJobId = await helpers.createTestJob('test', testScriptletName!);
 
@@ -55,7 +55,7 @@ export async function run(): Promise<void> {
 
     // Test 4: viewJob
     console.log('Test 4: viewJob...');
-    viewScriptletName = `view-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    viewScriptletName = `view-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
     await helpers.createTestScriptlet('test', viewScriptletName!, 'task', 'print("viewJob test")');
     viewJobId = await helpers.createTestJob('test', viewScriptletName!);
     await vscode.commands.executeCommand('pyops.refreshMonitor');
@@ -71,7 +71,7 @@ export async function run(): Promise<void> {
     // Test 5: Bulk cancel
     console.log('Test 5: Bulk cancel...');
     // Create a long-running scriptlet so jobs stay active long enough to cancel
-    const bulkScriptletName = `bulk-cancel-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const bulkScriptletName = `bulk-cancel-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
     await helpers.createTestScriptlet('test', bulkScriptletName, 'task', 'import time\ntime.sleep(30)');
     bulkIds = [];
     for(let i = 0; i < 3; i++) {
@@ -82,8 +82,11 @@ export async function run(): Promise<void> {
     // Mock dialog to accept cancel
     const originalShowWarningMessage = vscode.window.showWarningMessage;
     vscode.window.showWarningMessage = async () => 'Yes' as any;
-    await jobService.cancelAllJobs();
-    vscode.window.showWarningMessage = originalShowWarningMessage;
+    try {
+      await jobService.cancelAllJobs();
+    } finally {
+      vscode.window.showWarningMessage = originalShowWarningMessage;
+    }
     // Wait for jobs to be cancelled
     for (const id of bulkIds) {
       await helpers.waitForJobState(id, 'cancelled', 15000);

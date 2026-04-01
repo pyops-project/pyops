@@ -11,6 +11,7 @@ export async function run(): Promise<void> {
   let testScriptletName: string | undefined;
   let testScriptletCreated = false;
   let testScriptletDeleted = false;
+  let localPushedName: string | undefined;
 
   try {
     // Setup: Wait for extension to activate
@@ -29,7 +30,7 @@ export async function run(): Promise<void> {
 
     // Test 1: Create test scriptlet & visibility
     console.log('Test 1: Create test scriptlet & visibility...');
-    testScriptletName = `test-scriptlet-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    testScriptletName = `test-scriptlet-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
     const expectedLabel = `${testScriptletName} (task)`;
     await helpers.createTestScriptlet('test', testScriptletName!, 'task', 'print("Hello from test")');
     testScriptletCreated = true;
@@ -105,62 +106,40 @@ export async function run(): Promise<void> {
 
     // Test 9: Local-only scriptlet visibility & debug support
     console.log('Test 9: Local-only scriptlet...');
-    const localName = `localtest-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const localName = `localtest-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
     const localTestPath = path.join(wsRoot, localPyopsDir, 'test', 'task', `${localName}.py`);
     fs.mkdirSync(path.dirname(localTestPath), { recursive: true });
     fs.writeFileSync(localTestPath, 'print("Local only test")');
     await vscode.commands.executeCommand('pyops.refreshManager');
     await helpers.pollTree(managerProvider, ['test']);
     const expectedLocalLabel = `${localName} (task)`;
-    // Manual poll for diff-added icon (no helper support)
-    const pollTimeout = 5000;
-    const pollInterval = 200;
-    let localTestItem: any = null;
-    const pollStart = Date.now();
-    while (Date.now() - pollStart < pollTimeout) {
-      const test9ManagerChildren = await managerProvider.getChildren();
-      const test9TestSetItem = test9ManagerChildren.find((item: any) => item.label === 'test');
-      if (test9TestSetItem) {
-        const test9SetChildren = await managerProvider.getChildren(test9TestSetItem);
-        localTestItem = test9SetChildren.find((item: any) => item.label === expectedLocalLabel);
-        if (localTestItem && (localTestItem.iconPath as vscode.ThemeIcon).id === 'diff-added') {
-          break;
-        }
-      }
-      await new Promise(resolve => setTimeout(resolve, pollInterval));
-    }
-    assert.ok(localTestItem, `Local-only scriptlet timed out (label: ${expectedLocalLabel})`);
+    await helpers.pollTreeItemIcon(managerProvider, 'test', expectedLocalLabel, 'diff-added');
+    const test9ManagerChildren = await managerProvider.getChildren();
+    const test9TestSetItem = test9ManagerChildren.find((item: any) => item.label === 'test');
+    const test9SetChildren = await managerProvider.getChildren(test9TestSetItem);
+    const localTestItem = test9SetChildren.find((item: any) => item.label === expectedLocalLabel)!;
     // Verify properties
     assert.strictEqual(localTestItem.contextValue, 'pyopsItem-task-local');
-    assert(localTestItem.description!.endsWith('(local)'));
+    assert(String(localTestItem.description).endsWith('(local)'));
     assert.strictEqual((localTestItem.iconPath as vscode.ThemeIcon).id, 'diff-added');
     // Verify contextValue supports debug menu (matches package.json when regex)
     const debugRegex = /^pyopsItem-task(-local)?$/;
     assert.ok(debugRegex.test(localTestItem.contextValue!), 'ContextValue must support debug command');
     // Verify contextValue supports writeLocalToRemoteDraft & deleteScriptlet menus (matches package.json when regex)
-    const writeRegex = /^pyopsItem-(task|service|library|controller|view|markdown)(-local)?$/;
+    const writeRegex = /^pyopsItem-(task|service|library|controller|view|markdown|jslibrary)(-local)?$/;
     assert.ok(writeRegex.test(localTestItem.contextValue!), 'ContextValue must support writeLocalToRemoteDraft command');
     
     // Test writeLocalToRemoteDraft on local-only -> auto-create + draft -> no longer local-only
     console.log('Test writeLocalToRemoteDraft on local-only...');
     await scriptletService.writeLocalToRemoteDraft(localTestItem);
+    localPushedName = localName;
     await vscode.commands.executeCommand('pyops.refreshManager');
-    // Poll for icon change from diff-added
-    let postWriteItem: any = null;
-    const pollStart2 = Date.now();
-    while (Date.now() - pollStart2 < pollTimeout) {
-      const postWriteManagerChildren = await managerProvider.getChildren();
-      const postWriteTestSetItem = postWriteManagerChildren.find((item: any) => item.label === 'test');
-      if (postWriteTestSetItem) {
-        const postWriteChildren = await managerProvider.getChildren(postWriteTestSetItem);
-        postWriteItem = postWriteChildren?.find((item: any) => item.label === expectedLocalLabel);
-        if (postWriteItem && (postWriteItem.iconPath as vscode.ThemeIcon).id !== 'diff-added') {
-          break;
-        }
-      }
-      await new Promise(resolve => setTimeout(resolve, pollInterval));
-    }
-
+    // Poll for icon change from diff-added to check (synced)
+    await helpers.pollTreeItemIcon(managerProvider, 'test', expectedLocalLabel, 'check');
+    const postWriteManagerChildren = await managerProvider.getChildren();
+    const postWriteTestSetItem = postWriteManagerChildren.find((item: any) => item.label === 'test');
+    const postWriteChildren = await managerProvider.getChildren(postWriteTestSetItem);
+    const postWriteItem = postWriteChildren?.find((item: any) => item.label === expectedLocalLabel);
     assert.ok(postWriteItem, 'writeLocalToRemoteDraft should succeed and change status');
     assert.notStrictEqual(postWriteItem.contextValue, 'pyopsItem-task-local', 'No longer local-only');
     console.log('✓ writeLocalToRemoteDraft on local-only passed');
@@ -169,33 +148,20 @@ export async function run(): Promise<void> {
 
     // Test 10: JS Library support
     console.log('Test 10: JS Library support...');
-    const jsName = `jslib-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const jsName = `jslib-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
     const jsTestPath = path.join(wsRoot, localPyopsDir, 'test', 'jslibrary', `${jsName}.js`);
     fs.mkdirSync(path.dirname(jsTestPath), { recursive: true });
     fs.writeFileSync(jsTestPath, 'console.log("JS Library test");');
     await vscode.commands.executeCommand('pyops.refreshManager');
     await helpers.pollTree(managerProvider, ['test']);
     const expectedJsLabel = `${jsName} (jslibrary)`;
-    // Manual poll for diff-added icon
-    const pollTimeout10 = 5000;
-    const pollInterval10 = 200;
-    let jsTestItem: any = null;
-    const pollStart10 = Date.now();
-    while (Date.now() - pollStart10 < pollTimeout10) {
-      const test10ManagerChildren = await managerProvider.getChildren();
-      const test10TestSetItem = test10ManagerChildren.find((item: any) => item.label === 'test');
-      if (test10TestSetItem) {
-        const test10SetChildren = await managerProvider.getChildren(test10TestSetItem);
-        jsTestItem = test10SetChildren.find((item: any) => item.label === expectedJsLabel);
-        if (jsTestItem && (jsTestItem.iconPath as vscode.ThemeIcon).id === 'diff-added') {
-          break;
-        }
-      }
-      await new Promise(resolve => setTimeout(resolve, pollInterval10));
-    }
-    assert.ok(jsTestItem, `JS Library scriptlet timed out (label: ${expectedJsLabel})`);
+    await helpers.pollTreeItemIcon(managerProvider, 'test', expectedJsLabel, 'diff-added');
+    const test10ManagerChildren = await managerProvider.getChildren();
+    const test10TestSetItem = test10ManagerChildren.find((item: any) => item.label === 'test');
+    const test10SetChildren = await managerProvider.getChildren(test10TestSetItem);
+    const jsTestItem = test10SetChildren.find((item: any) => item.label === expectedJsLabel)!;
     assert.strictEqual(jsTestItem.contextValue, 'pyopsItem-jslibrary-local');
-    assert(jsTestItem.description!.endsWith('(local)'));
+    assert(String(jsTestItem.description).endsWith('(local)'));
     assert.strictEqual((jsTestItem.iconPath as vscode.ThemeIcon).id, 'diff-added');
     // Verify contextValue supports sync menus (matches package.json when regex)
     const jsWriteRegex = /^pyopsItem-(task|service|library|controller|view|markdown|jslibrary)(-local)?$/;
@@ -211,7 +177,11 @@ export async function run(): Promise<void> {
   } finally {
     // Cleanup only if not already deleted by test
     if (testScriptletCreated && testScriptletName && !testScriptletDeleted) {
-      await helpers.deleteTestScriptlet('test', testScriptletName!);
+      try { await helpers.deleteTestScriptlet('test', testScriptletName!); } catch (e) {}
+    }
+    // Cleanup remote scriptlet created by writeLocalToRemoteDraft in Test 9
+    if (localPushedName) {
+      try { await helpers.deleteTestScriptlet('test', localPushedName); } catch (e) {}
     }
   }
 }

@@ -24,7 +24,7 @@ export async function run(): Promise<void> {
     assert.ok(jobService && scriptletService && jobsProvider && managerProvider, 'Services and providers must exist');
 
     // Create test data for command testing
-    testScriptletName = `cmd-test-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    testScriptletName = `cmd-test-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
     await helpers.createTestScriptlet('test', testScriptletName!, 'task', 'print("test command execution")');
     testJobId = await helpers.createTestJob('test', testScriptletName!);
 
@@ -58,9 +58,11 @@ export async function run(): Promise<void> {
     vscode.window.showWarningMessage = async (message: string, options?: any, ...items: string[]) => {
       return items[0]; // 'Delete'
     };
-    await vscode.commands.executeCommand('pyops.deleteJob', jobItem);
-    // Restore
-    vscode.window.showWarningMessage = originalShowWarningMessageDelete;
+    try {
+      await vscode.commands.executeCommand('pyops.deleteJob', jobItem);
+    } finally {
+      vscode.window.showWarningMessage = originalShowWarningMessageDelete;
+    }
     // Verify job is removed from tree
     await vscode.commands.executeCommand('pyops.refreshMonitor');
     const childrenAfterDelete = await jobsProvider.getChildren();
@@ -138,9 +140,11 @@ export async function run(): Promise<void> {
     vscode.window.showWarningMessage = async (message: string, options?: any, ...items: string[]) => {
       return items[0]; // 'Delete'
     };
-    await vscode.commands.executeCommand('pyops.deleteScriptlet', scriptletItem);
-    // Restore
-    vscode.window.showWarningMessage = originalShowWarningMessageScriptlet;
+    try {
+      await vscode.commands.executeCommand('pyops.deleteScriptlet', scriptletItem);
+    } finally {
+      vscode.window.showWarningMessage = originalShowWarningMessageScriptlet;
+    }
     // Verify scriptlet is removed from tree
     await vscode.commands.executeCommand('pyops.refreshManager');
     const scriptletChildrenAfterDelete = await managerProvider.getChildren(testSetItem);
@@ -169,9 +173,11 @@ export async function run(): Promise<void> {
     vscode.window.showWarningMessage = async (message: string, options?: any, ...items: string[]) => {
       return items[0]; // 'Yes'
     };
-    await vscode.commands.executeCommand('pyops.cancelAllJobs');
-    // Restore
-    vscode.window.showWarningMessage = originalShowWarningBulkCancel;
+    try {
+      await vscode.commands.executeCommand('pyops.cancelAllJobs');
+    } finally {
+      vscode.window.showWarningMessage = originalShowWarningBulkCancel;
+    }
     // Verify all jobs are cancelled
     for (const id of bulkJobIds) {
       await helpers.waitForJobState(id, 'cancelled', 15000);
@@ -184,8 +190,11 @@ export async function run(): Promise<void> {
     vscode.window.showWarningMessage = async (message: string, options?: any, ...items: string[]) => {
       return items[0]; // 'Yes'
     };
-    await vscode.commands.executeCommand('pyops.deleteAllDone');
-    vscode.window.showWarningMessage = originalShowWarningBulkDelete;
+    try {
+      await vscode.commands.executeCommand('pyops.deleteAllDone');
+    } finally {
+      vscode.window.showWarningMessage = originalShowWarningBulkDelete;
+    }
     // Verify done jobs are removed
     await vscode.commands.executeCommand('pyops.refreshMonitor');
     const childrenAfterBulkDelete = await jobsProvider.getChildren();

@@ -1,5 +1,3 @@
-import * as path from 'path';
-
 // Integration test runner for VS Code extension
 // This runs the test suite directly in the VS Code environment
 
