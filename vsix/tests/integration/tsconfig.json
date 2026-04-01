@@ -2,8 +2,8 @@
     "compilerOptions": {
         "module": "commonjs",
         "target": "ES2020",
-        "outDir": "../../out/tests/integration",
-        "rootDir": ".",
+        "outDir": "../../out",
+        "rootDir": "../..",
         "lib": ["ES2020"],
         "sourceMap": true,
         "strict": true,

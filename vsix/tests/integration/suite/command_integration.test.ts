@@ -51,6 +51,8 @@ export async function run(): Promise<void> {
 
     // Test 3: deleteJob command
     console.log('Test 3: deleteJob command...');
+    // Wait for job to finish (delete API only allows todo/cancelled/failed/done)
+    await helpers.waitForJobState(testJobId!, 'done');
     // Mock showWarningMessage to auto-confirm 'Delete'
     const originalShowWarningMessageDelete = vscode.window.showWarningMessage;
     vscode.window.showWarningMessage = async (message: string, options?: any, ...items: string[]) => {

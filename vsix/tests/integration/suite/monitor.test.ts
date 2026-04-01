@@ -48,7 +48,7 @@ export async function run(): Promise<void> {
     const doneChildren = await jobsProvider.getChildren();
     const doneItem = doneChildren.find((item: any) => item.id === testJobId!);
     assert.ok(doneItem, 'Job visible after refresh');
-    assert.ok((doneItem.description || '').includes('done - task'), `Desc: ${doneItem.description || ''}`);
+    assert.ok(String(doneItem.description || '').includes('done - task'), `Desc: ${doneItem.description || ''}`);
 
     console.log('✓ Test 3 passed');
 
@@ -70,9 +70,12 @@ export async function run(): Promise<void> {
 
     // Test 5: Bulk cancel
     console.log('Test 5: Bulk cancel...');
+    // Create a long-running scriptlet so jobs stay active long enough to cancel
+    const bulkScriptletName = `bulk-cancel-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    await helpers.createTestScriptlet('test', bulkScriptletName, 'task', 'import time\ntime.sleep(30)');
     bulkIds = [];
     for(let i = 0; i < 3; i++) {
-      bulkIds.push(await helpers.createTestJob('test', testScriptletName!, 'import time\ntime.sleep(5)'));
+      bulkIds.push(await helpers.createTestJob('test', bulkScriptletName));
     }
     await vscode.commands.executeCommand('pyops.refreshMonitor');
     await helpers.pollTree(jobsProvider, bulkIds.slice(0,3));
@@ -85,6 +88,8 @@ export async function run(): Promise<void> {
     for (const id of bulkIds) {
       await helpers.waitForJobState(id, 'cancelled', 15000);
     }
+    // Cleanup bulk scriptlet
+    try { await helpers.deleteTestScriptlet('test', bulkScriptletName); } catch (e) {}
     console.log('✓ Test 5 passed');
 
     // Test 6: Graceful error

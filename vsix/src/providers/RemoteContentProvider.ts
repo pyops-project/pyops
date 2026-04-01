@@ -13,7 +13,18 @@ export class RemoteContentProvider implements vscode.TextDocumentContentProvider
     }
 
     provideTextDocumentContent(uri: vscode.Uri): vscode.ProviderResult<string> {
-        return this.contentMap.get(uri.path) ?? "No content provided";
+        const mapped = this.contentMap.get(uri.path);
+        if (mapped !== undefined) {
+            return mapped;
+        }
+        if (!uri.fragment) {
+            return "No content provided";
+        }
+        try {
+            return decodeURIComponent(uri.fragment);
+        } catch {
+            return `Error decoding content: ${uri.fragment}`;
+        }
     }
 }
 
