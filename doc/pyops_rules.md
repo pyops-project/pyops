@@ -13,8 +13,8 @@
 - **JS Libraries**: JavaScript modules for client-side code.
 - **Execution Model**: Jobs execute in isolated per-set venv subprocesses with global dict (`glob`) containing:
   - `control`: Pyops.Control for API calls (e.g., `control.job.list()` returns dict of jobs).
-  - `listener`: For services (inbound requests; see Services).
-  - `"__name__": "__main__" (enables `if __name__ == "__main__":` idiom: executes main logic in PyOps jobs; skips when imported locally for pytest testing without running main block).`
+  - `listener`: ServiceListener for inbound requests (services only; see Services).
+  - `"__name__"`: Set to `"__main__"`, enabling the `if __name__ == "__main__":` idiom: executes main logic in PyOps jobs; skips when imported locally for pytest testing without running main block.
   - Logging: Use Python's built-in `logging` module for structured logging. Configure it early:
     ```python
     import logging
@@ -56,12 +56,12 @@ Template (`task/{name}.py`):
 import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-# #!requests  # Install requests if missing
-# #!git@github.com/user/myrepo.git main  # Clone/pull myrepo
+#!requests
+#!git@github.com/user/myrepo.git main
 
 import os
-import requests  # Now available
-import myrepo.helper  # From cloned repo
+import requests  # Available after #!requests directive
+import myrepo.helper  # Available after git directive
 
 def main():
     # Access control and workspace
@@ -85,15 +85,23 @@ if __name__ == "__main__":
 
 ### Services (Persistent)
 Service Tasks (kind="service" jobs) loop with listener for inbound requests.
-Use: Handle requests from controllers/API (e.g., /q endpoints).
+Use: Handle requests from controllers/API via REST-style endpoints.
 
-Request: `listener.listen()` returns dict:
-- "type": "GET"/"POST"/"PUT"/"DELETE".
-- Query params: Direct keys (e.g., ?cmd=run → msg["cmd"] = "run").
-- Body (POST/PUT/DELETE): "data" (dict/JSON str/text/bytes/none); "data_type" ("json"/"text"/"binary"/"none").
-- From controllers: Body as direct payload dict in "data".
-- Respond: `listener.response(result_dict)` (e.g., {"status": "ok", "value": ...}).
-- "TERM": Shutdown.
+Request: `listener.listen()` returns dict with:
+- `"type"`: HTTP method (`"GET"`, `"POST"`, `"PUT"`, `"DELETE"`, `"PATCH"`, etc.)
+- `"path"`: URL path after `/controller/{set}/{name}/` (e.g., `"/fetch"`, `"/api/models"`, `"/q"` for legacy)
+- `"data"`: Request body — parsed JSON object, text string, bytes, or `None`
+- `"data_type"`: `"json"`, `"text"`, `"binary"`, or `"none"`
+- `"user"`: Requesting user (from `X-User` header)
+- Query params as direct keys (e.g., `?target=foo` → `msg["target"] = "foo"`)
+- `"TERM"`: Shutdown signal (string, not dict).
+- Respond: `listener.response(result_dict, status=200)` — the `status` int maps to the HTTP status code returned to the caller. Non-200 codes (e.g., 400, 404, 500) cause the controller proxy to raise an HTTP error to the client.
+
+**REST-style endpoints** (recommended): Use URL path for routing.
+- `GET /controller/{set}/{name}/items?limit=10` → `path="/items"`, `msg["limit"]="10"`
+- `POST /controller/{set}/{name}/items` (JSON body) → `path="/items"`, `msg["data"]={...}`
+
+**Legacy query-style**: `GET /controller/{set}/{name}/q?cmd=xxx` → `path="/q"`, `msg["cmd"]="xxx"`.
 
 Asynchronous handling: `listener.async_poll()` returns list of (identity, message) tuples for all pending requests. Respond to each with `listener.async_response(identity, result_dict)` for concurrent processing.
 
@@ -102,52 +110,46 @@ Template (`service/{name}.py`):
 #### Blocking Example (listen() - Simple Loops)
 ```python
 # Service: Persistent, handles requests (blocking listener)
-# #!flask  # Install Flask for internal use
-# #!git@gitlab.com/team/utils.git  # Clone utils
+#!flask
+#!git@gitlab.com/team/utils.git
 
-import time
-import utils.api  # From cloned repo
+import logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+import utils.api  # Available after git directive
 
 # Access control/listener/workspace
 # control: e.g., control.job.list()
 # listener: for inbound requests
 # workspace: job output dir
 
+def handle_request(msg):
+    """Route request by path and method. Returns (result_dict, http_status)."""
+    request_type = msg.get("type")
+    path = msg.get("path", "")
+    data = msg.get("data", {})
+
+    if path == "/fetch" and request_type == "GET":
+        target = msg.get("target")  # Query param
+        if not target:
+            return {"error": "Missing 'target' parameter"}, 400
+        result_value = utils.api.fetch_external(target)
+        return {"status": "ok", "value": result_value}, 200
+
+    elif path == "/process" and request_type == "POST":
+        result_value = utils.api.process_json(data)
+        return {"status": "ok", "value": result_value}, 200
+
+    return {"error": f"Not found: {request_type} {path}"}, 404
+
 def main():
-    # Main loop: Blocking poll for requests (original/default)
     while True:
         msg = listener.listen()  # Blocks up to 1s until message or TERM
         if msg == "TERM":
-            break  # Graceful shutdown
-
-        request_type = msg.get("type")
-        cmd = msg.get("cmd")  # Query param
-        other_param = msg.get("other")
-
-        if request_type == "GET":
-            if cmd == "fetch":
-                result_value = utils.api.fetch_external(other_param)
-                result = {"status": "ok", "value": result_value}
-            else:
-                result = {"status": "error", "message": "Unknown cmd"}
-        elif request_type in ["POST", "PUT"]:
-            data = msg.get("data", {})  # Body data; direct payload from controllers
-            if isinstance(data, str) and msg.get("data_type") == "json":
-                try:
-                    import json
-                    data = json.loads(data)
-                except:
-                    pass
-            data_type = msg.get("data_type")
-            if data_type == "json":
-                result_value = utils.api.process_json(data)
-            else:
-                result_value = "Processed: " + str(data)
-            result = {"status": "ok", "value": result_value}
-        else:
-            result = {"status": "error", "message": "Unsupported type"}
-
-        listener.response(result)  # Send dict back
+            break
+        result, status = handle_request(msg)
+        listener.response(result, status)
 
 if __name__ == "__main__":
     logger.info("Service started")
@@ -155,58 +157,71 @@ if __name__ == "__main__":
     logger.info("Service stopped")
 ```
 
+**Service request message fields:**
+- `type`: HTTP method (`"GET"`, `"POST"`, `"PUT"`, `"DELETE"`, etc.)
+- `path`: URL path after `/controller/{set}/{name}/` (e.g., `"/fetch"`, `"/api/models"`)
+- `data`: Request body (parsed JSON object, text string, bytes, or `None`)
+- `data_type`: `"json"`, `"text"`, `"binary"`, or `"none"`
+- `user`: Requesting user (from `X-User` header)
+- Additional query parameters as direct keys (e.g., `?target=foo` → `msg["target"] = "foo"`)
+
+**Response:**
+- `listener.response(result_dict, status)` — `status` is the HTTP status code (200, 400, 404, 500, etc.)
+- `listener.async_response(identity, result_dict, status)` — same, for async handlers
+- Non-200 status codes cause the controller proxy to return an HTTP error to the client
+
+**URL patterns:**
+- REST style (recommended): `GET /controller/{set}/{name}/fetch?target=foo` → `path="/fetch"`
+- REST style: `POST /controller/{set}/{name}/process` (with JSON body) → `path="/process"`
+- Legacy query style: `GET /controller/{set}/{name}/q?cmd=fetch` → `path="/q"`, `msg["cmd"]="fetch"`
+
 #### Non-Blocking Example (poll() - Responsive Loops)
 ```python
 # Service: Persistent, handles requests (non-blocking poll)
-# #!git@gitlab.com/team/utils.git  # Clone utils
+#!git@gitlab.com/team/utils.git
+
+import logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 import time
-import utils.api  # From cloned repo
+import utils.api  # Available after git directive
 
 # Access control/listener/workspace
 # control: e.g., control.job.list()
 # listener: for inbound requests
 # workspace: job output dir
 
+def handle_request(msg):
+    """Route request by path and method. Returns (result_dict, http_status)."""
+    request_type = msg.get("type")
+    path = msg.get("path", "")
+    data = msg.get("data", {})
+
+    if path == "/fetch" and request_type == "GET":
+        target = msg.get("target")  # Query param
+        if not target:
+            return {"error": "Missing 'target' parameter"}, 400
+        result_value = utils.api.fetch_external(target)
+        return {"status": "ok", "value": result_value}, 200
+
+    elif path == "/process" and request_type in ["POST", "PUT"]:
+        result_value = utils.api.process_json(data)
+        return {"status": "ok", "value": result_value}, 200
+
+    return {"error": f"Not found: {request_type} {path}"}, 404
+
 def main():
-    # Main loop: Non-blocking poll for requests (alternative for interleaving work)
     while True:
         msg = listener.poll()  # Returns immediately: msg, "TERM", or None
         if msg == "TERM":
             break
         elif msg is not None:
-            request_type = msg.get("type")
-            cmd = msg.get("cmd")  # Query param
-            other_param = msg.get("other")
-
-            if request_type == "GET":
-                if cmd == "fetch":
-                    result_value = utils.api.fetch_external(other_param)
-                    result = {"status": "ok", "value": result_value}
-                else:
-                    result = {"status": "error", "message": "Unknown cmd"}
-            elif request_type in ["POST", "PUT"]:
-                data = msg.get("data", {})  # Body data; direct payload from controllers
-                if isinstance(data, str) and msg.get("data_type") == "json":
-                    try:
-                        import json
-                        data = json.loads(data)
-                    except:
-                        pass
-                data_type = msg.get("data_type")
-                if data_type == "json":
-                    result_value = utils.api.process_json(data)
-                else:
-                    result_value = "Processed: " + str(data)
-                result = {"status": "ok", "value": result_value}
-            else:
-                result = {"status": "error", "message": "Unsupported type"}
-
-            listener.response(result)  # Send dict back
+            result, status = handle_request(msg)
+            listener.response(result, status)
         else:
             # No message; perform other non-blocking work (e.g., periodic checks)
-            # time.sleep(0.1)  # Optional small delay to reduce CPU
-            pass
+            time.sleep(0.01)  # Small delay to reduce CPU
 
 if __name__ == "__main__":
     logger.info("Service started")
@@ -215,61 +230,76 @@ if __name__ == "__main__":
 ```
 
 #### Asynchronous Example (async_poll() - Concurrent Requests)
+
+Unlike `listen()`/`poll()` which pair each receive with an immediate response,
+`async_poll()` decouples receiving from responding: it drains all pending requests
+at once, returning `(identity, message)` tuples. You can then process them
+concurrently (e.g., in a thread pool) and respond out-of-order via
+`async_response(identity, result)`.
+
 ```python
 # Service: Persistent, handles concurrent requests (asynchronous poll)
-import asyncio
+import logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Access control/listener/workspace
 # control: e.g., control.job.list()
 # listener: for inbound requests
 # workspace: job output dir
 
-# Stationary dict for pending messages: identity -> message
-pending_messages = {}
+def handle_request(msg):
+    """Route request by path and method (may be slow/blocking). Returns (result_dict, http_status)."""
+    request_type = msg.get("type")
+    path = msg.get("path", "")
+    data = msg.get("data", {})
 
-# Main loop: Asynchronous poll for concurrent requests
+    if path == "/status" and request_type == "GET":
+        return {"status": "ok", "message": "Service running"}, 200
+
+    elif path == "/process" and request_type == "POST":
+        if not data:
+            return {"error": "Missing request body"}, 400
+        # Simulate slow work (e.g., external API call)
+        time.sleep(1)
+        return {"status": "ok", "processed": len(str(data))}, 200
+
+    return {"error": f"Not found: {request_type} {path}"}, 404
+
 def main():
+    pool = ThreadPoolExecutor(max_workers=4)
+    pending = {}  # future -> identity
+
     while True:
-        # Poll for all pending messages
-        pending_messages.update(dict(listener.async_poll()))
-
-        if not pending_messages:
-            # No pending messages; perform other work
-            time.sleep(0.01)  # Small delay to prevent busy-waiting
-            continue
-
-        # Process each message immediately
-        for identity, msg in list(pending_messages.items()):
+        # Drain all queued requests at once
+        for identity, msg in listener.async_poll():
             if msg == "TERM":
+                pool.shutdown(wait=False)
                 return
+            future = pool.submit(handle_request, msg)
+            pending[future] = identity
 
-            request_type = msg.get("type")
-            cmd = msg.get("cmd")
-            data = msg.get("data", {})
+        # Collect completed results and respond out-of-order
+        done = [f for f in pending if f.done()]
+        for future in done:
+            identity = pending.pop(future)
+            try:
+                result, status = future.result()
+            except Exception as e:
+                logger.exception("Handler failed")
+                result, status = {"error": str(e)}, 500
+            listener.async_response(identity, result, status)
 
-            if request_type == "GET":
-                if cmd == "status":
-                    result = {"status": "ok", "message": "Service running"}
-                else:
-                    result = {"status": "error", "message": "Unknown command"}
-            elif request_type == "POST":
-                # Process data concurrently
-                if cmd == "process":
-                    result = {"status": "ok", "processed": len(str(data))}
-                else:
-                    result = {"status": "error", "message": "Unknown command"}
-            else:
-                result = {"status": "error", "message": "Unsupported type"}
-
-            # Send response to specific client and remove from pending
-            listener.async_response(identity, result)
-            del pending_messages[identity]
+        if not pending:
+            time.sleep(0.01)  # No in-flight work; avoid busy-waiting
 
 if __name__ == "__main__":
-  logger.info("Service started")
-  main()
-  logger.info("Service stopped")
+    logger.info("Service started")
+    main()
+    logger.info("Service stopped")
 ```
 
 
@@ -279,7 +309,7 @@ Use: Shared functions, imported via directives.
 Template (`library/{lib_name}.py`):
 ```python
 # Library: Pure code, no directives/loops
-# #!numpy  # Install if needed
+#!numpy
 
 import numpy as np
 
@@ -340,21 +370,23 @@ Styles/scripts only.
   .custom-head { color: blue; }
 </style>
 <script>
-  // Utility apiCall for AJAX to /q
-  function apiCall(type, params, callback) {
-    var url = "/controller/{{SET}}/{{NAME}}/q";
+  // Utility apiCall for REST-style AJAX requests
+  function apiCall(type, path, params, callback) {
+    var url = "/controller/{{SET}}/{{NAME}}/" + path;
     if (type === "GET") {
       $.get(url, params, callback);
     } else {
       $.ajax({
         url: url,
         type: type,
-        data: JSON.stringify({data: params, data_type: "json"}),
+        data: JSON.stringify(params),
         contentType: "application/json",
         success: callback
       });
     }
   }
+  // Usage: apiCall("GET", "items", {limit: 10}, function(resp) { ... });
+  // Usage: apiCall("POST", "items", {name: "new"}, function(resp) { ... });
 </script>
 ```
 
@@ -441,19 +473,12 @@ Content with buttons/modals.
 </div>
 <script>
   $("#action-btn").click(function() {
-    var postData = {data: {key: "value"}, data_type: "json"};
-    $.ajax({
-      url: "/controller/{{SET}}/{{NAME}}/q",
-      type: "POST",
-      data: JSON.stringify(postData),
-      contentType: "application/json",
-      success: function(resp) {
-        alert("Response: " + JSON.stringify(resp));
-      }
+    apiCall("POST", "action", {key: "value"}, function(resp) {
+      alert("Response: " + JSON.stringify(resp));
     });
   });
   function submitAction() {
-    // e.g., apiCall("POST", params, callback);
+    // e.g., apiCall("POST", "submit", {field: "value"}, callback);
   }
 </script>
 ```
@@ -461,10 +486,10 @@ Content with buttons/modals.
 ## Best Practices
 
 - **Self-Contained**: Directives for all deps; validate inputs in services.
-- **Error Handling**: Services return {"status": "error", "message": "..."}; tasks use `logger.error()` for errors. Prefer `logging` over `print` for production code to enable level-based filtering and better error tracking.
+- **Error Handling**: Services return appropriate HTTP status codes via `listener.response(result, status)` — use 400 for bad input, 404 for unknown routes, 500 for internal errors. Tasks use `logger.error()` for errors. Prefer `logging` over `print` for production code to enable level-based filtering and better error tracking.
 - **Security**: Sanitize untrusted params/cmds in services.
 - **Performance**: Efficient service loops (listener polls ~1s); keep tasks short.
-- **Views**: Rely on Bootstrap defaults; dynamic {{SET}}/{{NAME}}; JS in head only.
+- **Views**: Rely on Bootstrap defaults; dynamic {{SET}}/{{NAME}}; JS in head only; use REST-style endpoints (path-based routing) for service calls.
 
 ### Local Testing with Pytest
 
