@@ -45,19 +45,19 @@
 
             function genActions(s) {
                 return `
-                    <button type="button" onclick="edit('${s.id}')" class="btn btn-warning p-0">
+                    <button type="button" onclick="edit('${s.id}')" class="btn btn-warning p-0" data-testid="schedule-edit-${s.id}">
                         <span class="material-icons-round">edit</span>
                     </button>
-                    <button type="button" onclick="del('${s.id}')" class="btn btn-danger p-0">
+                    <button type="button" onclick="del('${s.id}')" class="btn btn-danger p-0" data-testid="schedule-delete-${s.id}">
                         <span class="material-icons-round">delete</span>
                     </button>
-                    <button type="button" onclick="${s.active ? 'deactivate' : 'activate'}('${s.id}')" class="btn btn-${s.active ? 'danger' : 'success'} p-0">
+                    <button type="button" onclick="${s.active ? 'deactivate' : 'activate'}('${s.id}')" class="btn btn-${s.active ? 'danger' : 'success'} p-0" data-testid="schedule-toggle-${s.id}">
                         <span class="material-icons-round">${s.active ? 'airplanemode_inactive' : 'airplanemode_active'}</span>
                     </button>
-                    <button type="button" onclick="run('${s.id}')" class="btn btn-success p-0">
+                    <button type="button" onclick="run('${s.id}')" class="btn btn-success p-0" data-testid="schedule-run-${s.id}">
                         <span class="material-icons-round">play_arrow</span>
                     </button>
-                    <button type="button" onclick="copyParam('${s.id}')" class="btn btn-danger p-0">
+                    <button type="button" onclick="copyParam('${s.id}')" class="btn btn-danger p-0" data-testid="schedule-copy-${s.id}">
                         <span class="material-icons-round">copy_all</span>
                     </button>
                 `
@@ -82,7 +82,7 @@
             }
 
             function genScheduleItem(s) {
-                return `<tr data-id="${s.id}">${genScheduleRowContent(s)}</tr>`;
+                return `<tr data-id="${s.id}" data-testid="schedule-row-${s.id}">${genScheduleRowContent(s)}</tr>`;
             }
 
             function copyParam(id) {
@@ -324,15 +324,15 @@
         </script>
     </head>
     <body class="bg-body">
-        <nav class="navbar navbar-expand navbar-dark bg-dark pt-3 sticky-top">
+        <nav class="navbar navbar-expand navbar-dark bg-dark pt-3 sticky-top" data-testid="scheduler-navbar">
             <ul class="navbar-nav w-100">
                 <li class="navbar-brand">
                     <span class="material-icons-round">description</span>
                     <span>Scriptlet/Scheduler</span>
                 </li>
-                
+
                 <li class="nav-item m-1">
-                    <button type="button" class="btn btn-success" data-bs-toggle="modal" data-bs-target="#createModal">
+                    <button type="button" class="btn btn-success" data-bs-toggle="modal" data-bs-target="#createModal" data-testid="scheduler-create">
                         <span class="material-icons-round">add</span>
                     </button>
                 </li>
@@ -340,14 +340,14 @@
                 <li class="nav-item mx-auto"></li>
 
                 <li class="nav-item m-1">
-                    <button type="button" class="btn btn-success" onclick="refreshList()">
+                    <button type="button" class="btn btn-success" onclick="refreshList()" data-testid="scheduler-refresh">
                         <span class="material-icons-round">refresh</span>
                     </button>
                 </li>
             </ul>
         </nav>
 
-        <table class="table table-secondary">
+        <table class="table table-secondary" data-testid="scheduler-table">
             <thead>
               <tr>
                 <th scope="col">ID</th>
@@ -361,91 +361,91 @@
                 <th style="display:none;"></th>
               </tr>
             </thead>
-            <tbody id="schedules">
+            <tbody id="schedules" data-testid="scheduler-schedules">
             </tbody>
         </table>
 
         <!-- DIALOGS -->
-        <div class="modal fade" data-bs-backdrop="static" id="createModal" tabindex="-1" aria-labelledby="createModalLabel" aria-hidden="true">
+        <div class="modal fade" data-bs-backdrop="static" id="createModal" tabindex="-1" aria-labelledby="createModalLabel" aria-hidden="true" data-testid="scheduler-create-modal">
             <div class="modal-dialog">
                 <div class="modal-content">
                     <div class="modal-header">
                         <h5 class="modal-title" id="createModalLabel">Create Schedule</h5>
                         <!--<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>-->
-                        <p id="createModal-error" class="text-danger"></p>
+                        <p id="createModal-error" class="text-danger" data-testid="scheduler-create-error"></p>
                     </div>
                     <div class="modal-body">
                         <div class="mb-3">
                             <label for="createModal-set" class="col-form-label">Set:</label>
-                            <input id="createModal-set" type="text" class="form-control">
+                            <input id="createModal-set" type="text" class="form-control" data-testid="scheduler-create-set">
                         </div>
                         <div class="mb-3">
                             <label for="createModal-name" class="col-form-label">Name:</label>
-                            <input id="createModal-name" type="text" class="form-control">
+                            <input id="createModal-name" type="text" class="form-control" data-testid="scheduler-create-name">
                         </div>
                         <div class="mb-3">
                             <label class="form-check-label" for="createModal-dropDone">Drop logs/data if successful:</label>
-                            <input id="createModal-dropDone" class="form-check-input" type="checkbox" value="">
+                            <input id="createModal-dropDone" class="form-check-input" type="checkbox" value="" data-testid="scheduler-create-drop-done">
                         </div>
                         <div class="mb-3">
                             <label for="createModal-maxRetries" class="col-form-label">Max Retries:</label>
-                            <input id="createModal-maxRetries" type="number" min="0" value="0" class="form-control">
+                            <input id="createModal-maxRetries" type="number" min="0" value="0" class="form-control" data-testid="scheduler-create-max-retries">
                         </div>
                         <div class="mb-3">
                             <label for="createModal-schedule" class="col-form-label">Schedule:</label>
-                            <input id="createModal-schedule" type="text" class="form-control">
+                            <input id="createModal-schedule" type="text" class="form-control" data-testid="scheduler-create-schedule">
                         </div>
                         <div class="mb-3">
                             <label for="createModal-param" class="col-form-label">Param:</label>
-                            <textarea id="createModal-param" cols="40" rows="5" class="form-control"></textarea>
+                            <textarea id="createModal-param" cols="40" rows="5" class="form-control" data-testid="scheduler-create-param"></textarea>
                         </div>
                     </div>
                     <div class="modal-footer">
-                        <button type="button" class="btn btn-danger" data-bs-dismiss="modal">Cancel</button>
-                        <button type="button" class="btn btn-primary" onclick="onCreate()" data-bs-target="#createModal">Create</button>
+                        <button type="button" class="btn btn-danger" data-bs-dismiss="modal" data-testid="scheduler-create-cancel">Cancel</button>
+                        <button type="button" class="btn btn-primary" onclick="onCreate()" data-bs-target="#createModal" data-testid="scheduler-create-submit">Create</button>
                     </div>
                 </div>
             </div>
         </div>
 
-        <div class="modal fade" data-bs-backdrop="static" id="editModal" tabindex="-1" aria-labelledby="editModalLabel" aria-hidden="true">
+        <div class="modal fade" data-bs-backdrop="static" id="editModal" tabindex="-1" aria-labelledby="editModalLabel" aria-hidden="true" data-testid="scheduler-edit-modal">
             <div class="modal-dialog">
                 <div class="modal-content">
                     <div class="modal-header">
                         <h5 class="modal-title" id="editModalLabel">Edit Schedule</h5>
                         <!--<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>-->
-                        <p id="editModal-error" class="text-danger"></p>
+                        <p id="editModal-error" class="text-danger" data-testid="scheduler-edit-error"></p>
                     </div>
                     <div class="modal-body">
                         <input id="editModal-id" type="hidden">
                         <div class="mb-3">
                             <label for="editModal-set" class="col-form-label">Set:</label>
-                            <input id="editModal-set" type="text" class="form-control">
+                            <input id="editModal-set" type="text" class="form-control" data-testid="scheduler-edit-set">
                         </div>
                         <div class="mb-3">
                             <label for="editModal-name" class="col-form-label">Name:</label>
-                            <input id="editModal-name" type="text" class="form-control">
+                            <input id="editModal-name" type="text" class="form-control" data-testid="scheduler-edit-name">
                         </div>
                         <div class="mb-3">
                             <label class="form-check-label" for="editModal-dropDone">Drop logs/data if successful:</label>
-                            <input id="editModal-dropDone" class="form-check-input" type="checkbox" value="">
+                            <input id="editModal-dropDone" class="form-check-input" type="checkbox" value="" data-testid="scheduler-edit-drop-done">
                         </div>
                         <div class="mb-3">
                             <label for="editModal-maxRetries" class="col-form-label">Max Retries:</label>
-                            <input id="editModal-maxRetries" type="number" min="0" value="0" class="form-control">
+                            <input id="editModal-maxRetries" type="number" min="0" value="0" class="form-control" data-testid="scheduler-edit-max-retries">
                         </div>
                         <div class="mb-3">
                             <label for="editModal-schedule" class="col-form-label">Schedule:</label>
-                            <input id="editModal-schedule" type="text" class="form-control">
+                            <input id="editModal-schedule" type="text" class="form-control" data-testid="scheduler-edit-schedule">
                         </div>
                         <div class="mb-3">
                             <label for="editModal-param" class="col-form-label">Param:</label>
-                            <textarea id="editModal-param" cols="40" rows="5" class="form-control"></textarea>
+                            <textarea id="editModal-param" cols="40" rows="5" class="form-control" data-testid="scheduler-edit-param"></textarea>
                         </div>
                     </div>
                     <div class="modal-footer">
-                        <button type="button" class="btn btn-danger" data-bs-dismiss="modal">Cancel</button>
-                        <button type="button" class="btn btn-primary" onclick="onUpdate()" data-bs-target="#editModal">Update</button>
+                        <button type="button" class="btn btn-danger" data-bs-dismiss="modal" data-testid="scheduler-edit-cancel">Cancel</button>
+                        <button type="button" class="btn btn-primary" onclick="onUpdate()" data-bs-target="#editModal" data-testid="scheduler-edit-submit">Update</button>
                     </div>
                 </div>
             </div>

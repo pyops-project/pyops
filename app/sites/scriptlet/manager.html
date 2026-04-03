@@ -45,10 +45,10 @@
 
             function genTaskActions(set, name) {
                 return `
-                    <button type="button" onclick="del('${set}', '${name}')" class="btn btn-danger p-0">
+                    <button type="button" onclick="del('${set}', '${name}')" class="btn btn-danger p-0" data-testid="scriptlet-delete-${set}-${name}">
                         <span class="material-icons-round">delete</span>
                     </button>
-                    <button type="button" onclick="onEditTask('${set}', '${name}')" class="btn btn-warning p-0">
+                    <button type="button" onclick="onEditTask('${set}', '${name}')" class="btn btn-warning p-0" data-testid="scriptlet-edit-${set}-${name}">
                         <span class="material-icons-round">edit</span>
                     </button>
                 `
@@ -56,10 +56,10 @@
 
             function genLibraryActions(set, name) {
                 return `
-                    <button type="button" onclick="del('${set}', '${name}')" class="btn btn-danger p-0">
+                    <button type="button" onclick="del('${set}', '${name}')" class="btn btn-danger p-0" data-testid="scriptlet-delete-${set}-${name}">
                         <span class="material-icons-round">delete</span>
                     </button>
-                    <button type="button" onclick="onEditLibrary('${set}', '${name}')" class="btn btn-warning p-0">
+                    <button type="button" onclick="onEditLibrary('${set}', '${name}')" class="btn btn-warning p-0" data-testid="scriptlet-edit-${set}-${name}">
                         <span class="material-icons-round">edit</span>
                     </button>
                 `
@@ -67,10 +67,10 @@
 
             function genViewActions(set, name) {
                 return `
-                    <button type="button" onclick="del('${set}', '${name}')" class="btn btn-danger p-0">
+                    <button type="button" onclick="del('${set}', '${name}')" class="btn btn-danger p-0" data-testid="scriptlet-delete-${set}-${name}">
                         <span class="material-icons-round">delete</span>
                     </button>
-                    <button type="button" onclick="onEditView('${set}', '${name}')" class="btn btn-warning p-0">
+                    <button type="button" onclick="onEditView('${set}', '${name}')" class="btn btn-warning p-0" data-testid="scriptlet-edit-${set}-${name}">
                         <span class="material-icons-round">edit</span>
                     </button>
                 `
@@ -78,10 +78,10 @@
 
             function genMdActions(set, name) {
                 return `
-                    <button type="button" onclick="del('${set}', '${name}')" class="btn btn-danger p-0"${name == 'README' ? ' disabled' : ''}>
+                    <button type="button" onclick="del('${set}', '${name}')" class="btn btn-danger p-0" data-testid="scriptlet-delete-${set}-${name}"${name == 'README' ? ' disabled' : ''}>
                         <span class="material-icons-round">delete</span>
                     </button>
-                    <button type="button" onclick="onEditMd('${set}', '${name}')" class="btn btn-warning p-0">
+                    <button type="button" onclick="onEditMd('${set}', '${name}')" class="btn btn-warning p-0" data-testid="scriptlet-edit-${set}-${name}">
                         <span class="material-icons-round">edit</span>
                     </button>
                 `
@@ -98,7 +98,7 @@
                 else if(type == "markdown")
                     actions = genMdActions(set, name);
                 return actions + `
-                    <button type="button" class="btn btn-danger p-0 save-rev-btn" onclick="saveRevision('${set}', '${name}')" disabled>
+                    <button type="button" class="btn btn-danger p-0 save-rev-btn" onclick="saveRevision('${set}', '${name}')" disabled data-testid="scriptlet-save-${set}-${name}">
                         <span class="material-icons-round">save_alt</span>
                     </button>
                 `;
@@ -120,7 +120,7 @@
             }
 
             function genScriptletItem(set, name, type) {
-                return `<tr data-set="${set}" data-name="${name}">${genScriptletRowContent(set, name, type)}</tr>`;
+                return `<tr data-set="${set}" data-name="${name}" data-testid="scriptlet-row-${set}-${name}">${genScriptletRowContent(set, name, type)}</tr>`;
             }
 
             function refreshList() {
@@ -361,15 +361,15 @@
         </script>
     </head>
     <body class="bg-body">
-        <nav class="navbar navbar-expand navbar-dark bg-dark pt-3 sticky-top">
+        <nav class="navbar navbar-expand navbar-dark bg-dark pt-3 sticky-top" data-testid="manager-navbar">
             <ul class="navbar-nav w-100">
                 <li class="navbar-brand">
                     <span class="material-icons-round">description</span>
                     <span>Scriptlet/Manager</span>
                 </li>
-                
+
                 <li class="nav-item m-1">
-                    <button type="button" class="btn btn-success" data-bs-toggle="modal" data-bs-target="#createModal">
+                    <button type="button" class="btn btn-success" data-bs-toggle="modal" data-bs-target="#createModal" data-testid="manager-create">
                         <span class="material-icons-round">add</span>
                     </button>
                 </li>
@@ -377,14 +377,14 @@
                 <li class="nav-item mx-auto"></li>
 
                 <li class="nav-item m-1">
-                    <button type="button" class="btn btn-success" onclick="refreshList()">
+                    <button type="button" class="btn btn-success" onclick="refreshList()" data-testid="manager-refresh">
                         <span class="material-icons-round">refresh</span>
                     </button>
                 </li>
             </ul>
         </nav>
 
-        <table class="table table-secondary">
+        <table class="table table-secondary" data-testid="manager-table">
             <thead>
               <tr>
                 <th scope="col">Set</th>
@@ -393,31 +393,31 @@
                 <th scope="col">Actions</th>
               </tr>
             </thead>
-            <tbody id="scriptlets">
+            <tbody id="scriptlets" data-testid="manager-scriptlets">
             </tbody>
         </table>
 
         <!-- DIALOGS -->
-        <div class="modal fade" data-bs-backdrop="static" id="createModal" tabindex="-1" aria-labelledby="createModalLabel" aria-hidden="true">
+        <div class="modal fade" data-bs-backdrop="static" id="createModal" tabindex="-1" aria-labelledby="createModalLabel" aria-hidden="true" data-testid="manager-create-modal">
             <div class="modal-dialog">
                 <div class="modal-content">
                     <div class="modal-header">
                         <h5 class="modal-title" id="createModalLabel">Create Scriptlet</h5>
                         <!--<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>-->
-                        <p id="createModal-error" class="text-danger"></p>
+                        <p id="createModal-error" class="text-danger" data-testid="manager-create-error"></p>
                     </div>
                     <div class="modal-body">
                         <div class="mb-3">
                             <label for="createModal-set" class="col-form-label">Set:</label>
-                            <select id="createModal-set" class="form-select"></select>
+                            <select id="createModal-set" class="form-select" data-testid="manager-create-set"></select>
                         </div>
                         <div class="mb-3">
                             <label for="createModal-name" class="col-form-label">Name:</label>
-                            <input id="createModal-name" type="text" class="form-control">
+                            <input id="createModal-name" type="text" class="form-control" data-testid="manager-create-name">
                         </div>
                         <div class="mb-3">
                             <label for="createModal-type" class="col-form-label">Type:</label>
-                            <select  id="createModal-type" class="form-select">
+                            <select  id="createModal-type" class="form-select" data-testid="manager-create-type">
                                 <option value="task" selected>Task</option>
                                 <option value="library">Library</option>
                                 <option value="controller">Controller</option>
@@ -430,9 +430,9 @@
                         </div>
                     </div>
                     <div class="modal-footer">
-                        <button type="button" class="btn btn-danger" data-bs-dismiss="modal">Cancel</button>
-                        <button type="button" class="btn btn-primary" onclick="onCreate()" data-bs-target="#createModal">Create</button>
-                        <button type="button" class="btn btn-secondary" onclick="onCreate(true)" data-bs-target="#createModal">Create & Edit</button>
+                        <button type="button" class="btn btn-danger" data-bs-dismiss="modal" data-testid="manager-create-cancel">Cancel</button>
+                        <button type="button" class="btn btn-primary" onclick="onCreate()" data-bs-target="#createModal" data-testid="manager-create-submit">Create</button>
+                        <button type="button" class="btn btn-secondary" onclick="onCreate(true)" data-bs-target="#createModal" data-testid="manager-create-edit">Create & Edit</button>
                     </div>
                 </div>
             </div>

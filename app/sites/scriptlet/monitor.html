@@ -54,7 +54,7 @@
 
             function genTransActions(j) {
                 return `
-                    <button type="button" onclick="copyParam('${j.id}')" class="btn btn-warning p-0">
+                    <button type="button" onclick="copyParam('${j.id}')" class="btn btn-warning p-0" data-testid="job-copy-${j.id}">
                         <span class="material-icons-round">copy_all</span>
                     </button>
                 `
@@ -62,13 +62,13 @@
 
             function genUndoneActions(j) {
                 return `
-                    <button type="button" onclick="cancel('${j.id}')" class="btn btn-danger p-0">
+                    <button type="button" onclick="cancel('${j.id}')" class="btn btn-danger p-0" data-testid="job-cancel-${j.id}">
                         <span class="material-icons-round">cancel</span>
                     </button>
-                    <button type="button" onclick="download('${j.id}')" class="btn btn-warning p-0">
+                    <button type="button" onclick="download('${j.id}')" class="btn btn-warning p-0" data-testid="job-download-${j.id}">
                         <span class="material-icons-round">download</span>
                     </button>
-                    <button type="button" onclick="copyParam('${j.id}')" class="btn btn-danger p-0">
+                    <button type="button" onclick="copyParam('${j.id}')" class="btn btn-danger p-0" data-testid="job-copy-${j.id}">
                         <span class="material-icons-round">copy_all</span>
                     </button>
                 `
@@ -76,13 +76,13 @@
 
             function genDoneActions(j) {
                 return `
-                    <button type="button" onclick="del('${j.id}')" class="btn btn-danger p-0">
+                    <button type="button" onclick="del('${j.id}')" class="btn btn-danger p-0" data-testid="job-delete-${j.id}">
                         <span class="material-icons-round">delete</span>
                     </button>
-                    <button type="button" onclick="download('${j.id}')" class="btn btn-warning p-0">
+                    <button type="button" onclick="download('${j.id}')" class="btn btn-warning p-0" data-testid="job-download-${j.id}">
                         <span class="material-icons-round">download</span>
                     </button>
-                    <button type="button" onclick="copyParam('${j.id}')" class="btn btn-danger p-0">
+                    <button type="button" onclick="copyParam('${j.id}')" class="btn btn-danger p-0" data-testid="job-copy-${j.id}">
                         <span class="material-icons-round">copy_all</span>
                     </button>
                 `
@@ -109,7 +109,7 @@
             }
 
             function genJobItem(j) {
-                return `<tr data-id="${j.id}">${genJobRowContent(j)}</tr>`;
+                return `<tr data-id="${j.id}" data-testid="job-row-${j.id}">${genJobRowContent(j)}</tr>`;
             }
 
             function copyParam(id) {
@@ -299,27 +299,27 @@
         </script>
     </head>
     <body class="bg-body">
-        <nav class="navbar navbar-expand navbar-dark bg-dark pt-3 sticky-top">
+        <nav class="navbar navbar-expand navbar-dark bg-dark pt-3 sticky-top" data-testid="monitor-navbar">
             <ul class="navbar-nav w-100">
                 <li class="navbar-brand">
                     <span class="material-icons-round">description</span>
                     <span>Scriptlet/Monitor</span>
                 </li>
-                
+
                 <li class="nav-item m-1">
-                    <button type="button" class="btn btn-danger" onclick="cancelAll()">
+                    <button type="button" class="btn btn-danger" onclick="cancelAll()" data-testid="monitor-cancel-all">
                         <span class="material-icons-round">cancel</span>
                     </button>
                 </li>
-                
+
                 <li class="nav-item m-1">
-                    <button type="button" class="btn btn-danger" onclick="delAllOf(['done', 'cancelled'])">
+                    <button type="button" class="btn btn-danger" onclick="delAllOf(['done', 'cancelled'])" data-testid="monitor-delete-done">
                         <span class="material-icons-round">delete</span>
                     </button>
                 </li>
-                
+
                 <li class="nav-item m-1">
-                    <button type="button" class="btn btn-danger" onclick="delAllOf(['failed', 'killed'])">
+                    <button type="button" class="btn btn-danger" onclick="delAllOf(['failed', 'killed'])" data-testid="monitor-delete-failed">
                         <span class="material-icons-round">delete_forever</span>
                     </button>
                 </li>
@@ -327,14 +327,14 @@
                 <li class="nav-item mx-auto"></li>
 
                 <li class="nav-item m-1">
-                    <button type="button" class="btn btn-success" onclick="refreshList()">
+                    <button type="button" class="btn btn-success" onclick="refreshList()" data-testid="monitor-refresh">
                         <span class="material-icons-round">refresh</span>
                     </button>
                 </li>
             </ul>
         </nav>
 
-        <table class="table table-secondary">
+        <table class="table table-secondary" data-testid="monitor-table">
             <thead>
               <tr>
                 <th scope="col">ID</th>
@@ -346,7 +346,7 @@
                 <th style="display:none;"></th>
               </tr>
             </thead>
-            <tbody id="jobs">
+            <tbody id="jobs" data-testid="monitor-jobs">
             </tbody>
         </table>
         <iframe id="download" style="display:none"></iframe>

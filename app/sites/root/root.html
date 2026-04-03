@@ -21,13 +21,13 @@
 
             function genMenuItem(id, name) {
                 return `
-                    <li id="${id}" class="mb-1">
-                        <button type="button" class="btn btn-toggle btn-primary w-100" data-bs-toggle="collapse" data-bs-target="#${id}-collapse" aria-expanded="true">
+                    <li id="${id}" class="mb-1" data-testid="menu-section-${id}">
+                        <button type="button" class="btn btn-toggle btn-primary w-100" data-bs-toggle="collapse" data-bs-target="#${id}-collapse" aria-expanded="true" data-testid="menu-toggle-${id}">
                             ${name}
                         </button>
                         <div id="${id}-collapse" class="collapse show">
                             <ul id="submenu_${id}" class="btn-toggle-nav list-unstyled">
-                                
+
                             </ul>
                         </div>
                     </li>
@@ -52,8 +52,8 @@
             function genSubmenuItem(parent, id, name, path) {
                 //  onclick="window.location.replace(window.location.origin+'/?goto=${id}')"
                 return `
-                    <li id="${id}">
-                        <a id="btn_${id}" class="btn btn-secondary w-100 p-0" onclick="history.replaceState('${id}', '', '/?goto=${id}'); setActive('${id}');" href="${path}" target="frame">${name}</a>
+                    <li id="${id}" data-testid="menu-item-${id}">
+                        <a id="btn_${id}" class="btn btn-secondary w-100 p-0" onclick="history.replaceState('${id}', '', '/?goto=${id}'); setActive('${id}');" href="${path}" target="frame" data-testid="menu-link-${id}">${name}</a>
                     </li>
                 `;
             }
@@ -98,16 +98,16 @@
     </head>
     <body>
         <div class="d-flex h-100">
-            <div class="p-3 bg-dark text-light" style="width: 280px">
-                <p>
+            <div class="p-3 bg-dark text-light" style="width: 280px" data-testid="sidebar">
+                <p data-testid="app-title">
                     <span class="material-icons-round text-icon mt-1">miscellaneous_services</span>
                     <span class="fs-5">PyOps</span>
                 </p>
                 <hr>
-                <ul id="menu" class="list-unstyled" />
+                <ul id="menu" class="list-unstyled" data-testid="sidebar-menu" />
             </div>
             <div class="w-100">
-                <iframe id="frame" name="frame" class="h-100 w-100" />
+                <iframe id="frame" name="frame" class="h-100 w-100" data-testid="content-frame" />
             </div>
         </div>
     </body>
