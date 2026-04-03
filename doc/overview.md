@@ -93,7 +93,7 @@ graph TD
 
 ## Configuration
 
-`app/lib/files.py` defines the Config class for managing `etc/pyops.json`.
+`app/lib/files.py` defines the Config class for managing `etc/pyops.json`. Both `app/gunicorn.py` and `app/runner.py` read the `PYOPS_CONFIG` environment variable to override the default config path, enabling isolated E2E test instances.
 
 ### JSON Structure
 
@@ -334,6 +334,7 @@ flowchart TD
 - unit/orm/: Tests job, schedule
 - integration/: Tests git, orm, routers, runner execution
 - api/: Tests api_editor, api_endpoints, api_job, api_schedule, api_sets
+- e2e/: Playwright E2E tests against real server instances
 
 ### Fixtures-Mocks
 
@@ -346,6 +347,14 @@ flowchart TD
 - `mock_zmq`: ZMQ Context/Socket mock for REQ/REP simulation (msgpack-packed messages, 3 retries on ZMQError)
 - `mock_croniter`, `mock_jedi`, `mock_datetime`
 - Overrides for controller_code, view_content, file_path
+
+### E2E Tests
+
+Playwright-based workflow tests in `tests/e2e/` that start a real PyOps server per test function. Each test gets isolated data directories via `PYOPS_CONFIG` env var pointing to `tmp_path`. Server runs in its own process group for clean shutdown.
+
+- Skipped by default in `pytest tests/`; run via `pytest tests/e2e/` or `pytest tests/ --e2e`
+- `ServerLog.assert_no_unexpected_errors()` scans server output for tracebacks and fatal errors
+- CI runs in `test:e2e` GitLab stage with Playwright system deps and `E2E_STARTUP_TIMEOUT=60`
 
 ## VSIX Extension
 

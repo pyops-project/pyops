@@ -426,7 +426,7 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
     os.environ.update(env)
 
     # Init config early for subprocess isolation
-    conf_path = os.path.join(files.project_root, "etc/pyops.json")
+    conf_path = os.environ.get("PYOPS_CONFIG", os.path.join(files.project_root, "etc/pyops.json"))
     files.Config.init(conf_path)
 
     killer = GracefulKiller()

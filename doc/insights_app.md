@@ -84,7 +84,7 @@ graph TD
 
 ## Configuration (`app/lib/files.py`)
 
-`Config` class manages `etc/pyops.json`; loaded once at startup via `Config.init()`. No built-in auth; proxy recommended.
+`Config` class manages `etc/pyops.json`; loaded once at startup via `Config.init()`. Both `app/gunicorn.py` and `app/runner.py` read the `PYOPS_CONFIG` environment variable to override the default config path (`etc/pyops.json`). This enables isolated E2E test instances with separate data directories and ports. No built-in auth; proxy recommended.
 
 ### JSON Structure
 
@@ -480,6 +480,7 @@ All routers mount under `/scriptlet/`. Owner resolved from `X-User` header (defa
 - `tests/unit/orm/`: job, schedule
 - `tests/integration/`: git, orm, routers, runner execution, zmq_integration, error_logging
 - `tests/api/`: api_editor, api_endpoints, api_job, api_schedule, api_sets
+- `tests/e2e/`: Playwright E2E tests against a real server instance
 
 ### Key Fixtures
 
@@ -492,6 +493,37 @@ All routers mount under `/scriptlet/`. Owner resolved from `X-User` header (defa
 - `mock_croniter`, `mock_jedi`, `mock_datetime`
 
 Rules: no `autouse` fixtures; runtime files in `.cache/`; test-body-only imports from `app`.
+
+### E2E Tests (`tests/e2e/`)
+
+Playwright-based workflow tests that run against a real PyOps server. Each test function gets a fresh, isolated server instance.
+
+#### Execution Model
+
+Each test starts a real gunicorn server with isolated config (via `PYOPS_CONFIG` env var) pointing to a `tmp_path`-based data directory. The server runs in its own process group (`os.setsid`) so all children (gunicorn workers, runner daemon) can be terminated together on teardown.
+
+```
+pytest fixture: e2e_env → creates tmp dirs + config
+                pyops_server → starts gunicorn, waits for ready, yields ServerLog, kills on teardown
+                api → requests.Session with base URL + X-User header
+                e2e_page → Playwright page pre-navigated to server root
+```
+
+#### Skip Guard
+
+E2E tests are marked with `@pytest.mark.e2e` and auto-skipped unless:
+- The test path targets `tests/e2e/` directly: `pytest tests/e2e/`
+- The `--e2e` flag is passed: `pytest tests/ --e2e`
+
+This prevents `test.sh` (which runs `pytest tests/`) from triggering E2E tests.
+
+#### ServerLog Assertions
+
+`ServerLog.assert_no_unexpected_errors(allow=[...])` scans the captured server output for `Traceback`, `FATAL`, `CRITICAL` patterns. Expected patterns (shutdown signals, intentional test failures) are filtered via allowlists. Each match includes 5 lines of context in the failure message.
+
+#### CI Integration
+
+The `test:e2e` stage in `.gitlab-ci.yml` installs Playwright with system deps (`playwright install --with-deps chromium`) and sets `E2E_STARTUP_TIMEOUT=60` for slower CI runners (default 30s locally).
 
 ---
 

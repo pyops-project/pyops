@@ -36,6 +36,11 @@ npm run test --prefix vsix/
 npm run test:integration --prefix vsix/
 ```
 
+**E2E tests** (Playwright, starts real server per test):
+```bash
+pytest tests/e2e/ -v
+```
+
 ## Architecture
 
 PyOps is a monorepo execution platform for Python Operations Scriptlets. Core flow:
@@ -51,7 +56,7 @@ WebUI/VSIX → FastAPI (app/web.py) → SQLite DB ↔ Runner daemon (app/runner.
 - `web.py` — FastAPI app; mounts routers, serves static files, proxies controller requests to ZMQ services
 - `runner.py` — Background daemon: polls DB for `todo` jobs, spawns `job_runner.py` via `subprocess.Popen` in per-set venvs, handles ZMQ completion signals, manages stale PIDs with psutil
 - `job_runner.py` — Subprocess entry point; accepts JSON-serialized kwargs; dispatches to `run_task_job`, `run_service_job`, `run_debug_job`, `run_draft_job`
-- `gunicorn.py` — WSGI config; also spawns the runner process
+- `gunicorn.py` — WSGI config; also spawns the runner process; reads `PYOPS_CONFIG` env var for config path override (default `etc/pyops.json`)
 - `routers/scriptlet/` — REST API: `job.py`, `editor.py`, `inventory.py`, `schedule.py`, `sets.py`, etc.
 - `orm/` — SQLAlchemy models: `Job` (states: todo→dequeued→loading→running→done/failed/cancelled/remove/removed) and `Schedule` (cron-based)
 - `lib/` — Shared utilities
@@ -83,6 +88,7 @@ VSCode extension in TypeScript. Key services: `ManagerTreeDataProvider` (scriptl
 - **Test fixtures** — never `autouse`; ensure isolation and cleanup; don't overlap; inherit if meaningful
 - **Test runtime files** — store in `.cache/`
 - **Coverage targets** — Python tests >90%; VSIX tests >80%
+- **E2E tests** — skipped by default in `pytest tests/`; run via `pytest tests/e2e/` or `pytest tests/ --e2e`
 
 ## Technical Insights (doc/)
 

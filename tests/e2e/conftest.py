@@ -1,0 +1,300 @@
+"""
+E2E test fixtures for PyOps Playwright tests.
+
+Each test gets a fresh PyOps server instance with isolated data directories.
+The server is started via gunicorn (same as run_dev.sh) and stopped after each test.
+Server logs are captured and available for assertion.
+
+Run with:  pytest tests/e2e/ -v
+           E2E tests are skipped when collected as part of the full suite
+           (pytest tests/) unless --e2e is passed explicitly.
+"""
+
+import json
+import os
+import re
+import signal
+import subprocess
+import time
+
+import pytest
+import requests
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def pytest_addoption(parser):
+    parser.addoption("--e2e", action="store_true", default=False, help="Run E2E tests")
+
+
+def _is_e2e_item(item):
+    """Check if a test item belongs to the e2e directory."""
+    return "tests/e2e" in str(item.fspath) or "tests\\e2e" in str(item.fspath)
+
+
+def pytest_collection_modifyitems(config, items):
+    """Mark and optionally skip E2E tests.
+
+    All items under tests/e2e/ get the 'e2e' marker applied automatically
+    (avoids module-level pytestmark which triggers PytestUnknownMarkWarning
+    before marker registration with -W error).
+
+    E2E tests are skipped unless --e2e is passed or tests/e2e/ is targeted directly.
+    """
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", pytest.PytestUnknownMarkWarning)
+        e2e_marker = pytest.mark.e2e
+
+    # Determine if E2E should run
+    run_e2e = config.getoption("--e2e", default=False)
+    if not run_e2e:
+        args = config.invocation_params.args
+        run_e2e = any("e2e" in str(a) for a in args)
+
+    for item in items:
+        if _is_e2e_item(item):
+            item.add_marker(e2e_marker)
+            if not run_e2e:
+                item.add_marker(pytest.mark.skip(
+                    reason="E2E tests require --e2e flag or direct tests/e2e/ path"
+                ))
+E2E_PORT = 18321
+BASE_URL = f"http://127.0.0.1:{E2E_PORT}"
+SERVER_STARTUP_TIMEOUT = int(os.environ.get("E2E_STARTUP_TIMEOUT", 30))
+SERVER_SHUTDOWN_TIMEOUT = 10
+
+# Log patterns that indicate unexpected errors (checked after each test)
+UNEXPECTED_ERROR_PATTERNS = [
+    re.compile(r"Traceback \(most recent call last\)"),
+    re.compile(r"\bFATAL\b", re.IGNORECASE),
+    re.compile(r"\bCRITICAL\b", re.IGNORECASE),
+]
+
+# Log patterns that are expected/acceptable even though they match error patterns
+EXPECTED_LOG_PATTERNS = [
+    re.compile(r"Worker .* exiting"),
+    re.compile(r"Shutting down"),
+    re.compile(r"SIGTERM"),
+    re.compile(r"signal: term"),
+]
+
+
+def _is_expected_line(line):
+    return any(p.search(line) for p in EXPECTED_LOG_PATTERNS)
+
+
+@pytest.fixture(scope="function")
+def e2e_env(tmp_path):
+    """Create isolated data directories and test config pointing to tmp_path."""
+    data_dir = tmp_path / "data"
+    (data_dir / "jobs").mkdir(parents=True)
+    (data_dir / "git").mkdir(parents=True)
+    (data_dir / "venv").mkdir(parents=True)
+    (data_dir / "pkg").mkdir(parents=True)
+
+    config = {
+        "web": {
+            "bind": f"127.0.0.1:{E2E_PORT}",
+            "worker": 1,
+            "timeout": 300,
+        },
+        "data": {
+            "jobs": str(data_dir / "jobs"),
+            "git": str(data_dir / "git"),
+            "db": str(data_dir / "app.db"),
+        },
+        "runner": {
+            "venv": str(data_dir / "venv"),
+            "pkg": str(data_dir / "pkg"),
+            "git_pull_interval": 9999,
+            "drop_done_delay_seconds": 9999,
+        },
+        "log": {"loglevel": "debug"},
+        "users": {"anonymous": {"debug_port": 15679}},
+    }
+
+    config_path = tmp_path / "pyops_e2e.json"
+    config_path.write_text(json.dumps(config, indent=2))
+
+    return {
+        "config_path": str(config_path),
+        "tmp_path": tmp_path,
+        "data_dir": data_dir,
+        "base_url": BASE_URL,
+        "port": E2E_PORT,
+    }
+
+
+class ServerLog:
+    """Wrapper around the server log file for assertions."""
+
+    def __init__(self, log_path):
+        self.log_path = log_path
+
+    def read(self):
+        if os.path.exists(self.log_path):
+            with open(self.log_path, "r", errors="replace") as f:
+                return f.read()
+        return ""
+
+    def lines(self):
+        return self.read().splitlines()
+
+    def contains(self, pattern):
+        """Check if log contains a regex pattern."""
+        if isinstance(pattern, str):
+            pattern = re.compile(pattern)
+        return bool(pattern.search(self.read()))
+
+    def assert_no_unexpected_errors(self, allow=None):
+        """Assert that the log contains no unexpected error patterns.
+
+        Args:
+            allow: Optional list of regex patterns (str or compiled) whose
+                   matching lines are treated as expected.
+        """
+        allow_patterns = []
+        if allow:
+            allow_patterns = [
+                re.compile(p) if isinstance(p, str) else p for p in allow
+            ]
+        content = self.read()
+        for pattern in UNEXPECTED_ERROR_PATTERNS:
+            for match in pattern.finditer(content):
+                start = content.rfind("\n", 0, match.start()) + 1
+                end = content.find("\n", match.end())
+                if end == -1:
+                    end = len(content)
+                line = content[start:end]
+                # Grab up to 5 lines of context after the match
+                context_end = match.start()
+                for _ in range(6):
+                    next_nl = content.find("\n", context_end + 1)
+                    if next_nl == -1:
+                        context_end = len(content)
+                        break
+                    context_end = next_nl
+                context = content[start:context_end]
+                if _is_expected_line(line):
+                    continue
+                if any(ap.search(context) for ap in allow_patterns):
+                    continue
+                pytest.fail(
+                    f"Unexpected error in server log:\n{context}"
+                )
+
+
+def _wait_for_server(url, timeout):
+    """Poll the server until it responds or timeout."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            resp = requests.get(url, timeout=2)
+            if resp.status_code == 200:
+                return True
+        except requests.ConnectionError:
+            pass
+        time.sleep(0.5)
+    return False
+
+
+def _kill_server(proc, timeout):
+    """Gracefully stop the server, escalating to SIGKILL if needed."""
+    if proc.poll() is not None:
+        return
+    # Send SIGTERM to the process group
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        proc.wait(timeout=5)
+
+
+@pytest.fixture(scope="function")
+def pyops_server(e2e_env):
+    """Start a fresh PyOps server, yield ServerLog, then stop and clean up.
+
+    The server runs in a new process group so all children (gunicorn workers,
+    runner daemon) can be terminated together.
+    """
+    log_path = str(e2e_env["tmp_path"] / "server.log")
+    log_file = open(log_path, "w")
+
+    env = os.environ.copy()
+    env["PYOPS_CONFIG"] = e2e_env["config_path"]
+
+    proc = subprocess.Popen(
+        [
+            os.path.join(PROJECT_ROOT, ".venv", "bin", "gunicorn"),
+            "-c", "app/gunicorn.py",
+            "--access-logfile", "-",
+            "--error-logfile", "-",
+            "--capture-output",
+        ],
+        cwd=PROJECT_ROOT,
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        env=env,
+        preexec_fn=os.setsid,  # new process group for clean shutdown
+    )
+
+    server_log = ServerLog(log_path)
+
+    try:
+        if not _wait_for_server(e2e_env["base_url"], SERVER_STARTUP_TIMEOUT):
+            log_file.flush()
+            content = server_log.read()
+            _kill_server(proc, SERVER_SHUTDOWN_TIMEOUT)
+            log_file.close()
+            pytest.fail(
+                f"PyOps server did not start within {SERVER_STARTUP_TIMEOUT}s.\n"
+                f"Log output:\n{content[-2000:]}"
+            )
+        yield server_log
+    finally:
+        _kill_server(proc, SERVER_SHUTDOWN_TIMEOUT)
+        log_file.close()
+
+
+@pytest.fixture(scope="session")
+def base_url():
+    """Provide the base URL for the test server (overrides pytest-base-url)."""
+    return BASE_URL
+
+
+@pytest.fixture(scope="function")
+def api(pyops_server, e2e_env):
+    """Provide a requests.Session pre-configured for the test server API."""
+    server_url = e2e_env["base_url"]
+    session = requests.Session()
+    session.headers["X-User"] = "e2e_test_user"
+
+    original_request = session.request
+
+    def patched_request(method, url, **kwargs):
+        if url.startswith("/"):
+            url = server_url + url
+        return original_request(method, url, **kwargs)
+
+    session.request = patched_request
+    yield session
+    session.close()
+
+
+@pytest.fixture(scope="function")
+def e2e_page(pyops_server, base_url, page):
+    """Provide a Playwright page pointing at the test server.
+
+    Depends on pyops_server so the server is running before the page is used.
+    """
+    page.goto(base_url)
+    page.wait_for_load_state("networkidle")
+    return page

@@ -32,6 +32,27 @@ test:
       when: always
     - when: manual
 
+test:e2e:
+  stage: test
+  before_script:
+    - apt-get update && apt-get install -y python3 python3-pip python3-venv git sqlite3 nodejs npm
+    - git config --global user.email "ci@pyops.local"
+    - git config --global user.name "PyOps CI"
+    - python3 -m venv .venv
+    - source .venv/bin/activate
+    - pip install --upgrade pip
+    - pip install psutil fastapi uvicorn sqlalchemy pyzmq msgpack croniter jedi requests zipstream-ng gunicorn pytest httpx pytest-cov debugpy pytest-playwright pytest-base-url
+    - playwright install --with-deps chromium
+  script:
+    - source .venv/bin/activate
+    - pytest tests/e2e/ -v
+  variables:
+    E2E_STARTUP_TIMEOUT: "60"
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"'
+      when: always
+    - when: manual
+
 test:vsix:
   stage: test
   cache:

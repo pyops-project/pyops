@@ -11,7 +11,8 @@ sys.path.insert(0, project_root)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "lib"))
 
 from app.lib.files import Config, conf_web, conf_log, conf_data, conf_runner
-Config.init(os.path.join(project_root, "etc", "pyops.json"))
+conf_path = os.environ.get("PYOPS_CONFIG", os.path.join(project_root, "etc", "pyops.json"))
+Config.init(conf_path)
 
 #import debugpy
 #debugpy.listen(('localhost', 5678))

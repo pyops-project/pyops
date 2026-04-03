@@ -22,6 +22,9 @@ flowchart LR
 ```
 
 ## Configuration
+
+Stored in `etc/pyops.json` (override path via `PYOPS_CONFIG` env var):
+
 - `web`: `{"bind": "127.0.0.1:8000", "worker": 4, "timeout": 300}`
 - `data`: `{"jobs": "data/jobs", "git": "data/git", "db": "data/app.db"}`
 - `runner`: `{"venv": "data/venv", "pkg": "data/pkg", "git_pull_interval": 60, "drop_done_delay_seconds": 60}`
@@ -53,6 +56,15 @@ cd pyops
 For development with hot reload:
 ```
 ./run_dev.sh
+```
+
+### Testing
+```bash
+# Unit/integration tests
+pytest tests/ -v --cov=app --cov-report=term-missing
+
+# E2E tests (Playwright, starts real server per test)
+pytest tests/e2e/ -v
 ```
 
 ### Docker Compose
