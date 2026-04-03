@@ -53,6 +53,46 @@ test:e2e:
       when: always
     - when: manual
 
+test:vsix_integration:
+  stage: test
+  before_script:
+    # Python + server dependencies
+    - apt-get update && apt-get install -y python3 python3-pip python3-venv git sqlite3 nodejs npm curl
+    # Electron/VS Code runtime dependencies + Xvfb
+    - apt-get install -y xvfb libnss3 libatk-bridge2.0-0 libdrm2 libxkbcommon0 libgbm1 libgtk-3-0 libasound2t64 libxshmfence1
+    - git config --global user.email "ci@pyops.local"
+    - git config --global user.name "PyOps CI"
+    # Setup Python venv and install server
+    - python3 -m venv .venv
+    - source .venv/bin/activate
+    - pip install --upgrade pip
+    - pip install psutil fastapi uvicorn sqlalchemy pyzmq msgpack croniter jedi requests zipstream-ng gunicorn debugpy
+    # Setup VSIX
+    - npm config set cache $NPM_CACHE_DIR
+    - cd vsix && npm ci && cd ..
+  script:
+    - source .venv/bin/activate
+    # Start PyOps server in background
+    - gunicorn -c app/gunicorn.py --access-logfile - --error-logfile - --capture-output &
+    - |
+      for i in $(seq 1 60); do
+        if curl -sf http://localhost:8000 > /dev/null 2>&1; then break; fi
+        sleep 1
+      done
+    - "curl -sf http://localhost:8000 > /dev/null || { echo 'Server failed to start'; exit 1; }"
+    # Run integration tests under Xvfb
+    - xvfb-run --auto-servernum --server-args="-screen 0 1024x768x24" npm run test:integration --prefix vsix/
+  variables:
+    PYOPS_SERVER_URL: "http://localhost:8000"
+    PYOPS_JOB_STATE_TIMEOUT: "30000"
+  cache:
+    paths:
+      - vsix/node_modules/
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"'
+      when: always
+    - when: manual
+
 test:vsix:
   stage: test
   cache:

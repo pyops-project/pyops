@@ -89,7 +89,9 @@ export function createTempDir(): string {
   return tempDir;
 }
 
-export async function waitForJobState(jobId: string, expectedState: string, timeoutMs: number = 5000): Promise<void> {
+const JOB_STATE_TIMEOUT = parseInt(process.env.PYOPS_JOB_STATE_TIMEOUT || '5000', 10);
+
+export async function waitForJobState(jobId: string, expectedState: string, timeoutMs: number = JOB_STATE_TIMEOUT): Promise<void> {
   const serverUrl = process.env.PYOPS_SERVER_URL || 'http://localhost:8000';
   const startTime = Date.now();
 
