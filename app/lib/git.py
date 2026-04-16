@@ -233,6 +233,8 @@ def get_file_path(repo: str, name: str, type_: str) -> str:
         return os.path.join(repo, "README.md")
     if type_ == "view":
         return os.path.join(repo, f"{name}.html")
+    if type_ == "jslibrary":
+        return os.path.join(repo, f"{name}.js")
     if type_ not in ["task", "library", "controller"]:
         raise ValueError(f"Invalid type: {type_}")
     return os.path.join(repo, f"{name}.{type_}.py")
@@ -356,7 +358,7 @@ def check_name_unique(repo: str, name: str) -> bool:
     Returns:
         bool: True if unique.
     """
-    files = [f for f in os.listdir(repo) if f.startswith(f"{name}.") and (f.endswith(('.py', '.html')) or f == "README.md")]
+    files = [f for f in os.listdir(repo) if f.startswith(f"{name}.") and (f.endswith(('.py', '.html', '.js')) or f == "README.md")]
     return len(files) == 0
 
 def read_content(repo: str, name: str, type_: str, committed: bool = False, strict: bool = False) -> str:

@@ -304,3 +304,36 @@ class TestWebUIWorkflow:
         sets = resp.json()["sets"]
         assert any(s["name"] == "ui_test_set" for s in sets)
         pyops_server.assert_no_unexpected_errors()
+
+    def test_create_scriptlet_via_manager_ui(self, e2e_page, api, pyops_server):
+        """Create a scriptlet through the Manager create modal and verify it appears."""
+        # Set must exist before the modal can select it.
+        api.post("/scriptlet/sets/create", json={"name": "ui_create_set"})
+
+        e2e_page.locator('[data-testid="menu-link-scriptlet_manager"]').click()
+        frame = e2e_page.frame_locator('[data-testid="content-frame"]')
+        frame.locator('[data-testid="manager-navbar"]').wait_for(state="visible", timeout=10_000)
+
+        # Open create modal.
+        frame.locator('[data-testid="manager-create"]').click()
+        frame.locator('[data-testid="manager-create-modal"]').wait_for(state="visible", timeout=5_000)
+
+        # Wait for the set dropdown to be populated (populateSets fetch).
+        frame.locator(
+            '[data-testid="manager-create-set"] option[value="ui_create_set"]'
+        ).wait_for(state="attached", timeout=5_000)
+        frame.locator('[data-testid="manager-create-set"]').select_option(value="ui_create_set")
+
+        frame.locator('[data-testid="manager-create-name"]').fill("new_task")
+        # Type defaults to "task" — no change needed.
+
+        frame.locator('[data-testid="manager-create-submit"]').click()
+        frame.locator('[data-testid="manager-create-modal"]').wait_for(state="hidden", timeout=10_000)
+
+        # Verify the new scriptlet row appears in the Manager table.
+        frame.locator('[data-testid="manager-refresh"]').click()
+        frame.locator(
+            '[data-testid="scriptlet-row-ui_create_set-new_task"]'
+        ).wait_for(state="visible", timeout=10_000)
+
+        pyops_server.assert_no_unexpected_errors()

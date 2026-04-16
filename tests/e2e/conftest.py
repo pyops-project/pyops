@@ -290,6 +290,30 @@ def api(pyops_server, e2e_env):
 
 
 @pytest.fixture(scope="function")
+def api_anon(pyops_server, e2e_env):
+    """Like api, but without X-User — defaults to 'anonymous', matching browser requests.
+
+    Use this fixture when the test also drives the browser (e2e_page), so that
+    jobs and schedules created here are owned by 'anonymous' and therefore
+    visible in the monitor/scheduler pages that the browser renders.
+    """
+    server_url = e2e_env["base_url"]
+    session = requests.Session()
+    # Intentionally NO X-User header; server resolves to 'anonymous'.
+
+    original_request = session.request
+
+    def patched_request(method, url, **kwargs):
+        if url.startswith("/"):
+            url = server_url + url
+        return original_request(method, url, **kwargs)
+
+    session.request = patched_request
+    yield session
+    session.close()
+
+
+@pytest.fixture(scope="function")
 def e2e_page(pyops_server, base_url, page):
     """Provide a Playwright page pointing at the test server.
 
