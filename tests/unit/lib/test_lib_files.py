@@ -352,3 +352,25 @@ def test_conf_web_init_on_empty(tmp_path):
     result = files.conf_web()
     expected = {"bind": "0.0.0.0:80"}
     assert result == expected
+
+
+def test_version_strips_whitespace(tmp_path):
+    from app.lib import files
+    version_file = tmp_path / "VERSION"
+    version_file.write_text("  2.1.0\n\n")
+    with patch.object(files, "version_path", str(version_file)):
+        assert files.version() == "2.1.0"
+
+
+def test_version_file_missing(tmp_path):
+    from app.lib import files
+    with patch.object(files, "version_path", str(tmp_path / "nope")):
+        with pytest.raises(FileNotFoundError):
+            files.version()
+
+
+def test_version_matches_project_version_file():
+    from app.lib import files
+    with open(files.version_path, "r") as f:
+        expected = f.read().strip()
+    assert files.version() == expected

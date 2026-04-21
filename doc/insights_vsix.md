@@ -394,3 +394,5 @@ Integration tests use a **separate** `tests/integration/tsconfig.json` from the 
 | `vscode:prepublish` | `compile` |
 
 **TypeScript config**: `target: ES2020`, `module: CommonJS`, `strict: true`, `outDir: out/`, `rootDir: src/`. Compiled JS files must only exist in `out/` — any `.js` in `src/` indicates misconfiguration.
+
+**Versioning**: the project-root `VERSION` file is the single source of truth for both the Python app and the VSIX. `vsix/build.sh` reads `../VERSION` and rewrites the `version` field in `package.json` before invoking `vsce package`. `tests/version.test.ts` asserts `package.json.version` equals the `VERSION` file, so drift between the two fails the unit suite.

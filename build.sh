@@ -3,21 +3,27 @@
 set -euo pipefail
 # set -x    # uncomment during debugging
 
-if [[ $# -lt 1 || -z "$1" ]]; then
-    echo "Usage: $0 VERSION [no-pull]"
-    echo "  VERSION       : required, e.g. 1.2.3"
-    echo "  no-pull       : optional, when present disables --pull and --no-cache"
-    echo
-    exit 1
-fi
-
-VERSION="$1"
-NO_CACHE_PULL="${2:-}"   # empty = normal cache/pull, non-empty = disable them
-
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 REGISTRY="registry.ralph.or.at/pyops/pyops"
 
 cd "$DIR" || exit 1
+
+if [[ $# -ge 1 && -n "$1" ]]; then
+    VERSION="$1"
+else
+    if [[ ! -f "$DIR/VERSION" ]]; then
+        echo "VERSION file not found at $DIR/VERSION" >&2
+        echo "Usage: $0 [VERSION] [no-pull]" >&2
+        exit 1
+    fi
+    VERSION="$(tr -d '[:space:]' < "$DIR/VERSION")"
+    if [[ -z "$VERSION" ]]; then
+        echo "VERSION file is empty" >&2
+        exit 1
+    fi
+fi
+
+NO_CACHE_PULL="${2:-}"   # empty = normal cache/pull, non-empty = disable them
 
 # Clean up pycache
 find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true

@@ -16,6 +16,7 @@ RUN DEBIAN_FRONTEND=noninteractive apt -y install \
 RUN mkdir -p /opt/pyops/app && mkdir -p /opt/pyops/data && mkdir -p /opt/pyops/etc && mkdir -p /opt/pyops/venv
 
 COPY app /opt/pyops/app
+COPY VERSION /opt/pyops/
 COPY run.sh /opt/pyops/
 
 CMD [ "/opt/pyops/run.sh" ]

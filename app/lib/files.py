@@ -6,9 +6,15 @@ project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 
 files_path = os.path.join(project_root, "app/files")
 
+version_path = os.path.join(project_root, "VERSION")
+
 def get(path: str):
     with open(os.path.join(files_path, path), "rb") as file:
         return file.read()
+
+def version() -> str:
+    with open(version_path, "r") as file:
+        return file.read().strip()
 
 class Config:
     def __init__(self):

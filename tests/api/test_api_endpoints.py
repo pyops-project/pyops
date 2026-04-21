@@ -499,6 +499,13 @@ def test_repo_status_exception(mock_client):
         assert "status error" in response.json()["detail"]
 
 
+def test_version_endpoint(mock_client):
+    with patch("app.lib.files.version", return_value="9.9.9"):
+        resp = mock_client.get("/version")
+        assert resp.status_code == 200
+        assert resp.json() == {"version": "9.9.9"}
+
+
 def test_debug_port(mock_client):
     with patch("app.lib.files.conf_users") as mock_conf_users:
         mock_conf_users.return_value = {

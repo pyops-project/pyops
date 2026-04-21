@@ -48,6 +48,10 @@ app.include_router(editor.router)
 app.include_router(sets.router)
 app.include_router(jslib.router)
 
+@app.get("/version")
+def get_version():
+    return {"version": files.version()}
+
 @app.get("/debug/port")
 def get_debug_port(request: Request):
     owner = sanitize_owner(request.headers.get("X-User", "anonymous"))
