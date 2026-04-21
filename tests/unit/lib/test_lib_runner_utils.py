@@ -558,6 +558,44 @@ class TestAssignJob:
             assert fetched.pid == 456
             assert fetched.debugpy_pid == 789
 
+    def test_assign_job_preserves_cancel_state(self, mock_db):
+        """If a cancel races in before assignJob commits, state must stay 'cancel'
+        so the runner's term loop can kill the subprocess we just started."""
+        from app import runner
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        with Session(get_db_engine()) as test_session:
+            # State already flipped to "cancel" by the cancel endpoint.
+            job = Job(id="123", set="set", name="name", kind="task", param="param", state="cancel", owner="owner")
+            test_session.add(job)
+            test_session.commit()
+        with patch('app.lib.job.get_debug_port', return_value=5678), \
+             patch('app.lib.job.get_debugpy_adapter_pid', return_value=None):
+            runner.assignJob("123", 456)
+        with Session(get_db_engine()) as test_session:
+            fetched = test_session.get(Job, "123")
+            # pid/start assigned, but state preserved at "cancel".
+            assert fetched.state == "cancel"
+            assert fetched.pid == 456
+            assert fetched.start is not None
+
+    def test_assign_job_preserves_cancelling_state(self, mock_db):
+        """Same guard for 'cancelling' — the term loop is already processing this job."""
+        from app import runner
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        with Session(get_db_engine()) as test_session:
+            job = Job(id="123", set="set", name="name", kind="task", param="param", state="cancelling", owner="owner")
+            test_session.add(job)
+            test_session.commit()
+        with patch('app.lib.job.get_debug_port', return_value=5678), \
+             patch('app.lib.job.get_debugpy_adapter_pid', return_value=None):
+            runner.assignJob("123", 456)
+        with Session(get_db_engine()) as test_session:
+            fetched = test_session.get(Job, "123")
+            assert fetched.state == "cancelling"
+            assert fetched.pid == 456
+
 class TestTerminateJobProcesses:
     @patch('app.orm.database.conf_data', return_value={"db": "/tmp/test.db"})
     @patch('app.runner.Session')

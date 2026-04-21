@@ -116,7 +116,13 @@ async def item_put(cr: ScheduleArgument, user: str = Depends(get_current_user)):
 
         if cr.schedule:
             now = datetime.now()
-            croniter.croniter(cr.schedule, now)
+            try:
+                croniter.croniter(cr.schedule, now)
+            except (croniter.CroniterBadCronError, ValueError) as ex:
+                raise HTTPException(
+                    status_code=HTTP_400_BAD_REQUEST,
+                    detail=f"Invalid cron expression: {ex}",
+                )
 
         with Session(get_db_engine()) as session:
             if cr.id is not None:

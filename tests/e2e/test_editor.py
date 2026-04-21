@@ -735,3 +735,330 @@ class TestJsLibIntegration:
         e2e_page.wait_for_load_state("networkidle")
         _full_cleanup(e2e_page, ALL_NAMES)
         pyops_server.assert_no_unexpected_errors()
+
+
+# ---------------------------------------------------------------------------
+# Tests: editor interactive actions (Run, Cancel, Clear Logs, Font Size)
+# ---------------------------------------------------------------------------
+
+
+def _ace_value(editor_page, element_id):
+    return editor_page.evaluate(f"ace.edit('{element_id}').getValue()")
+
+
+def _ace_font_size(editor_page, element_id):
+    return editor_page.evaluate(
+        f"String(ace.edit('{element_id}').getOption('fontSize'))"
+    )
+
+
+class TestEditorInteractiveActions:
+    """Exercise Run/Cancel/Clear Logs/Font Size in the task editor."""
+
+    def test_editor_run_populates_stdout_panel(self, e2e_page, api_anon, pyops_server):
+        """Clicking Run executes the draft code and shows output in the stdout Ace panel."""
+        _setup_basic(api_anon)
+        # Replace default code with something that prints a deterministic string.
+        api_anon.post(
+            "/scriptlet/inventory/item",
+            json={
+                "set": SET_NAME,
+                "name": TASK_NAME,
+                "code": 'print("editor_run_marker_42")\n',
+            },
+        )
+        frame = _nav_manager(e2e_page)
+        frame.locator('[data-testid="manager-refresh"]').click()
+
+        editor_page = _open_editor_popup(e2e_page, frame, SET_NAME, TASK_NAME)
+        _wait_for_ace(editor_page)
+
+        editor_page.locator('[data-testid="editor-run"]').click()
+
+        # Wait until the job poller has written the expected marker into #out.
+        editor_page.wait_for_function(
+            "ace.edit('out').getValue().includes('editor_run_marker_42')",
+            timeout=30_000,
+        )
+        # Run button re-enabled once terminal state is observed.
+        editor_page.wait_for_function(
+            "!document.querySelector('[data-testid=\"editor-run\"]').disabled",
+            timeout=10_000,
+        )
+
+        editor_page.close()
+        _full_cleanup(e2e_page, BASIC_NAMES)
+        pyops_server.assert_no_unexpected_errors()
+
+    def test_editor_clear_logs_empties_output_panels(self, e2e_page, api_anon, pyops_server):
+        """Clear Logs empties both stdout and stderr Ace panels."""
+        _setup_basic(api_anon)
+        api_anon.post(
+            "/scriptlet/inventory/item",
+            json={
+                "set": SET_NAME,
+                "name": TASK_NAME,
+                "code": 'print("before_clear")\n',
+            },
+        )
+        frame = _nav_manager(e2e_page)
+        frame.locator('[data-testid="manager-refresh"]').click()
+
+        editor_page = _open_editor_popup(e2e_page, frame, SET_NAME, TASK_NAME)
+        _wait_for_ace(editor_page)
+
+        editor_page.locator('[data-testid="editor-run"]').click()
+        editor_page.wait_for_function(
+            "ace.edit('out').getValue().includes('before_clear')",
+            timeout=30_000,
+        )
+        editor_page.wait_for_function(
+            "!document.querySelector('[data-testid=\"editor-run\"]').disabled",
+            timeout=10_000,
+        )
+
+        editor_page.locator('[data-testid="editor-clear-logs"]').click()
+        editor_page.wait_for_function(
+            "ace.edit('out').getValue() === '' && ace.edit('errout').getValue() === ''",
+            timeout=5_000,
+        )
+        assert _ace_value(editor_page, "out") == ""
+        assert _ace_value(editor_page, "errout") == ""
+
+        editor_page.close()
+        _full_cleanup(e2e_page, BASIC_NAMES)
+        pyops_server.assert_no_unexpected_errors()
+
+    def test_editor_cancel_stops_running_draft(self, e2e_page, api_anon, pyops_server):
+        """Clicking Cancel on a running draft aborts it and re-enables Run."""
+        _setup_basic(api_anon)
+        # Long-running draft — sleeps 60s so Cancel has a clear window.
+        long_code = "import time\nfor _ in range(120):\n    time.sleep(0.5)\n"
+        api_anon.post(
+            "/scriptlet/inventory/item",
+            json={"set": SET_NAME, "name": TASK_NAME, "code": long_code},
+        )
+        frame = _nav_manager(e2e_page)
+        frame.locator('[data-testid="manager-refresh"]').click()
+
+        editor_page = _open_editor_popup(e2e_page, frame, SET_NAME, TASK_NAME)
+        _wait_for_ace(editor_page)
+
+        editor_page.locator('[data-testid="editor-run"]').click()
+        # Cancel should be enabled once a job is in flight.
+        editor_page.wait_for_function(
+            "!document.querySelector('[data-testid=\"editor-cancel\"]').disabled",
+            timeout=10_000,
+        )
+        editor_page.locator('[data-testid="editor-cancel"]').click()
+
+        # After cancel, Run re-enables, Cancel disables again.
+        editor_page.wait_for_function(
+            "!document.querySelector('[data-testid=\"editor-run\"]').disabled "
+            "&& document.querySelector('[data-testid=\"editor-cancel\"]').disabled",
+            timeout=30_000,
+        )
+
+        editor_page.close()
+        _full_cleanup(e2e_page, BASIC_NAMES)
+        pyops_server.assert_no_unexpected_errors()
+
+    def test_editor_font_size_change_propagates_to_ace(self, e2e_page, api_anon, pyops_server):
+        """Changing the Font Size select updates every Ace panel's fontSize."""
+        _setup_basic(api_anon)
+        frame = _nav_manager(e2e_page)
+        frame.locator('[data-testid="manager-refresh"]').click()
+
+        editor_page = _open_editor_popup(e2e_page, frame, SET_NAME, TASK_NAME)
+        _wait_for_ace(editor_page)
+
+        select = editor_page.locator('[data-testid="editor-font-size"]')
+        # Pick the largest available option (different from default).
+        options = select.evaluate(
+            "s => Array.from(s.options).map(o => o.value)"
+        )
+        assert options, "font-size select had no options"
+        target = options[-1]
+        select.select_option(target)
+
+        # Every Ace editor on the page should adopt the new size.
+        for ace_id in ("editor", "out", "errout", "param"):
+            assert _ace_font_size(editor_page, ace_id) == target, (
+                f"{ace_id} font did not update: "
+                f"got {_ace_font_size(editor_page, ace_id)!r}, expected {target!r}"
+            )
+
+        editor_page.close()
+        _full_cleanup(e2e_page, BASIC_NAMES)
+        pyops_server.assert_no_unexpected_errors()
+
+
+# ---------------------------------------------------------------------------
+# Tests: Manager "Create & Edit" flow
+# ---------------------------------------------------------------------------
+
+
+class TestManagerCreateAndEdit:
+    """Verify the Create & Edit button creates the scriptlet AND opens an editor."""
+
+    def test_create_and_edit_opens_task_editor_for_new_scriptlet(
+        self, e2e_page, api_anon, pyops_server
+    ):
+        """manager-create-edit creates the scriptlet and pops open the matching editor."""
+        set_name = "create_edit_set"
+        new_name = "fresh_task"
+        api_anon.post("/scriptlet/sets/create", json={"name": set_name})
+
+        frame = _nav_manager(e2e_page)
+        frame.locator('[data-testid="manager-refresh"]').click()
+        frame.locator('[data-testid="manager-create"]').click()
+        frame.locator('[data-testid="manager-create-modal"]').wait_for(
+            state="visible", timeout=5_000
+        )
+        frame.locator('[data-testid="manager-create-set"]').select_option(set_name)
+        frame.locator('[data-testid="manager-create-name"]').fill(new_name)
+        frame.locator('[data-testid="manager-create-type"]').select_option("task")
+
+        # Create & Edit — should create the scriptlet AND open the task editor popup.
+        with e2e_page.expect_popup() as popup_info:
+            frame.locator('[data-testid="manager-create-edit"]').click()
+        editor_page = popup_info.value
+        editor_page.wait_for_load_state("load")
+        editor_page.locator('[data-testid="editor-task-navbar"]').wait_for(
+            state="visible", timeout=10_000
+        )
+        _wait_for_ace(editor_page)
+
+        # Scriptlet must exist in inventory now.
+        items = api_anon.get("/scriptlet/inventory/list").json()
+        assert any(
+            i["set"] == set_name and i["name"] == new_name and i["type"] == "task"
+            for i in items
+        ), f"scriptlet not listed: {items}"
+
+        editor_page.close()
+
+        # Cleanup: delete scriptlet + set.
+        frame = _nav_manager(e2e_page)
+        frame.locator('[data-testid="manager-refresh"]').click()
+        row = frame.locator(f'[data-testid="scriptlet-row-{set_name}-{new_name}"]')
+        if row.count() > 0 and row.is_visible():
+            e2e_page.once("dialog", lambda d: d.accept())
+            frame.locator(f'[data-testid="scriptlet-delete-{set_name}-{new_name}"]').click()
+            row.wait_for(state="hidden", timeout=5_000)
+        api_anon.delete(f"/scriptlet/sets/remove/{set_name}")
+        pyops_server.assert_no_unexpected_errors()
+
+    @pytest.mark.parametrize(
+        "scriptlet_type,expected_navbar",
+        [
+            ("library", "editor-library-navbar"),
+            ("controller", "editor-library-navbar"),  # controller reuses the library editor
+            ("view", "editor-view-navbar"),
+        ],
+    )
+    def test_create_and_edit_opens_correct_editor_per_type(
+        self, e2e_page, api_anon, pyops_server, scriptlet_type, expected_navbar
+    ):
+        """manager-create-edit picks the editor matching the selected scriptlet type."""
+        set_name = f"ce_{scriptlet_type}_set"
+        new_name = f"fresh_{scriptlet_type}"
+        api_anon.post("/scriptlet/sets/create", json={"name": set_name})
+
+        frame = _nav_manager(e2e_page)
+        frame.locator('[data-testid="manager-refresh"]').click()
+        frame.locator('[data-testid="manager-create"]').click()
+        frame.locator('[data-testid="manager-create-modal"]').wait_for(
+            state="visible", timeout=5_000
+        )
+        frame.locator('[data-testid="manager-create-set"]').select_option(set_name)
+        frame.locator('[data-testid="manager-create-name"]').fill(new_name)
+        frame.locator('[data-testid="manager-create-type"]').select_option(scriptlet_type)
+
+        with e2e_page.expect_popup() as popup_info:
+            frame.locator('[data-testid="manager-create-edit"]').click()
+        editor_page = popup_info.value
+        editor_page.wait_for_load_state("load")
+        editor_page.locator(f'[data-testid="{expected_navbar}"]').wait_for(
+            state="visible", timeout=10_000
+        )
+        _wait_for_ace(editor_page)
+
+        items = api_anon.get("/scriptlet/inventory/list").json()
+        assert any(
+            i["set"] == set_name and i["name"] == new_name and i["type"] == scriptlet_type
+            for i in items
+        ), f"scriptlet not listed: {items}"
+
+        editor_page.close()
+
+        frame = _nav_manager(e2e_page)
+        frame.locator('[data-testid="manager-refresh"]').click()
+        row = frame.locator(f'[data-testid="scriptlet-row-{set_name}-{new_name}"]')
+        if row.count() > 0 and row.is_visible():
+            e2e_page.once("dialog", lambda d: d.accept())
+            frame.locator(f'[data-testid="scriptlet-delete-{set_name}-{new_name}"]').click()
+            row.wait_for(state="hidden", timeout=5_000)
+        api_anon.delete(f"/scriptlet/sets/remove/{set_name}")
+        pyops_server.assert_no_unexpected_errors()
+
+
+class TestManagerCreateModal:
+    """Paths on the manager create modal that are not part of Create & Edit."""
+
+    def test_manager_create_cancel_closes_without_creating(
+        self, e2e_page, api_anon, pyops_server
+    ):
+        """Cancel on the create modal closes it and creates no scriptlet."""
+        set_name = "mcc_set"
+        api_anon.post("/scriptlet/sets/create", json={"name": set_name})
+
+        frame = _nav_manager(e2e_page)
+        frame.locator('[data-testid="manager-refresh"]').click()
+        frame.locator('[data-testid="manager-create"]').click()
+        frame.locator('[data-testid="manager-create-modal"]').wait_for(
+            state="visible", timeout=5_000
+        )
+        frame.locator('[data-testid="manager-create-set"]').select_option(set_name)
+        frame.locator('[data-testid="manager-create-name"]').fill("never_made")
+        frame.locator('[data-testid="manager-create-cancel"]').click()
+        frame.locator('[data-testid="manager-create-modal"]').wait_for(
+            state="hidden", timeout=5_000
+        )
+
+        items = api_anon.get("/scriptlet/inventory/list").json()
+        assert not any(
+            i["set"] == set_name and i["name"] == "never_made" for i in items
+        )
+        api_anon.delete(f"/scriptlet/sets/remove/{set_name}")
+        pyops_server.assert_no_unexpected_errors()
+
+    def test_manager_create_without_set_shows_inline_error(
+        self, e2e_page, api_anon, pyops_server
+    ):
+        """Submitting with no set selected populates manager-create-error and stays open."""
+        frame = _nav_manager(e2e_page)
+        frame.locator('[data-testid="manager-refresh"]').click()
+        frame.locator('[data-testid="manager-create"]').click()
+        frame.locator('[data-testid="manager-create-modal"]').wait_for(
+            state="visible", timeout=5_000
+        )
+        # Don't select a set — leave the default empty option.
+        frame.locator('[data-testid="manager-create-name"]').fill("orphan")
+        frame.locator('[data-testid="manager-create-submit"]').click()
+
+        err = frame.locator('[data-testid="manager-create-error"]').inner_text()
+        assert "set" in err.lower(), f"expected set error, got {err!r}"
+        # Modal still visible.
+        assert frame.locator('[data-testid="manager-create-modal"]').is_visible()
+
+        # No scriptlet created server-side.
+        items = api_anon.get("/scriptlet/inventory/list").json()
+        assert not any(i["name"] == "orphan" for i in items)
+
+        # Close cleanly.
+        frame.locator('[data-testid="manager-create-cancel"]').click()
+        frame.locator('[data-testid="manager-create-modal"]').wait_for(
+            state="hidden", timeout=5_000
+        )
+        pyops_server.assert_no_unexpected_errors()

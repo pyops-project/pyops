@@ -47,7 +47,8 @@ class TestScheduleRouter:
             }
             with patch("croniter.croniter", side_effect=ValueError("Invalid cron")):
                 response = mock_client.put("/scriptlet/schedule/item", json=create_data, headers={"X-User": "testuser"})
-                assert response.status_code == 500
+                assert response.status_code == 400
+                assert "Invalid cron" in response.json()["detail"]
 
     def test_put_schedule_item_create_no_job(self, mock_client, mock_db, mock_git_ops):
         create_data = {

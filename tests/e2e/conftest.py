@@ -17,6 +17,7 @@ import signal
 import subprocess
 import time
 
+import psutil
 import pytest
 import requests
 
@@ -64,11 +65,13 @@ BASE_URL = f"http://127.0.0.1:{E2E_PORT}"
 SERVER_STARTUP_TIMEOUT = int(os.environ.get("E2E_STARTUP_TIMEOUT", 30))
 SERVER_SHUTDOWN_TIMEOUT = 10
 
-# Log patterns that indicate unexpected errors (checked after each test)
+# Log patterns that indicate unexpected errors (checked after each test).
+# Case-sensitive on purpose: Python logging emits FATAL/CRITICAL in uppercase,
+# while git prints lowercase "fatal:" to stderr on normal 404-style failures.
 UNEXPECTED_ERROR_PATTERNS = [
     re.compile(r"Traceback \(most recent call last\)"),
-    re.compile(r"\bFATAL\b", re.IGNORECASE),
-    re.compile(r"\bCRITICAL\b", re.IGNORECASE),
+    re.compile(r"\bFATAL\b"),
+    re.compile(r"\bCRITICAL\b"),
 ]
 
 # Log patterns that are expected/acceptable even though they match error patterns
@@ -167,9 +170,12 @@ class ServerLog:
                 if end == -1:
                     end = len(content)
                 line = content[start:end]
-                # Grab up to 5 lines of context after the match
+                # Grab a generous window of context after the match so that the
+                # allow-pattern check sees the full traceback — the identifying
+                # keyword (e.g. "no_such_lib") commonly appears in the final
+                # "Exception: ..." line, 10+ lines below "Traceback".
                 context_end = match.start()
-                for _ in range(6):
+                for _ in range(30):
                     next_nl = content.find("\n", context_end + 1)
                     if next_nl == -1:
                         context_end = len(content)
@@ -199,23 +205,80 @@ def _wait_for_server(url, timeout):
     return False
 
 
+def _pgid_members(pgid):
+    """Return the PIDs currently in `pgid`. Empty list if the group is gone.
+
+    Uses psutil rather than shelling out to `pgrep` — the CI image
+    (debian:trixie-slim) does not ship `procps`, and psutil is already a
+    runtime dependency of the app.
+    """
+    members = []
+    for proc in psutil.process_iter(["pid"]):
+        try:
+            if os.getpgid(proc.info["pid"]) == pgid:
+                members.append(proc.info["pid"])
+        except (ProcessLookupError, psutil.NoSuchProcess, PermissionError):
+            continue
+    return members
+
+
 def _kill_server(proc, timeout):
-    """Gracefully stop the server, escalating to SIGKILL if needed."""
+    """Gracefully stop the server and verify cleanup.
+
+    Contract:
+      - Send SIGTERM to the process group.
+      - Wait `timeout` seconds for the master to exit.
+      - Poll up to 2s more for all group members to exit.
+      - If anything is still alive, SIGKILL the group and raise
+        RuntimeError — tests MUST flag leaked processes so they can be
+        fixed, not paper over the leak.
+    """
     if proc.poll() is not None:
         return
-    # Send SIGTERM to the process group
     try:
-        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        pgid = os.getpgid(proc.pid)
     except ProcessLookupError:
         return
+
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+
+    graceful = True
     try:
         proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
+        graceful = False
+
+    # Even after the master exits, give children a short grace period.
+    deadline = time.time() + 2
+    leftovers = _pgid_members(pgid)
+    while leftovers and time.time() < deadline:
+        time.sleep(0.2)
+        leftovers = _pgid_members(pgid)
+
+    if leftovers:
+        # Escalate to SIGKILL to keep the test host clean, then raise.
         try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            os.killpg(pgid, signal.SIGKILL)
         except ProcessLookupError:
             pass
-        proc.wait(timeout=5)
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+        raise RuntimeError(
+            f"Server did not shut down gracefully within {timeout}s; "
+            f"SIGKILL was required for PIDs {leftovers} in pgid {pgid}. "
+            f"Graceful-wait-on-master: {graceful}."
+        )
+
+    if not graceful:
+        raise RuntimeError(
+            f"Server master (pid={proc.pid}, pgid={pgid}) did not exit "
+            f"within {timeout}s of SIGTERM — investigate shutdown path."
+        )
 
 
 @pytest.fixture(scope="function")

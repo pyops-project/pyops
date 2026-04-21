@@ -356,7 +356,7 @@ Coverage targets: branches 80%, functions 80%, lines 90%, statements 80%.
 
 ### Integration Tests (`vsix/tests/integration/`, VSCode electron)
 
-Run with `npm run test:integration --prefix vsix/`. Requires a running PyOps server on `localhost:8000` without authentication. Excluded from CI/CD (no VSCode available in CI).
+Run with `npm run test:integration --prefix vsix/`. Requires a running PyOps server on `localhost:8000` without authentication. In CI the `test:vsix_integration` stage starts the server, waits for it to respond, and drives the suite with `xvfb-run` so Electron/VSCode has a virtual display.
 
 Uses `@vscode/test-electron` and a simple console-based test runner. Test suites:
 

@@ -70,7 +70,8 @@ def test_put_schedule_item_create_invalid_cron(mock_client, mock_db, mock_git_op
             },
             headers={"X-User": "testuser"}
         )
-        assert response.status_code == 500  # Croniter raises ValueError, caught as 500
+        assert response.status_code == 400  # Malformed cron is a client error, not 500
+        assert "cron" in response.json()["detail"].lower()
 
 def test_put_schedule_item_create_no_job(mock_client, mock_db, mock_git_ops, mock_croniter, test_temp_dir, patch_tempfile, mock_datetime):
     # No corresponding job (git show fails)

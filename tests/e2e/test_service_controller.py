@@ -791,15 +791,25 @@ class TestControllerProxy:
         result = _proxy_get(e2e_page, "ping")
         assert result["data"]["pong"] is True
 
-        # Cancel via Monitor.
+        # Cancel every service job that is still live in the monitor —
+        # the scheduler may have auto-enqueued a second instance during the
+        # active→inactive transition in _start_service_via_ui.
         monitor_frame = _nav_monitor(e2e_page)
-        monitor_frame.locator('[data-testid="monitor-refresh"]').click()
-        time.sleep(0.5)
-        monitor_frame.locator(f'[data-testid="job-cancel-{job_id}"]').click()
-        _wait_for_terminal_job_in_monitor(monitor_frame, job_id, timeout=30)
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            monitor_frame.locator('[data-testid="monitor-refresh"]').click()
+            time.sleep(0.5)
+            cancel_btns = monitor_frame.locator('[data-testid^="job-cancel-"]')
+            if cancel_btns.count() == 0:
+                break
+            for i in range(cancel_btns.count()):
+                cancel_btns.nth(i).click()
+            time.sleep(1)
+        else:
+            pytest.fail("Service jobs never reached terminal state within 30s")
 
         result = _proxy_get(e2e_page, "ping")
-        assert "error" in result["data"]
+        assert "error" in result["data"], f"Expected error, got: {result}"
 
         # Delete job, schedule, scriptlets, set.
         _cleanup_job(e2e_page, job_id)

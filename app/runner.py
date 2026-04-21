@@ -11,7 +11,7 @@ from typing import Any
 import zmq, msgpack
 import psutil
 
-from sqlalchemy import null, select, delete, and_, or_
+from sqlalchemy import null, select, delete, and_, or_, case
 from sqlalchemy.orm import Session
 import sqlalchemy.exc
 
@@ -183,14 +183,30 @@ def assignJob(job_id: str, pid: int):
         logger.debug(f"assignJob: session ID {id(session)} at {datetime.now()}")
         job = session.get(Job, job_id)
         old_pid = job.pid
-        job.pid = pid
+        debugpy_pid = None
         if job.kind == "debug":
             port = job_lib.get_debug_port(job.owner)
             debugpy_pid = job_lib.get_debugpy_adapter_pid(port)
-            job.debugpy_pid = debugpy_pid
             logger.debug(f"assignJob: debugpy_pid {debugpy_pid} for {job_id}")
-        job.state = "running"
-        job.start = datetime.now()
+
+        # Atomic conditional update: only flip state to "running" if a cancel
+        # did not race in while we were forking the subprocess. Using a CASE
+        # expression keeps the state check and write in one statement so we
+        # don't overwrite a cancel that committed after our initial read.
+        values = {
+            Job.pid: pid,
+            Job.start: datetime.now(),
+            Job.state: case(
+                (Job.state.in_(("cancel", "cancelling")), Job.state),
+                else_="running",
+            ),
+        }
+        if debugpy_pid is not None:
+            values[Job.debugpy_pid] = debugpy_pid
+
+        session.query(Job).filter(Job.id == job_id).update(
+            values, synchronize_session=False
+        )
         logger.debug(f"assignJob: before commit, session ID {id(session)}, job.pid {old_pid} to {pid} for {job_id} at {datetime.now()}")
         commit_with_retry(session)
         logger.debug(f"assignJob: after commit, session ID {id(session)}, committed pid for {job_id} at {datetime.now()}")
