@@ -36,7 +36,7 @@ class RunArgument(BaseModel):
     overrides: dict[str, str] | None = None
 
 @router.get("/scriptlet/job/list", tags=["job"])
-async def list_get(user: str = Depends(get_current_user)):
+async def list_get():
     """
     Returns a list of available Schedules
     """
@@ -50,8 +50,7 @@ async def list_get(user: str = Depends(get_current_user)):
                           Job.detail,
                           Job.param,
                           Job.owner).where(
-                Job.state != "remove",
-                Job.owner == user
+                Job.state != "remove"
             ).order_by(Job.id.desc())
             db_jobs = session.execute(stmt)
             

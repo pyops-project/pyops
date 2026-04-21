@@ -154,7 +154,7 @@ class TestJobRouter:
         assert data["owner"] == "otheruser"
 
     @pytest.mark.parametrize("state", ["todo", "running", "done", "failed"])
-    def test_job_list_owner_filter(self, mock_client, mock_db, state, test_temp_dir, patch_tempfile, mock_datetime):
+    def test_job_list_returns_all_owners(self, mock_client, mock_db, state, test_temp_dir, patch_tempfile, mock_datetime):
         with Session(get_db_engine()) as session:
             job_same_id = str(uuid.uuid4().hex)
             job_same = Job(id=job_same_id, owner="testuser", set="default", name="same", kind="task", state=state, param="{}")
@@ -165,9 +165,9 @@ class TestJobRouter:
 
         response = mock_client.get("/scriptlet/job/list", headers={"X-User": "testuser"})
         data = response.json()
-        assert len(data) == 1
-        assert data[0]["owner"] == "testuser"
-        assert data[0]["state"] == state
+        owners = {j["owner"] for j in data}
+        assert {"testuser", "other"} <= owners
+        assert all(j["state"] == state for j in data if j["id"] in {job_same_id, job_diff_id})
 
     @patch("app.lib.git.read_content")
     @patch('app.runner.terminate_job_processes')

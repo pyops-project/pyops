@@ -1,15 +1,15 @@
 """
-Multi-user job isolation E2E tests.
+Multi-user job visibility E2E tests.
 
-The /scriptlet/job/list endpoint filters jobs by the requesting user
-(Job.owner == user, where user is derived from the X-User header).
+There is no permission system — /scriptlet/job/list returns all jobs
+regardless of the requesting user's X-User header. Each job's `owner`
+metadata is still populated from the X-User header that enqueued it.
 
 Covers:
-  - User A cannot see User B's jobs in the job list.
-  - User B cannot see User A's jobs in the job list.
-  - Each user only sees their own jobs even when both run tasks from the
-    same scriptlet set (sets are not user-scoped).
-  - A job's owner metadata is stored and returned correctly.
+  - User A sees User B's jobs in the job list.
+  - User B sees User A's jobs in the job list.
+  - Both users see the same, complete job list.
+  - A job's owner metadata reflects the enqueueing user.
 """
 
 import time
@@ -131,37 +131,37 @@ def _job_ids_for(api):
 # ---------------------------------------------------------------------------
 
 
-class TestMultiUserJobIsolation:
-    """Job lists are filtered per user — users cannot see each other's jobs."""
+class TestMultiUserJobVisibility:
+    """Job lists are not filtered per user — all users see all jobs."""
 
-    def test_user_a_does_not_see_user_b_jobs(self, api_a, api_b, pyops_server):
-        """Jobs created by User B are invisible in User A's job list."""
+    def test_user_a_sees_user_b_jobs(self, api_a, api_b, pyops_server):
+        """Jobs created by User B are visible in User A's job list."""
         _setup_shared_task(api_a)  # sets are shared; created once
 
         job_b = _enqueue(api_b)
         _wait_for_job(api_b, job_b)
 
         ids_a = _job_ids_for(api_a)
-        assert job_b not in ids_a, (
-            f"User A should not see User B's job {job_b}"
+        assert job_b in ids_a, (
+            f"User A should see User B's job {job_b}"
         )
         pyops_server.assert_no_unexpected_errors()
 
-    def test_user_b_does_not_see_user_a_jobs(self, api_a, api_b, pyops_server):
-        """Jobs created by User A are invisible in User B's job list."""
+    def test_user_b_sees_user_a_jobs(self, api_a, api_b, pyops_server):
+        """Jobs created by User A are visible in User B's job list."""
         _setup_shared_task(api_a)
 
         job_a = _enqueue(api_a)
         _wait_for_job(api_a, job_a)
 
         ids_b = _job_ids_for(api_b)
-        assert job_a not in ids_b, (
-            f"User B should not see User A's job {job_a}"
+        assert job_a in ids_b, (
+            f"User B should see User A's job {job_a}"
         )
         pyops_server.assert_no_unexpected_errors()
 
-    def test_each_user_sees_only_their_own_jobs(self, api_a, api_b, pyops_server):
-        """After both users run the same task, each list is disjoint."""
+    def test_both_users_see_same_job_list(self, api_a, api_b, pyops_server):
+        """After both users enqueue jobs, both lists contain both jobs."""
         _setup_shared_task(api_a)
 
         job_a = _enqueue(api_a)
@@ -173,10 +173,9 @@ class TestMultiUserJobIsolation:
         ids_b = _job_ids_for(api_b)
 
         assert job_a in ids_a, "User A should see their own job"
+        assert job_b in ids_a, "User A should see User B's job"
+        assert job_a in ids_b, "User B should see User A's job"
         assert job_b in ids_b, "User B should see their own job"
-        assert job_b not in ids_a, "User A must not see User B's job"
-        assert job_a not in ids_b, "User B must not see User A's job"
-        assert ids_a.isdisjoint(ids_b), "User job lists must be disjoint"
 
         pyops_server.assert_no_unexpected_errors()
 
@@ -187,7 +186,6 @@ class TestMultiUserJobIsolation:
         job_a_id = _enqueue(api_a)
         job_b_id = _enqueue(api_b)
 
-        # Fetch each job directly (no owner filter on GET /job/item).
         resp_a = api_a.get(f"/scriptlet/job/item?id={job_a_id}")
         resp_b = api_b.get(f"/scriptlet/job/item?id={job_b_id}")
         assert resp_a.status_code == 200
