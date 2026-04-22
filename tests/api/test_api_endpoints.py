@@ -44,11 +44,11 @@ def test_put_inventory_item_create_conflict(mock_client, mock_git_ops, test_temp
     # First create
     create_data = {"set": "testset", "name": "conflict", "type": "task"}
     with patch("os.path.exists", return_value=True), \
-         patch("app.lib.git.check_name_unique", return_value=True), \
          patch("os.makedirs"):
         mock_client.put("/scriptlet/inventory/item", json=create_data, headers={"X-User": "testuser"})
-    # Second attempt - conflict
-    with patch("app.lib.git.check_name_unique", return_value=False):
+    # Second attempt - conflict: create_scriptlet raises FileExistsError under the lock.
+    with patch("os.path.exists", return_value=True), \
+         patch("app.lib.git.create_scriptlet", side_effect=FileExistsError("Name 'conflict' already exists")):
         response = mock_client.put("/scriptlet/inventory/item", json=create_data, headers={"X-User": "testuser"})
         assert response.status_code == 409
 
@@ -312,12 +312,31 @@ def test_root_exception(mock_client):
         assert response.status_code == 500
         assert "site error" in response.json()["detail"]
 
+def test_favicon_content_type(mock_client):
+    with patch("app.lib.files.get", return_value=b"\x00\x00\x01\x00"):
+        response = mock_client.get("/favicon.ico")
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "image/x-icon"
+
 def test_favicon_exception(mock_client):
     # Test favicon endpoint exception handling
     with patch("app.lib.files.get", side_effect=Exception("file error")):
         response = mock_client.get("/favicon.ico")
         assert response.status_code == 500
         assert "file error" in response.json()["detail"]
+
+@pytest.mark.parametrize("path,expected_type", [
+    ("style.css", "text/css"),
+    ("app.js", "text/javascript"),
+    ("logo.png", "image/png"),
+    ("data.json", "application/json"),
+    ("unknown.bin", "application/octet-stream"),
+])
+def test_file_content_type(mock_client, path, expected_type):
+    with patch("app.lib.files.get", return_value=b"content"):
+        response = mock_client.get(f"/files/{path}")
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith(expected_type)
 
 def test_file_exception(mock_client):
     # Test file endpoint exception handling
@@ -478,6 +497,13 @@ def test_repo_status_exception(mock_client):
         response = mock_client.get("/repo/status?set=testset")
         assert response.status_code == 500
         assert "status error" in response.json()["detail"]
+
+
+def test_version_endpoint(mock_client):
+    with patch("app.lib.files.version", return_value="9.9.9"):
+        resp = mock_client.get("/version")
+        assert resp.status_code == 200
+        assert resp.json() == {"version": "9.9.9"}
 
 
 def test_debug_port(mock_client):

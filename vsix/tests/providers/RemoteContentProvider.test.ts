@@ -4,23 +4,25 @@ jest.mock('vscode');
 
 describe('RemoteContentProvider', () => {
   describe('provideTextDocumentContent', () => {
-    it('returns decoded fragment', () => {
+    it('returns content from content map', () => {
       const provider = new RemoteContentProvider();
-      const mockUri = { fragment: 'Hello%20World' } as any;
+      provider.setContent('/testSet/testName', 'Hello World');
+      const mockUri = { path: '/testSet/testName' } as any;
       expect(provider.provideTextDocumentContent(mockUri)).toBe('Hello World');
     });
 
-    it('returns "No content provided" if no fragment', () => {
+    it('returns "No content provided" if path not in map', () => {
       const provider = new RemoteContentProvider();
-      const mockUri = {} as any;
+      const mockUri = { path: '/unknown' } as any;
       expect(provider.provideTextDocumentContent(mockUri)).toBe('No content provided');
     });
 
-    it('returns error message on decode failure', () => {
+    it('overwrites previous content for same path', () => {
       const provider = new RemoteContentProvider();
-      const mockUri = { fragment: '%invalid' } as any;
-      const result = provider.provideTextDocumentContent(mockUri);
-      expect(result).toContain('Error decoding content');
+      provider.setContent('/testSet/testName', 'old content');
+      provider.setContent('/testSet/testName', 'new content');
+      const mockUri = { path: '/testSet/testName' } as any;
+      expect(provider.provideTextDocumentContent(mockUri)).toBe('new content');
     });
   });
 

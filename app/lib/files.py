@@ -6,9 +6,15 @@ project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 
 files_path = os.path.join(project_root, "app/files")
 
+version_path = os.path.join(project_root, "VERSION")
+
 def get(path: str):
     with open(os.path.join(files_path, path), "rb") as file:
         return file.read()
+
+def version() -> str:
+    with open(version_path, "r") as file:
+        return file.read().strip()
 
 class Config:
     def __init__(self):
@@ -88,13 +94,9 @@ class Config:
             logger.debug("Accessing conf_log, _raw_conf type: %s", type(self._raw_conf))
             if self._raw_conf is None:
                 raise ValueError("Config not initialized. Call Config.init(conf_path) first.")
-            # Log section with conditional paths
+            # Log section - no file paths, only loglevel
             log = {"loglevel": "info"}
             if "log" in self._raw_conf:
-                if "access" in self._raw_conf["log"]:
-                    log["access"] = self._raw_conf["log"]["access"]
-                if "info" in self._raw_conf["log"]:
-                    log["info"] = self._raw_conf["log"]["info"]
                 log["loglevel"] = self._raw_conf["log"].get("loglevel", "info")
             logger.debug("Conf log accessed successfully")
             return log

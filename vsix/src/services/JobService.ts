@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { ApiClient } from '../apiClient';
 import { JobsTreeDataProvider, JobTreeItem, Job } from '../jobsTreeProvider';
+import { appendIncrementalOutput } from '../utils';
 
 export class JobService {
     private activeJobs = new Map<string, { interval: NodeJS.Timeout; jobId: string; prevStdoutLen: number; prevStderrLen: number }>();
@@ -11,19 +12,9 @@ export class JobService {
         return await this.fetchJobs();
     }
 
-    private async getHeaders(): Promise<Record<string, string>> {
-        return this.apiClient.getHeaders();
-    }
-
-    private getServerUrl(): string {
-        return this.apiClient.getServerUrl();
-    }
-
     protected async fetchJobs(): Promise<Job[]> {
-        const serverUrl = this.getServerUrl();
-        const headers = await this.getHeaders();
         try {
-            const response = await fetch(`${serverUrl}/scriptlet/job/list`, { headers });
+            const response = await this.apiClient.fetch('/scriptlet/job/list');
             if (response.ok) {
                 return await response.json() as Job[];
             } else {
@@ -52,11 +43,9 @@ export class JobService {
             vscode.window.showWarningMessage('No job selected');
             return;
         }
-        const serverUrl = this.getServerUrl();
         const id = treeItem.job.id;
-        const headers = await this.getHeaders();
         try {
-            const response = await fetch(`${serverUrl}/scriptlet/job/cancel?id=${id}`, { headers });
+            const response = await this.apiClient.fetch(`/scriptlet/job/cancel?id=${id}`);
             if (response.ok) {
                 if (this.jobsTreeProvider) {
                     this.jobsTreeProvider.refresh();
@@ -76,11 +65,9 @@ export class JobService {
             vscode.window.showWarningMessage('No job selected');
             return;
         }
-        const serverUrl = this.getServerUrl();
         const id = treeItem.job.id;
-        const headers = await this.getHeaders();
         try {
-            const response = await fetch(`${serverUrl}/scriptlet/job/download?id=${id}`, { headers });
+            const response = await this.apiClient.fetch(`/scriptlet/job/download?id=${id}`);
             if (response.ok) {
                 const blob = await response.blob();
                 const defaultUri = vscode.Uri.file(`${id}.zip`);
@@ -113,12 +100,9 @@ export class JobService {
             'Delete'
         );
         if (confirm !== 'Delete') return;
-        const serverUrl = this.getServerUrl();
-        const headers = await this.getHeaders();
         try {
-            const response = await fetch(`${serverUrl}/scriptlet/job/item?id=${id}`, {
-                method: 'DELETE',
-                headers
+            const response = await this.apiClient.fetch(`/scriptlet/job/item?id=${id}`, {
+                method: 'DELETE'
             });
             if (response.ok) {
                 if (this.jobsTreeProvider) {
@@ -146,71 +130,45 @@ export class JobService {
             vscode.window.showWarningMessage('Job details already being viewed');
             return;
         }
-        const serverUrl = this.getServerUrl();
-        const headers = await this.getHeaders();
         this.jobViewOutputChannel.clear();
         this.jobViewOutputChannel.show(true);
-        const pollInterval = setInterval(async () => {
+        const entry = { interval: null as unknown as NodeJS.Timeout, jobId: id, prevStdoutLen: 0, prevStderrLen: 0 };
+        this.activeJobs.set(key, entry);
+        this.jobViewOutputChannel.appendLine(`Viewing job ${id} details...\n`);
+        entry.interval = setInterval(async () => {
             try {
-                const jobResponse = await fetch(`${serverUrl}/scriptlet/job/item?id=${id}`, { headers });
+                const jobResponse = await this.apiClient.fetch(`/scriptlet/job/item?id=${id}`);
                 if (jobResponse.ok) {
                     const jobData = await jobResponse.json() as unknown;
-                    const jobObj = jobData as { param?: string; stdout?: string; stderr?: string; state: string };
+                    const jobObj = jobData as { stdout?: string; stderr?: string; state: string };
                     const active = this.activeJobs.get(key);
                     if (active) {
-                        // Append param if available
-                        if (jobObj.param && this.jobViewOutputChannel) {
-                            this.jobViewOutputChannel.appendLine(`\n--- Parameters ---`);
-                            this.jobViewOutputChannel.appendLine(jobObj.param);
-                        }
-                        // Append stdout
-                        if (jobObj.stdout) {
-                            const newOut = jobObj.stdout.slice(active.prevStdoutLen);
-                            if (newOut.length > 0 && this.jobViewOutputChannel) {
-                                this.jobViewOutputChannel.appendLine(`[STDOUT]`);
-                                this.jobViewOutputChannel.append(newOut);
-                            }
-                            active.prevStdoutLen = jobObj.stdout.length;
-                        }
-                        // Append stderr
-                        if (jobObj.stderr) {
-                            const newErr = jobObj.stderr.slice(active.prevStderrLen);
-                            if (newErr.length > 0 && this.jobViewOutputChannel) {
-                                this.jobViewOutputChannel.appendLine(`[STDERR]`);
-                                this.jobViewOutputChannel.append(newErr);
-                            }
-                            active.prevStderrLen = jobObj.stderr.length;
-                        }
-                        // Update state
+                        appendIncrementalOutput(this.jobViewOutputChannel, jobObj, active);
                         this.jobViewOutputChannel.appendLine(`\n--- State: ${jobObj.state} ---`);
                         if (['done', 'failed', 'cancelled', 'remove'].includes(jobObj.state)) {
-                            clearInterval(pollInterval);
+                            clearInterval(entry.interval);
                             this.activeJobs.delete(key);
                             this.jobViewOutputChannel.appendLine('\n--- Job ended ---');
                         }
                     }
                 } else if (jobResponse.status === 404) {
-                    // Job deleted
-                    const active = this.activeJobs.get(key);
-                    if (active) {
-                        clearInterval(pollInterval);
-                        this.activeJobs.delete(key);
-                        this.jobViewOutputChannel.appendLine('\n--- Job no longer exists ---');
-                    }
+                    clearInterval(entry.interval);
+                    this.activeJobs.delete(key);
+                    this.jobViewOutputChannel.appendLine('\n--- Job no longer exists ---');
                 }
             } catch (error: unknown) {
                 const errorMessage = error instanceof Error ? error.message : String(error);
                 this.jobViewOutputChannel.appendLine(`Error polling job: ${errorMessage}`);
             }
         }, 1000);
-        this.activeJobs.set(key, { interval: pollInterval, jobId: id, prevStdoutLen: 0, prevStderrLen: 0 });
-        this.jobViewOutputChannel.appendLine(`Viewing job ${id} details...\n`);
         vscode.window.showInformationMessage(`Viewing details for job ${id}`);
     }
 
     private async performBulkAction(action: 'cancel' | 'delete', filterStates: string[]): Promise<void> {
         const jobs = await this.fetchJobs();
-        const jobsToAct = jobs.filter(j => filterStates.includes(j.state) || (action === 'cancel' && !['done', 'failed', 'cancelled'].includes(j.state)));
+        const jobsToAct = action === 'cancel'
+            ? jobs.filter(j => !['done', 'failed', 'cancelled'].includes(j.state))
+            : jobs.filter(j => filterStates.includes(j.state));
         if (jobsToAct.length === 0) {
             vscode.window.showInformationMessage(`No jobs to ${action} matching criteria.`);
             return;
@@ -218,17 +176,15 @@ export class JobService {
         const confirmMsg = `Perform ${action} on ${jobsToAct.length} job(s)?`;
         const confirm = await vscode.window.showWarningMessage(confirmMsg, { modal: true }, 'Yes');
         if (confirm !== 'Yes') return;
-        const serverUrl = this.getServerUrl();
-        const headers = await this.getHeaders();
         let successCount = 0;
         let errorCount = 0;
         for (const job of jobsToAct) {
             try {
                 let response;
                 if (action === 'cancel') {
-                    response = await fetch(`${serverUrl}/scriptlet/job/cancel?id=${job.id}`, { headers });
+                    response = await this.apiClient.fetch(`/scriptlet/job/cancel?id=${job.id}`);
                 } else {
-                    response = await fetch(`${serverUrl}/scriptlet/job/item?id=${job.id}`, { method: 'DELETE', headers });
+                    response = await this.apiClient.fetch(`/scriptlet/job/item?id=${job.id}`, { method: 'DELETE' });
                 }
                 if (response.ok) {
                     successCount++;

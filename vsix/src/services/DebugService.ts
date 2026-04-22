@@ -1,9 +1,10 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
+import { ApiClient } from '../apiClient';
 
 export class DebugService {
-    constructor(private context: vscode.ExtensionContext, private outputChannel: vscode.OutputChannel) {}
+    constructor(private apiClient: ApiClient, private outputChannel: vscode.OutputChannel) {}
 
     static buildOverrides(set: string, workspaceRoot: string): { overrides: Record<string, string>, pathMappings: Array<{remoteRoot: string, localRoot: string}> } {
         const pyopsConfig = vscode.workspace.getConfiguration('pyops');
@@ -37,26 +38,15 @@ export class DebugService {
     }
 
     async enqueueDebugJob(set: string, name: string, overrides: Record<string, string> = {}): Promise<{ jobId?: string; port?: number }> {
-        const pyopsConfig = vscode.workspace.getConfiguration('pyops');
-        const serverUrl = pyopsConfig.get('serverUrl') as string || 'http://localhost:8000';
-        const username = pyopsConfig.get('username') as string;
-        const password = this.context.workspaceState.get('pyops.password') as string;
-
-        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-        if (username && password) {
-            const auth = Buffer.from(`${username}:${password}`).toString('base64');
-            headers['Authorization'] = `Basic ${auth}`;
-        }
-
         const port = await this.getDebugPort();
 
         const data = { set, name, drop_done: false, param: '#>AWAIT_DEBUG', kind: 'debug', overrides };
-        this.outputChannel.appendLine(`[DEBUG enqueueDebugJob] Request to ${serverUrl}/scriptlet/job/item with data keys: ${Object.keys(data)}`);
+        this.outputChannel.appendLine(`[DEBUG enqueueDebugJob] Request to /scriptlet/job/item with data keys: ${Object.keys(data)}`);
         this.outputChannel.appendLine(`[DEBUG enqueueDebugJob] Overrides: ${JSON.stringify(overrides)}`);
         try {
-            const response = await fetch(`${serverUrl}/scriptlet/job/item`, {
+            const response = await this.apiClient.fetch('/scriptlet/job/item', {
                 method: 'PUT',
-                headers,
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(data)
             });
             this.outputChannel.appendLine(`[DEBUG enqueueDebugJob] Response status: ${response.status} ${response.statusText}`);
@@ -78,25 +68,13 @@ export class DebugService {
     }
 
     public async getDebugPort(): Promise<number> {
-        const pyopsConfig = vscode.workspace.getConfiguration('pyops');
-        const serverUrl = pyopsConfig.get('serverUrl') as string || 'http://localhost:8000';
-        const username = pyopsConfig.get('username') as string;
-        const password = this.context.workspaceState.get('pyops.password') as string;
-        const headers: Record<string, string> = {};
-        if (username && password) {
-            const auth = Buffer.from(`${username}:${password}`).toString('base64');
-            headers['Authorization'] = `Basic ${auth}`;
-        }
-        const portResponse = await fetch(`${serverUrl}/debug/port`, {
-            method: 'GET',
-            headers
-        });
-        if (!portResponse.ok) {
-            const errorText = await portResponse.text();
+        const response = await this.apiClient.fetch('/debug/port', { method: 'GET' });
+        if (!response.ok) {
+            const errorText = await response.text();
             this.outputChannel.appendLine(`[DEBUG getDebugPort] Failed: ${errorText}`);
             throw new Error(`Failed to fetch debug port: ${errorText}`);
         }
-        const portData = await portResponse.json() as { port: number };
+        const portData = await response.json() as { port: number };
         const port = portData.port;
         if (typeof port !== 'number' || port <= 0 || port > 65535) {
             throw new Error(`Invalid port from server: ${port}`);
@@ -106,8 +84,7 @@ export class DebugService {
     }
 
     public getDebugHost(): string {
-        const pyopsConfig = vscode.workspace.getConfiguration('pyops');
-        const serverUrl = pyopsConfig.get('serverUrl') as string || 'http://localhost:8000';
+        const serverUrl = this.apiClient.getServerUrl();
         try {
             return new URL(serverUrl).hostname;
         } catch {

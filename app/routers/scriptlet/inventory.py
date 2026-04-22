@@ -1,19 +1,16 @@
 import os
 from datetime import datetime
 
-from fastapi import APIRouter, HTTPException, Query, Depends, Header
+from fastapi import APIRouter, HTTPException, Query, Depends
 from starlette.status import HTTP_204_NO_CONTENT, HTTP_404_NOT_FOUND, HTTP_409_CONFLICT, HTTP_500_INTERNAL_SERVER_ERROR, HTTP_400_BAD_REQUEST
 from pydantic import BaseModel, create_model
 
 from app.lib import git
 from app.lib.async_utils import run_in_executor
-from app.lib.auth import sanitize_owner
+from app.lib.auth import get_current_user
 
 import logging
 logger = logging.getLogger(__name__)
-
-async def get_current_user(x_user: str = Header(default=None, alias="X-User")):
-    return sanitize_owner(x_user)
 
 router = APIRouter()
 
@@ -49,26 +46,29 @@ async def item_put(cr: CreateArgument, user: str = Depends(get_current_user)):
         if not os.path.exists(os.path.join(potential_repo, '.git')):
             raise HTTPException(status_code=HTTP_400_BAD_REQUEST, detail="Set does not exist")
 
-        repo = await run_in_executor(git.get_repo_path, cr.set)
-        if not await run_in_executor(git.check_name_unique, repo, cr.name):
-            raise HTTPException(status_code=HTTP_409_CONFLICT, detail="Name {} already exists".format(cr.name))
-
         if cr.type == "markdown" and cr.name != "README":
             raise HTTPException(400, "Markdown only for README.")
 
         if cr.type == "view":
             initial_content = '<div class="container">\n  <!-- View content here -->\n</div>'
+        elif cr.type == "jslibrary":
+            initial_content = "// JS Library\n"
         else:
             initial_content = "" if cr.type == "markdown" else "pass\n"
-        await run_in_executor(git.write_content, repo, cr.name, cr.type, initial_content)
-        file_path = await run_in_executor(git.get_file_path, repo, cr.name, cr.type)
-        await run_in_executor(git.perform_git_add_commit_push, repo, file_path, f"Create {cr.name}.{cr.type} by {user}")
+
+        await run_in_executor(
+            git.create_scriptlet,
+            cr.set, cr.name, cr.type, initial_content,
+            f"Create {cr.name}.{cr.type} by {user}",
+        )
 
         return {"set": cr.set, "name": cr.name, "type": cr.type}
 
     except git.GitNotFoundError as ex:
         raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail=str(ex))
     except git.GitConflictError as ex:
+        raise HTTPException(status_code=HTTP_409_CONFLICT, detail=str(ex))
+    except FileExistsError as ex:
         raise HTTPException(status_code=HTTP_409_CONFLICT, detail=str(ex))
     except HTTPException as ex:
         raise ex
@@ -84,7 +84,7 @@ async def item_post(sa: SaveArgument, user: str = Depends(get_current_user)):
     try:
         repo = await run_in_executor(git.get_repo_path, sa.set)
         # Infer type from existing file.
-        files = [f for f in os.listdir(repo) if f.startswith(f"{sa.name}.") and f.endswith(('.py', '.html', '.md'))]
+        files = [f for f in os.listdir(repo) if f.startswith(f"{sa.name}.") and f.endswith(('.py', '.html', '.md', '.js'))]
         if not files:
             raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Scriptlet {}::{} not existing".format(sa.set, sa.name))
         filename = files[0]  # Assume unique.
@@ -112,7 +112,7 @@ async def draft_post(sa: SaveArgument):
     try:
         repo = await run_in_executor(git.get_repo_path, sa.set)
         # Infer type from existing file.
-        files = [f for f in os.listdir(repo) if f.startswith(f"{sa.name}.") and f.endswith(('.py', '.html', '.md'))]
+        files = [f for f in os.listdir(repo) if f.startswith(f"{sa.name}.") and f.endswith(('.py', '.html', '.md', '.js'))]
         if not files:
             raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Scriptlet {}::{} not existing".format(sa.set, sa.name))
         filename = files[0]  # Assume unique.
@@ -135,7 +135,7 @@ async def item_del(set: str, name: str, user: str = Depends(get_current_user)):
     """
     try:
         repo = await run_in_executor(git.get_repo_path, set)
-        files = [f for f in os.listdir(repo) if f.startswith(f"{name}.") and f.endswith(('.py', '.html', '.md'))]
+        files = [f for f in os.listdir(repo) if f.startswith(f"{name}.") and f.endswith(('.py', '.html', '.md', '.js'))]
         if not files:
             raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Scriptlet {}::{} not existing".format(set, name))
         filename = files[0]
@@ -159,7 +159,7 @@ async def draft_del(set: str = Query(..., description="Set"), name: str = Query(
     """
     try:
         repo = await run_in_executor(git.get_repo_path, set)
-        files = [f for f in os.listdir(repo) if f.startswith(f"{name}.") and f.endswith(('.py', '.html', '.md'))]
+        files = [f for f in os.listdir(repo) if f.startswith(f"{name}.") and f.endswith(('.py', '.html', '.md', '.js'))]
         if not files:
             raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail=f"Scriptlet {set}::{name} not existing")
         filename = files[0]
@@ -179,7 +179,9 @@ async def draft_del(set: str = Query(..., description="Set"), name: str = Query(
         if os.path.exists(file_path):
             with open(file_path, "r", encoding="utf-8") as f:
                 current_content = f.read()
-            if current_content == committed_content:
+            # Strip both sides: read_content(committed=True) goes through
+            # _check() which strips whitespace from git show output.
+            if current_content.strip() == committed_content.strip():
                 logger.info("Discarded draft for %s::%s.%s; reset to committed", set, name, type_)
                 return  # 204 No Content
             else:
@@ -204,7 +206,7 @@ async def draft_del(set: str = Query(..., description="Set"), name: str = Query(
 async def code_get(set: str, name: str):
     try:
         repo = await run_in_executor(git.get_repo_path, set)
-        files = [f for f in os.listdir(repo) if f.startswith(f"{name}.") and f.endswith(('.py', '.html', '.md'))]
+        files = [f for f in os.listdir(repo) if f.startswith(f"{name}.") and f.endswith(('.py', '.html', '.md', '.js'))]
         if not files:
             raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Scriptlet {}::{} not existing".format(set, name))
         filename = files[0]
@@ -251,7 +253,7 @@ async def status_get(set: str, name: str):
     """
     try:
         repo = await run_in_executor(git.get_repo_path, set)
-        files = [f for f in os.listdir(repo) if f.startswith(f"{name}.") and f.endswith(('.py', '.html', '.md'))]
+        files = [f for f in os.listdir(repo) if f.startswith(f"{name}.") and f.endswith(('.py', '.html', '.md', '.js'))]
         if not files:
             raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail=f"Scriptlet {set}::{name} not existing")
         filename = files[0]

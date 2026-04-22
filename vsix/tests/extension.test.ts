@@ -1,4 +1,4 @@
-import { activate, deactivate } from '../src/extension';
+import { activate, deactivate, getExtensionState } from '../src/extension';
 import { createMockApiClient, createMockTreeProvider } from './utils/helpers';
 
 jest.mock('vscode');
@@ -66,6 +66,7 @@ describe('Extension', () => {
   let mockJobErrOutputChannel: any;
   let mockJobTreeItem: any;
   let mockScriptletTreeItem: any;
+  let mockApiClient: any;
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -123,15 +124,11 @@ describe('Extension', () => {
 
 
 
-
-
-
-
     // Mock providers/services constructors
     (require('../src/providers/RemoteContentProvider').RemoteContentProvider as jest.Mock).mockImplementation(() => ({}));
     (require('../src/providers/RemoteContentProvider').registerRemoteLanguageModeSetter as jest.Mock).mockReturnValue({});
     const ApiClientClass = require('../src/apiClient').ApiClient;
-    createMockApiClient(ApiClientClass);
+    mockApiClient = createMockApiClient(ApiClientClass);
 
     (require('../src/commands/CreateScriptletCommand').CreateScriptletCommand.execute as jest.Mock).mockResolvedValue(undefined);
 
@@ -147,7 +144,7 @@ describe('Extension', () => {
       expect(require('../src/providers/RemoteContentProvider').RemoteContentProvider).toHaveBeenCalled();
       expect(require('vscode').workspace.registerTextDocumentContentProvider).toHaveBeenCalledWith('pyops-remote', {});
       expect(require('../src/providers/RemoteContentProvider').registerRemoteLanguageModeSetter).toHaveBeenCalled();
-      expect(require('../src/ConnectionStatusManager').ConnectionStatusManager).toHaveBeenCalledWith(mockContext, expect.any(Object));
+      expect(require('../src/ConnectionStatusManager').ConnectionStatusManager).toHaveBeenCalledWith(expect.any(Object), mockContext, expect.any(Object));
       expect(require('vscode').workspace.onDidChangeConfiguration).toHaveBeenCalled();
       expect(require('vscode').window.registerTreeDataProvider).toHaveBeenCalledWith('pyops-manager', expect.any(Object));
       expect(require('vscode').window.registerTreeDataProvider).toHaveBeenCalledWith('pyops-monitor', expect.any(Object));
@@ -292,6 +289,7 @@ describe('Extension', () => {
     let managerTreeDataProvider: any;
     let jobsTreeDataProvider: any;
     let DebugServiceModule: any;
+    let mockApiClientInstance: any;
     beforeAll(async () => {
       // Set up mocks needed for activate
       const vscode = require('vscode');
@@ -353,7 +351,7 @@ describe('Extension', () => {
       (require('../src/providers/RemoteContentProvider').RemoteContentProvider as jest.Mock).mockImplementation(() => ({}));
       (require('../src/providers/RemoteContentProvider').registerRemoteLanguageModeSetter as jest.Mock).mockReturnValue({});
       const ApiClientClass = require('../src/apiClient').ApiClient;
-      createMockApiClient(ApiClientClass);
+      mockApiClientInstance = createMockApiClient(ApiClientClass);
 
 
       // Reset instances
@@ -391,11 +389,12 @@ describe('Extension', () => {
       const extension = require('../src/extension');
       await extension.activate(mockContext);
 
-      // Capture instances from globals
-      jobServiceInstance = (global as any).jobService;
-      scriptletServiceInstance = (global as any).scriptletService;
-      debugServiceInstance = (global as any).debugService;
-      debugOutputMonitorInstance = (global as any).debugOutputMonitor;
+      // Capture instances from extension state
+      const state = getExtensionState()!;
+      jobServiceInstance = state.jobService;
+      scriptletServiceInstance = state.scriptletService;
+      debugServiceInstance = state.debugService;
+      debugOutputMonitorInstance = state.debugOutputMonitor;
 
       // Get providers from mock instances and spy on methods
       connectionStatusManager = require('../src/ConnectionStatusManager').ConnectionStatusManager.mock.instances[0];
@@ -411,6 +410,7 @@ describe('Extension', () => {
         jest.clearAllMocks();
         debugOutputMonitorInstance.isMonitoring.mockReturnValue(false);
         global.fetch = jest.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({ state: 'running' }) });
+        mockApiClientInstance.fetch.mockResolvedValue({ ok: true, json: () => Promise.resolve({ state: 'running' }) });
     });
 
     afterAll(() => {
@@ -611,13 +611,13 @@ describe('Extension', () => {
       jobServiceInstance.listJobs.mockResolvedValueOnce([
         { id: 'debug123', kind: 'debug', state: 'running', set: 'foo', name: 'bar' }
       ]);
-      (global.fetch as jest.Mock).mockResolvedValueOnce({
+      mockApiClientInstance.fetch.mockResolvedValueOnce({
         ok: true,
         json: () => Promise.resolve({ port: 5678 })
       });
       const handler = commandHandlers.get('pyops.attachDebugJob');
       await handler!();
-      expect((global as any).outputChannel.appendLine).toHaveBeenCalledWith('Attaching to job debug123 (foo::bar) at port 5678');
+      expect(getExtensionState()!.outputChannel.appendLine).toHaveBeenCalledWith('Attaching to job debug123 (foo::bar) at port 5678');
       expect(require('vscode').debug.startDebugging).toHaveBeenCalled();
       expect(require('vscode').window.showInformationMessage).toHaveBeenCalledWith('Attached to debug job debug123');
     });
@@ -626,13 +626,13 @@ describe('Extension', () => {
       jobServiceInstance.listJobs.mockResolvedValueOnce([
         { id: 'debug456', kind: 'debug', state: 'running', set: undefined, name: undefined }
       ]);
-      (global.fetch as jest.Mock).mockResolvedValueOnce({
+      mockApiClientInstance.fetch.mockResolvedValueOnce({
         ok: true,
         json: () => Promise.resolve({ port: 5678 })
       });
       const handler = commandHandlers.get('pyops.attachDebugJob');
       await handler!();
-      expect((global as any).outputChannel.appendLine).toHaveBeenCalledWith('Attaching to job debug456 (?::?) at port 5678');
+      expect(getExtensionState()!.outputChannel.appendLine).toHaveBeenCalledWith('Attaching to job debug456 (?::?) at port 5678');
       expect(require('vscode').debug.startDebugging).toHaveBeenCalled();
     });
 

@@ -6,7 +6,7 @@ export class ApiClient {
     async getHeaders(): Promise<Record<string, string>> {
         const pyopsConfig = vscode.workspace.getConfiguration('pyops');
         const username = pyopsConfig.get('username') as string;
-        const password = this.context.workspaceState.get('pyops.password') as string;
+        const password = await this.context.secrets.get('pyops.password');
         const headers: Record<string, string> = {};
         if (username && password) {
             const auth = Buffer.from(`${username}:${password}`).toString('base64');
@@ -18,6 +18,18 @@ export class ApiClient {
     getServerUrl(defaultUrl: string = 'http://localhost:8000'): string {
         const pyopsConfig = vscode.workspace.getConfiguration('pyops');
         return pyopsConfig.get('serverUrl') as string || defaultUrl;
+    }
+
+    async fetch(path: string, init?: RequestInit): Promise<Response> {
+        const url = `${this.getServerUrl()}${path}`;
+        const headers = await this.getHeaders();
+        return fetch(url, { ...init, headers: { ...headers, ...init?.headers as Record<string, string> } });
+    }
+
+    async fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
+        const response = await this.fetch(path, init);
+        if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+        return response.json() as Promise<T>;
     }
 
     hasValidConfig(): boolean {

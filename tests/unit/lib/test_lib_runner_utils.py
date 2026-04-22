@@ -100,17 +100,16 @@ class TestDBUtils:
     def test_drop_success(self, mock_listdir, mock_rmtree, mock_remove, mock_exists, mock_gettempdir, mock_conf_data):
         from app.lib import runner
         mock_gettempdir.return_value = '/tmp'
-        mock_exists.side_effect = [True, True, lambda p: p == '/tmp/userspace' or p == '/tmp/setspace']
-        mock_listdir.side_effect = lambda p: [] if p.endswith('setspace') or p.endswith('userspace') else []
+        mock_exists.side_effect = [True, True]
+        mock_listdir.return_value = []
         mock_rmtree.return_value = None
         mock_remove.return_value = None
-        result = runner.drop("123", "owner", "set")
+        result = runner.drop("123", "set")
         assert result is True
         mock_remove.assert_called_once_with('/tmp/pyops/123.sock')
         mock_rmtree.assert_has_calls([
-            call('/tmp/mock/data/jobs/owner/set/123'),
-            call('/tmp/mock/data/jobs/owner/set'),
-            call('/tmp/mock/data/jobs/owner')
+            call('/tmp/mock/data/jobs/set/123'),
+            call('/tmp/mock/data/jobs/set')
         ], any_order=False)
 
     @patch('app.lib.runner.files.conf_data', return_value={"jobs": "/tmp/mock/data/jobs"})
@@ -120,7 +119,7 @@ class TestDBUtils:
         from app.lib import runner
         mock_gettempdir.return_value = '/tmp'
         mock_exists.return_value = False  # No workspace exists
-        result = runner.drop("123", "owner", "set")
+        result = runner.drop("123", "set")
         assert result is False
 
     @patch('app.lib.runner.files.conf_data', return_value={"jobs": "/tmp/mock/data/jobs"})
@@ -131,7 +130,7 @@ class TestDBUtils:
         from app.lib import runner
         mock_gettempdir.return_value = '/tmp'
         mock_exists.return_value = True
-        result = runner.drop("123", "owner", "set")
+        result = runner.drop("123", "set")
         assert result is False
 
     @patch('app.lib.runner.files.conf_data', return_value={"jobs": "/tmp/mock/data/jobs"})
@@ -142,7 +141,7 @@ class TestDBUtils:
         # Edge: no exist returns False
         mock_gettempdir.return_value = '/tmp'
         mock_exists.return_value = False
-        result = runner.drop("123", "owner", "set")
+        result = runner.drop("123", "set")
         assert result is False
 
 class TestLoadUtils:
@@ -221,7 +220,7 @@ class TestLoadUtils:
             assert result == ("owner", "set", "name", "debug", "param", "override", '{"set::name": "override"}', 0)
 
     def test_load_lib(self, mock_git_ops):
-        from app import job_runner
+        from app.lib import job
         mock_read_content = mock_git_ops.read_content
         mock_infer = mock_git_ops.infer_type_from_filename
         mock_infer.return_value = 'task'
@@ -229,17 +228,17 @@ class TestLoadUtils:
             return 'lib code'
         mock_read_content.side_effect = mock_read_side
         with patch('os.listdir', return_value=['name.py']):
-            result = job_runner.loadLib("set", "name", "task")
+            result = job.loadLib("set", "name", "task", mock_git_ops)
             mock_read_content.assert_called_once_with('data/git/set', 'name', 'task', committed=True)
             assert result == 'lib code'
 
     def test_load_lib_no_file(self, mock_git_ops):
-        from app import job_runner
+        from app.lib import job
         mock_read_content = mock_git_ops.read_content
         mock_infer = mock_git_ops.infer_type_from_filename
         with patch('os.listdir', return_value=[]):
             with pytest.raises(Exception, match=r"Scriptlet set::name not existing"):
-                job_runner.loadLib("set", "name", "task")
+                job.loadLib("set", "name", "task", mock_git_ops)
 
     def test_load_job_no_file(self, mock_db, mock_git_ops):
         from app import runner
@@ -270,28 +269,28 @@ class TestLoadUtils:
                 assert fetched.state == "dequeued"  # State not updated on missing scriptlet
 
 class TestProcessImports:
-    @patch('app.job_runner.loadLib')
+    @patch('app.lib.job.loadLib')
     def test_process_imports_valid_lib(self, mock_load_lib):
-        from app.job_runner import process_imports
+        from app.lib.job import process_imports
         mock_load_lib.return_value = 'lib_code'
         text = "#!{set::lib}\npass"
         libs = []
         process_imports(text, 'set', 'task', libs)
         assert libs == [{"code": "lib_code", "filename": "set::lib"}]
-        mock_load_lib.assert_called_once_with('set', 'lib', 'task')
+        mock_load_lib.assert_called_once_with('set', 'lib', 'task', ANY)
 
-    @patch('app.job_runner.loadLib')
+    @patch('app.lib.job.loadLib')
     def test_process_imports_empty_set(self, mock_load_lib):
-        from app.job_runner import process_imports
+        from app.lib.job import process_imports
         mock_load_lib.return_value = 'lib_code'
         text = "#!{::lib}\npass"
         libs = []
         process_imports(text, 'current_set', 'task', libs)
         assert libs == [{"code": "lib_code", "filename": "current_set::lib"}]
-        mock_load_lib.assert_called_once_with('current_set', 'lib', 'task')
+        mock_load_lib.assert_called_once_with('current_set', 'lib', 'task', ANY)
 
     def test_process_imports_invalid_format(self):
-        from app.job_runner import process_imports
+        from app.lib.job import process_imports
         text = "#!{invalid}\npass"
         libs = []
         result = process_imports(text, 'set', 'task', libs)
@@ -299,28 +298,28 @@ class TestProcessImports:
         assert libs == []
 
     def test_process_imports_no_match(self):
-        from app.job_runner import process_imports
+        from app.lib.job import process_imports
         text = "pass\n"
         libs = []
         result = process_imports(text, 'set', 'task', libs)
         assert result == "pass\n"
         assert libs == []
 
-    @patch('app.job_runner.loadLib', side_effect=Exception('load error'))
+    @patch('app.lib.job.loadLib', side_effect=Exception('load error'))
     def test_process_imports_load_error(self, mock_load_lib):
-        from app.job_runner import process_imports
+        from app.lib.job import process_imports
         text = "#!{set::lib}\npass"
         libs = []
         with pytest.raises(Exception, match='load error'):
             process_imports(text, 'set', 'task', libs)
 
 class TestProcessInstallLines:
-    @patch('app.runner.ensure_set_environment')
+    @patch('app.lib.job.process_install_lines')
     @patch('os.makedirs')
-    @patch('app.runner.subprocess.run')
-    @patch('app.runner.os.path.join', side_effect=lambda *args: '/'.join(args))
+    @patch('app.lib.job.subprocess.run')
+    @patch('app.lib.job.os.path.join', side_effect=lambda *args: '/'.join(args))
     def test_process_install_lines_pip_install(self, mock_join, mock_run, mock_makedirs, mock_ensure):
-        from app.runner import process_install_lines
+        from app.lib.job import process_install_lines
         # Mock pip install succeeds
         mock_result = Mock()
         mock_result.returncode = 0
@@ -332,12 +331,12 @@ class TestProcessInstallLines:
         expected_cmd = ". /venv/testset/bin/activate && pip install pip_module"
         mock_run.assert_called_once_with(expected_cmd, shell=True, capture_output=True, text=True, check=True)
 
-    @patch('app.runner.ensure_set_environment')
+    @patch('app.lib.job.process_install_lines')
     @patch('os.makedirs')
-    @patch('app.runner.subprocess.run')
-    @patch('app.runner.os.path.join', side_effect=lambda *args: '/'.join(args))
+    @patch('app.lib.job.subprocess.run')
+    @patch('app.lib.job.os.path.join', side_effect=lambda *args: '/'.join(args))
     def test_process_install_lines_pip_install_with_args(self, mock_join, mock_run, mock_makedirs, mock_ensure):
-        from app.runner import process_install_lines
+        from app.lib.job import process_install_lines
         # Mock pip install with additional arguments succeeds
         mock_result = Mock()
         mock_result.returncode = 0
@@ -349,13 +348,13 @@ class TestProcessInstallLines:
         expected_cmd = ". /venv/testset/bin/activate && pip install torch --index-url https://download.pytorch.org/whl/cu130"
         mock_run.assert_called_once_with(expected_cmd, shell=True, capture_output=True, text=True, check=True)
 
-    @patch('app.runner.ensure_set_environment')
+    @patch('app.lib.job.process_install_lines')
     @patch('os.makedirs')
-    @patch('app.runner.subprocess.run')
-    @patch('app.runner.os.path.join', side_effect=lambda *args: '/'.join(args))
-    @patch('app.runner.os.path.exists', return_value=False)
+    @patch('app.lib.job.subprocess.run')
+    @patch('app.lib.job.os.path.join', side_effect=lambda *args: '/'.join(args))
+    @patch('app.lib.job.os.path.exists', return_value=False)
     def test_process_install_lines_git_clone(self, mock_exists, mock_join, mock_run, mock_makedirs, mock_ensure):
-        from app.runner import process_install_lines
+        from app.lib.job import process_install_lines
         # Mock git clone succeeds
         mock_result = Mock()
         mock_result.returncode = 0
@@ -365,41 +364,41 @@ class TestProcessInstallLines:
         # Check that git clone was called with correct args
         mock_run.assert_any_call(['git', 'clone', 'https://github.com/user/repo.git', '/pkg/testset/repo'], capture_output=True, text=True, cwd='/pkg/testset')
 
-    @patch('app.runner.ensure_set_environment')
+    @patch('app.lib.job.process_install_lines')
     @patch('os.makedirs')
-    @patch('app.runner.subprocess.run')
-    @patch('app.runner.os.path.join', side_effect=lambda *args: '/'.join(args))
+    @patch('app.lib.job.subprocess.run')
+    @patch('app.lib.job.os.path.join', side_effect=lambda *args: '/'.join(args))
     def test_process_install_lines_no_bang(self, mock_join, mock_run, mock_makedirs, mock_ensure):
-        from app.runner import process_install_lines
+        from app.lib.job import process_install_lines
         lines = ['pass']
         result = process_install_lines(lines, '/venv', '/pkg', 'testset', 'job_id')
         assert result == ['pass']
         mock_run.assert_not_called()
 
-    @patch('app.runner.ensure_set_environment')
+    @patch('app.lib.job.process_install_lines')
     @patch('os.makedirs')
-    @patch('app.runner.subprocess.run')
-    @patch('app.runner.os.path.join', side_effect=lambda *args: '/'.join(args))
+    @patch('app.lib.job.subprocess.run')
+    @patch('app.lib.job.os.path.join', side_effect=lambda *args: '/'.join(args))
     def test_process_install_lines_empty(self, mock_join, mock_run, mock_makedirs, mock_ensure):
-        from app.runner import process_install_lines
+        from app.lib.job import process_install_lines
         lines = ['!']
         result = process_install_lines(lines, '/venv', '/pkg', 'testset', 'job_id')
         assert result == ['!']
         mock_run.assert_not_called()
 
 class TestKillProcTree:
-    @patch('app.runner.os.kill')
+    @patch('app.lib.job.os.kill')
     def test_kill_proc_tree_single_process(self, mock_os_kill):
-        from app.runner import kill_proc_tree
+        from app.lib.job import kill_proc_tree
         mock_proc = Mock()
         mock_proc.pid = 123
         processes = [mock_proc]
         kill_proc_tree(processes, signal.SIGTERM)
         mock_os_kill.assert_called_once_with(123, signal.SIGTERM)
 
-    @patch('app.runner.os.kill')
+    @patch('app.lib.job.os.kill')
     def test_kill_proc_tree_multiple_processes(self, mock_os_kill):
-        from app.runner import kill_proc_tree
+        from app.lib.job import kill_proc_tree
         mock_proc1 = Mock()
         mock_proc1.pid = 123
         mock_proc2 = Mock()
@@ -410,9 +409,9 @@ class TestKillProcTree:
         mock_os_kill.assert_any_call(123, signal.SIGKILL)
         mock_os_kill.assert_any_call(456, signal.SIGKILL)
 
-    @patch('app.runner.os.kill', side_effect=OSError("Process already dead"))
+    @patch('app.lib.job.os.kill', side_effect=OSError("Process already dead"))
     def test_kill_proc_tree_oserror_ignored(self, mock_os_kill):
-        from app.runner import kill_proc_tree
+        from app.lib.job import kill_proc_tree
         mock_proc = Mock()
         mock_proc.pid = 123
         processes = [mock_proc]
@@ -487,7 +486,7 @@ class TestKillProcTree:
         from app.lib import runner
         mock_gettempdir.return_value = '/tmp'
         mock_exists.return_value = True
-        result = runner.drop("123", "owner", "set")
+        result = runner.drop("123", "set")
         assert result is False
 
     @patch('app.lib.runner.files.conf_data', return_value={"jobs": "/tmp/mock/data/jobs"})
@@ -500,11 +499,11 @@ class TestKillProcTree:
         from app.lib import runner
         mock_gettempdir.return_value = '/tmp'
         mock_exists.side_effect = [True, True]  # sock exists, workspace exists
-        result = runner.drop("123", "owner", "set")
+        result = runner.drop("123", "set")
         assert result is False
 
     def test_load_lib_debug(self, mock_git_ops):
-        from app import job_runner
+        from app.lib import job
         mock_read_content = mock_git_ops.read_content
         mock_infer = mock_git_ops.infer_type_from_filename
         mock_infer.return_value = 'task'
@@ -512,7 +511,7 @@ class TestKillProcTree:
             return 'lib code'
         mock_read_content.side_effect = mock_read_side
         with patch('os.listdir', return_value=['name.py']):
-            result = job_runner.loadLib("set", "name", "debug")
+            result = job.loadLib("set", "name", "debug", mock_git_ops)
             mock_read_content.assert_called_once_with('data/git/set', 'name', 'task', committed=False)
             assert result == 'lib code'
 
@@ -528,8 +527,8 @@ class TestAssignJob:
             test_session.add(job)
             test_session.commit()
         # Mock get_debug_port and get_debugpy_adapter_pid for non-debug job
-        with patch('app.runner.get_debug_port', return_value=5678), \
-             patch('app.runner.get_debugpy_adapter_pid', return_value=None):
+        with patch('app.lib.job.get_debug_port', return_value=5678), \
+             patch('app.lib.job.get_debugpy_adapter_pid', return_value=None):
             runner.assignJob("123", 456)
         with Session(get_db_engine()) as test_session:
             fetched = test_session.get(Job, "123")
@@ -548,8 +547,8 @@ class TestAssignJob:
             test_session.add(job)
             test_session.commit()
         # Mock get_debug_port and get_debugpy_adapter_pid for debug job
-        with patch('app.runner.get_debug_port', return_value=5678), \
-             patch('app.runner.get_debugpy_adapter_pid', return_value=789):
+        with patch('app.lib.job.get_debug_port', return_value=5678), \
+             patch('app.lib.job.get_debugpy_adapter_pid', return_value=789):
             runner.assignJob("123", 456)
         with Session(get_db_engine()) as test_session:
             fetched = test_session.get(Job, "123")
@@ -558,12 +557,50 @@ class TestAssignJob:
             assert fetched.pid == 456
             assert fetched.debugpy_pid == 789
 
+    def test_assign_job_preserves_cancel_state(self, mock_db):
+        """If a cancel races in before assignJob commits, state must stay 'cancel'
+        so the runner's term loop can kill the subprocess we just started."""
+        from app import runner
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        with Session(get_db_engine()) as test_session:
+            # State already flipped to "cancel" by the cancel endpoint.
+            job = Job(id="123", set="set", name="name", kind="task", param="param", state="cancel", owner="owner")
+            test_session.add(job)
+            test_session.commit()
+        with patch('app.lib.job.get_debug_port', return_value=5678), \
+             patch('app.lib.job.get_debugpy_adapter_pid', return_value=None):
+            runner.assignJob("123", 456)
+        with Session(get_db_engine()) as test_session:
+            fetched = test_session.get(Job, "123")
+            # pid/start assigned, but state preserved at "cancel".
+            assert fetched.state == "cancel"
+            assert fetched.pid == 456
+            assert fetched.start is not None
+
+    def test_assign_job_preserves_cancelling_state(self, mock_db):
+        """Same guard for 'cancelling' — the term loop is already processing this job."""
+        from app import runner
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        with Session(get_db_engine()) as test_session:
+            job = Job(id="123", set="set", name="name", kind="task", param="param", state="cancelling", owner="owner")
+            test_session.add(job)
+            test_session.commit()
+        with patch('app.lib.job.get_debug_port', return_value=5678), \
+             patch('app.lib.job.get_debugpy_adapter_pid', return_value=None):
+            runner.assignJob("123", 456)
+        with Session(get_db_engine()) as test_session:
+            fetched = test_session.get(Job, "123")
+            assert fetched.state == "cancelling"
+            assert fetched.pid == 456
+
 class TestTerminateJobProcesses:
     @patch('app.orm.database.conf_data', return_value={"db": "/tmp/test.db"})
     @patch('app.runner.Session')
     @patch('app.runner.postTerm')
-    @patch('app.runner.os.kill')
-    @patch('app.runner.psutil.Process')
+    @patch('app.lib.job.os.kill')
+    @patch('app.lib.job.psutil.Process')
     def test_terminate_graceful_quick_debug(self, mock_Process, mock_os_kill, mock_postTerm, mock_Session, mock_conf_data):
         from app.runner import terminate_job_processes
         mock_session_instance = Mock()
@@ -583,8 +620,8 @@ class TestTerminateJobProcesses:
     @patch('app.orm.database.conf_data', return_value={"db": "/tmp/test.db"})
     @patch('app.runner.Session')
     @patch('app.runner.postTerm')
-    @patch('app.runner.os.kill')
-    @patch('app.runner.psutil.Process')
+    @patch('app.lib.job.os.kill')
+    @patch('app.lib.job.psutil.Process')
     def test_terminate_graceful_quick_non_debug(self, mock_Process, mock_os_kill, mock_postTerm, mock_Session, mock_conf_data):
         from app.runner import terminate_job_processes
         mock_session_instance = Mock()
@@ -604,10 +641,10 @@ class TestTerminateJobProcesses:
     @patch('app.orm.database.conf_data', return_value={"db": "/tmp/test.db"})
     @patch('app.runner.Session')
     @patch('app.runner.postTerm')
-    @patch('app.runner.kill_proc_tree')
+    @patch('app.lib.job.kill_proc_tree')
     @patch('time.sleep')
     @patch('time.time')
-    @patch('app.runner.get_process_tree')
+    @patch('app.lib.job.get_process_tree')
     def test_terminate_timeout_force_kill(self, mock_tree, mock_time, mock_sleep, mock_kill_tree, mock_post, mock_Session, mock_conf_data):
         from app.runner import terminate_job_processes
         mock_session_instance = Mock()
@@ -627,9 +664,9 @@ class TestTerminateJobProcesses:
         ], any_order=False)
         mock_post.assert_called_once_with("job_id", killed=True)
 
-    @patch('app.runner.psutil.Process')
+    @patch('app.lib.job.psutil.Process')
     def test_get_process_tree_exists_children(self, mock_Process):
-        from app.runner import get_process_tree
+        from app.lib.job import get_process_tree
         mock_parent = Mock(pid=123)
         mock_child = Mock(pid=456)
         mock_parent.children.return_value = [mock_child]
@@ -640,8 +677,8 @@ class TestTerminateJobProcesses:
         assert tree[1].pid == 456
 
     def test_get_process_tree_pid_gone(self):
-        from app.runner import get_process_tree
-        with patch('app.runner.psutil.Process', side_effect=psutil.NoSuchProcess(123)):
+        from app.lib.job import get_process_tree
+        with patch('app.lib.job.psutil.Process', side_effect=psutil.NoSuchProcess(123)):
             tree = get_process_tree(123)
         assert tree == []
 
@@ -708,141 +745,74 @@ class TestPostTerm:
             session.add(job)
             session.commit()
         postTerm("testid")
-        mock_drop.assert_called_once_with("testid", "owner", "set")
+        mock_drop.assert_called_once_with("testid", "set")
         with Session(get_db_engine()) as session:
             assert session.get(Job, "testid") is None
 
 class TestDebugAdapterUtils:
-    @patch('app.job_runner.os.kill')
-    @patch('app.job_runner.psutil.process_iter')
-    def test_terminate_debugpy_adapter_match_kill(self, mock_iter, mock_kill):
-        from app.job_runner import terminate_debugpy_adapter
-        with patch('app.job_runner._conf_users', {"owner": {"debug_port": 5678}}):
-            mock_pinfo = Mock()
-            mock_pinfo.info = {'pid': 999, 'cmdline': ['python', '-m', 'debugpy.adapter', '--port', '5678']}
-            mock_iter.return_value = iter([mock_pinfo])
-            terminate_debugpy_adapter("owner")
-            mock_kill.assert_called_once_with(999, signal.SIGKILL)
-
-    @patch('app.job_runner.psutil.process_iter')
-    def test_terminate_debugpy_adapter_no_match(self, mock_iter):
-        from app.job_runner import terminate_debugpy_adapter
-        with patch('app.job_runner._conf_users', {"owner": {"debug_port": 5678}}):
-            mock_iter.return_value = iter([])
-            with patch('app.job_runner.logger.warning') as mock_warn:
-                terminate_debugpy_adapter("owner")
-                mock_warn.assert_called()
-
-    def test_terminate_debugpy_adapter_no_port(self):
-        from app.job_runner import terminate_debugpy_adapter
-        with patch('app.job_runner._conf_users', {}):
-            with patch('app.job_runner.logger.warning') as mock_warn:
-                terminate_debugpy_adapter("owner")
-                mock_warn.assert_called_with("no debug_port configured for owner %s", "owner")
-
-    def test_get_debugpy_adapter_pid_match(self):
-        from app.runner import get_debugpy_adapter_pid
+    @patch('app.lib.job.os.kill')
+    @patch('app.lib.job.psutil.process_iter')
+    def test_terminate_debugpy_adapter_with_port_match_kill(self, mock_iter, mock_kill):
+        from app.lib.job import terminate_debugpy_adapter
         mock_pinfo = Mock()
         mock_pinfo.info = {'pid': 999, 'cmdline': ['python', '-m', 'debugpy.adapter', '--port', '5678']}
-        with patch('app.runner.psutil.process_iter', return_value=iter([mock_pinfo])):
+        mock_iter.return_value = iter([mock_pinfo])
+        terminate_debugpy_adapter("owner", port=5678)
+        mock_kill.assert_called_once_with(999, signal.SIGKILL)
+
+    @patch('app.lib.job.psutil.process_iter')
+    def test_terminate_debugpy_adapter_with_port_no_match(self, mock_iter):
+        from app.lib.job import terminate_debugpy_adapter
+        mock_iter.return_value = iter([])
+        with patch('app.lib.job.logger.warning') as mock_warn:
+            terminate_debugpy_adapter("owner", port=5678)
+            mock_warn.assert_called()
+
+    def test_terminate_debugpy_adapter_no_port_provided(self):
+        from app.lib.job import terminate_debugpy_adapter
+        with patch('app.lib.job.logger.error') as mock_error:
+            terminate_debugpy_adapter("owner", port=None)
+            mock_error.assert_called_with("No port provided, cannot terminate debugpy adapter for owner %s", "owner")
+
+    # Legacy tests removed - port is now required, no fallback to config
+
+    def test_get_debugpy_adapter_pid_match(self):
+        from app.lib.job import get_debugpy_adapter_pid
+        mock_pinfo = Mock()
+        mock_pinfo.info = {'pid': 999, 'cmdline': ['python', '-m', 'debugpy.adapter', '--port', '5678']}
+        with patch('app.lib.job.psutil.process_iter', return_value=iter([mock_pinfo])):
             pid = get_debugpy_adapter_pid(5678)
             assert pid == 999
 
     def test_get_debugpy_adapter_pid_no_match(self):
-        from app.runner import get_debugpy_adapter_pid
-        with patch('app.runner.psutil.process_iter', return_value=iter([])):
+        from app.lib.job import get_debugpy_adapter_pid
+        with patch('app.lib.job.psutil.process_iter', return_value=iter([])):
             pid = get_debugpy_adapter_pid(5678)
             assert pid is None
 
-    @patch('app.job_runner._conf_users', {"owner": {"debug_port": 5678}})
+    @patch('app.lib.files.conf_users', return_value={"owner": {"debug_port": 5678}})
     def test_validate_debug_prerequisites_valid(self, mock_conf):
-        from app.runner import validate_debug_prerequisites
-        port = validate_debug_prerequisites("id", "owner")
+        from app.lib.job import validate_debug_prerequisites
+        port = validate_debug_prerequisites("owner")
         assert port == 5678
 
-    @patch('app.job_runner._conf_users', {"owner": {"debug_port": "invalid"}})
+    @patch('app.lib.files.conf_users', return_value={"owner": {"debug_port": "invalid"}})
     def test_validate_debug_prerequisites_invalid(self, mock_conf):
-        from app.runner import validate_debug_prerequisites
+        from app.lib.job import validate_debug_prerequisites
         with pytest.raises(Exception, match="Invalid or missing debug_port"):
-            validate_debug_prerequisites("id", "owner")
+            validate_debug_prerequisites("owner")
 
-class TestLibRunnerLoad:
-    def test_load_lib_task_committed(self, mock_git_ops):
-        from app.lib.runner import loadLib
-        with patch('os.listdir', return_value=['lib.task.py']):
-            mock_git_ops.infer_type_from_filename.return_value = 'task'
-            result = loadLib("testset", "lib", "task")
-            mock_git_ops.read_content.assert_called_once_with('data/git/testset', 'lib', 'task', committed=True)
-
-    def test_load_lib_debug_uncommitted(self, mock_git_ops):
-        from app.lib.runner import loadLib
-        with patch('os.listdir', return_value=['lib.task.py']):
-            mock_git_ops.infer_type_from_filename.return_value = 'task'
-            result = loadLib("testset", "lib", "debug")
-            mock_git_ops.read_content.assert_called_once_with('data/git/testset', 'lib', 'task', committed=False)
-
-    def test_load_lib_no_file(self, mock_git_ops):
-        from app.lib.runner import loadLib
-        with patch('os.listdir', return_value=[]):
-            with pytest.raises(Exception, match="Library testset::lib not existing"):
-                loadLib("testset", "lib", "task")
-
-    def test_load_job_success(self, mock_db, mock_git_ops):
-        from app.lib.runner import loadJob
-        from app.orm.database import get_db_engine
-        from app.orm.job import Job
-        from sqlalchemy.orm import Session
-        with Session(get_db_engine()) as session:
-            job = Job(id="testid", owner="owner", set="testset", name="testname", kind="task", param="param", state="dequeued")
-            session.add(job)
-            session.commit()
-        with patch('os.listdir', return_value=['testname.task.py']):
-            mock_git_ops.infer_type_from_filename.return_value = "task"
-            result = loadJob("testid")
-            with Session(get_db_engine()) as session:
-                updated = session.get(Job, "testid")
-                assert updated.state == "running"
-                assert updated.start is not None
-
-    def test_load_job_debug_uncommitted(self, mock_db, mock_git_ops):
-        from app.lib.runner import loadJob
-        from app.orm.database import get_db_engine
-        from app.orm.job import Job
-        from sqlalchemy.orm import Session
-        with Session(get_db_engine()) as session:
-            job = Job(id="testid", owner="owner", set="testset", name="testname", kind="debug", param="param", state="dequeued")
-            session.add(job)
-            session.commit()
-        with patch('os.listdir', return_value=['testname.task.py']):
-            mock_git_ops.infer_type_from_filename.return_value = "task"
-            result = loadJob("testid")
-            mock_git_ops.read_content.assert_called_with('data/git/testset', 'testname', 'task', committed=False)
-
-    def test_load_job_no_job(self, mock_db, mock_git_ops):
-        from app.lib.runner import loadJob
-        with pytest.raises(Exception, match="Job testid not existing"):
-            loadJob("testid")
-
-    def test_load_job_no_file(self, mock_db, mock_git_ops):
-        from app.lib.runner import loadJob
-        from app.orm.database import get_db_engine
-        from app.orm.job import Job
-        from sqlalchemy.orm import Session
-        with Session(get_db_engine()) as session:
-            job = Job(id="testid", owner="owner", set="testset", name="testname", kind="task", param="param", state="dequeued")
-            session.add(job)
-            session.commit()
-        with patch('os.listdir', return_value=[]):
-            with pytest.raises(Exception, match="Scriptlet testset::testname not existing"):
-                loadJob("testid")
 
 class TestProcessInstallLines:
-    @patch('app.runner.subprocess.run')
+    @patch('app.lib.job.subprocess.run')
     def test_process_install_lines_pip(self, mock_run, mock_conf):
-        from app.job_runner import process_install_lines
+        from app.lib.job import process_install_lines
+        import io
         lines = ["code\n", "#!torch --index-url https://download.pytorch.org/whl/cpu\n", "more code\n"]
         mock_run.return_value = Mock()
-        result_lines = process_install_lines(lines, "/venv", "/pkg", "set", "id")
+        stdout_file = io.StringIO()
+        stderr_file = io.StringIO()
+        result_lines = process_install_lines(lines, "/venv", "/pkg", "set", "id", stdout_file, stderr_file)
         assert mock_run.call_count == 2
         expected_cmd = ". /venv/set/bin/activate && pip install --no-cache-dir --upgrade --upgrade-strategy eager torch --index-url https://download.pytorch.org/whl/cpu"
-        mock_run.assert_called_with(expected_cmd, shell=True, stdout=sys.stdout, stderr=sys.stderr, text=True, check=True)
+        mock_run.assert_called_with(expected_cmd, shell=True, stdout=stdout_file, stderr=stderr_file, text=True, check=True)

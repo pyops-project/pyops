@@ -22,6 +22,9 @@ flowchart LR
 ```
 
 ## Configuration
+
+Stored in `etc/pyops.json` (override path via `PYOPS_CONFIG` env var):
+
 - `web`: `{"bind": "127.0.0.1:8000", "worker": 4, "timeout": 300}`
 - `data`: `{"jobs": "data/jobs", "git": "data/git", "db": "data/app.db"}`
 - `runner`: `{"venv": "data/venv", "pkg": "data/pkg", "git_pull_interval": 60, "drop_done_delay_seconds": 60}`
@@ -31,7 +34,7 @@ flowchart LR
 ## Features
 PyOps supports various scriptlet types: task, service, schedule, controller, view, library, markdown, jslibrary.
 
-In addition to WebUI it also includes a VSCode extension for direct use from VSCode and derrivates.
+In addition to WebUI it also includes a VSCode extension for direct use from VSCode and derivatives.
 
 - **Task**: One-time executed scriptlets for debugging or batch operations
 - **Service**: Persistent services that run continuously
@@ -48,6 +51,20 @@ In addition to WebUI it also includes a VSCode extension for direct use from VSC
 git clone https://git.ralph.or.at/pyops/pyops.git
 cd pyops
 ./run.sh
+```
+
+For development with hot reload:
+```
+./run_dev.sh
+```
+
+### Testing
+```bash
+# Unit/integration tests
+pytest tests/ -v --cov=app --cov-report=term-missing
+
+# E2E tests (Playwright, starts real server per test)
+pytest tests/e2e/ -v
 ```
 
 ### Docker Compose
@@ -99,8 +116,8 @@ services:
         "db": "data/app.db"
     },
     "runner": {
-        "venv": "data/venv",
-        "pkg": "data/pkg",
+        "venv": "venv",
+        "pkg": "pkg",
         "git_pull_interval": 60,
         "drop_done_delay_seconds": 60
     },

@@ -9,6 +9,7 @@ export async function run(): Promise<void> {
   console.log('Test 1: Temp dir creation...');
   const dir = helpers.createTempDir();
   assert.ok(fs.existsSync(dir), 'Temp dir must exist');
+  fs.rmSync(dir, { recursive: true, force: true });
   console.log('✓ Test 1 passed');
 
   // Test 2: pollTree function

@@ -3,18 +3,15 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { ApiClient } from '../apiClient';
 import { ManagerTreeDataProvider, ScriptletTreeItem } from '../managerTreeProvider';
+import { RemoteContentProvider } from '../providers/RemoteContentProvider';
 import { inferExt } from '../utils';
 
 
 export class ScriptletService {
-    constructor(private apiClient: ApiClient, private managerTreeProvider: ManagerTreeDataProvider) {}
+    constructor(private apiClient: ApiClient, private managerTreeProvider: ManagerTreeDataProvider, private remoteProvider: RemoteContentProvider) {}
 
-    private async getHeaders(): Promise<Record<string, string>> {
-        return this.apiClient.getHeaders();
-    }
-
-    private getServerUrl(): string {
-        return this.apiClient.getServerUrl();
+    private getWorkspaceRoot(): string | undefined {
+        return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     }
 
     private getLocalPath(treeItem: ScriptletTreeItem, workspaceRoot: string, localPyopsDir: string): string {
@@ -26,14 +23,16 @@ export class ScriptletService {
         if (!treeItem || !treeItem.set || !treeItem.scriptletName || !treeItem.scriptletType) return;
         const set = treeItem.set!;
         const name = treeItem.scriptletName!;
-        const serverUrl = this.getServerUrl();
-        const headers = await this.getHeaders();
         try {
-            const response = await fetch(`${serverUrl}/scriptlet/inventory/code?set=${set}&name=${name}`, { headers });
+            const response = await this.apiClient.fetch(`/scriptlet/inventory/code?set=${set}&name=${name}`);
             if (response.ok) {
                 const responseData = await response.json();
                 const code = (responseData as { code?: string }).code || '';
-                const workspaceRoot = vscode.workspace.workspaceFolders![0].uri.fsPath;
+                const workspaceRoot = this.getWorkspaceRoot();
+                if (!workspaceRoot) {
+                    vscode.window.showWarningMessage('No workspace folder open');
+                    return;
+                }
                 const pyopsConfig = vscode.workspace.getConfiguration('pyops');
                 const localPyopsDir = pyopsConfig.get('localPyopsDir', 'pyops') as string;
                 const localPath = this.getLocalPath(treeItem, workspaceRoot, localPyopsDir);
@@ -54,8 +53,7 @@ export class ScriptletService {
     }
 
     async writeLocalToRemoteDraft(treeItem?: ScriptletTreeItem): Promise<void> {
-        const isValidConfig = ApiClient.hasValidConfigStatic();
-        if (!isValidConfig) {
+        if (!this.apiClient.hasValidConfig()) {
             vscode.window.showWarningMessage('No valid PyOps configuration set. Please configure in settings.');
             return;
         }
@@ -63,7 +61,11 @@ export class ScriptletService {
         const set = treeItem.set!;
         const name = treeItem.scriptletName!;
         const pyopsConfig = vscode.workspace.getConfiguration('pyops');
-        const workspaceRoot = vscode.workspace.workspaceFolders![0].uri.fsPath;
+        const workspaceRoot = this.getWorkspaceRoot();
+        if (!workspaceRoot) {
+            vscode.window.showWarningMessage('No workspace folder open');
+            return;
+        }
         const localPyopsDir = pyopsConfig.get('localPyopsDir', 'pyops') as string;
         const localPath = this.getLocalPath(treeItem, workspaceRoot, localPyopsDir);
         if (!fs.existsSync(localPath)) {
@@ -77,13 +79,11 @@ export class ScriptletService {
             vscode.window.showErrorMessage('Error reading local file');
             return;
         }
-        const serverUrl = this.getServerUrl();
-        const headers = await this.getHeaders();
 
         // Check if remote scriptlet exists; create if not
         let checkResponse: Response;
         try {
-            checkResponse = await fetch(`${serverUrl}/scriptlet/inventory/code?set=${encodeURIComponent(set)}&name=${encodeURIComponent(name)}`, { headers });
+            checkResponse = await this.apiClient.fetch(`/scriptlet/inventory/code?set=${encodeURIComponent(set)}&name=${encodeURIComponent(name)}`);
         } catch (error: unknown) {
             const errorMessage = error instanceof Error ? error.message : String(error);
             vscode.window.showErrorMessage(`Network error checking remote existence: ${errorMessage}`);
@@ -92,9 +92,9 @@ export class ScriptletService {
         if (checkResponse.status === 404) {
             try {
                 const createData = { set, name, type: treeItem.scriptletType! };
-                const createResponse = await fetch(`${serverUrl}/scriptlet/inventory/item`, {
+                const createResponse = await this.apiClient.fetch('/scriptlet/inventory/item', {
                     method: 'PUT',
-                    headers: { ...headers, 'Content-Type': 'application/json' },
+                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(createData)
                 });
                 if (!createResponse.ok) {
@@ -114,9 +114,9 @@ export class ScriptletService {
 
         const data = { set, name, code };
         try {
-            const response = await fetch(`${serverUrl}/scriptlet/inventory/draft`, {
+            const response = await this.apiClient.fetch('/scriptlet/inventory/draft', {
                 method: 'POST',
-                headers: { ...headers, 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(data)
             });
             if (response.ok) {
@@ -133,18 +133,15 @@ export class ScriptletService {
     }
 
     async saveRemoteDraft(treeItem?: ScriptletTreeItem): Promise<void> {
-        const isValidConfig = ApiClient.hasValidConfigStatic();
-        if (!isValidConfig) {
+        if (!this.apiClient.hasValidConfig()) {
             vscode.window.showWarningMessage('No valid PyOps configuration set. Please configure in settings.');
             return;
         }
         if (!treeItem || !treeItem.set || !treeItem.scriptletName || !treeItem.scriptletType) return;
         const set = treeItem.set!;
         const name = treeItem.scriptletName!;
-        const serverUrl = this.getServerUrl();
-        const authHeaders = await this.getHeaders();
         try {
-            const statusResponse = await fetch(`${serverUrl}/scriptlet/inventory/status?set=${set}&name=${name}`, { headers: authHeaders });
+            const statusResponse = await this.apiClient.fetch(`/scriptlet/inventory/status?set=${set}&name=${name}`);
             if (!statusResponse.ok) {
                 vscode.window.showErrorMessage('Failed to check draft status');
                 return;
@@ -155,18 +152,17 @@ export class ScriptletService {
                 vscode.window.showInformationMessage(`No remote draft to save for ${name}; no unstaged changes.`);
                 return;
             }
-            const codeResponse = await fetch(`${serverUrl}/scriptlet/inventory/code?set=${set}&name=${name}`, { headers: authHeaders });
+            const codeResponse = await this.apiClient.fetch(`/scriptlet/inventory/code?set=${set}&name=${name}`);
             if (!codeResponse.ok) {
                 vscode.window.showErrorMessage('No remote draft to save');
                 return;
             }
             const codeResponseData = await codeResponse.json();
             const draftCode = (codeResponseData as { code: string }).code;
-            const saveHeaders = { ...authHeaders, 'Content-Type': 'application/json' };
             const data = { set, name, code: draftCode };
-            const saveResponse = await fetch(`${serverUrl}/scriptlet/inventory/item`, {
+            const saveResponse = await this.apiClient.fetch('/scriptlet/inventory/item', {
                 method: 'POST',
-                headers: saveHeaders,
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(data)
             });
             if (saveResponse.ok) {
@@ -182,22 +178,23 @@ export class ScriptletService {
     }
 
     async diffLocalRemote(treeItem?: ScriptletTreeItem): Promise<void> {
-        const isValidConfig = ApiClient.hasValidConfigStatic();
-        if (!isValidConfig) {
+        if (!this.apiClient.hasValidConfig()) {
             vscode.window.showWarningMessage('No valid PyOps configuration set. Please configure in settings.');
             return;
         }
         if (!treeItem || !treeItem.set || !treeItem.scriptletName || !treeItem.scriptletType) return;
         const set = treeItem.set!;
         const name = treeItem.scriptletName!;
-        const serverUrl = this.getServerUrl();
-        const headers = await this.getHeaders();
         try {
-            const response = await fetch(`${serverUrl}/scriptlet/inventory/code?set=${set}&name=${name}`, { headers });
+            const response = await this.apiClient.fetch(`/scriptlet/inventory/code?set=${set}&name=${name}`);
             if (response.ok) {
                 const responseData = await response.json();
                 const code = (responseData as { code: string }).code;
-                const workspaceRoot = vscode.workspace.workspaceFolders![0].uri.fsPath;
+                const workspaceRoot = this.getWorkspaceRoot();
+                if (!workspaceRoot) {
+                    vscode.window.showWarningMessage('No workspace folder open');
+                    return;
+                }
                 const pyopsConfig = vscode.workspace.getConfiguration('pyops');
                 const localPyopsDir = pyopsConfig.get('localPyopsDir', 'pyops') as string;
                 const localPath = this.getLocalPath(treeItem, workspaceRoot, localPyopsDir);
@@ -205,8 +202,9 @@ export class ScriptletService {
                     vscode.window.showWarningMessage('Local file not found; create first');
                     return;
                 }
-                const encodedCode = encodeURIComponent(code);
-                const remoteUri = vscode.Uri.parse(`pyops-remote:/${set}/${name}?type=${treeItem.scriptletType!}#${encodedCode}`);
+                const uriPath = `/${set}/${name}`;
+                this.remoteProvider.setContent(uriPath, code);
+                const remoteUri = vscode.Uri.parse(`pyops-remote:${uriPath}?type=${treeItem.scriptletType!}`);
                 const localUri = vscode.Uri.file(localPath);
                 await vscode.commands.executeCommand('vscode.diff', remoteUri, localUri, 'Remote vs Local');
             } else {
@@ -219,8 +217,7 @@ export class ScriptletService {
     }
 
     async deleteScriptlet(treeItem?: ScriptletTreeItem): Promise<void> {
-        const isValidConfig = ApiClient.hasValidConfigStatic();
-        if (!isValidConfig) {
+        if (!this.apiClient.hasValidConfig()) {
             vscode.window.showWarningMessage('No valid PyOps configuration set. Please configure in settings.');
             return;
         }
@@ -234,16 +231,17 @@ export class ScriptletService {
             'Delete'
         );
         if (confirm !== 'Delete') return;
-        const serverUrl = this.getServerUrl();
-        const headers = await this.getHeaders();
-        const workspaceRoot = vscode.workspace.workspaceFolders![0].uri.fsPath;
+        const workspaceRoot = this.getWorkspaceRoot();
+        if (!workspaceRoot) {
+            vscode.window.showWarningMessage('No workspace folder open');
+            return;
+        }
         const pyopsConfig = vscode.workspace.getConfiguration('pyops');
         const localPyopsDir = pyopsConfig.get('localPyopsDir', 'pyops') as string;
         const localPath = this.getLocalPath(treeItem, workspaceRoot, localPyopsDir);
         try {
-            const response = await fetch(`${serverUrl}/scriptlet/inventory/item?set=${set}&name=${name}`, {
-                method: 'DELETE',
-                headers
+            const response = await this.apiClient.fetch(`/scriptlet/inventory/item?set=${set}&name=${name}`, {
+                method: 'DELETE'
             });
             if (response.ok) {
                 // remote deleted
@@ -280,7 +278,11 @@ export class ScriptletService {
 
     async openLocalFile(treeItem?: ScriptletTreeItem): Promise<void> {
         if (!treeItem || !treeItem.set || !treeItem.scriptletName || !treeItem.scriptletType) return;
-        const workspaceRoot = vscode.workspace.workspaceFolders![0].uri.fsPath;
+        const workspaceRoot = this.getWorkspaceRoot();
+        if (!workspaceRoot) {
+            vscode.window.showWarningMessage('No workspace folder open');
+            return;
+        }
         const pyopsConfig = vscode.workspace.getConfiguration('pyops');
         const localPyopsDir = pyopsConfig.get('localPyopsDir', 'pyops') as string;
         const localPath = this.getLocalPath(treeItem, workspaceRoot, localPyopsDir);

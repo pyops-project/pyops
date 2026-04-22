@@ -14,7 +14,7 @@ PyOps is an execution platform for Python operations scriptlets, licensed under 
     "pyops.localPyopsDir": "pyops",
     "pyops.autoRefreshInterval": 10,
     "pyops.username": "anonymous",  // Optional for Basic Auth (X-User header; password prompted & stored securely in workspace state)
-    "pyops.excludedSets": []        // Exclude sets from manager tree
+    "pyops.excludedSets": []        // Sets to hide from the manager tree view
   }
   ```
 - **Auth**: Set `pyops.username`; extension prompts for password on first API call (stored securely in workspace state).
@@ -26,7 +26,7 @@ VSIX provides pyops-container in sidebar/activitybar:
   Titlebar: Refresh Manager, Create Scriptlet, Attach to Debug Job.
 - **pyops-monitor**: Jobs by state; right-click: Copy Job Param, Cancel/Download/Delete/View Job.
   Titlebar: Refresh Monitor, Cancel All Jobs, Delete All Done/Canceled, Delete All Failed/Killed.
-- Sets Manager: Open http://server/scriptlet/sets.html for clone/switch/remove.
+- Sets Manager: Open http://{pyops.serverUrl}/scriptlet/sets.html for clone/switch/remove.
 
 Local `pyops/` mirrors remote files for editing (create opens file; upload/save syncs changes). Local-only scriptlets (created locally without remote counterpart) can be synced to remote via "Write Local to Remote Draft", which auto-creates the remote scriptlet if it doesn't exist.
 
@@ -38,9 +38,9 @@ Examples:
 - Task: "Generate a task scriptlet to fetch data from https://api.example.com using requests, process JSON, write result to job output file, and log completion. Use directives for deps. Ensure error handling."
 - Service: "In this service file, add a handler for POST requests with JSON data: validate payload, call external API via control, return {'status': 'ok', 'value': result}. Include setup loop with listener."
 - Controller: "Update this controller to route to 'myservice', use views 'head', 'menu', 'body', set debug=False, name='My UI'."
-- View: "Enhance body.html with Bootstrap table for job list, AJAX GET to /q?cmd=list via apiCall, populate rows with Material Icons."
+- View: "Enhance body.html with Bootstrap table for job list, AJAX GET to /jobs via apiCall, populate rows with Material Icons."
 - Library: "Generate a Python library scriptlet with shared functions, e.g., data processing utilities, for import in other scriptlets."
-- JS Library: "Create a JavaScript library scriptlet with utility functions, e.g., `function apiCall(path, data) { /* AJAX implementation */ }` for use in views."
+- JS Library: "Create a JavaScript library scriptlet with utility functions, e.g., `function apiCall(type, path, params, callback) { /* REST AJAX implementation */ }` for use in views."
 - Markdown: "Write a markdown scriptlet for documentation or README content."
 
 Cline outputs full file content; paste/replace in editor, then save via VSIX. Iterate prompts for refinements (e.g., "Add validation to previous code").
@@ -86,10 +86,10 @@ Controllers: `debug=True` uses unstaged/draft code (preview).
    - Create view/my_head.html, my_menu.html, my_body.html (Bootstrap + apiCall).
 3. **Edit/Generate**: Cline prompts for code/logic refinements.
 4. **Sync**: Right-click > Write Local to Remote Draft > Save Remote Draft (commit).
-5. **Enqueue Service**: Enqueue via web UI (/scriptlet/manager.html POST kind="service", with optional max_retries for retry on failure) or API /scriptlet/job/item.
+5. **Enqueue Service**: Enqueue via web UI (/scriptlet/manager.html POST kind="service", with optional `max_retries` to auto-restart on failure up to N times) or API /scriptlet/job/item.
 6. **Access UI**: http://localhost:8000/controller/myops/mycontroller.
 7. **Debug**: Right-click task > Start Debug Job; titlebar Attach to Debug Job for VSCode debugger.
-8. **Monitor/Schedule**: pyops-monitor bulk ops; /scriptlet/schedule (create schedules with optional max_retries for retry on failure).
+8. **Monitor/Schedule**: pyops-monitor bulk ops; /scriptlet/schedule (create schedules with optional `max_retries` to auto-restart on failure).
 
 ## Sets Manager
 

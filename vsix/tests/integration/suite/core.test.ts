@@ -1,5 +1,6 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
+import { getExtensionState } from '../../../src/extension';
 
 export async function run(): Promise<void> {
   console.log('Running Core Tests...');
@@ -26,10 +27,10 @@ export async function run(): Promise<void> {
 
   // Configure extension settings for localhost (no auth for development)
   const config = vscode.workspace.getConfiguration('pyops');
-  await config.update('serverUrl', 'http://localhost:8000', vscode.ConfigurationTarget.Global);
+  await config.update('serverUrl', 'http://localhost:8000', vscode.ConfigurationTarget.Workspace);
 
   // Ensure manager is refreshed with the new config to load existing sets
-  const managerProvider = (global as any).managerTreeProvider;
+  const managerProvider = getExtensionState()?.managerTreeProvider;
   if (managerProvider) {
     await managerProvider.refresh();
   }
@@ -49,14 +50,15 @@ export async function run(): Promise<void> {
 
   // Test 3: Status bar connection
   console.log('Test 3: Status bar connection...');
-  assert.ok((global as any).connectionStatusManager, 'ConnectionStatusManager must be available');
+  assert.ok(getExtensionState()?.connectionStatusManager, 'ConnectionStatusManager must be available');
   console.log('✓ Test 3 passed');
 
   // Test 4: Can access PyOps views
   console.log('Test 4: PyOps views accessibility...');
   const allCommands = await vscode.commands.getCommands(true);
-  const hasManagerView = allCommands.some(cmd => cmd.includes('manager'));
-  const hasMonitorView = allCommands.some(cmd => cmd.includes('monitor'));
+  const pyopsViewCommands = allCommands.filter(cmd => cmd.startsWith('pyops.'));
+  const hasManagerView = pyopsViewCommands.some(cmd => cmd.includes('manager') || cmd.includes('Manager'));
+  const hasMonitorView = pyopsViewCommands.some(cmd => cmd.includes('monitor') || cmd.includes('Monitor'));
   assert.ok(hasManagerView, 'Manager view commands should be available');
   assert.ok(hasMonitorView, 'Monitor view commands should be available');
   console.log('✓ Test 4 passed');

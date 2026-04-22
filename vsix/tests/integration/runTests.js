@@ -78,7 +78,11 @@ async function main() {
     // Install Python extension for debug tests
     const vscodeExecutablePathEarly = await downloadAndUnzipVSCode(version);
     const cliPath = resolveCliPathFromVSCodeExecutablePath(vscodeExecutablePathEarly);
-    execSync(`${cliPath} --install-extension ms-python.python --force`, { cwd: testWorkspace, stdio: 'inherit' });
+    const cliArgs = ['--install-extension', 'ms-python.python', '--force', '--user-data-dir', userDataDir];
+    if (process.getuid && process.getuid() === 0) {
+      cliArgs.push('--no-sandbox');
+    }
+    execSync(`${cliPath} ${cliArgs.join(' ')}`, { cwd: testWorkspace, stdio: 'inherit' });
     console.log('✓ Installed Python extension for debug tests');
 
     // Download and unzip VS Code

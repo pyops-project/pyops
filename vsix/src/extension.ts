@@ -29,16 +29,27 @@ let jobsTreeProvider: JobsTreeDataProvider | undefined;
 let managerTreeProvider: ManagerTreeDataProvider | undefined;
 let refreshManager: RefreshTimerManager | undefined;
 
+let extensionState: {
+    outputChannel: vscode.OutputChannel;
+    connectionStatusManager: ConnectionStatusManager;
+    jobService: JobService;
+    scriptletService: ScriptletService;
+    debugService: DebugService;
+    DebugService: typeof DebugService;
+    debugOutputMonitor: DebugOutputMonitor;
+    managerTreeProvider: ManagerTreeDataProvider;
+    jobsTreeProvider: JobsTreeDataProvider;
+    debugConfigProvider: PyOpsPythonDebugConfigProvider;
+} | undefined;
+
+export function getExtensionState() { return extensionState; }
+
 
 
 
 export async function activate(context: vscode.ExtensionContext) {
     outputChannel = vscodeWindow.createOutputChannel('PyOps');
     outputChannel.appendLine('PyOps extension activating...');
-
-    // Assign to global for testing
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (global as any).outputChannel = outputChannel;
 
     try {
 
@@ -51,14 +62,12 @@ export async function activate(context: vscode.ExtensionContext) {
         // Set language mode for remote diff documents
         context.subscriptions.push(registerRemoteLanguageModeSetter());
 
+    const apiClient = new ApiClient(context);
+
         // Create status bar item for connection state
-        const statusManager = new ConnectionStatusManager(context, outputChannel);
+        const statusManager = new ConnectionStatusManager(apiClient, context, outputChannel);
         statusBarItem = statusManager.createStatusBarItem();
         context.subscriptions.push(statusBarItem);
-
-        // Assign to global for testing
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (global as any).connectionStatusManager = statusManager;
 
         // Initial status update
         await statusManager.update();
@@ -88,14 +97,12 @@ export async function activate(context: vscode.ExtensionContext) {
         });
         context.subscriptions.push(refreshStatusDisposable);
 
-    const apiClient = new ApiClient(context);
-
     // Register tree view for manager
     managerTreeProvider = new ManagerTreeDataProvider(context, outputChannel, apiClient);
     context.subscriptions.push(vscode.window.registerTreeDataProvider('pyops-manager', managerTreeProvider));
 
     context.subscriptions.push(vscode.commands.registerCommand('pyops.createScriptlet', async () => {
-        await CreateScriptletCommand.execute(context, outputChannel, managerTreeProvider!);
+        await CreateScriptletCommand.execute(apiClient, outputChannel, managerTreeProvider!);
     }));
 
     // Register native tree view for monitor (repurposing existing ID)
@@ -109,32 +116,14 @@ export async function activate(context: vscode.ExtensionContext) {
     const jobViewOutputChannel = vscodeWindow.createOutputChannel('PyOps Job View');
     context.subscriptions.push(jobViewOutputChannel);
     jobService = new JobService(apiClient, jobsTreeProvider, jobViewOutputChannel);
-    const scriptletService = new ScriptletService(apiClient, managerTreeProvider!);
+    const scriptletService = new ScriptletService(apiClient, managerTreeProvider!, remoteProvider);
 
     // Create debug service
-    const debugService = new DebugService(context, outputChannel);
-
-    // Assign to global for testing
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (global as any).jobService = jobService;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (global as any).scriptletService = scriptletService;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (global as any).debugService = debugService;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (global as any).DebugService = DebugService;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (global as any).managerTreeProvider = managerTreeProvider;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (global as any).jobsTreeProvider = jobsTreeProvider;
+    const debugService = new DebugService(apiClient, outputChannel);
 
     // Register debug configuration provider for Python
     const debugConfigProvider = new PyOpsPythonDebugConfigProvider(debugService);
     context.subscriptions.push(vscode.debug.registerDebugConfigurationProvider('python', debugConfigProvider));
-
-    // Assign to global for testing
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (global as any).debugConfigProvider = debugConfigProvider;
 
 
     // Register commands
@@ -163,9 +152,18 @@ export async function activate(context: vscode.ExtensionContext) {
 
         debugOutputMonitor = new DebugOutputMonitor(apiClient, jobOutputChannel);
 
-        // Assign to global for testing
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (global as any).debugOutputMonitor = debugOutputMonitor;
+        extensionState = {
+            outputChannel,
+            connectionStatusManager: statusManager,
+            jobService,
+            scriptletService,
+            debugService,
+            DebugService,
+            debugOutputMonitor,
+            managerTreeProvider: managerTreeProvider!,
+            jobsTreeProvider: jobsTreeProvider!,
+            debugConfigProvider,
+        };
 
         context.subscriptions.push(vscode.commands.registerCommand('pyops.copyJobParam', async (treeItem?: JobTreeItem) => {
             await jobService.copyJobParam(treeItem);
@@ -226,7 +224,12 @@ export async function activate(context: vscode.ExtensionContext) {
                 return;
             }
 
-            const workspaceRoot = vscode.workspace.workspaceFolders![0].uri.fsPath;
+            const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+            if (!workspaceFolder) {
+                vscode.window.showWarningMessage('No workspace folder open');
+                return;
+            }
+            const workspaceRoot = workspaceFolder.uri.fsPath;
             const { overrides, pathMappings } = DebugService.buildOverrides(set, workspaceRoot);
             outputChannel.appendLine(`[DEBUG] Built overrides for ${set}: ${Object.keys(overrides).length} files`);
             outputChannel.appendLine(`[DEBUG] Path mappings: ${JSON.stringify(pathMappings, null, 2)}`);
@@ -238,14 +241,12 @@ export async function activate(context: vscode.ExtensionContext) {
                     await debugOutputMonitor.startMonitoring(key, result.jobId);
 
                     // Wait for job to be running
-                    const serverUrl = apiClient.getServerUrl();
-                    const headers = await apiClient.getHeaders();
                     const jobTimeoutMs = 15000;
                     const pollIntervalMs = 1000;
                     const jobStartTime = Date.now();
                     let jobRunning = false;
                     while (Date.now() - jobStartTime < jobTimeoutMs) {
-                        const response = await fetch(`${serverUrl}/scriptlet/job/item?id=${result.jobId}`, { headers });
+                        const response = await apiClient.fetch(`/scriptlet/job/item?id=${result.jobId}`);
                         if (!response.ok) {
                             if (response.status === 404) {
                                 throw new Error(`Job ${result.jobId} not found`);
@@ -279,7 +280,7 @@ export async function activate(context: vscode.ExtensionContext) {
                         jobId: result.jobId
                     };
                     outputChannel.appendLine(`[DEBUG] Starting debug with config: ${JSON.stringify(config, null, 2)}`);
-                    await vscode.debug.startDebugging(vscode.workspace.workspaceFolders![0], config);
+                    await vscode.debug.startDebugging(workspaceFolder, config);
 
                     vscode.window.showInformationMessage(`Started debug job ${result.jobId} for ${name} with local overrides`);
                 } catch (error: unknown) {
@@ -376,15 +377,9 @@ export async function activate(context: vscode.ExtensionContext) {
 }
 
 export function deactivate() {
-    if (statusBarItem) {
-        statusBarItem.dispose();
-    }
-    if (outputChannel) {
-        outputChannel.dispose();
-    }
-    if (jobOutputChannel) {
-        jobOutputChannel.dispose();
-    }
-    jobService.dispose();
-    debugOutputMonitor.dispose();
+    statusBarItem?.dispose();
+    outputChannel?.dispose();
+    jobOutputChannel?.dispose();
+    jobService?.dispose();
+    debugOutputMonitor?.dispose();
 }

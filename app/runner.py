@@ -11,7 +11,7 @@ from typing import Any
 import zmq, msgpack
 import psutil
 
-from sqlalchemy import null, select, delete, and_, or_
+from sqlalchemy import null, select, delete, and_, or_, case
 from sqlalchemy.orm import Session
 import sqlalchemy.exc
 
@@ -37,11 +37,10 @@ def commit_with_retry(session, max_retries=5, backoff=0.1):
                     raise
             else:
                 raise
-        time.sleep(1.0)
 
 from app.lib import pyops
 from app.lib.sets import ensure_set_environment
-from app.job_runner import get_debug_port, has_debugpy_adapter, get_debugpy_adapter_pid, kill_proc_tree, get_process_tree, process_imports, validate_debug_prerequisites
+from app.lib import job as job_lib
 
 import logging
 from contextlib import redirect_stdout, redirect_stderr
@@ -72,22 +71,22 @@ def terminate_job_processes(job_id: str, pid: int, is_debug: bool, owner: str, g
     # Guard: Skip if job already in terminal state or pid None
     with Session(get_db_engine()) as session:
         job = session.get(Job, job_id)
-        if job and (job.state in ['failed', 'done', 'cancelled', 'remove'] or job.pid is None):
+        if job and job.state in ['failed', 'done', 'cancelled', 'remove']:
             logger.debug("terminate_job_processes: skip %s state=%s pid=%s", job_id, job.state, job.pid)
             return
 
     # Get target processes to terminate
-    target_processes = get_process_tree(pid)
+    target_processes = job_lib.get_process_tree(pid)
 
     # Send SIGTERM to targets
-    kill_proc_tree(target_processes, signal.SIGTERM)
+    job_lib.kill_proc_tree(target_processes, signal.SIGTERM)
 
     # Wait for graceful termination
     import time
     start_time = time.time()
     while (time.time() - start_time) < graceful_timeout:
         # Recreate target processes and check if any are still running
-        target_processes = get_process_tree(pid)
+        target_processes = job_lib.get_process_tree(pid)
         alive = False
         for proc in target_processes:
             logger.debug(f"from {job_id} polling pid={pid} alive={proc.is_running()}")
@@ -99,7 +98,7 @@ def terminate_job_processes(job_id: str, pid: int, is_debug: bool, owner: str, g
         time.sleep(1.0)
 
     # Force kill if still running
-    kill_proc_tree(target_processes, signal.SIGKILL)
+    job_lib.kill_proc_tree(target_processes, signal.SIGKILL)
     postTerm(job_id, killed=True)
     
 def setup_runner_socket(sock_path="/tmp/pyops/runner.sock"):
@@ -154,7 +153,7 @@ def purgeLeftoverServiceJobs():
         for job in jobs:
             logger.debug(f"Purging leftover service job {job.id} in state {job.state}")
             session.delete(job)
-            lib_runner.drop(job.id, job.owner, job.set)
+            lib_runner.drop(job.id, job.set)
         commit_with_retry(session)
 
 def getNextToDo():
@@ -166,7 +165,7 @@ def getNextToDo():
 
         job = session.scalar(stmt)
 
-        if job != None:
+        if job is not None:
             logger.debug(f"getNextToDo: before commit, session ID {id(session)}, job.state '{job.state}' at {datetime.now()}")
             job.state = "dequeued"
             commit_with_retry(session)
@@ -184,14 +183,30 @@ def assignJob(job_id: str, pid: int):
         logger.debug(f"assignJob: session ID {id(session)} at {datetime.now()}")
         job = session.get(Job, job_id)
         old_pid = job.pid
-        job.pid = pid
+        debugpy_pid = None
         if job.kind == "debug":
-            port = get_debug_port(job.owner)
-            debugpy_pid = get_debugpy_adapter_pid(port)
-            job.debugpy_pid = debugpy_pid
+            port = job_lib.get_debug_port(job.owner)
+            debugpy_pid = job_lib.get_debugpy_adapter_pid(port)
             logger.debug(f"assignJob: debugpy_pid {debugpy_pid} for {job_id}")
-        job.state = "running"
-        job.start = datetime.now()
+
+        # Atomic conditional update: only flip state to "running" if a cancel
+        # did not race in while we were forking the subprocess. Using a CASE
+        # expression keeps the state check and write in one statement so we
+        # don't overwrite a cancel that committed after our initial read.
+        values = {
+            Job.pid: pid,
+            Job.start: datetime.now(),
+            Job.state: case(
+                (Job.state.in_(("cancel", "cancelling")), Job.state),
+                else_="running",
+            ),
+        }
+        if debugpy_pid is not None:
+            values[Job.debugpy_pid] = debugpy_pid
+
+        session.query(Job).filter(Job.id == job_id).update(
+            values, synchronize_session=False
+        )
         logger.debug(f"assignJob: before commit, session ID {id(session)}, job.pid {old_pid} to {pid} for {job_id} at {datetime.now()}")
         commit_with_retry(session)
         logger.debug(f"assignJob: after commit, session ID {id(session)}, committed pid for {job_id} at {datetime.now()}")
@@ -240,7 +255,7 @@ def loadJob(job_id: str):
         job.start = datetime.now()
 
         commit_with_retry(session)
-        logger.debug(f"loadJob: after commit, session ID {id(session)}, committed 'running' for {job_id} at {datetime.now()}")
+        logger.debug(f"loadJob: after commit, session ID {id(session)}, committed 'loading' for {job_id} at {datetime.now()}")
 
         return job.owner, job.set, job.name, job.kind, job.param, code, job.overrides, job.max_retries
 
@@ -278,7 +293,7 @@ def finishJob(job_id: str, state: str, detail: str):
         logger.debug(f"finishJob: session ID {id(session)} at {datetime.now()}")
         job = session.get(Job, job_id)
 
-        if job != None:
+        if job is not None:
             old_state = job.state
             if job.kind == "service" and state == "done" and job.drop_done:
                 new_state = "remove"  # Immediately remove done services
@@ -332,7 +347,7 @@ def getNextToTerm():
         )
 
         job = session.scalar(stmt)
-        return {"id": job.id, "pid": job.pid} if job != None else None
+        return {"id": job.id, "pid": job.pid} if job is not None else None
 
 def postTerm(job_id: str, killed: bool = False):
     logger.debug(f"postTerm({job_id}, killed={killed})")
@@ -341,12 +356,12 @@ def postTerm(job_id: str, killed: bool = False):
         logger.debug(f"postTerm: session ID {id(session)} at {datetime.now()}")
         job = session.get(Job, job_id)
 
-        if job != None:
+        if job is not None:
             old_state = job.state
             if job.state == "remove":
                 logger.debug(f"postTerm: before delete, session ID {id(session)}, deleting {job_id} (state '{old_state}') at {datetime.now()}")
                 session.delete(job)
-                lib_runner.drop(job_id, job.owner, job.set)
+                lib_runner.drop(job_id, job.set)
             else:
                 job.end = datetime.now()
 
@@ -407,17 +422,11 @@ def schedule():
         logger.debug(f"schedule: completed at {datetime.now()}")
 
 def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
-    import time
-
     from app.lib import files
     log_conf = files.conf_log()
     level_str = log_conf["loglevel"]
     level = logging.DEBUG if level_str.lower() == "debug" else logging.INFO
     handlers = [logging.StreamHandler(sys.stdout)]
-    if "info" in log_conf:
-        info_path = log_conf["info"]
-        os.makedirs(os.path.dirname(info_path), exist_ok=True)
-        handlers.append(logging.FileHandler(info_path))
     # Add stderr handler for warnings
     stderr_handler = logging.StreamHandler(sys.stderr)
     stderr_handler.setLevel(logging.WARNING)
@@ -427,15 +436,13 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
         format="%(asctime)s [%(name)s] %(levelname)s %(message)s",
         handlers=handlers
     )
-    if "info" in log_conf:
-        logger.info("Runner logging configured: level=%s info=%s", level_str, info_path)
-    else:
-        logger.info("Runner logging configured: level=%s (no file logging)", level_str)
+    logger.info("Runner logging configured: level=%s", level_str)
 
-    os.environ = env
+    os.environ.clear()
+    os.environ.update(env)
 
     # Init config early for subprocess isolation
-    conf_path = os.path.join(files.project_root, "etc/pyops.json")
+    conf_path = os.environ.get("PYOPS_CONFIG", os.path.join(files.project_root, "etc/pyops.json"))
     files.Config.init(conf_path)
 
     killer = GracefulKiller()
@@ -494,7 +501,7 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
                 job = getNextToTerm()
                 logger.debug(f"main: getNextToTerm returned {job}")
 
-                if job != None:
+                if job is not None:
                     if job["pid"] in processes:
                         logger.debug(f"Trying to term job {job}")
                         # Get job kind for termination
@@ -523,7 +530,7 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
                 job_id = getNextToDo()
                 logger.debug(f"main: job_id from getNextToDo = '{job_id}'")
 
-                if job_id != None:
+                if job_id is not None:
                     try:
                         logger.debug(f"main: loading job {job_id}")
                         owner, set, name, kind, param, code, overrides, max_retries = loadJob(job_id)
@@ -531,7 +538,7 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
                         port = None
                         if kind == "debug":
                             try:
-                                port = validate_debug_prerequisites(job_id, owner)
+                                port = job_lib.validate_debug_prerequisites(owner)
                             except Exception as e:
                                 finishJob(job_id, "failed", str(e))
                                 continue
@@ -541,15 +548,15 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
                         override_dict = json.loads(overrides) if overrides else None
 
                         if param:
-                            param = process_imports(param, set, kind, libs, override_dict)
-                        code = process_imports(code, set, kind, libs, override_dict)
+                            param = job_lib.process_imports(param, set, kind, libs, override_dict)
+                        code = job_lib.process_imports(code, set, kind, libs, override_dict)
 
                         logger.debug(f"Run job {job_id}")
                         ensure_set_environment(set)
                         venv_python = os.path.join(venv_path, set, 'bin', 'python')
                         json_kwargs = json.dumps({"job_id": job_id, "owner": owner, "set": set, "name": name, "kind": kind, "param": param, "code": code, "libs": libs, "overrides": overrides, "runner_sock_path": "/tmp/pyops/runner.sock", "max_retries": max_retries, "port": port, "conf_data": files.conf_data(), "conf_runner": files.conf_runner(), "conf_users": files.conf_users(), "conf_web": files.conf_web()})
                         try:
-                            p = subprocess.Popen([venv_python, os.path.abspath('app/job_runner.py'), json_kwargs], cwd=files.project_root)
+                            p = subprocess.Popen([venv_python, os.path.abspath('app/job_runner.py'), json_kwargs], cwd=files.project_root, stdout=sys.stdout, stderr=sys.stderr, text=True)
                         except Exception as e:
                             finishJob(job_id, "failed", f"Launch failed: {e}")
                             continue
@@ -560,7 +567,7 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
                                 if p.poll() is not None:
                                     logger.warning("Job process died before debugpy adapter appeared for job %s", job_id)
                                     break
-                                if has_debugpy_adapter(port):
+                                if job_lib.has_debugpy_adapter(port):
                                     adapter_up = True
                                     logger.debug("Debugpy adapter is up for job %s", job_id)
                                     break
@@ -581,6 +588,7 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
                         assignJob(job_id, p.pid)
                         processes[p.pid] = p
                         logger.debug(f"main: started process for {job_id}, pid {p.pid}")
+
                     except Exception as e:
                         logger.debug(f"main: exception loading/running {job_id}: {e}")
                         logger.exception("Error loading/running job %s: %s", job_id, e)
@@ -610,23 +618,11 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
                 owner = job.owner if job else None
 
             logger.debug(f"Terminating process tree {pid} on shutdown")
-            finishJob(job_id, "cancelling", "shutdown")
+            finishJob(job.id, "cancelling", "shutdown")
             try:
                 p.wait(timeout=1.0)
             except subprocess.TimeoutExpired:
                 p.terminate()
-
-    # handle finished or failed jobs
-    events = runner_poller.poll(0)
-    while events:
-        for sock, _ in events:
-            receive_and_process(runner_socket)
-        events = runner_poller.poll(0)
-
-    # dispose already remove jobs
-    logger.debug("main: final disposeJobs in shutdown")
-    disposeJobs()
-    logger.debug("main: final disposeJobs completed")
 
     # handle finished or failed jobs
     events = runner_poller.poll(0)

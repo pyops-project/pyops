@@ -1,25 +1,21 @@
 import { ScriptletService } from '../../src/services/ScriptletService';
 import { ApiClient } from '../../src/apiClient';
 import { ManagerTreeDataProvider, ScriptletTreeItem } from '../../src/managerTreeProvider';
-
 import { createMockVscodeWindow, createMockApiClient, createMockTreeProvider } from '../utils/helpers';
 
 jest.mock('vscode');
 jest.mock('../../src/utils');
 jest.mock('../../src/apiClient', () => ({ ApiClient: jest.fn() }));
 
-global.fetch = jest.fn();
-
 jest.mock('fs', () => require('../utils/helpers').fsMockFactory());
 jest.mock('path', () => require('../utils/helpers').pathMockFactory());
 
 
 
-const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation();
-
 describe('ScriptletService', () => {
   let mockApiClient: jest.Mocked<ApiClient>;
   let mockManagerTreeProvider: jest.Mocked<ManagerTreeDataProvider>;
+  let mockRemoteProvider: any;
   let mockVscode: any;
   let service: ScriptletService;
 
@@ -50,14 +46,16 @@ describe('ScriptletService', () => {
 
     mockManagerTreeProvider = createMockTreeProvider('manager');
 
-    service = new ScriptletService(mockApiClient, mockManagerTreeProvider);
+    mockRemoteProvider = { setContent: jest.fn() } as any;
+
+    service = new ScriptletService(mockApiClient, mockManagerTreeProvider, mockRemoteProvider);
   });
 
   describe('resetLocalFromRemote', () => {
     it('resets local from remote successfully', async () => {
       const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
 
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
         ok: true,
         json: () => Promise.resolve({ code: 'test code' }),
       } as Response);
@@ -69,9 +67,7 @@ describe('ScriptletService', () => {
 
       await service.resetLocalFromRemote(treeItem);
 
-      expect(global.fetch).toHaveBeenCalledWith('http://localhost:8000/scriptlet/inventory/code?set=testSet&name=testName', {
-        headers: { 'Authorization': 'Basic test' },
-      });
+      expect(mockApiClient.fetch).toHaveBeenCalledWith('/scriptlet/inventory/code?set=testSet&name=testName');
       expect(mockFs.mkdirSync).toHaveBeenCalledWith('/workspace/pyops/testSet/task', { recursive: true });
       expect(mockFs.writeFileSync).toHaveBeenCalledWith('/workspace/pyops/testSet/task/testName.py', 'test code');
       expect(mockManagerTreeProvider.refresh).toHaveBeenCalled();
@@ -80,7 +76,7 @@ describe('ScriptletService', () => {
     it('handles fetch failure', async () => {
       const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
 
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
         ok: false,
         statusText: 'Not Found',
       } as Response);
@@ -99,17 +95,17 @@ describe('ScriptletService', () => {
       mockFs.existsSync.mockReturnValue(true);
       mockFs.readFileSync.mockReturnValue('test code');
 
-      (global.fetch as jest.MockedFunction<typeof fetch>)
+      (mockApiClient.fetch as jest.Mock)
         .mockResolvedValueOnce({ ok: true } as Response)  // check exists
         .mockResolvedValueOnce({ ok: true } as Response); // draft
 
       await service.writeLocalToRemoteDraft(treeItem);
 
-      expect(global.fetch).toHaveBeenCalledTimes(2);
-      expect(global.fetch).toHaveBeenNthCalledWith(1, expect.stringContaining('/inventory/code?set=testSet&name=testName'), expect.any(Object));
-      expect(global.fetch).toHaveBeenNthCalledWith(2, 'http://localhost:8000/scriptlet/inventory/draft', {
+      expect(mockApiClient.fetch).toHaveBeenCalledTimes(2);
+      expect(mockApiClient.fetch).toHaveBeenNthCalledWith(1, expect.stringContaining('/inventory/code?set=testSet&name=testName'));
+      expect(mockApiClient.fetch).toHaveBeenNthCalledWith(2, '/scriptlet/inventory/draft', {
         method: 'POST',
-        headers: { 'Authorization': 'Basic test', 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ set: 'testSet', name: 'testName', code: 'test code' }),
       });
       expect(mockManagerTreeProvider.refresh).toHaveBeenCalled();
@@ -122,7 +118,7 @@ describe('ScriptletService', () => {
       mockFs.existsSync.mockReturnValue(true);
       mockFs.readFileSync.mockReturnValue('test code');
 
-      (global.fetch as jest.MockedFunction<typeof fetch>)
+      (mockApiClient.fetch as jest.Mock)
         .mockResolvedValueOnce({
           status: 404,
           ok: false,
@@ -136,14 +132,14 @@ describe('ScriptletService', () => {
 
       await service.writeLocalToRemoteDraft(treeItem);
 
-      expect(global.fetch).toHaveBeenCalledTimes(3);
-      expect(global.fetch).toHaveBeenNthCalledWith(1, expect.stringContaining('/inventory/code?set=testSet&name=testName'), expect.any(Object));
-      expect(global.fetch).toHaveBeenNthCalledWith(2, 'http://localhost:8000/scriptlet/inventory/item', expect.objectContaining({
+      expect(mockApiClient.fetch).toHaveBeenCalledTimes(3);
+      expect(mockApiClient.fetch).toHaveBeenNthCalledWith(1, expect.stringContaining('/inventory/code?set=testSet&name=testName'));
+      expect(mockApiClient.fetch).toHaveBeenNthCalledWith(2, '/scriptlet/inventory/item', expect.objectContaining({
         method: 'PUT',
         headers: expect.objectContaining({ 'Content-Type': 'application/json' }),
         body: expect.stringContaining('"type":"task"'),
       }));
-      expect(global.fetch).toHaveBeenNthCalledWith(3, 'http://localhost:8000/scriptlet/inventory/draft', expect.objectContaining({
+      expect(mockApiClient.fetch).toHaveBeenNthCalledWith(3, '/scriptlet/inventory/draft', expect.objectContaining({
         method: 'POST',
         body: JSON.stringify({ set: 'testSet', name: 'testName', code: 'test code' }),
       }));
@@ -152,7 +148,7 @@ describe('ScriptletService', () => {
     });
 
     it('shows warning if no valid config', async () => {
-      (ApiClient.hasValidConfigStatic as jest.MockedFunction<typeof ApiClient.hasValidConfigStatic>).mockReturnValue(false);
+      mockApiClient.hasValidConfig.mockReturnValue(false);
 
       const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
 
@@ -167,7 +163,7 @@ describe('ScriptletService', () => {
     it('saves remote draft successfully', async () => {
       const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
 
-      (global.fetch as jest.MockedFunction<typeof fetch>)
+      (mockApiClient.fetch as jest.Mock)
         .mockResolvedValueOnce({
           ok: true,
           json: () => Promise.resolve({ has_unstaged: true }),
@@ -182,14 +178,14 @@ describe('ScriptletService', () => {
 
       await service.saveRemoteDraft(treeItem);
 
-      expect(global.fetch).toHaveBeenCalledTimes(3);
+      expect(mockApiClient.fetch).toHaveBeenCalledTimes(3);
       expect(mockManagerTreeProvider.refresh).toHaveBeenCalled();
     });
 
     it('does nothing if no unstaged changes', async () => {
       const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
 
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
         ok: true,
         json: () => Promise.resolve({ has_unstaged: false }),
       } as Response);
@@ -207,7 +203,7 @@ describe('ScriptletService', () => {
       const mockFs = require('fs');
       mockFs.existsSync.mockReturnValue(true);
 
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
         ok: true,
         json: () => Promise.resolve({ code: 'remote code' }),
       } as Response);
@@ -229,16 +225,15 @@ describe('ScriptletService', () => {
       mockFs.existsSync.mockReturnValue(true);
       mockFs.unlinkSync = jest.fn();
 
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
         ok: true,
         text: () => Promise.resolve(''),
       } as Response);
 
       await service.deleteScriptlet(treeItem);
 
-      expect(global.fetch).toHaveBeenCalledWith('http://localhost:8000/scriptlet/inventory/item?set=testSet&name=testName', {
+      expect(mockApiClient.fetch).toHaveBeenCalledWith('/scriptlet/inventory/item?set=testSet&name=testName', {
         method: 'DELETE',
-        headers: { 'Authorization': 'Basic test' },
       });
       expect(mockFs.unlinkSync).toHaveBeenCalled();
       expect(mockManagerTreeProvider.refresh).toHaveBeenCalled();
@@ -252,7 +247,7 @@ describe('ScriptletService', () => {
 
       await service.deleteScriptlet(treeItem);
 
-      expect(global.fetch).not.toHaveBeenCalled();
+      expect(mockApiClient.fetch).not.toHaveBeenCalled();
     });
   });
 
@@ -261,7 +256,7 @@ describe('ScriptletService', () => {
       const mockVscode = require('vscode');
       const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
 
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockRejectedValueOnce(new Error('Network error'));
+      (mockApiClient.fetch as jest.Mock).mockRejectedValueOnce(new Error('Network error'));
 
       await service.resetLocalFromRemote(treeItem);
 
@@ -272,7 +267,7 @@ describe('ScriptletService', () => {
       const mockVscode = require('vscode');
       const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
 
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
         ok: false,
         statusText: 'Not Found',
       } as Response);
@@ -291,7 +286,7 @@ describe('ScriptletService', () => {
       mockFs.existsSync.mockReturnValue(true);
       mockFs.readFileSync.mockReturnValue('test code');
 
-      (global.fetch as jest.MockedFunction<typeof fetch>)
+      (mockApiClient.fetch as jest.Mock)
         .mockResolvedValueOnce({ ok: true } as Response)  // check exists
         .mockRejectedValueOnce(new Error('Network error')); // draft fetch
 
@@ -308,7 +303,7 @@ describe('ScriptletService', () => {
       mockFs.existsSync.mockReturnValue(true);
       mockFs.readFileSync.mockReturnValue('test code');
 
-      (global.fetch as jest.MockedFunction<typeof fetch>)
+      (mockApiClient.fetch as jest.Mock)
         .mockResolvedValueOnce({ ok: true } as Response)  // check exists
         .mockResolvedValueOnce({
           ok: false,
@@ -326,7 +321,7 @@ describe('ScriptletService', () => {
       const mockVscode = require('vscode');
       const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
 
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockRejectedValueOnce(new Error('Network error'));
+      (mockApiClient.fetch as jest.Mock).mockRejectedValueOnce(new Error('Network error'));
 
       await service.saveRemoteDraft(treeItem);
 
@@ -337,7 +332,7 @@ describe('ScriptletService', () => {
       const mockVscode = require('vscode');
       const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
 
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
         ok: false,
       } as Response);
 
@@ -350,7 +345,7 @@ describe('ScriptletService', () => {
       const mockVscode = require('vscode');
       const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
 
-      (global.fetch as jest.MockedFunction<typeof fetch>)
+      (mockApiClient.fetch as jest.Mock)
         .mockResolvedValueOnce({
           ok: true,
           json: () => Promise.resolve({ has_unstaged: true }),
@@ -366,7 +361,7 @@ describe('ScriptletService', () => {
       const mockVscode = require('vscode');
       const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
 
-      (global.fetch as jest.MockedFunction<typeof fetch>)
+      (mockApiClient.fetch as jest.Mock)
         .mockResolvedValueOnce({
           ok: true,
           json: () => Promise.resolve({ has_unstaged: true }),
@@ -384,7 +379,7 @@ describe('ScriptletService', () => {
       const mockVscode = require('vscode');
       const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
 
-      (global.fetch as jest.MockedFunction<typeof fetch>)
+      (mockApiClient.fetch as jest.Mock)
         .mockResolvedValueOnce({
           ok: true,
           json: () => Promise.resolve({ has_unstaged: true }),
@@ -404,7 +399,7 @@ describe('ScriptletService', () => {
       const mockVscode = require('vscode');
       const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
 
-      (global.fetch as jest.MockedFunction<typeof fetch>)
+      (mockApiClient.fetch as jest.Mock)
         .mockResolvedValueOnce({
           ok: true,
           json: () => Promise.resolve({ has_unstaged: true }),
@@ -432,7 +427,7 @@ describe('ScriptletService', () => {
       const mockFs = require('fs');
       mockFs.existsSync.mockReturnValue(true);
 
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockRejectedValueOnce(new Error('Network error'));
+      (mockApiClient.fetch as jest.Mock).mockRejectedValueOnce(new Error('Network error'));
 
       await service.diffLocalRemote(treeItem);
 
@@ -446,7 +441,7 @@ describe('ScriptletService', () => {
       const mockFs = require('fs');
       mockFs.existsSync.mockReturnValue(true);
 
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
         ok: false,
         statusText: 'Not Found',
       } as Response);
@@ -467,7 +462,7 @@ describe('ScriptletService', () => {
       const mockFs = require('fs');
       mockFs.existsSync.mockReturnValue(true);
 
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockRejectedValueOnce(new Error('Network error'));
+      (mockApiClient.fetch as jest.Mock).mockRejectedValueOnce(new Error('Network error'));
 
       await service.deleteScriptlet(treeItem);
 
@@ -483,7 +478,7 @@ describe('ScriptletService', () => {
       const mockFs = require('fs');
       mockFs.existsSync.mockReturnValue(true);
 
-      (global.fetch as jest.MockedFunction<typeof fetch>)
+      (mockApiClient.fetch as jest.Mock)
         .mockResolvedValueOnce({
           ok: false,
           text: () => Promise.resolve('Delete failed'),
@@ -521,11 +516,26 @@ describe('ScriptletService', () => {
       expect(mockVscode.window.showWarningMessage).toHaveBeenCalledWith('Local file not found: /workspace/pyops/testSet/task/testName.py. Run refresh to download.');
     });
 
-    it('handles resetLocalFromRemote when response code is missing', async () => {
-      const mockVscode = require('vscode');
+    it('does nothing for invalid treeItem', async () => {
+      await service.openLocalFile(undefined);
+      expect(mockVscode.workspace.openTextDocument).not.toHaveBeenCalled();
+    });
+
+    it('shows warning when no workspace folder open', async () => {
+      mockVscode.workspace.workspaceFolders = undefined;
       const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
 
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
+      await service.openLocalFile(treeItem);
+
+      expect(mockVscode.window.showWarningMessage).toHaveBeenCalledWith('No workspace folder open');
+    });
+  });
+
+  describe('resetLocalFromRemote edge cases', () => {
+    it('handles response code missing', async () => {
+      const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
+
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
         ok: true,
         json: () => Promise.resolve({}),
       } as Response);
@@ -541,19 +551,28 @@ describe('ScriptletService', () => {
       expect(mockManagerTreeProvider.refresh).toHaveBeenCalled();
     });
 
-    it('handles resetLocalFromRemote network errors', async () => {
-      const mockVscode = require('vscode');
+    it('does nothing for invalid treeItem', async () => {
+      await service.resetLocalFromRemote(undefined);
+      expect(mockApiClient.fetch).not.toHaveBeenCalled();
+    });
+
+    it('shows warning when no workspace folder open', async () => {
+      mockVscode.workspace.workspaceFolders = undefined;
       const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
 
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockRejectedValueOnce(new Error('Network error'));
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ code: 'test code' }),
+      } as Response);
 
       await service.resetLocalFromRemote(treeItem);
 
-      expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith('Error resetting local: Network error');
+      expect(mockVscode.window.showWarningMessage).toHaveBeenCalledWith('No workspace folder open');
     });
+  });
 
-    it('handles writeLocalToRemoteDraft when local file read fails', async () => {
-      const mockVscode = require('vscode');
+  describe('writeLocalToRemoteDraft edge cases', () => {
+    it('handles local file read failure', async () => {
       const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
 
       const mockFs = require('fs');
@@ -567,11 +586,96 @@ describe('ScriptletService', () => {
       expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith('Error reading local file');
     });
 
-    it('handles saveRemoteDraft when status check returns invalid JSON', async () => {
-      const mockVscode = require('vscode');
+    it('does nothing for invalid treeItem', async () => {
+      await service.writeLocalToRemoteDraft(undefined);
+      expect(mockApiClient.fetch).not.toHaveBeenCalled();
+    });
+
+    it('shows warning when no workspace folder open', async () => {
+      mockVscode.workspace.workspaceFolders = undefined;
       const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
 
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
+      await service.writeLocalToRemoteDraft(treeItem);
+
+      expect(mockVscode.window.showWarningMessage).toHaveBeenCalledWith('No workspace folder open');
+    });
+
+    it('shows error when local file not found', async () => {
+      const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
+      const mockFs = require('fs');
+      mockFs.existsSync.mockReturnValue(false);
+
+      await service.writeLocalToRemoteDraft(treeItem);
+
+      expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith('Local file not found');
+    });
+
+    it('handles network error checking remote existence', async () => {
+      const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
+      const mockFs = require('fs');
+      mockFs.existsSync.mockReturnValue(true);
+      mockFs.readFileSync.mockReturnValue('test code');
+
+      (mockApiClient.fetch as jest.Mock).mockRejectedValueOnce(new Error('Connection refused'));
+
+      await service.writeLocalToRemoteDraft(treeItem);
+
+      expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith('Network error checking remote existence: Connection refused');
+    });
+
+    it('handles non-ok non-404 check response', async () => {
+      const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
+      const mockFs = require('fs');
+      mockFs.existsSync.mockReturnValue(true);
+      mockFs.readFileSync.mockReturnValue('test code');
+
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+        statusText: 'Internal Server Error',
+      } as Response);
+
+      await service.writeLocalToRemoteDraft(treeItem);
+
+      expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith('Failed to check remote existence: Internal Server Error');
+    });
+
+    it('handles auto-create failure', async () => {
+      const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
+      const mockFs = require('fs');
+      mockFs.existsSync.mockReturnValue(true);
+      mockFs.readFileSync.mockReturnValue('test code');
+
+      (mockApiClient.fetch as jest.Mock)
+        .mockResolvedValueOnce({ status: 404, ok: false } as Response) // check 404
+        .mockResolvedValueOnce({ ok: false, statusText: 'Conflict' } as Response); // create fail
+
+      await service.writeLocalToRemoteDraft(treeItem);
+
+      expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith('Failed to auto-create remote scriptlet testName: Conflict');
+    });
+
+    it('handles auto-create network error', async () => {
+      const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
+      const mockFs = require('fs');
+      mockFs.existsSync.mockReturnValue(true);
+      mockFs.readFileSync.mockReturnValue('test code');
+
+      (mockApiClient.fetch as jest.Mock)
+        .mockResolvedValueOnce({ status: 404, ok: false } as Response)
+        .mockRejectedValueOnce(new Error('Network error'));
+
+      await service.writeLocalToRemoteDraft(treeItem);
+
+      expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith('Network error auto-creating remote scriptlet testName: Network error');
+    });
+  });
+
+  describe('saveRemoteDraft edge cases', () => {
+    it('handles status check returning invalid JSON', async () => {
+      const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
+
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
         ok: true,
         json: () => Promise.reject(new Error('Invalid JSON')),
       } as Response);
@@ -581,14 +685,29 @@ describe('ScriptletService', () => {
       expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith('Error saving draft: Invalid JSON');
     });
 
-    it('handles diffLocalRemote when local file is missing', async () => {
-      const mockVscode = require('vscode');
+    it('shows warning for invalid config', async () => {
+      mockApiClient.hasValidConfig.mockReturnValue(false);
+      const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
+
+      await service.saveRemoteDraft(treeItem);
+
+      expect(mockVscode.window.showWarningMessage).toHaveBeenCalledWith('No valid PyOps configuration set. Please configure in settings.');
+    });
+
+    it('does nothing for invalid treeItem', async () => {
+      await service.saveRemoteDraft(undefined);
+      expect(mockApiClient.fetch).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('diffLocalRemote edge cases', () => {
+    it('shows warning when local file is missing', async () => {
       const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
 
       const mockFs = require('fs');
       mockFs.existsSync.mockReturnValue(false);
 
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
         ok: true,
         json: () => Promise.resolve({ code: 'remote code' }),
       } as Response);
@@ -598,8 +717,37 @@ describe('ScriptletService', () => {
       expect(mockVscode.window.showWarningMessage).toHaveBeenCalledWith('Local file not found; create first');
     });
 
-    it('handles deleteScriptlet when local file unlink fails', async () => {
-      const mockVscode = require('vscode');
+    it('shows warning for invalid config', async () => {
+      mockApiClient.hasValidConfig.mockReturnValue(false);
+      const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
+
+      await service.diffLocalRemote(treeItem);
+
+      expect(mockVscode.window.showWarningMessage).toHaveBeenCalledWith('No valid PyOps configuration set. Please configure in settings.');
+    });
+
+    it('does nothing for invalid treeItem', async () => {
+      await service.diffLocalRemote(undefined);
+      expect(mockApiClient.fetch).not.toHaveBeenCalled();
+    });
+
+    it('shows warning when no workspace folder open', async () => {
+      mockVscode.workspace.workspaceFolders = undefined;
+      const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
+
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ code: 'remote code' }),
+      } as Response);
+
+      await service.diffLocalRemote(treeItem);
+
+      expect(mockVscode.window.showWarningMessage).toHaveBeenCalledWith('No workspace folder open');
+    });
+  });
+
+  describe('deleteScriptlet edge cases', () => {
+    it('handles local file unlink failure gracefully', async () => {
       const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
 
       mockVscode.window.showWarningMessage.mockResolvedValue('Delete');
@@ -610,7 +758,7 @@ describe('ScriptletService', () => {
         throw new Error('Unlink failed');
       });
 
-      (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValueOnce({
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
         ok: true,
         text: () => Promise.resolve(''),
       } as Response);
@@ -619,6 +767,72 @@ describe('ScriptletService', () => {
 
       expect(mockManagerTreeProvider.refresh).toHaveBeenCalled();
       expect(mockVscode.window.showInformationMessage).toHaveBeenCalledWith('Deleted remote and local testSet::testName (task)');
+    });
+
+    it('shows warning for invalid config', async () => {
+      mockApiClient.hasValidConfig.mockReturnValue(false);
+      const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
+
+      await service.deleteScriptlet(treeItem);
+
+      expect(mockVscode.window.showWarningMessage).toHaveBeenCalledWith('No valid PyOps configuration set. Please configure in settings.');
+    });
+
+    it('does nothing for invalid treeItem', async () => {
+      await service.deleteScriptlet(undefined);
+      expect(mockApiClient.fetch).not.toHaveBeenCalled();
+    });
+
+    it('shows warning when no workspace folder open', async () => {
+      mockVscode.workspace.workspaceFolders = undefined;
+      const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
+
+      mockVscode.window.showWarningMessage.mockResolvedValue('Delete');
+
+      await service.deleteScriptlet(treeItem);
+
+      expect(mockVscode.window.showWarningMessage).toHaveBeenCalledWith('No workspace folder open');
+    });
+
+    it('handles 404 response (local-only delete)', async () => {
+      const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
+
+      mockVscode.window.showWarningMessage.mockResolvedValue('Delete');
+
+      const mockFs = require('fs');
+      mockFs.existsSync.mockReturnValue(true);
+      mockFs.unlinkSync = jest.fn();
+
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+      } as Response);
+
+      await service.deleteScriptlet(treeItem);
+
+      expect(mockFs.unlinkSync).toHaveBeenCalled();
+      expect(mockManagerTreeProvider.refresh).toHaveBeenCalled();
+      expect(mockVscode.window.showInformationMessage).toHaveBeenCalledWith('Deleted local testSet::testName (task)');
+    });
+
+    it('handles 404 with unlink failure', async () => {
+      const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
+
+      mockVscode.window.showWarningMessage.mockResolvedValue('Delete');
+
+      const mockFs = require('fs');
+      mockFs.existsSync.mockReturnValue(true);
+      mockFs.unlinkSync.mockImplementation(() => { throw new Error('Permission denied'); });
+
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+      } as Response);
+
+      await service.deleteScriptlet(treeItem);
+
+      expect(mockManagerTreeProvider.refresh).toHaveBeenCalled();
+      expect(mockVscode.window.showInformationMessage).toHaveBeenCalledWith('Deleted local testSet::testName (task)');
     });
   });
 });

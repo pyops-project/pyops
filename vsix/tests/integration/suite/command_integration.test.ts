@@ -1,6 +1,7 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
 import * as helpers from '../utils/helpers';
+import { getExtensionState } from '../../../src/extension';
 
 export async function run(): Promise<void> {
   console.log('Running Command Integration Tests...');
@@ -15,14 +16,15 @@ export async function run(): Promise<void> {
       throw new Error('Extension not active');
     }
 
-    const jobService = (global as any).jobService;
-    const scriptletService = (global as any).scriptletService;
-    const jobsProvider = (global as any).jobsTreeProvider;
-    const managerProvider = (global as any).managerTreeProvider;
+    const state = getExtensionState();
+    const jobService = state?.jobService;
+    const scriptletService = state?.scriptletService;
+    const jobsProvider = state?.jobsTreeProvider;
+    const managerProvider = state?.managerTreeProvider;
     assert.ok(jobService && scriptletService && jobsProvider && managerProvider, 'Services and providers must exist');
 
     // Create test data for command testing
-    testScriptletName = `cmd-test-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    testScriptletName = `cmd-test-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
     await helpers.createTestScriptlet('test', testScriptletName!, 'task', 'print("test command execution")');
     testJobId = await helpers.createTestJob('test', testScriptletName!);
 
@@ -49,14 +51,18 @@ export async function run(): Promise<void> {
 
     // Test 3: deleteJob command
     console.log('Test 3: deleteJob command...');
+    // Wait for job to finish (delete API only allows todo/cancelled/failed/done)
+    await helpers.waitForJobState(testJobId!, 'done');
     // Mock showWarningMessage to auto-confirm 'Delete'
     const originalShowWarningMessageDelete = vscode.window.showWarningMessage;
     vscode.window.showWarningMessage = async (message: string, options?: any, ...items: string[]) => {
       return items[0]; // 'Delete'
     };
-    await vscode.commands.executeCommand('pyops.deleteJob', jobItem);
-    // Restore
-    vscode.window.showWarningMessage = originalShowWarningMessageDelete;
+    try {
+      await vscode.commands.executeCommand('pyops.deleteJob', jobItem);
+    } finally {
+      vscode.window.showWarningMessage = originalShowWarningMessageDelete;
+    }
     // Verify job is removed from tree
     await vscode.commands.executeCommand('pyops.refreshMonitor');
     const childrenAfterDelete = await jobsProvider.getChildren();
@@ -92,7 +98,7 @@ export async function run(): Promise<void> {
 
     // Test 6: refreshConnectionStatus command
     console.log('Test 6: refreshConnectionStatus command...');
-    const connectionStatusManager = (global as any).connectionStatusManager;
+    const connectionStatusManager = getExtensionState()?.connectionStatusManager;
     assert.ok(connectionStatusManager, 'ConnectionStatusManager must exist');
 
     // Mock the update method to verify it's called
@@ -134,9 +140,11 @@ export async function run(): Promise<void> {
     vscode.window.showWarningMessage = async (message: string, options?: any, ...items: string[]) => {
       return items[0]; // 'Delete'
     };
-    await vscode.commands.executeCommand('pyops.deleteScriptlet', scriptletItem);
-    // Restore
-    vscode.window.showWarningMessage = originalShowWarningMessageScriptlet;
+    try {
+      await vscode.commands.executeCommand('pyops.deleteScriptlet', scriptletItem);
+    } finally {
+      vscode.window.showWarningMessage = originalShowWarningMessageScriptlet;
+    }
     // Verify scriptlet is removed from tree
     await vscode.commands.executeCommand('pyops.refreshManager');
     const scriptletChildrenAfterDelete = await managerProvider.getChildren(testSetItem);
@@ -165,9 +173,11 @@ export async function run(): Promise<void> {
     vscode.window.showWarningMessage = async (message: string, options?: any, ...items: string[]) => {
       return items[0]; // 'Yes'
     };
-    await vscode.commands.executeCommand('pyops.cancelAllJobs');
-    // Restore
-    vscode.window.showWarningMessage = originalShowWarningBulkCancel;
+    try {
+      await vscode.commands.executeCommand('pyops.cancelAllJobs');
+    } finally {
+      vscode.window.showWarningMessage = originalShowWarningBulkCancel;
+    }
     // Verify all jobs are cancelled
     for (const id of bulkJobIds) {
       await helpers.waitForJobState(id, 'cancelled', 15000);
@@ -180,8 +190,11 @@ export async function run(): Promise<void> {
     vscode.window.showWarningMessage = async (message: string, options?: any, ...items: string[]) => {
       return items[0]; // 'Yes'
     };
-    await vscode.commands.executeCommand('pyops.deleteAllDone');
-    vscode.window.showWarningMessage = originalShowWarningBulkDelete;
+    try {
+      await vscode.commands.executeCommand('pyops.deleteAllDone');
+    } finally {
+      vscode.window.showWarningMessage = originalShowWarningBulkDelete;
+    }
     // Verify done jobs are removed
     await vscode.commands.executeCommand('pyops.refreshMonitor');
     const childrenAfterBulkDelete = await jobsProvider.getChildren();

@@ -66,10 +66,10 @@ class JobControl:
         return self.rq.delete("scriptlet/job/item", params={"id":id})
     
     def cancel(self, id: str):
-        return self.rq.get("scriptlet/job/item", params={"id":id})
-    
+        return self.rq.get("scriptlet/job/cancel", params={"id": id})
+
     def download(self, id: str):
-        return self.rq.get("scriptlet/job/item", params={"id":id})
+        return self.rq.get("scriptlet/job/download", params={"id": id})
 
 class ScheduleControl:
     def __init__(self, rq: ControlRequest):
@@ -89,16 +89,16 @@ class ScheduleControl:
         })["schedule"]
 
     def get(self, id: int):
-        return self.rq.get("scriptlet/schedule/item", params={id:id})
-    
+        return self.rq.get("scriptlet/schedule/item", params={"id": id})
+
     def delete(self, id: int):
-        return self.rq.delete("scriptlet/schedule/item", params={id:id})
-    
+        return self.rq.delete("scriptlet/schedule/item", params={"id": id})
+
     def activate(self, id: int):
-        return self.rq.get("scriptlet/schedule/activate", params={id:id})
-    
+        return self.rq.get("scriptlet/schedule/activate", params={"id": id})
+
     def deactivate(self, id: int):
-        return self.rq.get("scriptlet/schedule/deactivate", params={id:id})
+        return self.rq.get("scriptlet/schedule/deactivate", params={"id": id})
 
 class Control:
     def __init__(self, owner: str, web_bind: str):
@@ -107,16 +107,16 @@ class Control:
         self.schedule = ScheduleControl(self.rq)
 
     def get(self, set: str, name: str, params = {}):
-        return self.rq.get(f"controller/{set}/{name}/get", params=params)
-    
+        return self.rq.get(f"controller/{set}/{name}", params=params)
+
     def delete(self, set: str, name: str, params = {}):
-        return self.rq.get(f"controller/{set}/{name}/delete", params=params)
-    
+        return self.rq.delete(f"controller/{set}/{name}", params=params)
+
     def put(self, set: str, name: str, json = {}):
-        return self.rq.get(f"controller/{set}/{name}/put", json=json)
-    
+        return self.rq.put(f"controller/{set}/{name}", json=json)
+
     def post(self, set: str, name: str, json = {}):
-        return self.rq.get(f"controller/{set}/{name}/post", json=json)
+        return self.rq.post(f"controller/{set}/{name}", json=json)
 
 class ServiceListener:
     def __init__(self, owner: str, job_id: str):
@@ -177,9 +177,9 @@ class ServiceListener:
         else:
             return "TERM"
 
-    def response(self, msg):
+    def response(self, msg, status: int = 200):
         if self.last_identity is not None:
-            b = msgpack.packb(msg)
+            b = msgpack.packb([status, msg])
             self.socket.send(self.last_identity, zmq.SNDMORE)
             self.socket.send(b'', zmq.SNDMORE)
             self.socket.send(b)
@@ -198,9 +198,9 @@ class ServiceListener:
             messages.append((identity, message))
         return messages
 
-    def async_response(self, identity, msg):
+    def async_response(self, identity, msg, status: int = 200):
         """Send response to a specific client identity."""
-        b = msgpack.packb(msg)
+        b = msgpack.packb([status, msg])
         self.socket.send(identity, zmq.SNDMORE)
         self.socket.send(b'', zmq.SNDMORE)
         self.socket.send(b)
@@ -227,4 +227,5 @@ class ServiceClient:
     def request(self, msg):
         b = msgpack.packb(msg)
         self.socket.send(b)
-        return msgpack.unpackb(self.socket.recv())
+        status, data = msgpack.unpackb(self.socket.recv())
+        return status, data

@@ -13,6 +13,11 @@
         <script src="/files/js/js.cookie.min.js"></script>
         <script src="/files/js/bootstrap/bootstrap.bundle.min.js"></script>
 
+        <style>
+            html, body { height: 100%; margin: 0; }
+            #sidebarOffcanvas { overflow-y: auto; }
+        </style>
+
         <script>
             'use strict';
 
@@ -21,13 +26,13 @@
 
             function genMenuItem(id, name) {
                 return `
-                    <li id="${id}" class="mb-1">
-                        <button type="button" class="btn btn-toggle btn-primary w-100" data-bs-toggle="collapse" data-bs-target="#${id}-collapse" aria-expanded="true">
+                    <li id="${id}" class="mb-1" data-testid="menu-section-${id}">
+                        <button type="button" class="btn btn-toggle btn-primary w-100" data-bs-toggle="collapse" data-bs-target="#${id}-collapse" aria-expanded="true" data-testid="menu-toggle-${id}">
                             ${name}
                         </button>
                         <div id="${id}-collapse" class="collapse show">
                             <ul id="submenu_${id}" class="btn-toggle-nav list-unstyled">
-                                
+
                             </ul>
                         </div>
                     </li>
@@ -52,8 +57,8 @@
             function genSubmenuItem(parent, id, name, path) {
                 //  onclick="window.location.replace(window.location.origin+'/?goto=${id}')"
                 return `
-                    <li id="${id}">
-                        <a id="btn_${id}" class="btn btn-secondary w-100 p-0" onclick="history.replaceState('${id}', '', '/?goto=${id}'); setActive('${id}');" href="${path}" target="frame">${name}</a>
+                    <li id="${id}" data-testid="menu-item-${id}">
+                        <a id="btn_${id}" class="btn btn-secondary w-100 p-0" onclick="history.replaceState('${id}', '', '/?goto=${id}'); setActive('${id}');" href="${path}" target="frame" data-testid="menu-link-${id}">${name}</a>
                     </li>
                 `;
             }
@@ -96,18 +101,29 @@
             });
         </script>
     </head>
-    <body>
-        <div class="d-flex h-100">
-            <div class="p-3 bg-dark text-light" style="width: 280px">
-                <p>
+    <body class="d-flex flex-column h-100">
+        <nav class="navbar navbar-dark bg-dark d-lg-none flex-shrink-0" data-testid="mobile-topbar">
+            <div class="container-fluid">
+                <button class="navbar-toggler" type="button" data-bs-toggle="offcanvas" data-bs-target="#sidebarOffcanvas" aria-controls="sidebarOffcanvas" aria-label="Toggle navigation" data-testid="sidebar-toggle">
+                    <span class="navbar-toggler-icon"></span>
+                </button>
+                <span class="navbar-brand mb-0">
+                    <span class="material-icons-round text-icon align-middle">miscellaneous_services</span>
+                    <span class="fs-5 align-middle">PyOps</span>
+                </span>
+            </div>
+        </nav>
+        <div class="d-flex flex-grow-1 overflow-hidden">
+            <div class="p-3 bg-dark text-light offcanvas-lg offcanvas-start" tabindex="-1" id="sidebarOffcanvas" aria-labelledby="sidebarOffcanvasLabel" style="--bs-offcanvas-width: 280px; width: 280px;" data-testid="sidebar">
+                <p data-testid="app-title" id="sidebarOffcanvasLabel">
                     <span class="material-icons-round text-icon mt-1">miscellaneous_services</span>
                     <span class="fs-5">PyOps</span>
                 </p>
                 <hr>
-                <ul id="menu" class="list-unstyled" />
+                <ul id="menu" class="list-unstyled" data-testid="sidebar-menu"></ul>
             </div>
-            <div class="w-100">
-                <iframe id="frame" name="frame" class="h-100 w-100" />
+            <div class="flex-grow-1 h-100">
+                <iframe id="frame" name="frame" class="h-100 w-100 border-0" data-testid="content-frame"></iframe>
             </div>
         </div>
     </body>

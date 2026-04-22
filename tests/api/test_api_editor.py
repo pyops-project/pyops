@@ -1,9 +1,5 @@
 import pytest
-from fastapi.testclient import TestClient
 from unittest.mock import patch, MagicMock
-from app.web import app
-from app.lib.files import conf_data
-from app.lib.git import get_file_path, read_content
 import jedi
 
 def test_get_editor_task(mock_client, mock_git_ops, mock_db, test_temp_dir, patch_tempfile, mock_datetime):

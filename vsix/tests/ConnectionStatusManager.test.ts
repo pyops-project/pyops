@@ -3,11 +3,9 @@ import { ConnectionStatusManager } from '../src/ConnectionStatusManager';
 jest.mock('vscode');
 jest.mock('../src/services/AuthService');
 
-// Mock fetch
-global.fetch = jest.fn();
-
 describe('ConnectionStatusManager', () => {
   let manager: ConnectionStatusManager;
+  let mockApiClient: any;
   let mockContext: any;
   let mockOutputChannel: any;
   let mockStatusBarItem: any;
@@ -25,17 +23,24 @@ describe('ConnectionStatusManager', () => {
     require('./utils/helpers').setupConfigMock();
     (require('vscode').commands.executeCommand as jest.Mock).mockResolvedValue(undefined);
     mockContext = {
-      workspaceState: {
-        get: jest.fn().mockReturnValue('password'),
-        update: jest.fn(),
+      secrets: {
+        get: jest.fn().mockResolvedValue('password'),
+        store: jest.fn(),
+        delete: jest.fn(),
       },
     };
     mockOutputChannel = {
       appendLine: jest.fn(),
     };
+    mockApiClient = {
+      getServerUrl: jest.fn().mockReturnValue('http://localhost:8000'),
+      getHeaders: jest.fn().mockResolvedValue({ 'Authorization': 'Basic test' }),
+      fetch: jest.fn(),
+      hasValidConfig: jest.fn().mockReturnValue(true),
+    };
     const mockAuthService = require('../src/services/AuthService');
     mockAuthService.AuthService.setupAuth = jest.fn().mockResolvedValue(undefined);
-    manager = new ConnectionStatusManager(mockContext, mockOutputChannel);
+    manager = new ConnectionStatusManager(mockApiClient, mockContext, mockOutputChannel);
   });
 
   describe('createStatusBarItem', () => {
@@ -56,7 +61,7 @@ describe('ConnectionStatusManager', () => {
     });
 
     it('should set status bar to no serverUrl when config has no serverUrl', async () => {
-      require('./utils/helpers').setupConfigMock({serverUrl: ''});
+      mockApiClient.getServerUrl.mockReturnValue('');
 
       await manager.update();
 
@@ -73,7 +78,7 @@ describe('ConnectionStatusManager', () => {
     });
 
     it('should set status bar to connected when fetch succeeds', async () => {
-      (global.fetch as jest.Mock).mockResolvedValue({
+      mockApiClient.fetch.mockResolvedValue({
         ok: true,
       });
 
@@ -87,13 +92,11 @@ describe('ConnectionStatusManager', () => {
       expect(mockOutputChannel.appendLine).toHaveBeenCalledWith('Status: Connected to http://localhost:8000');
       expect(mockStatusBarItem.show).toHaveBeenCalled();
       expect(require('vscode').commands.executeCommand).toHaveBeenCalledWith('setContext', 'pyops.hasValidConfig', true);
-      expect(global.fetch).toHaveBeenCalledWith('http://localhost:8000/', {
-        headers: { Authorization: 'Basic dGVzdHVzZXI6cGFzc3dvcmQ=' },
-      });
+      expect(mockApiClient.fetch).toHaveBeenCalledWith('/');
     });
 
     it('should set status bar to failed when fetch returns error status', async () => {
-      (global.fetch as jest.Mock).mockResolvedValue({
+      mockApiClient.fetch.mockResolvedValue({
         ok: false,
         status: 500,
       });
@@ -114,7 +117,7 @@ describe('ConnectionStatusManager', () => {
 
     it('should set status bar to error when fetch throws', async () => {
       const error = new Error('Network error');
-      (global.fetch as jest.Mock).mockRejectedValue(error);
+      mockApiClient.fetch.mockRejectedValue(error);
 
       await manager.update();
 
@@ -130,59 +133,38 @@ describe('ConnectionStatusManager', () => {
       expect(require('vscode').commands.executeCommand).toHaveBeenCalledWith('setContext', 'pyops.hasValidConfig', false);
     });
 
-    it('should include auth headers when username and password are set', async () => {
-      (global.fetch as jest.Mock).mockResolvedValue({
-        ok: true,
-      });
-
-      await manager.update();
-
-      expect(global.fetch).toHaveBeenCalledWith('http://localhost:8000/', {
-        headers: { Authorization: 'Basic dGVzdHVzZXI6cGFzc3dvcmQ=' },
-      });
-    });
-
-    it('should not include auth headers when no password', async () => {
-      mockContext.workspaceState.get.mockReturnValue(undefined);
-      (global.fetch as jest.Mock).mockResolvedValue({
-        ok: true,
-      });
-
-      await manager.update();
-
-      expect(global.fetch).toHaveBeenCalledWith('http://localhost:8000/', {
-        headers: {},
-      });
-    });
-
     it('should handle 401 by clearing password, prompting, and connecting on retry', async () => {
-      (global.fetch as jest.Mock).mockResolvedValueOnce({ ok: false, status: 401 }).mockResolvedValueOnce({ ok: true });
+      mockApiClient.fetch.mockResolvedValueOnce({ ok: false, status: 401 }).mockResolvedValueOnce({ ok: true });
 
       await manager.update();
 
-      expect(mockContext.workspaceState.update).toHaveBeenCalledWith('pyops.password', undefined);
+      expect(mockContext.secrets.delete).toHaveBeenCalledWith('pyops.password');
       expect(require('../src/services/AuthService').AuthService.setupAuth).toHaveBeenCalledWith(mockContext, mockOutputChannel);
       expect(mockOutputChannel.appendLine).toHaveBeenCalledWith('[AUTH] Invalid credentials (401), clearing stored password and prompting for new one.');
       expect(mockStatusBarItem.text).toBe('$(check) PyOps: Connected');
-      expect(global.fetch).toHaveBeenCalledTimes(2);
+      expect(mockApiClient.fetch).toHaveBeenCalledTimes(2);
+      expect(mockApiClient.fetch).toHaveBeenNthCalledWith(1, '/');
+      expect(mockApiClient.fetch).toHaveBeenNthCalledWith(2, '/');
       expect(require('vscode').commands.executeCommand).toHaveBeenCalledWith('setContext', 'pyops.hasValidConfig', true);
     });
 
     it('should handle 401 and show failed if retry also fails', async () => {
-      (global.fetch as jest.Mock).mockResolvedValueOnce({ ok: false, status: 401 }).mockResolvedValueOnce({ ok: false, status: 401 });
+      mockApiClient.fetch.mockResolvedValueOnce({ ok: false, status: 401 }).mockResolvedValueOnce({ ok: false, status: 401 });
 
       await manager.update();
 
-      expect(mockContext.workspaceState.update).toHaveBeenCalledWith('pyops.password', undefined);
+      expect(mockContext.secrets.delete).toHaveBeenCalledWith('pyops.password');
       expect(require('../src/services/AuthService').AuthService.setupAuth).toHaveBeenCalledWith(mockContext, mockOutputChannel);
       expect(mockOutputChannel.appendLine).toHaveBeenCalledWith('[AUTH] Invalid credentials (401), clearing stored password and prompting for new one.');
       expect(mockStatusBarItem.text).toBe('$(circle-slash) PyOps: Failed (401)');
-      expect(global.fetch).toHaveBeenCalledTimes(2);
+      expect(mockApiClient.fetch).toHaveBeenCalledTimes(2);
+      expect(mockApiClient.fetch).toHaveBeenNthCalledWith(1, '/');
+      expect(mockApiClient.fetch).toHaveBeenNthCalledWith(2, '/');
       expect(require('vscode').commands.executeCommand).toHaveBeenCalledWith('setContext', 'pyops.hasValidConfig', false);
     });
 
     it('should throw error if statusBarItem not created', async () => {
-      manager = new ConnectionStatusManager(mockContext, mockOutputChannel); // New instance without createStatusBarItem
+      manager = new ConnectionStatusManager(mockApiClient, mockContext, mockOutputChannel); // New instance without createStatusBarItem
 
       await expect(manager.update()).rejects.toThrow('StatusBarItem not created');
     });

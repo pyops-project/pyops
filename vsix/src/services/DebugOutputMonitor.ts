@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { ApiClient } from '../apiClient';
+import { appendIncrementalOutput } from '../utils';
 
 export class DebugOutputMonitor {
     private activeJobs = new Map<string, { timeout: NodeJS.Timeout | null; jobId: string; prevStdoutLen: number; prevStderrLen: number }>();
@@ -16,32 +17,13 @@ export class DebugOutputMonitor {
             return false;
         }
 
-        const serverUrl = this.apiClient.getServerUrl();
-        const headers = await this.apiClient.getHeaders();
-
         try {
-            const jobResponse = await fetch(`${serverUrl}/scriptlet/job/item?id=${active.jobId}`, { headers });
+            const jobResponse = await this.apiClient.fetch(`/scriptlet/job/item?id=${active.jobId}`);
             if (jobResponse.ok) {
                 const jobData = await jobResponse.json() as unknown;
                 const jobObj = jobData as { stdout?: string; stderr?: string; state: string };
 
-                if (jobObj.stdout) {
-                    const newOut = jobObj.stdout.slice(active.prevStdoutLen);
-                    if (newOut.length > 0) {
-                        this.outputChannel.appendLine('[STDOUT]');
-                        this.outputChannel.append(newOut);
-                    }
-                    active.prevStdoutLen = jobObj.stdout.length;
-                }
-                if (jobObj.stderr) {
-                    const newErr = jobObj.stderr.slice(active.prevStderrLen);
-                    if (newErr.length > 0) {
-                        this.outputChannel.appendLine('[STDERR]');
-                        this.outputChannel.append(newErr);
-                        this.outputChannel.show(true);
-                    }
-                    active.prevStderrLen = jobObj.stderr.length;
-                }
+                appendIncrementalOutput(this.outputChannel, jobObj, active);
                 if (['done', 'failed', 'cancelled', 'remove'].includes(jobObj.state)) {
                     this.activeJobs.delete(key);
                     return false;
@@ -95,11 +77,9 @@ export class DebugOutputMonitor {
             return;
         }
 
-        const serverUrl = this.apiClient.getServerUrl();
-        const headers = await this.apiClient.getHeaders();
         const jobId = active.jobId;
         try {
-            const cancelResponse = await fetch(`${serverUrl}/scriptlet/job/cancel?id=${jobId}`, { headers });
+            const cancelResponse = await this.apiClient.fetch(`/scriptlet/job/cancel?id=${jobId}`);
             if (cancelResponse.ok) {
                 if (active.timeout) clearTimeout(active.timeout);
                 this.activeJobs.delete(key);

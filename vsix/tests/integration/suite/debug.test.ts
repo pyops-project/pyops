@@ -3,6 +3,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as helpers from '../utils/helpers';
+import { getExtensionState } from '../../../src/extension';
 
 export async function run(): Promise<void> {
   console.log('Running Debug Tests...');
@@ -19,10 +20,11 @@ export async function run(): Promise<void> {
       throw new Error('Extension not active');
     }
 
-    const debugService = (global as any).debugService;
-    const debugOutputMonitor = (global as any).debugOutputMonitor;
-    const managerProvider = (global as any).managerTreeProvider;
-    const jobsProvider = (global as any).jobsTreeProvider;
+    const state = getExtensionState();
+    const debugService = state?.debugService;
+    const debugOutputMonitor = state?.debugOutputMonitor;
+    const managerProvider = state?.managerTreeProvider;
+    const jobsProvider = state?.jobsTreeProvider;
     assert.ok(debugService && debugOutputMonitor && managerProvider && jobsProvider, 'Debug services and providers must exist');
 
     // Cleanup leftover jobs
@@ -52,7 +54,7 @@ export async function run(): Promise<void> {
     fs.writeFileSync(path.join(taskDir, 'mytask.py'), taskContent);
     fs.writeFileSync(path.join(serviceDir, 'myservice.py'), serviceContent);
 
-    const DebugService = (global as any).DebugService;
+    const DebugService = state!.DebugService;
     const buildResult = DebugService.buildOverrides('test', vscode.workspace.workspaceFolders![0].uri.fsPath);
     assert.strictEqual(Object.keys(buildResult.overrides).length, 2, 'Should have 2 overrides');
     assert.strictEqual(buildResult.overrides['test::mytask'], taskContent, 'Task override correct');
@@ -69,7 +71,7 @@ export async function run(): Promise<void> {
 
     // Test 3: enqueueDebugJob
     console.log('Test 3: enqueueDebugJob...');
-    testScriptletName = `debug-scriptlet-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    testScriptletName = `debug-scriptlet-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
     await helpers.createTestScriptlet('test', testScriptletName!, 'task', 'print("debug test")');
     const enqueueResult = await debugService.enqueueDebugJob('test', testScriptletName!, testOverrides);
     assert.ok(enqueueResult.jobId, 'JobId returned');
@@ -83,7 +85,7 @@ export async function run(): Promise<void> {
 
     // Test 4: Debug job in tree
     console.log('Test 4: Debug job in tree...');
-    const treeTestScriptletName = `tree-debug-scriptlet-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const treeTestScriptletName = `tree-debug-scriptlet-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
     await helpers.createTestScriptlet('test', treeTestScriptletName, 'task', 'print("tree test")');
     const treeResult = await debugService.enqueueDebugJob('test', treeTestScriptletName, {});
     assert.ok(treeResult.jobId, 'Tree test JobId returned');
@@ -122,7 +124,7 @@ export async function run(): Promise<void> {
 
     // Test 7: Scriptlet download & editor open (stripped)
     console.log('Test 7: Scriptlet download & editor open...');
-    const attachScriptletName = `attach-debug-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const attachScriptletName = `attach-debug-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
     await helpers.createTestScriptlet('test', attachScriptletName, 'task', 'print("attach test")');
 
     // Refresh manager tree to fetch and download scriptlet
@@ -146,30 +148,18 @@ export async function run(): Promise<void> {
 
     // Test 8: startDebugJob on local-only task (regression for backend skip-check)
     console.log('Test 8: startDebugJob on local-only task...');
-    const localName = `local-debug-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const localName = `local-debug-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
     const localTestPath = path.join(tempDir!, 'test', 'task', `${localName}.py`);
     fs.mkdirSync(path.dirname(localTestPath), { recursive: true });
     fs.writeFileSync(localTestPath, 'print("Local debug test")');
     await vscode.commands.executeCommand('pyops.refreshManager');
     await helpers.pollTree(managerProvider, ['test']);
     const expectedLocalLabel = `${localName} (task)`;
-    let localTestItem: any = null;
-    const localPollTimeout = 5000;
-    const localPollInterval = 200;
-    const localPollStart = Date.now();
-    while (Date.now() - localPollStart < localPollTimeout) {
-      const managerChildren = await managerProvider.getChildren();
-      const testSetItem = managerChildren.find((item: any) => item.label === 'test');
-      if (testSetItem) {
-        const setChildren = await managerProvider.getChildren(testSetItem);
-        localTestItem = setChildren.find((item: any) => item.label === expectedLocalLabel);
-        if (localTestItem && (localTestItem.iconPath as vscode.ThemeIcon).id === 'diff-added') {
-          break;
-        }
-      }
-      await new Promise(resolve => setTimeout(resolve, localPollInterval));
-    }
-    assert.ok(localTestItem, `Local-only scriptlet for debug test timed out`);
+    await helpers.pollTreeItemIcon(managerProvider, 'test', expectedLocalLabel, 'diff-added');
+    const localManagerChildren = await managerProvider.getChildren();
+    const localTestSetItem = localManagerChildren.find((item: any) => item.label === 'test');
+    const localSetChildren = await managerProvider.getChildren(localTestSetItem);
+    const localTestItem = localSetChildren.find((item: any) => item.label === expectedLocalLabel)!;
     const baselineJobsDebug = await jobsProvider.getChildren();
     await vscode.commands.executeCommand('pyops.startDebugJob', localTestItem);
     let debugJobItem: any = null;

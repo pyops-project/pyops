@@ -158,25 +158,25 @@
         </script>
     </head>
     <body class="d-flex flex-column bg-dark h-100">
-        <nav class="d-flex flex-column navbar navbar-expand navbar-dark bg-dark align-items-stretch">
+        <nav class="d-flex flex-column navbar navbar-expand navbar-dark bg-dark align-items-stretch" data-testid="editor-md-navbar">
             <ul class="navbar-nav">
                 <li class="navbar-brand m-1">
                     <span class="material-icons-round">description</span>
                     <span> Markdown Editor</span>
-                    <span id="scriptlet-id"></span>
+                    <span id="scriptlet-id" data-testid="editor-scriptlet-id"></span>
                 </li>
                 <li class="nav-item m-1">
-                    <button id="btn-save" type="button" class="btn btn-danger" onclick="save(false)" disabled="disabled">
+                    <button id="btn-save" type="button" class="btn btn-danger" onclick="save(false)" disabled="disabled" data-testid="editor-save">
                         <span class="material-icons-round">save_alt</span>
                     </button>
                 </li>
                 <li class="nav-item m-1">
-                    <button id="btn-revert" type="button" class="btn btn-danger" onclick="rollback()" disabled="disabled">
+                    <button id="btn-revert" type="button" class="btn btn-danger" onclick="rollback()" disabled="disabled" data-testid="editor-revert">
                         <span class="material-icons-round">backspace</span>
                     </button>
                 </li>
                 <li class="nav-item m-1">
-                    <select id="font-size" class="form-select bg-dark text-light" onchange="fontSizeChanged()">
+                    <select id="font-size" class="form-select bg-dark text-light" onchange="fontSizeChanged()" data-testid="editor-font-size">
                         <option value="8pt">8pt</option>
                         <option value="9pt" selected>9pt</option>
                         <option value="12pt">12pt</option>
@@ -186,6 +186,6 @@
             </ul>
         </nav>
 
-        <div id="editor" class="d-flex flex-column flex-grow-1 mt-1"></div>
+        <div id="editor" class="d-flex flex-column flex-grow-1 mt-1" data-testid="editor-code"></div>
     </body>
 </html>

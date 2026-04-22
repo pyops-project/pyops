@@ -59,7 +59,7 @@ graph TD
     D --> E[Execution Layer<br/>Isolated venv & process directives]
 ```
 
-### Layers
+### Layer Details
 
 - **Presentation Layer**: FastAPI routes and static HTML with Ace Editor, Bootstrap 5, jQuery
 - **API Layer**: CRUD operations via scriptlet routers
@@ -80,7 +80,7 @@ graph TD
 - ZMQ IPC (ROUTER/REQ over /tmp/pyops/runner.sock) signals completion; json-serialized kwargs ensure config isolation.
 - Process checks: p.poll() for liveness; psutil for tree-kill (SIGTERM → SIGKILL after 15s).
 - Stale PID handling: After cleanProcesses, sync DB running jobs to 'failed' if !psutil.Process(pid).is_running().
-- Job states: todo, dequeued, running, done, failed, cancelled, remove, removed.
+- Job states: todo, dequeued, loading, running, done, failed, cancel, cancelling, cancelled, remove, removed.
 - Debug mode: Always inject debugpy.listen(('0.0.0.0', port)) from conf_users(); appends wait_for_client() if '#>AWAIT_DEBUG' in param. Validates via /debug/port; terminates prior owner jobs.
 
 ### Web (`app/web.py`)
@@ -89,11 +89,11 @@ graph TD
 
 ### PyOps (`app/lib/pyops.py`)
 - Provides `Control` for API calls
-- Provides `ServiceListener` for services
+- Provides `ServiceListener` for ZMQ service IPC
 
 ## Configuration
 
-`app/lib/files.py` defines the Config class for managing `etc/pyops.json`.
+`app/lib/files.py` defines the Config class for managing `etc/pyops.json`. Both `app/gunicorn.py` and `app/runner.py` read the `PYOPS_CONFIG` environment variable to override the default config path, enabling isolated E2E test instances.
 
 ### JSON Structure
 
@@ -163,7 +163,7 @@ sequenceDiagram
 
 ### Runner Daemon
 
-`app/runner.py` implements background job executor with GracefulKiller for signals.
+`app/runner.py` implements background job executor with `GracefulKiller` for graceful shutdown on SIGINT/SIGTERM.
 
 #### Main Loop
 
@@ -185,7 +185,7 @@ flowchart TD
 #### Job Execution
 
 - `loadJob()`: Fetches from DB, returns owner, set, name, kind, param, code, overrides
-- `run()`: Processes param, libs, code in subprocess with venv activation
+- `run()`: Dispatches to `run_task_job`, `run_service_job`, `run_debug_job`, or `run_draft_job`; processes param, libs, code in subprocess with venv activation
 - Handles directives: pip packages, git repos, libraries
 - For debug: uses unstaged code (preview) or overrides (VSIX)
 - Compiles with custom filenames for accurate stacktraces
@@ -334,6 +334,7 @@ flowchart TD
 - unit/orm/: Tests job, schedule
 - integration/: Tests git, orm, routers, runner execution
 - api/: Tests api_editor, api_endpoints, api_job, api_schedule, api_sets
+- e2e/: Playwright E2E tests against real server instances
 
 ### Fixtures-Mocks
 
@@ -346,6 +347,14 @@ flowchart TD
 - `mock_zmq`: ZMQ Context/Socket mock for REQ/REP simulation (msgpack-packed messages, 3 retries on ZMQError)
 - `mock_croniter`, `mock_jedi`, `mock_datetime`
 - Overrides for controller_code, view_content, file_path
+
+### E2E Tests
+
+Playwright-based workflow tests in `tests/e2e/` that start a real PyOps server per test function. Each test gets isolated data directories via `PYOPS_CONFIG` env var pointing to `tmp_path`. Server runs in its own process group for clean shutdown.
+
+- Skipped by default in `pytest tests/`; run via `pytest tests/e2e/` or `pytest tests/ --e2e`
+- `ServerLog.assert_no_unexpected_errors()` scans server output for tracebacks and fatal errors
+- CI runs in `test:e2e` GitLab stage with Playwright system deps and `E2E_STARTUP_TIMEOUT=60`
 
 ## VSIX Extension
 
@@ -431,7 +440,7 @@ RemoteContentProvider serves remote files; onDidChange events.
 
 ## Key Features
 
-- Scriptlets support types: task, library, controller, view, markdown, jslibrary
+- Scriptlets support types: task, service, schedule, controller, view, library, markdown, jslibrary
 - Support directives for pip packages, git repos, libraries
 - Scheduling via croniter
 - Monitoring and bulk operations

@@ -36,14 +36,6 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
         this.refresh();
     }
 
-    private async getHeaders(): Promise<Record<string, string>> {
-        return this._apiClient.getHeaders();
-    }
-
-    private getServerUrl(): string {
-        return this._apiClient.getServerUrl();
-    }
-
     getTreeItem(element: TreeItem): TreeItem {
         return element;
     }
@@ -126,11 +118,8 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
     }
 
     private async fetchScriptlets(): Promise<ScriptletInfo[]> {
-        const serverUrl = this.getServerUrl();
-        const headers = await this.getHeaders();
-
         try {
-            const response = await fetch(`${serverUrl}/scriptlet/inventory/list`, { headers });
+            const response = await this._apiClient.fetch('/scriptlet/inventory/list');
             if (response.ok) {
                 this._lastScriptletErrorShown = 0;
                 const scriptlets = await response.json();
@@ -162,9 +151,6 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
 
         this._syncStatus.clear();
 
-        const serverUrl = this.getServerUrl();
-        const headers = await this.getHeaders();
-
         const workspaceRoot = vscode.workspace.workspaceFolders[0].uri.fsPath;
         const localPyopsDir = vscode.workspace.getConfiguration('pyops').get('localPyopsDir', 'pyops') as string;
         const baseLocalPath = path.join(workspaceRoot, localPyopsDir);
@@ -173,7 +159,7 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
             const sObj = { set: s.set, name: s.name, type: s.type };
             const key = `${sObj.set}-${sObj.name}-${sObj.type}`;
             try {
-                const response = await fetch(`${serverUrl}/scriptlet/inventory/code?set=${sObj.set}&name=${sObj.name}`, { headers });
+                const response = await this._apiClient.fetch(`/scriptlet/inventory/code?set=${sObj.set}&name=${sObj.name}`);
                 if (response.ok) {
                     const data = await response.json() as {code: string};
                     const remoteCode = data.code;
@@ -254,13 +240,10 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
     async downloadScriptlet(scriptletItem: ScriptletTreeItem): Promise<void> {
         if (!scriptletItem.set || !scriptletItem.scriptletName || !scriptletItem.scriptletType) return;
 
-        const serverUrl = this.getServerUrl();
-        const headers = await this.getHeaders();
-
         const sObj = { set: scriptletItem.set, name: scriptletItem.scriptletName, type: scriptletItem.scriptletType };
         const key = `${sObj.set}-${sObj.name}-${sObj.type}`;
         try {
-            const response = await fetch(`${serverUrl}/scriptlet/inventory/code?set=${sObj.set}&name=${sObj.name}`, { headers });
+            const response = await this._apiClient.fetch(`/scriptlet/inventory/code?set=${sObj.set}&name=${sObj.name}`);
             if (response.ok) {
                 const data = await response.json() as {code: string};
                 const remoteCode = data.code;

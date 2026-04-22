@@ -108,7 +108,7 @@ class TestJobRouter:
             session.add(job)
             session.commit()
             
-            workspace_path = tmp_path / f"data/jobs/testuser/default/{job_id}"
+            workspace_path = tmp_path / f"data/jobs/default/{job_id}"
             workspace_path.mkdir(parents=True)
             (workspace_path / "stdout.log").write_text("Test output")
             
@@ -154,7 +154,7 @@ class TestJobRouter:
         assert data["owner"] == "otheruser"
 
     @pytest.mark.parametrize("state", ["todo", "running", "done", "failed"])
-    def test_job_list_owner_filter(self, mock_client, mock_db, state, test_temp_dir, patch_tempfile, mock_datetime):
+    def test_job_list_returns_all_owners(self, mock_client, mock_db, state, test_temp_dir, patch_tempfile, mock_datetime):
         with Session(get_db_engine()) as session:
             job_same_id = str(uuid.uuid4().hex)
             job_same = Job(id=job_same_id, owner="testuser", set="default", name="same", kind="task", state=state, param="{}")
@@ -165,9 +165,9 @@ class TestJobRouter:
 
         response = mock_client.get("/scriptlet/job/list", headers={"X-User": "testuser"})
         data = response.json()
-        assert len(data) == 1
-        assert data[0]["owner"] == "testuser"
-        assert data[0]["state"] == state
+        owners = {j["owner"] for j in data}
+        assert {"testuser", "other"} <= owners
+        assert all(j["state"] == state for j in data if j["id"] in {job_same_id, job_diff_id})
 
     @patch("app.lib.git.read_content")
     @patch('app.runner.terminate_job_processes')
@@ -340,7 +340,7 @@ class TestJobRouter:
             session.commit()
         
         # Create log files
-        workspace = tmp_path / f"data/jobs/testuser/default/{job_id}"
+        workspace = tmp_path / f"data/jobs/default/{job_id}"
         workspace.mkdir(parents=True)
         (workspace / "stdout.log").write_text("stdout content")
         (workspace / "stderr.log").write_text("stderr content")
@@ -373,7 +373,7 @@ class TestJobRouter:
             assert response.status_code == 500
             assert "remove error" in response.json()["detail"]
 
-    @pytest.mark.parametrize("state", ["todo", "cancelled", "killed", "failed", "done"])
+    @pytest.mark.parametrize("state", ["todo", "cancelled", "failed", "done"])
     def test_delete_job_item_allowed_states(self, mock_client, mock_db, state, test_temp_dir, patch_tempfile, mock_datetime):
         with Session(get_db_engine()) as session:
             job_id = str(uuid.uuid4().hex)
@@ -389,7 +389,7 @@ class TestJobRouter:
             updated_job = session.query(Job).filter_by(id=job_id).first()
             assert updated_job.state == "remove"
 
-    @pytest.mark.parametrize("state", ["dequeued", "running", "cancel", "remove", "removed"])
+    @pytest.mark.parametrize("state", ["killed", "dequeued", "running", "cancel", "remove", "removed"])
     def test_delete_job_item_invalid_states(self, mock_client, mock_db, state, test_temp_dir, patch_tempfile, mock_datetime):
         with Session(get_db_engine()) as session:
             job_id = str(uuid.uuid4().hex)
@@ -400,7 +400,7 @@ class TestJobRouter:
         response = mock_client.delete(f"/scriptlet/job/item?id={job_id}", headers={"X-User": "testuser"})
         assert response.status_code == 400
         assert f"is in state '{state}' and cannot be deleted" in response.json()["detail"]
-        assert "Allowed states: todo, cancelled, killed, failed, done" in response.json()["detail"]
+        assert "Allowed states: todo, cancelled, failed, done" in response.json()["detail"]
 
     def test_get_job_cancel_exception(self, mock_client, test_temp_dir, patch_tempfile, mock_datetime):
         with patch("app.lib.runner.cancel", side_effect=Exception("cancel error")):

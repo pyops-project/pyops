@@ -6,8 +6,6 @@ import msgpack
 import json
 import signal
 from unittest.mock import Mock, patch, MagicMock, ANY
-from app.lib import pyops
-from app.lib import runner
 
 @pytest.fixture
 def mock_web_bind():
@@ -15,6 +13,7 @@ def mock_web_bind():
 
 @pytest.fixture
 def mock_control_request(mock_web_bind):
+    from app.lib import pyops
     with patch('requests.get') as mock_get, \
          patch('requests.delete') as mock_del, \
          patch('requests.post') as mock_post, \
@@ -90,6 +89,7 @@ class TestControlRequest:
 
 class TestJobControl:
     def test_list(self, mock_control_request):
+        from app.lib import pyops
         mock_rq = Mock()
         mock_rq.get.return_value = {"jobs": []}
         job_control = pyops.JobControl(mock_rq)
@@ -98,6 +98,7 @@ class TestJobControl:
         mock_rq.get.assert_called_once_with("scriptlet/job/list")
 
     def test_create(self, mock_control_request):
+        from app.lib import pyops
         mock_rq = Mock()
         mock_rq.put.return_value = {"job": {"id": "123"}}
         job_control = pyops.JobControl(mock_rq)
@@ -113,6 +114,7 @@ class TestJobControl:
         })
 
     def test_create_with_user(self, mock_control_request):
+        from app.lib import pyops
         mock_rq = Mock()
         mock_rq.put.return_value = {"job": {"id": "456"}}
         job_control = pyops.JobControl(mock_rq)
@@ -128,6 +130,7 @@ class TestJobControl:
         })
 
     def test_get(self, mock_control_request):
+        from app.lib import pyops
         mock_rq = Mock()
         mock_rq.get.return_value = {"job": {"state": "running"}}
         job_control = pyops.JobControl(mock_rq)
@@ -136,6 +139,7 @@ class TestJobControl:
         mock_rq.get.assert_called_once_with("scriptlet/job/item", params={"id": "123"})
 
     def test_delete(self, mock_control_request):
+        from app.lib import pyops
         mock_rq = Mock()
         mock_rq.delete.return_value = {"deleted": True}
         job_control = pyops.JobControl(mock_rq)
@@ -144,23 +148,26 @@ class TestJobControl:
         mock_rq.delete.assert_called_once_with("scriptlet/job/item", params={"id": "123"})
 
     def test_cancel(self, mock_control_request):
+        from app.lib import pyops
         mock_rq = Mock()
         mock_rq.get.return_value = {"cancelled": True}
         job_control = pyops.JobControl(mock_rq)
         result = job_control.cancel("123")
         assert result == {"cancelled": True}
-        mock_rq.get.assert_called_once_with("scriptlet/job/item", params={"id": "123"})
+        mock_rq.get.assert_called_once_with("scriptlet/job/cancel", params={"id": "123"})
 
     def test_download(self, mock_control_request):
+        from app.lib import pyops
         mock_rq = Mock()
         mock_rq.get.return_value = {"download": "url"}
         job_control = pyops.JobControl(mock_rq)
         result = job_control.download("123")
         assert result == {"download": "url"}
-        mock_rq.get.assert_called_once_with("scriptlet/job/item", params={"id": "123"})
+        mock_rq.get.assert_called_once_with("scriptlet/job/download", params={"id": "123"})
 
 class TestScheduleControl:
     def test_list(self, mock_control_request):
+        from app.lib import pyops
         mock_rq = Mock()
         mock_rq.get.return_value = {"schedules": []}
         schedule_control = pyops.ScheduleControl(mock_rq)
@@ -169,6 +176,7 @@ class TestScheduleControl:
         mock_rq.get.assert_called_once_with("scriptlet/schedule/list")
 
     def test_create(self, mock_control_request):
+        from app.lib import pyops
         mock_rq = Mock()
         mock_rq.put.return_value = {"schedule": {"id": 1}}
         schedule_control = pyops.ScheduleControl(mock_rq)
@@ -184,73 +192,81 @@ class TestScheduleControl:
         })
 
     def test_get(self, mock_control_request):
+        from app.lib import pyops
         mock_rq = Mock()
         mock_rq.get.return_value = {"schedule": {"active": True}}
         schedule_control = pyops.ScheduleControl(mock_rq)
         result = schedule_control.get(1)
         assert result == {"schedule": {"active": True}}
-        mock_rq.get.assert_called_once_with("scriptlet/schedule/item", params={1: 1})
+        mock_rq.get.assert_called_once_with("scriptlet/schedule/item", params={"id": 1})
 
     def test_delete(self, mock_control_request):
+        from app.lib import pyops
         mock_rq = Mock()
         mock_rq.delete.return_value = {"deleted": True}
         schedule_control = pyops.ScheduleControl(mock_rq)
         result = schedule_control.delete(1)
         assert result == {"deleted": True}
-        mock_rq.delete.assert_called_once_with("scriptlet/schedule/item", params={1: 1})
+        mock_rq.delete.assert_called_once_with("scriptlet/schedule/item", params={"id": 1})
 
     def test_activate(self, mock_control_request):
+        from app.lib import pyops
         mock_rq = Mock()
         mock_rq.get.return_value = {"activated": True}
         schedule_control = pyops.ScheduleControl(mock_rq)
         result = schedule_control.activate(1)
         assert result == {"activated": True}
-        mock_rq.get.assert_called_once_with("scriptlet/schedule/activate", params={1: 1})
+        mock_rq.get.assert_called_once_with("scriptlet/schedule/activate", params={"id": 1})
 
     def test_deactivate(self, mock_control_request):
+        from app.lib import pyops
         mock_rq = Mock()
         mock_rq.get.return_value = {"deactivated": True}
         schedule_control = pyops.ScheduleControl(mock_rq)
         result = schedule_control.deactivate(1)
         assert result == {"deactivated": True}
-        mock_rq.get.assert_called_once_with("scriptlet/schedule/deactivate", params={1: 1})
+        mock_rq.get.assert_called_once_with("scriptlet/schedule/deactivate", params={"id": 1})
 
 class TestControl:
     def test_get(self, mock_control_request):
+        from app.lib import pyops
         mock_rq = Mock()
         mock_rq.get.return_value = {"data": "value"}
         control = pyops.Control("test_user", "127.0.0.1:8000")
         control.rq = mock_rq  # Patch for test
         result = control.get("test_set", "test_name", params={"p": "v"})
         assert result == {"data": "value"}
-        mock_rq.get.assert_called_once_with("controller/test_set/test_name/get", params={"p": "v"})
+        mock_rq.get.assert_called_once_with("controller/test_set/test_name", params={"p": "v"})
 
     def test_delete(self, mock_control_request):
+        from app.lib import pyops
         mock_rq = Mock()
-        mock_rq.get.return_value = {"deleted": True}
+        mock_rq.delete.return_value = {"deleted": True}
         control = pyops.Control("test_user", "127.0.0.1:8000")
         control.rq = mock_rq
         result = control.delete("test_set", "test_name")
         assert result == {"deleted": True}
-        mock_rq.get.assert_called_once_with("controller/test_set/test_name/delete", params={})
+        mock_rq.delete.assert_called_once_with("controller/test_set/test_name", params={})
 
     def test_put(self, mock_control_request):
+        from app.lib import pyops
         mock_rq = Mock()
-        mock_rq.get.return_value = {"put": "success"}
+        mock_rq.put.return_value = {"put": "success"}
         control = pyops.Control("test_user", "127.0.0.1:8000")
         control.rq = mock_rq
         result = control.put("test_set", "test_name", json={"data": "value"})
         assert result == {"put": "success"}
-        mock_rq.get.assert_called_once_with("controller/test_set/test_name/put", json={"data": "value"})
+        mock_rq.put.assert_called_once_with("controller/test_set/test_name", json={"data": "value"})
 
     def test_post(self, mock_control_request):
+        from app.lib import pyops
         mock_rq = Mock()
-        mock_rq.get.return_value = {"posted": True}
+        mock_rq.post.return_value = {"posted": True}
         control = pyops.Control("test_user", "127.0.0.1:8000")
         control.rq = mock_rq
         result = control.post("test_set", "test_name", json={"data": "value"})
         assert result == {"posted": True}
-        mock_rq.get.assert_called_once_with("controller/test_set/test_name/post", json={"data": "value"})
+        mock_rq.post.assert_called_once_with("controller/test_set/test_name", json={"data": "value"})
 
 class TestServiceListener:
     @patch('os.remove')
@@ -261,6 +277,7 @@ class TestServiceListener:
     @patch('signal.signal')
     @patch('atexit.register')
     def test_init(self, mock_atexit, mock_signal, mock_makedirs, mock_poller, mock_context, mock_gettempdir, mock_remove):
+        from app.lib import pyops
         mock_atexit.side_effect = lambda *args: None
         mock_remove.return_value = None  # Suppress atexit remove error
         mock_gettempdir.return_value = '/tmp'
@@ -285,6 +302,7 @@ class TestServiceListener:
     @patch('zmq.Context')
     @patch('msgpack.unpackb')
     def test_listen_timeout_no_kill(self, mock_unpackb, mock_context, mock_poller, mock_gettempdir, mock_atexit, mock_remove):
+        from app.lib import pyops
         mock_atexit.side_effect = lambda *args: None
         mock_remove.return_value = None
         mock_gettempdir.return_value = '/tmp'
@@ -306,6 +324,7 @@ class TestServiceListener:
     @patch('zmq.Poller')
     @patch('zmq.Context')
     def test_listen_kill_now(self, mock_context, mock_poller, mock_gettempdir, mock_atexit, mock_remove):
+        from app.lib import pyops
         mock_atexit.side_effect = lambda *args: None
         mock_remove.return_value = None
         mock_gettempdir.return_value = '/tmp'
@@ -325,6 +344,7 @@ class TestServiceListener:
     @patch('zmq.Context')
     @patch('msgpack.unpackb')
     def test_listen_poll_input(self, mock_unpackb, mock_context, mock_poller, mock_gettempdir, mock_atexit, mock_remove):
+        from app.lib import pyops
         mock_atexit.side_effect = lambda *args: None
         mock_remove.return_value = None
         mock_gettempdir.return_value = '/tmp'
@@ -346,6 +366,7 @@ class TestServiceListener:
     @patch('msgpack.packb')
     @patch('zmq.Context')
     def test_response(self, mock_context, mock_packb, mock_gettempdir, mock_atexit, mock_remove):
+        from app.lib import pyops
         mock_atexit.side_effect = lambda *args: None
         mock_remove.return_value = None
         mock_gettempdir.return_value = '/tmp'
@@ -356,7 +377,7 @@ class TestServiceListener:
         test_msg = {"response": "data"}
         mock_packb.return_value = b'test_packed'
         listener.response(test_msg)
-        mock_packb.assert_called_once_with(test_msg)
+        mock_packb.assert_called_once_with([200, test_msg])
         # Check multipart send
         assert mock_socket.send.call_count == 3
         mock_socket.send.assert_any_call(b'test_identity', zmq.SNDMORE)
@@ -364,7 +385,29 @@ class TestServiceListener:
         mock_socket.send.assert_any_call(b'test_packed')
         listener.close()
 
+    @patch('os.remove')
+    @patch('atexit.register')
+    @patch('tempfile.gettempdir')
+    @patch('msgpack.packb')
+    @patch('zmq.Context')
+    def test_response_with_status(self, mock_context, mock_packb, mock_gettempdir, mock_atexit, mock_remove):
+        from app.lib import pyops
+        mock_atexit.side_effect = lambda *args: None
+        mock_remove.return_value = None
+        mock_gettempdir.return_value = '/tmp'
+        mock_socket = Mock()
+        mock_context.return_value.socket.return_value = mock_socket
+        listener = pyops.ServiceListener("test_job", "test_owner")
+        listener.last_identity = b'test_identity'
+        test_msg = "resource not found"
+        mock_packb.return_value = b'test_packed'
+        listener.response(test_msg, 404)
+        mock_packb.assert_called_once_with([404, test_msg])
+        assert mock_socket.send.call_count == 3
+        listener.close()
+
     def test_exit_gracefully(self):
+        from app.lib import pyops
         listener = pyops.ServiceListener("test_job", "test_owner")
         listener.exit_gracefully(None, None)
         assert listener.kill_now is True
@@ -376,6 +419,7 @@ class TestServiceListener:
     @patch('zmq.Poller')
     @patch('zmq.Context')
     def test_poll_no_input(self, mock_context, mock_poller, mock_gettempdir, mock_atexit, mock_remove):
+        from app.lib import pyops
         mock_atexit.side_effect = lambda *args: None
         mock_remove.return_value = None
         mock_gettempdir.return_value = '/tmp'
@@ -396,6 +440,7 @@ class TestServiceListener:
     @patch('zmq.Context')
     @patch('msgpack.unpackb')
     def test_poll_with_input(self, mock_unpackb, mock_context, mock_poller, mock_gettempdir, mock_atexit, mock_remove):
+        from app.lib import pyops
         mock_atexit.side_effect = lambda *args: None
         mock_remove.return_value = None
         mock_gettempdir.return_value = '/tmp'
@@ -418,6 +463,7 @@ class TestServiceListener:
     @patch('zmq.Poller')
     @patch('zmq.Context')
     def test_poll_kill_now(self, mock_context, mock_poller, mock_gettempdir, mock_atexit, mock_remove):
+        from app.lib import pyops
         mock_atexit.side_effect = lambda *args: None
         mock_remove.return_value = None
         mock_gettempdir.return_value = '/tmp'
@@ -435,6 +481,7 @@ class TestServiceListener:
     @patch('zmq.Poller')
     @patch('zmq.Context')
     def test_async_poll_no_messages(self, mock_context, mock_poller, mock_gettempdir, mock_atexit, mock_remove):
+        from app.lib import pyops
         mock_atexit.side_effect = lambda *args: None
         mock_remove.return_value = None
         mock_gettempdir.return_value = '/tmp'
@@ -455,6 +502,7 @@ class TestServiceListener:
     @patch('zmq.Poller')
     @patch('zmq.Context')
     def test_async_poll_with_messages(self, mock_context, mock_poller, mock_unpackb, mock_gettempdir, mock_atexit, mock_remove):
+        from app.lib import pyops
         mock_atexit.side_effect = lambda *args: None
         mock_remove.return_value = None
         mock_gettempdir.return_value = '/tmp'
@@ -476,6 +524,7 @@ class TestServiceListener:
     @patch('msgpack.packb')
     @patch('zmq.Context')
     def test_async_response(self, mock_context, mock_packb, mock_gettempdir, mock_atexit, mock_remove):
+        from app.lib import pyops
         mock_atexit.side_effect = lambda *args: None
         mock_remove.return_value = None
         mock_gettempdir.return_value = '/tmp'
@@ -486,7 +535,7 @@ class TestServiceListener:
         test_msg = {"response": "async_data"}
         mock_packb.return_value = b'packed_async'
         listener.async_response(test_identity, test_msg)
-        mock_packb.assert_called_once_with(test_msg)
+        mock_packb.assert_called_once_with([200, test_msg])
         # Check multipart send
         assert mock_socket.send.call_count == 3
         mock_socket.send.assert_any_call(test_identity, zmq.SNDMORE)
@@ -494,10 +543,32 @@ class TestServiceListener:
         mock_socket.send.assert_any_call(b'packed_async')
         listener.close()
 
+    @patch('os.remove')
+    @patch('atexit.register')
+    @patch('tempfile.gettempdir')
+    @patch('msgpack.packb')
+    @patch('zmq.Context')
+    def test_async_response_with_status(self, mock_context, mock_packb, mock_gettempdir, mock_atexit, mock_remove):
+        from app.lib import pyops
+        mock_atexit.side_effect = lambda *args: None
+        mock_remove.return_value = None
+        mock_gettempdir.return_value = '/tmp'
+        mock_socket = Mock()
+        mock_context.return_value.socket.return_value = mock_socket
+        listener = pyops.ServiceListener("test_job", "test_owner")
+        test_identity = b'test_identity'
+        test_msg = "forbidden"
+        mock_packb.return_value = b'packed_async'
+        listener.async_response(test_identity, test_msg, 403)
+        mock_packb.assert_called_once_with([403, test_msg])
+        assert mock_socket.send.call_count == 3
+        listener.close()
+
 class TestServiceClient:
     @patch('zmq.Context')
     @patch('os.path.join')
     def test_init_success(self, mock_join, mock_context):
+        from app.lib import pyops
         mock_job = "123"
         mock_join.return_value = "/tmp/pyops/123.sock"
         client = pyops.ServiceClient(mock_job)
@@ -509,23 +580,41 @@ class TestServiceClient:
     @patch('msgpack.packb')
     @patch('zmq.Context')
     def test_request_success(self, mock_context, mock_packb, mock_unpackb):
+        from app.lib import pyops
         mock_job = "123"
         client = pyops.ServiceClient(mock_job)
         test_msg = {"cmd": "test"}
         mock_packb.return_value = b'test_packed'
         mock_socket = client.socket
         mock_socket.recv.return_value = b'reply_packed'
-        mock_unpackb.return_value = {"reply": "ok"}
-        result = client.request(test_msg)
-        assert result == {"reply": "ok"}
+        mock_unpackb.return_value = [200, {"reply": "ok"}]
+        status, data = client.request(test_msg)
+        assert status == 200
+        assert data == {"reply": "ok"}
         mock_packb.assert_called_once_with(test_msg)
         mock_socket.send.assert_called_once_with(b'test_packed')
         mock_socket.recv.assert_called_once()
         mock_unpackb.assert_called_once_with(b'reply_packed')
 
+    @patch('msgpack.unpackb')
+    @patch('msgpack.packb')
+    @patch('zmq.Context')
+    def test_request_error_status(self, mock_context, mock_packb, mock_unpackb):
+        from app.lib import pyops
+        mock_job = "123"
+        client = pyops.ServiceClient(mock_job)
+        mock_packb.return_value = b'test_packed'
+        mock_socket = client.socket
+        mock_socket.recv.return_value = b'reply_packed'
+        mock_unpackb.return_value = [422, "validation failed"]
+        status, data = client.request({"cmd": "test"})
+        assert status == 422
+        assert data == "validation failed"
+
     @patch('msgpack.packb')
     @patch('zmq.Context')
     def test_request_recv_error(self, mock_context, mock_packb):
+        from app.lib import pyops
         mock_job = "123"
         client = pyops.ServiceClient(mock_job)
         mock_packb.return_value = b'test_packed'

@@ -3,7 +3,7 @@ import subprocess
 import json
 import re
 
-from fastapi import APIRouter, HTTPException, Depends, Header, Query
+from fastapi import APIRouter, HTTPException, Depends, Query
 from fastapi.responses import StreamingResponse
 from starlette.status import HTTP_404_NOT_FOUND, HTTP_500_INTERNAL_SERVER_ERROR
 from pydantic import BaseModel
@@ -17,15 +17,12 @@ from app.orm.job import Job
 
 from app.lib import runner, files, git
 from app.lib.async_utils import run_in_executor
-from app.lib.auth import sanitize_owner
+from app.lib.auth import get_current_user
 
 from zipstream import ZipStream, ZIP_DEFLATED
 
 import logging
 logger = logging.getLogger(__name__)
-
-async def get_current_user(x_user: str = Header(default=None, alias="X-User")):
-    return sanitize_owner(x_user)
 
 router = APIRouter()
 
@@ -39,7 +36,7 @@ class RunArgument(BaseModel):
     overrides: dict[str, str] | None = None
 
 @router.get("/scriptlet/job/list", tags=["job"])
-async def list_get(user: str = Depends(get_current_user)):
+async def list_get():
     """
     Returns a list of available Schedules
     """
@@ -53,8 +50,7 @@ async def list_get(user: str = Depends(get_current_user)):
                           Job.detail,
                           Job.param,
                           Job.owner).where(
-                Job.state != "remove",
-                Job.owner == user
+                Job.state != "remove"
             ).order_by(Job.id.desc())
             db_jobs = session.execute(stmt)
             
@@ -111,8 +107,7 @@ async def job_get(id: str):
             raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Job {} not existing".format(id))
 
         data_base = files.conf_data()["jobs"]
-        userspace = os.path.join(data_base, job.owner)
-        setspace = os.path.join(userspace, job.set)
+        setspace = os.path.join(data_base, job.set)
         workspace = os.path.join(setspace, job.id)
         stdout_log_path = os.path.join(workspace, "stdout.log")
         stderr_log_path = os.path.join(workspace, "stderr.log")
@@ -151,7 +146,7 @@ async def job_del(id: str):
         if job is None:
             raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail=f"Job {id} not existing")
 
-        allowed_states = ["todo", "cancelled", "killed", "failed", "done"]
+        allowed_states = ["todo", "cancelled", "failed", "done"]
         if job.state not in allowed_states:
             raise HTTPException(status_code=400, detail=f"Job {id} is in state '{job.state}' and cannot be deleted. Allowed states: {', '.join(allowed_states)}")
 
@@ -188,8 +183,7 @@ async def download_get(id: str):
             raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Job {} not existing".format(id))
 
         data_base = files.conf_data()["jobs"]
-        userspace = os.path.join(data_base, f"{job.owner}")
-        setspace = os.path.join(userspace, f"{job.set}")
+        setspace = os.path.join(data_base, f"{job.set}")
         workspace = os.path.join(setspace, f"{job.id}")
 
         zs = ZipStream(compress_type=ZIP_DEFLATED)

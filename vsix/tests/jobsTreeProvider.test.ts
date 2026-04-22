@@ -29,9 +29,6 @@ describe('JobsTreeDataProvider', () => {
     // Mock configuration
     require('./utils/helpers').setupConfigMock({serverUrl: 'http://localhost:8000', username: 'testuser'});
 
-    // Mock fetch
-    global.fetch = jest.fn();
-
     mockApiClient = createMockApiClient(ApiClientClass, { headers: { 'Authorization': 'Basic dGVzdHVzZXI6dGVzdHBhc3M=' }, serverUrl: 'http://localhost:8000' });
 
   });
@@ -114,7 +111,7 @@ describe('JobsTreeDataProvider', () => {
 
     it('should return empty message when no jobs', async () => {
       // Mock fetch to return empty array
-      (global.fetch as jest.Mock).mockResolvedValue({
+      mockApiClient.fetch.mockResolvedValue({
         ok: true,
         json: jest.fn().mockResolvedValue([]),
       });
@@ -155,7 +152,7 @@ describe('JobsTreeDataProvider', () => {
         },
       ];
 
-      (global.fetch as jest.Mock).mockResolvedValue({
+      mockApiClient.fetch.mockResolvedValue({
         ok: true,
         json: jest.fn().mockResolvedValue(mockJobs),
       });
@@ -202,7 +199,7 @@ describe('JobsTreeDataProvider', () => {
         },
       ];
 
-      (global.fetch as jest.Mock).mockResolvedValue({
+      mockApiClient.fetch.mockResolvedValue({
         ok: true,
         json: jest.fn().mockResolvedValue(mockJobs),
       });
@@ -239,15 +236,11 @@ describe('JobsTreeDataProvider', () => {
         ok: true,
         json: jest.fn().mockResolvedValue(mockJobs),
       };
-      (global.fetch as jest.Mock).mockResolvedValue(mockResponse);
+      mockApiClient.fetch.mockResolvedValue(mockResponse);
 
       const result = await (provider as any).fetchJobs();
 
-      expect(global.fetch).toHaveBeenCalledWith('http://localhost:8000/scriptlet/job/list', {
-        headers: {
-          'Authorization': 'Basic dGVzdHVzZXI6dGVzdHBhc3M=', // base64 of testuser:testpass
-        },
-      });
+      expect(mockApiClient.fetch).toHaveBeenCalledWith('/scriptlet/job/list');
       expect(result).toEqual(mockJobs);
       expect((provider as any)._lastJobsErrorShown).toBe(0);
     });
@@ -257,7 +250,7 @@ describe('JobsTreeDataProvider', () => {
         ok: false,
         statusText: 'Internal Server Error',
       };
-      (global.fetch as jest.Mock).mockResolvedValue(mockResponse);
+      mockApiClient.fetch.mockResolvedValue(mockResponse);
 
       const result = await (provider as any).fetchJobs();
 
@@ -266,7 +259,7 @@ describe('JobsTreeDataProvider', () => {
     });
 
     it('should handle network error', async () => {
-      (global.fetch as jest.Mock).mockRejectedValue(new Error('Network error'));
+      mockApiClient.fetch.mockRejectedValue(new Error('Network error'));
 
       const result = await (provider as any).fetchJobs();
 
@@ -279,7 +272,7 @@ describe('JobsTreeDataProvider', () => {
         ok: false,
         statusText: 'Error',
       };
-      (global.fetch as jest.Mock).mockResolvedValue(mockResponse);
+      mockApiClient.fetch.mockResolvedValue(mockResponse);
 
       // First call
       await (provider as any).fetchJobs();
@@ -296,7 +289,7 @@ describe('JobsTreeDataProvider', () => {
     });
 
     it('should throttle network error messages', async () => {
-      (global.fetch as jest.Mock).mockRejectedValue(new Error('Network error'));
+      mockApiClient.fetch.mockRejectedValue(new Error('Network error'));
 
       // First call
       await (provider as any).fetchJobs();
@@ -335,7 +328,7 @@ describe('JobsTreeDataProvider', () => {
 
     it('should fetch jobs and update state when config is valid', async () => {
       const mockJobs: Job[] = [{ id: 'job1', set: 'testset', name: 'testtask', start: '', end: '', kind: '', state: '' }];
-      (global.fetch as jest.Mock).mockResolvedValue({
+      mockApiClient.fetch.mockResolvedValue({
         ok: true,
         json: jest.fn().mockResolvedValue(mockJobs),
       });
@@ -356,4 +349,3 @@ describe('JobsTreeDataProvider', () => {
     });
   });
 });
-

@@ -331,7 +331,7 @@ class TestDaemon:
         with Session(get_db_engine()) as test_session:
             result = test_session.execute(select(Job).where(Job.id == "id")).scalar_one_or_none()
             assert result is None
-        mock_drop.assert_called_once_with("id", "test_owner", "test_set")
+        mock_drop.assert_called_once_with("id", "test_set")
 
     @patch('app.lib.runner.drop')
     def test_postTerm_cancel(self, mock_drop, mock_db):
@@ -349,6 +349,42 @@ class TestDaemon:
             assert result.state == "cancelled"
             assert result.end is not None
         mock_drop.assert_not_called()
+
+    def test_shutdown_loop_uses_per_pid_job_id(self, mock_db):
+        """Regression: shutdown loop must call finishJob(job.id) for each pid's own job,
+        not a stale job_id variable from the outer dequeue loop scope (runner.py:607)."""
+        from app.runner import finishJob
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        from sqlalchemy.orm import Session
+
+        with Session(get_db_engine()) as session:
+            job_a = Job(id="job_a", set="s", name="n", owner="o", kind="task",
+                        state="running", pid=111, drop_done=False)
+            job_b = Job(id="job_b", set="s", name="n", owner="o", kind="task",
+                        state="running", pid=222, drop_done=False)
+            session.add_all([job_a, job_b])
+            session.commit()
+
+        mock_p = Mock()
+        mock_p.poll.return_value = None
+        mock_p.wait.return_value = None
+        processes = {111: mock_p, 222: mock_p}
+
+        finished = []
+        with patch('app.runner.finishJob', side_effect=lambda jid, s, d: finished.append(jid)):
+            import app.runner as runner_module
+            for pid in list(processes.keys()):
+                p = processes[pid]
+                if p.poll() is None:
+                    with Session(get_db_engine()) as session:
+                        job = session.query(Job).filter_by(pid=pid).first()
+                    runner_module.finishJob(job.id, "cancelling", "shutdown")
+
+        assert set(finished) == {"job_a", "job_b"}, (
+            "Each job must be finished with its own id; if stale job_id were used "
+            "both calls would use the same (wrong) id"
+        )
 
     def test_shutdown_graceful(self):
         from app.runner import Job, get_db_engine
@@ -413,25 +449,23 @@ class TestDaemon:
         mock_process.join.assert_called_once_with(timeout=1.0)
         # assert mock_session.call_count == 1  # manual simulation
 
-    @patch('app.job_runner._conf_users', {"owner": {"debug_port": 5678}})
-    def test_validate_debug_prerequisites_valid(self):
-        from app.runner import validate_debug_prerequisites
-        port = validate_debug_prerequisites("job_id", "owner")
+    @patch('app.lib.files.conf_users', return_value={"owner": {"debug_port": 5678}})
+    def test_validate_debug_prerequisites_valid(self, mock_conf_users):
+        from app.lib.job import validate_debug_prerequisites
+        port = validate_debug_prerequisites("owner")
         assert port == 5678
 
-    @patch('app.job_runner._conf_users', {"owner": {}})
-    def test_validate_debug_prerequisites_no_port(self):
-        from app.runner import validate_debug_prerequisites
+    @patch('app.lib.files.conf_users', return_value={"owner": {}})
+    def test_validate_debug_prerequisites_no_port(self, mock_conf_users):
+        from app.lib.job import validate_debug_prerequisites
         with pytest.raises(Exception, match="Invalid or missing debug_port for user owner"):
-            validate_debug_prerequisites("job_id", "owner")
+            validate_debug_prerequisites("owner")
 
-    @patch('app.job_runner._conf_users', {"owner": {"debug_port": 1000}})
-    def test_validate_debug_prerequisites_invalid_port(self):
-        from app.runner import validate_debug_prerequisites
+    @patch('app.lib.files.conf_users', return_value={"owner": {"debug_port": 1000}})
+    def test_validate_debug_prerequisites_invalid_port(self, mock_conf_users):
+        from app.lib.job import validate_debug_prerequisites
         with pytest.raises(Exception, match="Invalid or missing debug_port for user owner"):
-            validate_debug_prerequisites("job_id", "owner")
-
-
+            validate_debug_prerequisites("owner")
 
     def test_enqueue_debug_mark_existing_for_cancellation(self, mock_db):
         from app.lib.runner import enqueue
@@ -531,3 +565,4 @@ class TestDaemon:
                 mock_sleep.assert_not_called()
             finally:
                 session.commit = original_commit
+

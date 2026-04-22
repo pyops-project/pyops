@@ -44,38 +44,38 @@
 
             function genCloneModal() {
                 return `
-                    <div class="modal fade" data-bs-backdrop="static" id="cloneModal" tabindex="-1" aria-labelledby="cloneModalLabel" aria-hidden="true">
+                    <div class="modal fade" data-bs-backdrop="static" id="cloneModal" tabindex="-1" aria-labelledby="cloneModalLabel" aria-hidden="true" data-testid="sets-clone-modal">
                         <div class="modal-dialog">
                             <div class="modal-content">
                                 <div class="modal-header">
                                     <h5 class="modal-title" id="cloneModalLabel">Clone Set</h5>
-                                    <p id="cloneModal-error" class="text-danger"></p>
+                                    <p id="cloneModal-error" class="text-danger" data-testid="sets-clone-error"></p>
                                 </div>
                                 <div class="modal-body">
                                     <div class="mb-3">
                                         <label for="cloneModal-url" class="col-form-label">URL:</label>
-                                        <input id="cloneModal-url" type="text" class="form-control">
+                                        <input id="cloneModal-url" type="text" class="form-control" data-testid="sets-clone-url">
                                     </div>
                                     <div class="mb-3">
                                         <label for="cloneModal-username" class="col-form-label">Username (optional):</label>
-                                        <input id="cloneModal-username" type="text" class="form-control">
+                                        <input id="cloneModal-username" type="text" class="form-control" data-testid="sets-clone-username">
                                     </div>
                                     <div class="mb-3">
                                         <label for="cloneModal-password" class="col-form-label">Password (optional):</label>
-                                        <input id="cloneModal-password" type="password" class="form-control">
+                                        <input id="cloneModal-password" type="password" class="form-control" data-testid="sets-clone-password">
                                     </div>
                                     <div class="mb-3">
                                         <label for="cloneModal-git_name" class="col-form-label">Git Name:</label>
-                                        <input id="cloneModal-git_name" type="text" class="form-control">
+                                        <input id="cloneModal-git_name" type="text" class="form-control" data-testid="sets-clone-git-name">
                                     </div>
                                     <div class="mb-3">
                                         <label for="cloneModal-git_email" class="col-form-label">Git Email:</label>
-                                        <input id="cloneModal-git_email" type="text" class="form-control">
+                                        <input id="cloneModal-git_email" type="text" class="form-control" data-testid="sets-clone-git-email">
                                     </div>
                                 </div>
                                 <div class="modal-footer">
-                                    <button type="button" class="btn btn-danger" data-bs-dismiss="modal">Cancel</button>
-                                    <button type="button" class="btn btn-primary" onclick="onClone()">Clone</button>
+                                    <button type="button" class="btn btn-danger" data-bs-dismiss="modal" data-testid="sets-clone-cancel">Cancel</button>
+                                    <button type="button" class="btn btn-primary" onclick="onClone()" data-testid="sets-clone-submit">Clone</button>
                                 </div>
                             </div>
                         </div>
@@ -85,27 +85,27 @@
 
             function genSwitchModal() {
                 return `
-                    <div class="modal fade" data-bs-backdrop="static" id="switchModal" tabindex="-1" aria-labelledby="switchModalLabel" aria-hidden="true">
+                    <div class="modal fade" data-bs-backdrop="static" id="switchModal" tabindex="-1" aria-labelledby="switchModalLabel" aria-hidden="true" data-testid="sets-switch-modal">
                         <div class="modal-dialog">
                             <div class="modal-content">
                                 <div class="modal-header">
                                     <h5 class="modal-title" id="switchModalLabel">Switch Branch</h5>
-                                    <p id="switchModal-error" class="text-danger"></p>
+                                    <p id="switchModal-error" class="text-danger" data-testid="sets-switch-error"></p>
                                 </div>
                                 <div class="modal-body">
                                     <div class="mb-3">
                                         <label for="switchModal-name" class="col-form-label">Set:</label>
-                                        <select id="switchModal-name" class="form-select" disabled></select>
+                                        <select id="switchModal-name" class="form-select" disabled data-testid="sets-switch-name"></select>
                                     </div>
                                     <div class="mb-3">
                                         <label for="switchModal-branch" class="col-form-label">Branch:</label>
-                                        <input type="text" id="switchModal-branch" class="form-control" list="branchSuggestions">
+                                        <input type="text" id="switchModal-branch" class="form-control" list="branchSuggestions" data-testid="sets-switch-branch">
                                         <datalist id="branchSuggestions"></datalist>
                                     </div>
                                 </div>
                                 <div class="modal-footer">
-                                    <button type="button" class="btn btn-danger" data-bs-dismiss="modal">Cancel</button>
-                                    <button type="button" class="btn btn-primary" onclick="onSwitch()">Switch</button>
+                                    <button type="button" class="btn btn-danger" data-bs-dismiss="modal" data-testid="sets-switch-cancel">Cancel</button>
+                                    <button type="button" class="btn btn-primary" onclick="onSwitch()" data-testid="sets-switch-submit">Switch</button>
                                 </div>
                             </div>
                         </div>
@@ -115,13 +115,13 @@
 
             function genActions(name, branch) {
                 return `
-                    <button type="button" onclick="onPull('${name}')" class="btn btn-primary p-0">
+                    <button type="button" onclick="onPull('${name}')" class="btn btn-primary p-0" data-testid="set-pull-${name}">
                         <span class="material-icons-round">sync</span>
                     </button>
-                    <button type="button" onclick="onSwitchBranch('${name}')" class="btn btn-warning p-0">
+                    <button type="button" onclick="onSwitchBranch('${name}')" class="btn btn-warning p-0" data-testid="set-switch-${name}">
                         <span class="material-icons-round">swap_horiz</span>
                     </button>
-                    <button type="button" onclick="onRemove('${name}')" class="btn btn-danger p-0">
+                    <button type="button" onclick="onRemove('${name}')" class="btn btn-danger p-0" data-testid="set-remove-${name}">
                         <span class="material-icons-round">delete</span>
                     </button>
                 `;
@@ -140,7 +140,7 @@
             }
 
             function genSetItem(name, branch) {
-                return `<tr data-name="${name}">${genSetRowContent(name, branch)}</tr>`;
+                return `<tr data-name="${name}" data-testid="set-row-${name}">${genSetRowContent(name, branch)}</tr>`;
             }
 
             function refreshList() {
@@ -192,22 +192,22 @@
 
             function genCreateModal() {
                 return `
-                    <div class="modal fade" data-bs-backdrop="static" id="createModal" tabindex="-1" aria-labelledby="createModalLabel" aria-hidden="true">
+                    <div class="modal fade" data-bs-backdrop="static" id="createModal" tabindex="-1" aria-labelledby="createModalLabel" aria-hidden="true" data-testid="sets-create-modal">
                         <div class="modal-dialog">
                             <div class="modal-content">
                                 <div class="modal-header">
                                     <h5 class="modal-title" id="createModalLabel">Create Set</h5>
-                                    <p id="createModal-error" class="text-danger"></p>
+                                    <p id="createModal-error" class="text-danger" data-testid="sets-create-error"></p>
                                 </div>
                                 <div class="modal-body">
                                     <div class="mb-3">
                                         <label for="createModal-name" class="col-form-label">Name:</label>
-                                        <input id="createModal-name" type="text" class="form-control">
+                                        <input id="createModal-name" type="text" class="form-control" data-testid="sets-create-name">
                                     </div>
                                 </div>
                                 <div class="modal-footer">
-                                    <button type="button" class="btn btn-danger" data-bs-dismiss="modal">Cancel</button>
-                                    <button type="button" class="btn btn-primary" onclick="onCreate()">Create</button>
+                                    <button type="button" class="btn btn-danger" data-bs-dismiss="modal" data-testid="sets-create-cancel">Cancel</button>
+                                    <button type="button" class="btn btn-primary" onclick="onCreate()" data-testid="sets-create-submit">Create</button>
                                 </div>
                             </div>
                         </div>
@@ -405,35 +405,42 @@
         </script>
     </head>
     <body class="bg-body">
-        <nav class="navbar navbar-expand navbar-dark bg-dark pt-3 sticky-top">
-            <ul class="navbar-nav w-100">
-                <li class="navbar-brand">
+        <nav class="navbar navbar-expand-md navbar-dark bg-dark pt-3 sticky-top" data-testid="sets-navbar">
+            <div class="container-fluid">
+                <span class="navbar-brand">
                     <span class="material-icons-round">folder</span>
                     <span>Sets Manager</span>
-                </li>
-                
-                <li class="nav-item m-1">
-                    <button type="button" id="cloneButton" class="btn btn-success">
-                        <span class="material-icons-round">content_copy</span>
-                    </button>
-                </li>
-                <li class="nav-item m-1">
-                    <button type="button" id="createButton" class="btn btn-success">
-                        <span class="material-icons-round">add</span>
-                    </button>
-                </li>
+                </span>
+                <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#setsNav" aria-controls="setsNav" aria-expanded="false" aria-label="Toggle navigation">
+                    <span class="navbar-toggler-icon"></span>
+                </button>
+                <div class="collapse navbar-collapse" id="setsNav">
+                    <ul class="navbar-nav w-100">
+                        <li class="nav-item m-1">
+                            <button type="button" id="cloneButton" class="btn btn-success" data-testid="sets-clone">
+                                <span class="material-icons-round">content_copy</span>
+                            </button>
+                        </li>
+                        <li class="nav-item m-1">
+                            <button type="button" id="createButton" class="btn btn-success" data-testid="sets-create">
+                                <span class="material-icons-round">add</span>
+                            </button>
+                        </li>
 
-                <li class="nav-item mx-auto"></li>
+                        <li class="nav-item mx-auto"></li>
 
-                <li class="nav-item m-1">
-                    <button type="button" class="btn btn-success" onclick="refreshList()">
-                        <span class="material-icons-round">refresh</span>
-                    </button>
-                </li>
-            </ul>
+                        <li class="nav-item m-1">
+                            <button type="button" class="btn btn-success" onclick="refreshList()" data-testid="sets-refresh">
+                                <span class="material-icons-round">refresh</span>
+                            </button>
+                        </li>
+                    </ul>
+                </div>
+            </div>
         </nav>
 
-        <table class="table table-secondary">
+        <div class="table-responsive">
+        <table class="table table-secondary" data-testid="sets-table">
             <thead>
               <tr>
                 <th scope="col">Name</th>
@@ -441,8 +448,9 @@
                 <th scope="col">Actions</th>
               </tr>
             </thead>
-            <tbody id="sets">
+            <tbody id="sets" data-testid="sets-rows">
             </tbody>
         </table>
+        </div>
     </body>
 </html>

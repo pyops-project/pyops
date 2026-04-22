@@ -85,6 +85,34 @@ describe('RefreshTimerManager', () => {
     });
   });
 
+  describe('timer callbacks', () => {
+    it('calls managerTreeProvider.refresh on manager timer tick', () => {
+      jest.useFakeTimers();
+      require('../utils/helpers').setupConfigMock({autoRefreshInterval: 10});
+      (ApiClient.hasValidConfigStatic as jest.MockedFunction<typeof ApiClient.hasValidConfigStatic>).mockReturnValue(true);
+
+      manager.ensureRunning();
+
+      jest.advanceTimersByTime(10000);
+
+      expect(mockManagerProvider.refresh).toHaveBeenCalled();
+      jest.useRealTimers();
+    });
+
+    it('calls jobsTreeProvider.refresh on monitor timer tick', () => {
+      jest.useFakeTimers();
+      require('../utils/helpers').setupConfigMock({autoRefreshInterval: 10});
+      (ApiClient.hasValidConfigStatic as jest.MockedFunction<typeof ApiClient.hasValidConfigStatic>).mockReturnValue(true);
+
+      manager.ensureRunning();
+
+      jest.advanceTimersByTime(10000);
+
+      expect(mockJobsProvider.refresh).toHaveBeenCalled();
+      jest.useRealTimers();
+    });
+  });
+
   describe('dispose', () => {
     it('clears all timers', () => {
       require('../utils/helpers').setupConfigMock({autoRefreshInterval: 10});

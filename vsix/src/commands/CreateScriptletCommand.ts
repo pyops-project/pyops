@@ -5,9 +5,10 @@ import * as fs from 'fs';
 import { Uri } from 'vscode';
 import { ManagerTreeDataProvider } from '../managerTreeProvider';
 import { inferExt } from '../utils';
+import { ApiClient } from '../apiClient';
 
 export class CreateScriptletCommand {
-    static async execute(context: vscode.ExtensionContext, outputChannel: vscode.OutputChannel, managerTreeProvider: ManagerTreeDataProvider) {
+    static async execute(apiClient: ApiClient, outputChannel: vscode.OutputChannel, managerTreeProvider: ManagerTreeDataProvider) {
         const types: vscode.QuickPickItem[] = [
             { label: 'Task', description: 'Python task script' },
             { label: 'Library', description: 'Python library module' },
@@ -22,22 +23,11 @@ export class CreateScriptletCommand {
         let typeLower = typePick.label.toLowerCase();
         if (typeLower === 'js library') typeLower = 'jslibrary';
 
-        const pyopsConfig = vscode.workspace.getConfiguration('pyops');
-        const serverUrl = pyopsConfig.get('serverUrl') as string || 'http://localhost:8000';
-        const username = pyopsConfig.get('username') as string;
-        const password = context.workspaceState.get('pyops.password') as string;
-
-        const headers: Record<string, string> = {};
-        if (username && password) {
-            const auth = Buffer.from(`${username}:${password}`).toString('base64');
-            headers['Authorization'] = `Basic ${auth}`;
-        }
-
         // Fetch existing sets
         outputChannel.appendLine(`[Create Scriptlet] Fetching existing sets...`);
         let scriptlets: unknown[] = [];
         try {
-            const response = await fetch(`${serverUrl}/scriptlet/inventory/list`, { headers });
+            const response = await apiClient.fetch('/scriptlet/inventory/list');
             outputChannel.appendLine(`[Create Scriptlet] Sets list fetch status: ${response.status} ${response.statusText}`);
             if (response.ok) {
                 scriptlets = await response.json() as unknown[];
@@ -60,6 +50,8 @@ export class CreateScriptletCommand {
                 const setScriptlets = scriptlets.filter((s: unknown) => (s as { set: string }).set === set);
                 const existingNames = new Set(setScriptlets.map((s: unknown) => (s as { name: string }).name));
                 outputChannel.appendLine(`[Create Scriptlet] Existing names in set '${set}': ${JSON.stringify(Array.from(existingNames))}`);
+
+                const pyopsConfig = vscode.workspace.getConfiguration('pyops');
 
                 // Loop for unique name
                 let name: string | undefined;

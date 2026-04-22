@@ -1,11 +1,12 @@
 import asyncio, traceback
+import mimetypes
 import os
 import subprocess
 import logging
 import json
 
 from fastapi import FastAPI, Request, HTTPException, Query
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from starlette.status import HTTP_200_OK, HTTP_404_NOT_FOUND, HTTP_405_METHOD_NOT_ALLOWED, HTTP_500_INTERNAL_SERVER_ERROR
 
 from .routers.scriptlet import job
@@ -47,6 +48,10 @@ app.include_router(editor.router)
 app.include_router(sets.router)
 app.include_router(jslib.router)
 
+@app.get("/version")
+def get_version():
+    return {"version": files.version()}
+
 @app.get("/debug/port")
 def get_debug_port(request: Request):
     owner = sanitize_owner(request.headers.get("X-User", "anonymous"))
@@ -71,8 +76,9 @@ async def root():
 @app.get("/favicon.ico")
 async def favicon():
     try:
-        return HTMLResponse(
+        return Response(
             content=files.get("favicon.ico"),
+            media_type="image/x-icon",
             status_code=HTTP_200_OK
         )
     except Exception as ex:
@@ -82,8 +88,10 @@ async def favicon():
 @app.get("/files/{path:path}")
 async def file(path: str):
     try:
-        return HTMLResponse(
+        media_type, _ = mimetypes.guess_type(path)
+        return Response(
             content=files.get(path),
+            media_type=media_type or "application/octet-stream",
             status_code=HTTP_200_OK
         )
     except Exception as ex:
@@ -184,14 +192,21 @@ async def controller(set: str, name: str):
         {{HEAD}}
     </head>
     <body class="bg-light">
-        <nav class="navbar navbar-expand navbar-dark bg-dark text-light pt-3 sticky-top">
-            <ul class="navbar-nav w-100">
-                <li class="navbar-brand">
+        <nav class="navbar navbar-expand-md navbar-dark bg-dark text-light pt-3 sticky-top">
+            <div class="container-fluid">
+                <span class="navbar-brand">
                     <span class="material-icons-round">description</span>
                     <span>{{SET}}::{{DISPLAY_NAME}}</span>
-                </li>
-                {{MENU}}
-            </ul>
+                </span>
+                <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#controllerNav" aria-controls="controllerNav" aria-expanded="false" aria-label="Toggle navigation">
+                    <span class="navbar-toggler-icon"></span>
+                </button>
+                <div class="collapse navbar-collapse" id="controllerNav">
+                    <ul class="navbar-nav w-100">
+                        {{MENU}}
+                    </ul>
+                </div>
+            </div>
         </nav>
         {{BODY}}
     </body>
@@ -283,7 +298,10 @@ async def controller_proxy(set: str, name: str, rest: str, request: Request):
             params["data"] = None
             params["data_type"] = "none"
 
-        return s.request(params)
+        status, data = s.request(params)
+        if status != 200:
+            raise HTTPException(status_code=status, detail=data)
+        return data
     except HTTPException:
         raise
     except Exception as ex:

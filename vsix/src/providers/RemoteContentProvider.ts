@@ -2,21 +2,29 @@ import * as vscode from 'vscode';
 
 export class RemoteContentProvider implements vscode.TextDocumentContentProvider {
     private _onDidChange = new vscode.EventEmitter<vscode.Uri>();
+    private contentMap = new Map<string, string>();
 
     get onDidChange(): vscode.Event<vscode.Uri> {
         return this._onDidChange.event;
     }
 
+    setContent(uriPath: string, content: string): void {
+        this.contentMap.set(uriPath, content);
+    }
+
     provideTextDocumentContent(uri: vscode.Uri): vscode.ProviderResult<string> {
-        if (uri.fragment) {
-            try {
-                return decodeURIComponent(uri.fragment);
-            } catch (e: unknown) {
-                const errorMessage = e instanceof Error ? e.message : String(e);
-                return `Error decoding content: ${errorMessage}`;
-            }
+        const mapped = this.contentMap.get(uri.path);
+        if (mapped !== undefined) {
+            return mapped;
         }
-        return "No content provided";
+        if (!uri.fragment) {
+            return "No content provided";
+        }
+        try {
+            return decodeURIComponent(uri.fragment);
+        } catch {
+            return `Error decoding content: ${uri.fragment}`;
+        }
     }
 }
 

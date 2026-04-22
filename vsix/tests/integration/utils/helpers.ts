@@ -55,23 +55,12 @@ export async function createTestJob(set: string, name: string, param: string = '
     throw new Error(`Failed to create test job: ${response.statusText}`);
   }
 
-  const result = await response.json() as any;
-  console.log('createTestJob response:', JSON.stringify(result, null, 2));
+  const result = await response.json() as { job: string };
   // The response is {"job": "job_id_string"}
-  let jobId: string;
-  if (typeof result.job === 'string') {
-    jobId = result.job;
-  } else if (result.job && result.job.id) {
-    jobId = result.job.id;
-  } else if (result.id) {
-    jobId = result.id;
-  } else if (typeof result === 'string') {
-    jobId = result;
-  } else {
+  if (typeof result.job !== 'string') {
     throw new Error(`Unexpected job creation response format: ${JSON.stringify(result)}`);
   }
-  console.log('Extracted jobId:', jobId);
-  return jobId;
+  return result.job;
 }
 
 export async function deleteTestScriptlet(set: string, name: string): Promise<void> {
@@ -94,13 +83,15 @@ export function createTempDir(): string {
     return fs.mkdtempSync(path.join(os.tmpdir(), 'pyops-test-'));
   }
   const wsRoot = vscode.workspace.workspaceFolders[0].uri.fsPath;
-  const tempName = `pyops-test-${Math.random().toString(36).substr(2, 9)}`;
+  const tempName = `pyops-test-${Math.random().toString(36).substring(2, 11)}`;
   const tempDir = path.join(wsRoot, tempName);
   fs.mkdirSync(tempDir, { recursive: true });
   return tempDir;
 }
 
-export async function waitForJobState(jobId: string, expectedState: string, timeoutMs: number = 5000): Promise<void> {
+const JOB_STATE_TIMEOUT = parseInt(process.env.PYOPS_JOB_STATE_TIMEOUT || '5000', 10);
+
+export async function waitForJobState(jobId: string, expectedState: string, timeoutMs: number = JOB_STATE_TIMEOUT): Promise<void> {
   const serverUrl = process.env.PYOPS_SERVER_URL || 'http://localhost:8000';
   const startTime = Date.now();
 
@@ -151,7 +142,7 @@ export function findTreeItemByLabel(children: any[], label: string): any {
 }
 
 // Poll tree item icon
-export async function pollTreeItemIcon(provider: any, parentLabel: string | undefined, expectedLabel: string, expectedIconId: 'check' | 'warning', timeoutMs: number = 5000): Promise<void> {
+export async function pollTreeItemIcon(provider: any, parentLabel: string | undefined, expectedLabel: string, expectedIconId: string, timeoutMs: number = 5000): Promise<void> {
   const startTime = Date.now();
   while (Date.now() - startTime < timeoutMs) {
     let children: any[];
@@ -242,6 +233,8 @@ export async function cleanupJobs(waitForPortRelease: boolean = false): Promise<
     throw new Error(`Timeout waiting for test jobs to be removed: ${finalRemaining.map(j => `${j.id}:${j.state}`).join(', ')}`);
   }
 
-  // Wait additional 3 seconds for port cleanup to complete
-  await new Promise(resolve => setTimeout(resolve, 5000));
+  // Wait for port cleanup to complete (debug jobs hold ports)
+  if (waitForPortRelease) {
+    await new Promise(resolve => setTimeout(resolve, 5000));
+  }
 }

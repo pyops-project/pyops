@@ -237,9 +237,9 @@ def test_config_log_with_log_section(tmp_path):
         f.write(mock_content)
     config = Config.init(str(conf_path))
     result = config.log()
-    assert result["info"] == "/custom/info.log"
     assert result["loglevel"] == "debug"
     assert "access" not in result  # No access if not in config
+    assert "info" not in result  # info path removed from log config
 
 def test_config_log_exception_in_update(tmp_path):
     from app.lib.files import Config
@@ -284,7 +284,7 @@ def test_config_log_access_only(tmp_path):
     config = Config.init(str(conf_path))
     result = config.log()
     assert result["loglevel"] == "info"
-    assert result["access"] == "log/access.log"
+    assert "access" not in result  # access path removed from log config
     assert "info" not in result
 
 def test_config_log_info_only(tmp_path):
@@ -296,7 +296,7 @@ def test_config_log_info_only(tmp_path):
     config = Config.init(str(conf_path))
     result = config.log()
     assert result["loglevel"] == "info"
-    assert result["info"] == "log/info.log"
+    assert "info" not in result  # info path removed from log config
     assert "access" not in result
 
 def test_config_log_full(tmp_path):
@@ -308,8 +308,8 @@ def test_config_log_full(tmp_path):
     config = Config.init(str(conf_path))
     result = config.log()
     assert result["loglevel"] == "debug"
-    assert result["info"] == "log/info.log"
-    assert result["access"] == "log/access.log"
+    assert "info" not in result  # info path removed from log config
+    assert "access" not in result  # access path removed from log config
 
 
 def test_conf_users_no_init():
@@ -352,3 +352,25 @@ def test_conf_web_init_on_empty(tmp_path):
     result = files.conf_web()
     expected = {"bind": "0.0.0.0:80"}
     assert result == expected
+
+
+def test_version_strips_whitespace(tmp_path):
+    from app.lib import files
+    version_file = tmp_path / "VERSION"
+    version_file.write_text("  2.1.0\n\n")
+    with patch.object(files, "version_path", str(version_file)):
+        assert files.version() == "2.1.0"
+
+
+def test_version_file_missing(tmp_path):
+    from app.lib import files
+    with patch.object(files, "version_path", str(tmp_path / "nope")):
+        with pytest.raises(FileNotFoundError):
+            files.version()
+
+
+def test_version_matches_project_version_file():
+    from app.lib import files
+    with open(files.version_path, "r") as f:
+        expected = f.read().strip()
+    assert files.version() == expected
