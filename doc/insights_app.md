@@ -152,7 +152,7 @@ SQLite file-based DB in `data/app.db`, thread-safe WAL mode.
 
 ## Git Operations (`app/lib/git.py`)
 
-Manages scriptlet files as Git repos in `data/git/{set}/`. All mutating operations are serialized via `repo_lock(git_base, set_name)` (fcntl advisory lock per set).
+Manages scriptlet files as Git repos in `data/git/{set}/`. All mutating operations are serialized via `repo_lock(git_base, set_name)` — an `fcntl.flock` exclusive lock on a persistent `data/git/{set}.lock` file. The lockfile is never unlinked: removing it after release would let a late caller open a new inode while another caller still holds flock on the unlinked one, breaking mutual exclusion.
 
 ### Scriptlet File Conventions
 
@@ -167,6 +167,7 @@ Manages scriptlet files as Git repos in `data/git/{set}/`. All mutating operatio
 - `get_repo_path(set)`: resolves `data/git/{set}/`; initializes `.git`, `.gitignore`, `README.md` if missing
 - `read_content(repo, name, type_, committed, strict)`: reads working tree (default) or `git show HEAD:` for committed; `strict=True` raises if no committed version
 - `write_content(repo, name, type_, content)`: writes file under `repo_lock`
+- `create_scriptlet(set_name, name, type_, content, commit_msg)`: atomic unique-name check + file write + commit under a single `repo_lock` span, closing the race where two concurrent same-name creates would each pass `check_name_unique` before either writes; raises `FileExistsError` on duplicate
 - `perform_git_add_commit_push(repo, file_path, msg)`: add + commit + push (skips push if no remote; raises `GitConflictError` on tag)
 - `batch_commit(repo, msg, rel_files)`: add all or specific files + commit + push
 - `delete_file_and_commit(repo, file_path, msg)`: `git rm` + commit + push

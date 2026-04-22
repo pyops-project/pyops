@@ -50,10 +50,15 @@ def _check(cmd: list, cwd) -> None:
 
 @contextmanager
 def repo_lock(git_base: str, set_name: str):
-    """Advisory lock holding fd across context for explicit release."""
+    """Advisory lock holding fd across context for explicit release.
+
+    The lockfile is persistent: unlinking after release would allow a
+    late-arriving caller to open a *new* inode while another caller still
+    holds flock on the unlinked one, defeating mutual exclusion.
+    """
     lockfile = os.path.join(git_base, f"{set_name}.lock")
     os.makedirs(git_base, exist_ok=True)
-    fd = open(lockfile, "w")
+    fd = open(lockfile, "a")
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
         logger.debug(f"Acquired lock for {set_name} in {git_base}")
@@ -61,11 +66,6 @@ def repo_lock(git_base: str, set_name: str):
     finally:
         fcntl.flock(fd, fcntl.LOCK_UN)
         fd.close()
-        if os.path.exists(lockfile):
-            try:
-                os.unlink(lockfile)
-            except FileNotFoundError:
-                pass  # Safe if race-deleted
         logger.debug(f"Released lock for {set_name} in {git_base}")
 
 # Git base path from config.
@@ -424,6 +424,22 @@ def write_content(repo: str, name: str, type_: str, content: str) -> None:  # Re
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(content)
 
+def _add_commit_push_locked(repo: str, rel_path: str, msg: str) -> None:
+    """Tag check + git add/commit/push. Caller MUST hold repo_lock."""
+    tags_output = subprocess.check_output(["git", "tag", "-l"], cwd=repo).decode().strip()
+    if tags_output:
+        try:
+            _check(["git", "describe", "--tags", "--exact-match", "HEAD"], repo)
+            raise GitConflictError("Cannot commit on a tag.")
+        except subprocess.CalledProcessError:
+            pass  # Not a tag.
+
+    _call(["git", "add", rel_path], repo)
+    _call(["git", "commit", "-m", msg], repo)
+    remotes = _check(["git", "remote"], repo)
+    if remotes:
+        _call(["git", "push"], repo)
+
 def perform_git_add_commit_push(repo: str, file_path: str, msg: str) -> None:
     """Adds file, commits, pushes (checks remote and not tag).
 
@@ -437,27 +453,44 @@ def perform_git_add_commit_push(repo: str, file_path: str, msg: str) -> None:
         subprocess.CalledProcessError: Git failure.
     """
     rel_path = os.path.relpath(file_path, repo)
-
-    # Check not on tag.
-    tags_output = subprocess.check_output(["git", "tag", "-l"], cwd=repo).decode().strip()
-    if tags_output:
-        try:
-            _check(["git", "describe", "--tags", "--exact-match", "HEAD"], repo)
-            raise GitConflictError("Cannot commit on a tag.")
-        except subprocess.CalledProcessError:
-            pass  # Not a tag.
-    # No tags, assume not on tag
-    
-    # Add, commit, push.
     git_base = get_git_base()
     set_name = os.path.basename(repo)
     with repo_lock(git_base, set_name):
-        _call(["git", "add", rel_path], repo)
-        _call(["git", "commit", "-m", msg], repo)
+        _add_commit_push_locked(repo, rel_path, msg)
 
-        remotes = _check(["git", "remote"], repo)
-        if remotes:
-            _call(["git", "push"], repo)
+def create_scriptlet(set_name: str, name: str, type_: str, content: str, commit_msg: str) -> str:
+    """Atomic scriptlet creation: unique-name check + write + commit under one lock.
+
+    Holding the lock across the whole sequence prevents a same-name race where
+    two concurrent callers both pass check_name_unique before either writes.
+
+    Args:
+        set_name (str): Set.
+        name (str): Scriptlet name.
+        type_ (str): Scriptlet type.
+        content (str): Initial file content.
+        commit_msg (str): Git commit message.
+
+    Returns:
+        str: Absolute path of the created file.
+
+    Raises:
+        GitNotFoundError: Set does not exist.
+        FileExistsError: Name already taken in the set.
+        GitConflictError: Repo is on a tag.
+        subprocess.CalledProcessError: Git failure.
+    """
+    repo = get_repo_path(set_name)  # ensures .git/.gitignore/README; takes+releases lock
+    git_base = get_git_base()
+    with repo_lock(git_base, set_name):
+        if not check_name_unique(repo, name):
+            raise FileExistsError(f"Name '{name}' already exists in set '{set_name}'")
+        file_path = get_file_path(repo, name, type_)
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(content)
+        rel_path = os.path.relpath(file_path, repo)
+        _add_commit_push_locked(repo, rel_path, commit_msg)
+    return file_path
 
 def batch_commit(repo: str, msg: str, rel_files: List[str] = None) -> None:
     """Batch adds files/all, commits, pushes (checks remote and not tag).

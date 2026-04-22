@@ -32,7 +32,7 @@ class TestInventoryRouter:
 
     def test_put_inventory_item_create_conflict(self, mock_client, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
         create_data = {"set": "default", "name": "sample_task", "type": "task"}  # Exists in mock
-        with patch("app.lib.git.check_name_unique", return_value=False):
+        with patch("app.lib.git.create_scriptlet", side_effect=FileExistsError("Name 'sample_task' already exists")):
             response = mock_client.put("/scriptlet/inventory/item", json=create_data, headers={"X-User": "testuser"})
             assert response.status_code == 409
 

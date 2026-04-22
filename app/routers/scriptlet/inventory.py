@@ -46,10 +46,6 @@ async def item_put(cr: CreateArgument, user: str = Depends(get_current_user)):
         if not os.path.exists(os.path.join(potential_repo, '.git')):
             raise HTTPException(status_code=HTTP_400_BAD_REQUEST, detail="Set does not exist")
 
-        repo = await run_in_executor(git.get_repo_path, cr.set)
-        if not await run_in_executor(git.check_name_unique, repo, cr.name):
-            raise HTTPException(status_code=HTTP_409_CONFLICT, detail="Name {} already exists".format(cr.name))
-
         if cr.type == "markdown" and cr.name != "README":
             raise HTTPException(400, "Markdown only for README.")
 
@@ -59,15 +55,20 @@ async def item_put(cr: CreateArgument, user: str = Depends(get_current_user)):
             initial_content = "// JS Library\n"
         else:
             initial_content = "" if cr.type == "markdown" else "pass\n"
-        await run_in_executor(git.write_content, repo, cr.name, cr.type, initial_content)
-        file_path = await run_in_executor(git.get_file_path, repo, cr.name, cr.type)
-        await run_in_executor(git.perform_git_add_commit_push, repo, file_path, f"Create {cr.name}.{cr.type} by {user}")
+
+        await run_in_executor(
+            git.create_scriptlet,
+            cr.set, cr.name, cr.type, initial_content,
+            f"Create {cr.name}.{cr.type} by {user}",
+        )
 
         return {"set": cr.set, "name": cr.name, "type": cr.type}
 
     except git.GitNotFoundError as ex:
         raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail=str(ex))
     except git.GitConflictError as ex:
+        raise HTTPException(status_code=HTTP_409_CONFLICT, detail=str(ex))
+    except FileExistsError as ex:
         raise HTTPException(status_code=HTTP_409_CONFLICT, detail=str(ex))
     except HTTPException as ex:
         raise ex

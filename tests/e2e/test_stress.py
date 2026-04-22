@@ -375,15 +375,11 @@ class TestConcurrentJobExecution:
             if job["state"] == "done":
                 done_count += 1
 
-        # Under concurrent execution, workspace setup races can cause
-        # occasional failures.  Most jobs should succeed.
-        assert done_count >= job_count - 1, (
-            f"Too many job failures: {done_count}/{job_count} done"
+        assert done_count == job_count, (
+            f"Job failures: {done_count}/{job_count} done"
         )
 
-        pyops_server.assert_no_unexpected_errors(
-            allow=[r"setup_workspace", r"makedirs", r"FileExistsError"]
-        )
+        pyops_server.assert_no_unexpected_errors()
 
     def test_concurrent_jobs_and_inventory_ops(self, api, pyops_server):
         """Run jobs while also doing draft saves in parallel."""

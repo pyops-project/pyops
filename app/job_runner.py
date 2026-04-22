@@ -33,11 +33,8 @@ def setup_workspace(data_base: str, set: str, job_id: str) -> tuple[str, str]:
     setspace = os.path.abspath(os.path.join(data_base, f"{set}"))
     workspace = os.path.abspath(os.path.join(setspace, f"{job_id}"))
 
-    if not os.path.exists(setspace):
-        os.makedirs(setspace)
-
-    if not os.path.exists(workspace):
-        os.makedirs(workspace)
+    os.makedirs(setspace, exist_ok=True)
+    os.makedirs(workspace, exist_ok=True)
 
     return setspace, workspace
 

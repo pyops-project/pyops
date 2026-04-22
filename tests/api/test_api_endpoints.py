@@ -44,11 +44,11 @@ def test_put_inventory_item_create_conflict(mock_client, mock_git_ops, test_temp
     # First create
     create_data = {"set": "testset", "name": "conflict", "type": "task"}
     with patch("os.path.exists", return_value=True), \
-         patch("app.lib.git.check_name_unique", return_value=True), \
          patch("os.makedirs"):
         mock_client.put("/scriptlet/inventory/item", json=create_data, headers={"X-User": "testuser"})
-    # Second attempt - conflict
-    with patch("app.lib.git.check_name_unique", return_value=False):
+    # Second attempt - conflict: create_scriptlet raises FileExistsError under the lock.
+    with patch("os.path.exists", return_value=True), \
+         patch("app.lib.git.create_scriptlet", side_effect=FileExistsError("Name 'conflict' already exists")):
         response = mock_client.put("/scriptlet/inventory/item", json=create_data, headers={"X-User": "testuser"})
         assert response.status_code == 409
 
