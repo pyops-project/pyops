@@ -361,29 +361,36 @@
         </script>
     </head>
     <body class="bg-body">
-        <nav class="navbar navbar-expand navbar-dark bg-dark pt-3 sticky-top" data-testid="manager-navbar">
-            <ul class="navbar-nav w-100">
-                <li class="navbar-brand">
+        <nav class="navbar navbar-expand-md navbar-dark bg-dark pt-3 sticky-top" data-testid="manager-navbar">
+            <div class="container-fluid">
+                <span class="navbar-brand">
                     <span class="material-icons-round">description</span>
                     <span>Scriptlet/Manager</span>
-                </li>
+                </span>
+                <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#managerNav" aria-controls="managerNav" aria-expanded="false" aria-label="Toggle navigation">
+                    <span class="navbar-toggler-icon"></span>
+                </button>
+                <div class="collapse navbar-collapse" id="managerNav">
+                    <ul class="navbar-nav w-100">
+                        <li class="nav-item m-1">
+                            <button type="button" class="btn btn-success" data-bs-toggle="modal" data-bs-target="#createModal" data-testid="manager-create">
+                                <span class="material-icons-round">add</span>
+                            </button>
+                        </li>
 
-                <li class="nav-item m-1">
-                    <button type="button" class="btn btn-success" data-bs-toggle="modal" data-bs-target="#createModal" data-testid="manager-create">
-                        <span class="material-icons-round">add</span>
-                    </button>
-                </li>
+                        <li class="nav-item mx-auto"></li>
 
-                <li class="nav-item mx-auto"></li>
-
-                <li class="nav-item m-1">
-                    <button type="button" class="btn btn-success" onclick="refreshList()" data-testid="manager-refresh">
-                        <span class="material-icons-round">refresh</span>
-                    </button>
-                </li>
-            </ul>
+                        <li class="nav-item m-1">
+                            <button type="button" class="btn btn-success" onclick="refreshList()" data-testid="manager-refresh">
+                                <span class="material-icons-round">refresh</span>
+                            </button>
+                        </li>
+                    </ul>
+                </div>
+            </div>
         </nav>
 
+        <div class="table-responsive">
         <table class="table table-secondary" data-testid="manager-table">
             <thead>
               <tr>
@@ -396,6 +403,7 @@
             <tbody id="scriptlets" data-testid="manager-scriptlets">
             </tbody>
         </table>
+        </div>
 
         <!-- DIALOGS -->
         <div class="modal fade" data-bs-backdrop="static" id="createModal" tabindex="-1" aria-labelledby="createModalLabel" aria-hidden="true" data-testid="manager-create-modal">

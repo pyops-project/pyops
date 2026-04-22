@@ -38,9 +38,9 @@
 ## Execution environment
 
 Execution environment provides these globals:
-- `userspace`: `data/jobs/{owner}/` (owner's jobs root)
-- `setspace`: `data/jobs/{owner}/{set}/` (set's jobs root)
-- `workspace`: `data/jobs/{owner}/{set}/{id}/` (this job's workspace)
+- `user`: owner of this job (string; identifies the requesting user)
+- `setspace`: `data/jobs/{set}/` (set's jobs root; shared across all users)
+- `workspace`: `data/jobs/{set}/{id}/` (this job's workspace)
 - `listener`: ServiceListener for inbound ZMQ IPC (services only). `listener.listen()` blocking; `listener.poll()` non-blocking (None/"TERM"/msg); `listener.async_poll()` returns list of pending messages; `response(dict)` or `async_response(identity, dict)`.
 
 ## Scriptlet Types
@@ -362,6 +362,7 @@ Guidelines:
 - No `<title>` or `<h1>` (auto-handled).
 - JS `<script>` preferably in head; inline in body ok for simple scripts. Custom in head.html.
 - Use {{SET}}/{{NAME}} in URLs/AJAX for portability.
+- Mobile: the controller wrapper already places the menu inside a `navbar-expand-md` collapse with a hamburger toggler below 768px. Do not add your own toggler/collapse to menu.html — just emit the `<li>` items. For body content, wrap wide tables in `<div class="table-responsive">` and avoid fixed pixel widths so the layout reflows on phones.
 
 #### Head View (my_head.html)
 Styles/scripts only.

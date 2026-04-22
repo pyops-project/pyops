@@ -206,7 +206,9 @@ def test_controller_html_output(client, mock_git_ops, mock_db):
         assert "<head>" in html
         assert "<body class=\"bg-light\">" in html
         assert "sticky-top" in html  # The navbar should have sticky-top class
-        assert "navbar navbar-expand navbar-dark bg-dark text-light pt-3 sticky-top" in html
+        assert "navbar navbar-expand-md navbar-dark bg-dark text-light pt-3 sticky-top" in html
+        assert 'class="navbar-toggler"' in html
+        assert 'id="controllerNav"' in html
         assert "testset::Test Controller" in html
         assert "<div>head_view content</div>" in html
         assert "<div>menu_view content</div>" in html

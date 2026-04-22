@@ -277,7 +277,7 @@ Config dicts (`conf_data`, `conf_runner`, `conf_users`, `conf_web`) are passed a
 graph TD
     A[main kwargs] --> B["_conf_data/_conf_runner/_conf_users/_conf_web = kwargs"]
     B --> C["run_task_job / run_service_job / run_debug_job / run_draft_job"]
-    C --> D["setup_workspace(data_jobs, owner, set, job_id)"]
+    C --> D["setup_workspace(data_jobs, set, job_id)"]
     D --> E["setup_execution_environment → open stdout.log/stderr.log"]
     E --> F["with redirect_stdout/redirect_stderr"]
     F --> G["process_code_installs → pip/git installs to files"]
@@ -294,11 +294,10 @@ graph TD
 
 | Name | Value |
 |------|-------|
-| `owner` | job owner |
+| `user` | job owner (DB column is still `owner`) |
 | `set`, `name` | scriptlet identity |
-| `workspace` | `data/jobs/{owner}/{set}/{id}/` |
-| `userspace` | `data/jobs/{owner}/` |
-| `setspace` | `data/jobs/{owner}/{set}/` |
+| `workspace` | `data/jobs/{set}/{id}/` |
+| `setspace` | `data/jobs/{set}/` (shared across all users) |
 | `gitspace` | `data/git/` |
 | `pkgspace` | `data/pkg/` |
 | `jobsspace` | `data/jobs/` |
@@ -444,7 +443,7 @@ FastAPI application; mounts all routers; serves static files.
 - `GET /files/{path}` → static files
 - `GET /version` → `{"version": str}` from `app/lib/files.py::version()` which reads the project-root `VERSION` file (single source of truth shared with the VSIX build)
 - `GET /debug/port` → `{"port": int}` from `conf_users()[owner]["debug_port"]`; 400 if missing; owner from `X-User` header (default `anonymous`)
-- `GET /controller/{set}/{name}` → executes controller.py draft, renders head/menu/body views with `{{SET}}`/`{{NAME}}` injection
+- `GET /controller/{set}/{name}` → executes controller.py draft, renders head/menu/body views with `{{SET}}`/`{{NAME}}` injection; wraps the menu fragment in a `navbar-expand-md` collapse with a toggler so user menus fold behind a hamburger below 768px without any author effort
 - `ANY /controller/{set}/{name}/{rest:path}` → `controller_proxy`: executes controller to find running service/debug job, forwards via `ServiceClient.request()`
 - `GET /menu` → `{"menu": [...], "failures": [...]}` — hardcoded Scriptlet group (Manager, Scheduler, Monitor, Sets) + dynamic per-set controller groups from Git; exec failures collected rather than raised
 

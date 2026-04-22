@@ -405,34 +405,41 @@
         </script>
     </head>
     <body class="bg-body">
-        <nav class="navbar navbar-expand navbar-dark bg-dark pt-3 sticky-top" data-testid="sets-navbar">
-            <ul class="navbar-nav w-100">
-                <li class="navbar-brand">
+        <nav class="navbar navbar-expand-md navbar-dark bg-dark pt-3 sticky-top" data-testid="sets-navbar">
+            <div class="container-fluid">
+                <span class="navbar-brand">
                     <span class="material-icons-round">folder</span>
                     <span>Sets Manager</span>
-                </li>
+                </span>
+                <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#setsNav" aria-controls="setsNav" aria-expanded="false" aria-label="Toggle navigation">
+                    <span class="navbar-toggler-icon"></span>
+                </button>
+                <div class="collapse navbar-collapse" id="setsNav">
+                    <ul class="navbar-nav w-100">
+                        <li class="nav-item m-1">
+                            <button type="button" id="cloneButton" class="btn btn-success" data-testid="sets-clone">
+                                <span class="material-icons-round">content_copy</span>
+                            </button>
+                        </li>
+                        <li class="nav-item m-1">
+                            <button type="button" id="createButton" class="btn btn-success" data-testid="sets-create">
+                                <span class="material-icons-round">add</span>
+                            </button>
+                        </li>
 
-                <li class="nav-item m-1">
-                    <button type="button" id="cloneButton" class="btn btn-success" data-testid="sets-clone">
-                        <span class="material-icons-round">content_copy</span>
-                    </button>
-                </li>
-                <li class="nav-item m-1">
-                    <button type="button" id="createButton" class="btn btn-success" data-testid="sets-create">
-                        <span class="material-icons-round">add</span>
-                    </button>
-                </li>
+                        <li class="nav-item mx-auto"></li>
 
-                <li class="nav-item mx-auto"></li>
-
-                <li class="nav-item m-1">
-                    <button type="button" class="btn btn-success" onclick="refreshList()" data-testid="sets-refresh">
-                        <span class="material-icons-round">refresh</span>
-                    </button>
-                </li>
-            </ul>
+                        <li class="nav-item m-1">
+                            <button type="button" class="btn btn-success" onclick="refreshList()" data-testid="sets-refresh">
+                                <span class="material-icons-round">refresh</span>
+                            </button>
+                        </li>
+                    </ul>
+                </div>
+            </div>
         </nav>
 
+        <div class="table-responsive">
         <table class="table table-secondary" data-testid="sets-table">
             <thead>
               <tr>
@@ -444,5 +451,6 @@
             <tbody id="sets" data-testid="sets-rows">
             </tbody>
         </table>
+        </div>
     </body>
 </html>

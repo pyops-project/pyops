@@ -107,8 +107,7 @@ async def job_get(id: str):
             raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Job {} not existing".format(id))
 
         data_base = files.conf_data()["jobs"]
-        userspace = os.path.join(data_base, job.owner)
-        setspace = os.path.join(userspace, job.set)
+        setspace = os.path.join(data_base, job.set)
         workspace = os.path.join(setspace, job.id)
         stdout_log_path = os.path.join(workspace, "stdout.log")
         stderr_log_path = os.path.join(workspace, "stderr.log")
@@ -184,8 +183,7 @@ async def download_get(id: str):
             raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Job {} not existing".format(id))
 
         data_base = files.conf_data()["jobs"]
-        userspace = os.path.join(data_base, f"{job.owner}")
-        setspace = os.path.join(userspace, f"{job.set}")
+        setspace = os.path.join(data_base, f"{job.set}")
         workspace = os.path.join(setspace, f"{job.id}")
 
         zs = ZipStream(compress_type=ZIP_DEFLATED)

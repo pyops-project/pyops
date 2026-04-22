@@ -12,10 +12,9 @@ from sqlalchemy import select
 @pytest.fixture
 def mock_glob():
     return {
-        "owner": "mock_owner",
+        "user": "mock_owner",
         "set": "mock_set",
         "name": "mock_name",
-        "userspace": "/mock/userspace",
         "setspace": "/mock/setspace",
         "workspace": "/mock/workspace",
         "control": Mock(),
@@ -502,7 +501,7 @@ logging.error('ERROR message')
         return q
 
     def get_log_contents(self, data_base, owner, set_name, job_id):
-        workspace = os.path.join(data_base, owner, set_name, job_id)
+        workspace = os.path.join(data_base, set_name, job_id)
         stdout_path = os.path.join(workspace, "stdout.log")
         stderr_path = os.path.join(workspace, "stderr.log")
         stdout_content = ""
@@ -796,7 +795,7 @@ logging.error('ERROR message')
         owner = "owner"
         set_name = "set"
         job_id = "id"
-        workspace = os.path.join(data_base, owner, set_name, job_id)
+        workspace = os.path.join(data_base, set_name, job_id)
 
         venv_path = os.path.join(tmp_path, "venv")
         pkg_path = os.path.join(tmp_path, "pkg")
@@ -830,7 +829,7 @@ logging.error('ERROR message')
             owner = "owner"
             set_name = "set"
             job_id = "id"
-            workspace = os.path.join(data_base, owner, set_name, job_id)
+            workspace = os.path.join(data_base, set_name, job_id)
             expected_gitspace = os.path.join(project_root, "data/git")
             expected_pkgspace = os.path.join(project_root, "pkg")
             expected_jobsspace = data_base
@@ -1006,7 +1005,7 @@ print("jobsspace: " + globals()['jobsspace'])
         mock_send.assert_called_once_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
 
         # Check that files were created in .debug/src/ subdirectories
-        workspace = os.path.join(data_base, owner, set_name, job_id)
+        workspace = os.path.join(data_base, set_name, job_id)
         debug_src_dir = os.path.join(workspace, ".debug", "src")
 
         # Check param file
@@ -1102,7 +1101,7 @@ print("jobsspace: " + globals()['jobsspace'])
 
         mock_send.assert_called_once_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
 
-        workspace = os.path.join(data_base, owner, set_name, job_id)
+        workspace = os.path.join(data_base, set_name, job_id)
         debug_src_dir = os.path.join(workspace, ".debug", "src")
         new_lib_file = os.path.join(debug_src_dir, set_name, "library", "newlib.py")
         assert not os.path.exists(new_lib_file)  # Ignored!
@@ -1567,14 +1566,14 @@ class TestDebugOverridesResolution(TestLoggingCapture):
         mock_send.assert_called_once_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
 
         # Check stdout has newlib
-        stdout_path = os.path.join(data_base, owner, set_name, job_id, "stdout.log")
+        stdout_path = os.path.join(data_base, set_name, job_id, "stdout.log")
         with open(stdout_path, 'r') as f:
             stdout = f.read()
             assert "overridden newlib" in stdout
             assert "task" in stdout
 
         # Check file created
-        workspace = os.path.join(data_base, owner, set_name, job_id)
+        workspace = os.path.join(data_base, set_name, job_id)
         debug_src_dir = os.path.join(workspace, ".debug", "src")
         new_lib_file = os.path.join(debug_src_dir, set_name, "library", "newlib.py")
         assert os.path.exists(new_lib_file)
@@ -1618,7 +1617,7 @@ class TestDebugOverridesResolution(TestLoggingCapture):
 
         mock_send.assert_called_once_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
 
-        stdout_path = os.path.join(data_base, owner, set_name, job_id, "stdout.log")
+        stdout_path = os.path.join(data_base, set_name, job_id, "stdout.log")
         with open(stdout_path, 'r') as f:
             stdout = f.read()
             assert "libB" in stdout
@@ -1626,7 +1625,7 @@ class TestDebugOverridesResolution(TestLoggingCapture):
             assert "task" in stdout
 
         # Check files
-        workspace = os.path.join(data_base, owner, set_name, job_id)
+        workspace = os.path.join(data_base, set_name, job_id)
         debug_src_dir = os.path.join(workspace, ".debug", "src")
         libA_file = os.path.join(debug_src_dir, set_name, "library", "libA.py")
         libB_file = os.path.join(debug_src_dir, set_name, "library", "libB.py")

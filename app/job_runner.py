@@ -28,14 +28,10 @@ _conf_runner = None
 _conf_users = None
 _conf_web = None
 
-def setup_workspace(data_base: str, owner: str, set: str, job_id: str) -> tuple[str, str, str]:
-    """Create and return workspace paths: (userspace, setspace, workspace)"""
-    userspace = os.path.abspath(os.path.join(data_base, f"{owner}"))
-    setspace = os.path.abspath(os.path.join(userspace, f"{set}"))
+def setup_workspace(data_base: str, set: str, job_id: str) -> tuple[str, str]:
+    """Create and return workspace paths: (setspace, workspace)"""
+    setspace = os.path.abspath(os.path.join(data_base, f"{set}"))
     workspace = os.path.abspath(os.path.join(setspace, f"{job_id}"))
-
-    if not os.path.exists(userspace):
-        os.makedirs(userspace)
 
     if not os.path.exists(setspace):
         os.makedirs(setspace)
@@ -43,7 +39,7 @@ def setup_workspace(data_base: str, owner: str, set: str, job_id: str) -> tuple[
     if not os.path.exists(workspace):
         os.makedirs(workspace)
 
-    return userspace, setspace, workspace
+    return setspace, workspace
 
 def setup_execution_environment(venv_path: str, pkg_path: str, set: str, workspace: str, log_level: int) -> tuple[TextIOWrapper, TextIOWrapper]:
     """Change to workspace directory and return stdout/stderr files"""
@@ -54,7 +50,7 @@ def setup_execution_environment(venv_path: str, pkg_path: str, set: str, workspa
 
     return stdout_file, stderr_file
 
-def setup_job_globals(owner: str, userspace: str, setspace: str, workspace: str, web_bind: str, job_id: str, kind: str, set: str, name: str) -> dict:
+def setup_job_globals(owner: str, setspace: str, workspace: str, web_bind: str, job_id: str, kind: str, set: str, name: str) -> dict:
     """Create the globals dict for job execution"""
     if kind in ("service", "debug"):
         listener = pyops.ServiceListener(owner, job_id)
@@ -62,10 +58,9 @@ def setup_job_globals(owner: str, userspace: str, setspace: str, workspace: str,
         listener = None
 
     return {
-        "owner": owner,
+        "user": owner,
         "set": set,
         "name": name,
-        "userspace": userspace,
         "setspace": setspace,
         "workspace": workspace,
         "gitspace": os.path.join(_project_root, _conf_data["git"]),
@@ -146,7 +141,7 @@ def run_debug_job(job_id: str, owner: str, set: str, name: str, param: str, code
 
     try:
         # Step 1: Workspace setup
-        userspace, setspace, workspace = setup_workspace(data_jobs, owner, set, job_id)
+        setspace, workspace = setup_workspace(data_jobs, set, job_id)
 
         # Step 2: Execution environment setup
         stdout_file, stderr_file = setup_execution_environment(venv_path, pkg_path, set, workspace, logging.DEBUG)
@@ -232,7 +227,7 @@ debugpy.breakpoint()
                         with open(lib_file, 'r') as f:
                             compiled_libs.append(compile(f.read(), lib_file, 'exec'))
 
-                    glob = setup_job_globals(owner, userspace, setspace, workspace, web_bind, job_id, "debug", set, name)
+                    glob = setup_job_globals(owner, setspace, workspace, web_bind, job_id, "debug", set, name)
 
                     info_handler, warn_handler = setup_logging(logging.DEBUG, stdout_file, stderr_file)
 
@@ -286,7 +281,7 @@ def run_draft_job(job_id: str, owner: str, set: str, name: str, param: str, code
 
     try:
         # Step 1: Workspace setup
-        userspace, setspace, workspace = setup_workspace(data_jobs, owner, set, job_id)
+        setspace, workspace = setup_workspace(data_jobs, set, job_id)
 
         # Step 2: Execution environment setup
         stdout_file, stderr_file = setup_execution_environment(venv_path, pkg_path, set, workspace, logging.INFO)
@@ -311,7 +306,7 @@ def run_draft_job(job_id: str, owner: str, set: str, name: str, param: str, code
                         lib_filename = f"{set}/library/{lib_name}.py"
                         compiled_libs.append(compile(lib["code"], lib_filename, 'exec'))
 
-                    glob = setup_job_globals(owner, userspace, setspace, workspace, web_bind, job_id, "draft", set, name)
+                    glob = setup_job_globals(owner, setspace, workspace, web_bind, job_id, "draft", set, name)
 
                     info_handler, warn_handler = setup_logging(logging.INFO, stdout_file, stderr_file)
 
@@ -359,7 +354,7 @@ def run_task_job(job_id: str, owner: str, set: str, name: str, param: str, code:
 
     try:
         # Step 1: Workspace setup
-        userspace, setspace, workspace = setup_workspace(data_jobs, owner, set, job_id)
+        setspace, workspace = setup_workspace(data_jobs, set, job_id)
 
         # Step 2: Execution environment setup
         stdout_file, stderr_file = setup_execution_environment(venv_path, pkg_path, set, workspace, logging.INFO)
@@ -384,7 +379,7 @@ def run_task_job(job_id: str, owner: str, set: str, name: str, param: str, code:
                         lib_filename = f"{set}/library/{lib_name}.py"
                         compiled_libs.append(compile(lib["code"], lib_filename, 'exec'))
 
-                    glob = setup_job_globals(owner, userspace, setspace, workspace, web_bind, job_id, "task", set, name)
+                    glob = setup_job_globals(owner, setspace, workspace, web_bind, job_id, "task", set, name)
 
                     info_handler, warn_handler = setup_logging(logging.INFO, stdout_file, stderr_file)
 
@@ -432,7 +427,7 @@ def run_service_job(job_id: str, owner: str, set: str, name: str, param: str, co
 
     try:
         # Step 1: Workspace setup
-        userspace, setspace, workspace = setup_workspace(data_jobs, owner, set, job_id)
+        setspace, workspace = setup_workspace(data_jobs, set, job_id)
 
         # Step 2: Execution environment setup
         stdout_file, stderr_file = setup_execution_environment(venv_path, pkg_path, set, workspace, logging.INFO)
@@ -457,7 +452,7 @@ def run_service_job(job_id: str, owner: str, set: str, name: str, param: str, co
                         lib_filename = f"{set}/library/{lib_name}.py"
                         compiled_libs.append(compile(lib["code"], lib_filename, 'exec'))
 
-                    glob = setup_job_globals(owner, userspace, setspace, workspace, web_bind, job_id, "service", set, name)
+                    glob = setup_job_globals(owner, setspace, workspace, web_bind, job_id, "service", set, name)
 
                     info_handler, warn_handler = setup_logging(logging.INFO, stdout_file, stderr_file)
 

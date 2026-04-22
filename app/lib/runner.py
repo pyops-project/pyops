@@ -134,22 +134,20 @@ def remove(id: str):
 
         return job.__dict__ if job else None
 
-def drop(id: str, owner: str, set: str):
+def drop(id: str, set: str):
     """Drops job workspace and socket files.
-    
+
     Args:
         id (str): Job ID.
-        owner (str): Owner.
         set (str): Set.
-    
+
     Returns:
         bool: True if dropped successfully.
     """
     data_base = files.conf_data()["jobs"]
-    userspace = os.path.join(data_base, f"{owner}")
-    setspace = os.path.join(userspace, f"{set}")
+    setspace = os.path.join(data_base, f"{set}")
     workspace = os.path.join(setspace, f"{id}")
-    
+
     # Updated sock path for cleanup
     temp_dir = tempfile.gettempdir()
     pyops_dir = os.path.join(temp_dir, "pyops")
@@ -164,9 +162,6 @@ def drop(id: str, owner: str, set: str):
 
             if len(os.listdir(setspace)) == 0:
                 shutil.rmtree(setspace)
-
-            if len(os.listdir(userspace)) == 0:
-                shutil.rmtree(userspace)
 
             return True
         else:

@@ -100,17 +100,16 @@ class TestDBUtils:
     def test_drop_success(self, mock_listdir, mock_rmtree, mock_remove, mock_exists, mock_gettempdir, mock_conf_data):
         from app.lib import runner
         mock_gettempdir.return_value = '/tmp'
-        mock_exists.side_effect = [True, True, lambda p: p == '/tmp/userspace' or p == '/tmp/setspace']
-        mock_listdir.side_effect = lambda p: [] if p.endswith('setspace') or p.endswith('userspace') else []
+        mock_exists.side_effect = [True, True]
+        mock_listdir.return_value = []
         mock_rmtree.return_value = None
         mock_remove.return_value = None
-        result = runner.drop("123", "owner", "set")
+        result = runner.drop("123", "set")
         assert result is True
         mock_remove.assert_called_once_with('/tmp/pyops/123.sock')
         mock_rmtree.assert_has_calls([
-            call('/tmp/mock/data/jobs/owner/set/123'),
-            call('/tmp/mock/data/jobs/owner/set'),
-            call('/tmp/mock/data/jobs/owner')
+            call('/tmp/mock/data/jobs/set/123'),
+            call('/tmp/mock/data/jobs/set')
         ], any_order=False)
 
     @patch('app.lib.runner.files.conf_data', return_value={"jobs": "/tmp/mock/data/jobs"})
@@ -120,7 +119,7 @@ class TestDBUtils:
         from app.lib import runner
         mock_gettempdir.return_value = '/tmp'
         mock_exists.return_value = False  # No workspace exists
-        result = runner.drop("123", "owner", "set")
+        result = runner.drop("123", "set")
         assert result is False
 
     @patch('app.lib.runner.files.conf_data', return_value={"jobs": "/tmp/mock/data/jobs"})
@@ -131,7 +130,7 @@ class TestDBUtils:
         from app.lib import runner
         mock_gettempdir.return_value = '/tmp'
         mock_exists.return_value = True
-        result = runner.drop("123", "owner", "set")
+        result = runner.drop("123", "set")
         assert result is False
 
     @patch('app.lib.runner.files.conf_data', return_value={"jobs": "/tmp/mock/data/jobs"})
@@ -142,7 +141,7 @@ class TestDBUtils:
         # Edge: no exist returns False
         mock_gettempdir.return_value = '/tmp'
         mock_exists.return_value = False
-        result = runner.drop("123", "owner", "set")
+        result = runner.drop("123", "set")
         assert result is False
 
 class TestLoadUtils:
@@ -487,7 +486,7 @@ class TestKillProcTree:
         from app.lib import runner
         mock_gettempdir.return_value = '/tmp'
         mock_exists.return_value = True
-        result = runner.drop("123", "owner", "set")
+        result = runner.drop("123", "set")
         assert result is False
 
     @patch('app.lib.runner.files.conf_data', return_value={"jobs": "/tmp/mock/data/jobs"})
@@ -500,7 +499,7 @@ class TestKillProcTree:
         from app.lib import runner
         mock_gettempdir.return_value = '/tmp'
         mock_exists.side_effect = [True, True]  # sock exists, workspace exists
-        result = runner.drop("123", "owner", "set")
+        result = runner.drop("123", "set")
         assert result is False
 
     def test_load_lib_debug(self, mock_git_ops):
@@ -746,7 +745,7 @@ class TestPostTerm:
             session.add(job)
             session.commit()
         postTerm("testid")
-        mock_drop.assert_called_once_with("testid", "owner", "set")
+        mock_drop.assert_called_once_with("testid", "set")
         with Session(get_db_engine()) as session:
             assert session.get(Job, "testid") is None
 

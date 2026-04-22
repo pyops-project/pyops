@@ -299,41 +299,48 @@
         </script>
     </head>
     <body class="bg-body">
-        <nav class="navbar navbar-expand navbar-dark bg-dark pt-3 sticky-top" data-testid="monitor-navbar">
-            <ul class="navbar-nav w-100">
-                <li class="navbar-brand">
+        <nav class="navbar navbar-expand-md navbar-dark bg-dark pt-3 sticky-top" data-testid="monitor-navbar">
+            <div class="container-fluid">
+                <span class="navbar-brand">
                     <span class="material-icons-round">description</span>
                     <span>Scriptlet/Monitor</span>
-                </li>
+                </span>
+                <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#monitorNav" aria-controls="monitorNav" aria-expanded="false" aria-label="Toggle navigation">
+                    <span class="navbar-toggler-icon"></span>
+                </button>
+                <div class="collapse navbar-collapse" id="monitorNav">
+                    <ul class="navbar-nav w-100">
+                        <li class="nav-item m-1">
+                            <button type="button" class="btn btn-danger" onclick="cancelAll()" data-testid="monitor-cancel-all">
+                                <span class="material-icons-round">cancel</span>
+                            </button>
+                        </li>
 
-                <li class="nav-item m-1">
-                    <button type="button" class="btn btn-danger" onclick="cancelAll()" data-testid="monitor-cancel-all">
-                        <span class="material-icons-round">cancel</span>
-                    </button>
-                </li>
+                        <li class="nav-item m-1">
+                            <button type="button" class="btn btn-danger" onclick="delAllOf(['done', 'cancelled'])" data-testid="monitor-delete-done">
+                                <span class="material-icons-round">delete</span>
+                            </button>
+                        </li>
 
-                <li class="nav-item m-1">
-                    <button type="button" class="btn btn-danger" onclick="delAllOf(['done', 'cancelled'])" data-testid="monitor-delete-done">
-                        <span class="material-icons-round">delete</span>
-                    </button>
-                </li>
+                        <li class="nav-item m-1">
+                            <button type="button" class="btn btn-danger" onclick="delAllOf(['failed', 'killed'])" data-testid="monitor-delete-failed">
+                                <span class="material-icons-round">delete_forever</span>
+                            </button>
+                        </li>
 
-                <li class="nav-item m-1">
-                    <button type="button" class="btn btn-danger" onclick="delAllOf(['failed', 'killed'])" data-testid="monitor-delete-failed">
-                        <span class="material-icons-round">delete_forever</span>
-                    </button>
-                </li>
+                        <li class="nav-item mx-auto"></li>
 
-                <li class="nav-item mx-auto"></li>
-
-                <li class="nav-item m-1">
-                    <button type="button" class="btn btn-success" onclick="refreshList()" data-testid="monitor-refresh">
-                        <span class="material-icons-round">refresh</span>
-                    </button>
-                </li>
-            </ul>
+                        <li class="nav-item m-1">
+                            <button type="button" class="btn btn-success" onclick="refreshList()" data-testid="monitor-refresh">
+                                <span class="material-icons-round">refresh</span>
+                            </button>
+                        </li>
+                    </ul>
+                </div>
+            </div>
         </nav>
 
+        <div class="table-responsive">
         <table class="table table-secondary" data-testid="monitor-table">
             <thead>
               <tr>
@@ -349,6 +356,7 @@
             <tbody id="jobs" data-testid="monitor-jobs">
             </tbody>
         </table>
+        </div>
         <iframe id="download" style="display:none"></iframe>
     </body>
 </html>

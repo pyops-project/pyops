@@ -3,7 +3,7 @@ Job artifact download E2E tests.
 
 Covers GET /scriptlet/job/download?id=<id>:
   - Streams a ZIP containing the job's workspace directory (stdout.log,
-    stderr.log and anything else written under data/jobs/<owner>/<set>/<id>).
+    stderr.log and anything else written under data/jobs/<set>/<id>).
   - Unknown id returns HTTP 404.
 """
 

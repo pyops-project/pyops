@@ -108,7 +108,7 @@ class TestJobRouter:
             session.add(job)
             session.commit()
             
-            workspace_path = tmp_path / f"data/jobs/testuser/default/{job_id}"
+            workspace_path = tmp_path / f"data/jobs/default/{job_id}"
             workspace_path.mkdir(parents=True)
             (workspace_path / "stdout.log").write_text("Test output")
             
@@ -340,7 +340,7 @@ class TestJobRouter:
             session.commit()
         
         # Create log files
-        workspace = tmp_path / f"data/jobs/testuser/default/{job_id}"
+        workspace = tmp_path / f"data/jobs/default/{job_id}"
         workspace.mkdir(parents=True)
         (workspace / "stdout.log").write_text("stdout content")
         (workspace / "stderr.log").write_text("stderr content")

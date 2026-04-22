@@ -331,7 +331,7 @@ class TestDaemon:
         with Session(get_db_engine()) as test_session:
             result = test_session.execute(select(Job).where(Job.id == "id")).scalar_one_or_none()
             assert result is None
-        mock_drop.assert_called_once_with("id", "test_owner", "test_set")
+        mock_drop.assert_called_once_with("id", "test_set")
 
     @patch('app.lib.runner.drop')
     def test_postTerm_cancel(self, mock_drop, mock_db):

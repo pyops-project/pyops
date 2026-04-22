@@ -192,14 +192,21 @@ async def controller(set: str, name: str):
         {{HEAD}}
     </head>
     <body class="bg-light">
-        <nav class="navbar navbar-expand navbar-dark bg-dark text-light pt-3 sticky-top">
-            <ul class="navbar-nav w-100">
-                <li class="navbar-brand">
+        <nav class="navbar navbar-expand-md navbar-dark bg-dark text-light pt-3 sticky-top">
+            <div class="container-fluid">
+                <span class="navbar-brand">
                     <span class="material-icons-round">description</span>
                     <span>{{SET}}::{{DISPLAY_NAME}}</span>
-                </li>
-                {{MENU}}
-            </ul>
+                </span>
+                <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#controllerNav" aria-controls="controllerNav" aria-expanded="false" aria-label="Toggle navigation">
+                    <span class="navbar-toggler-icon"></span>
+                </button>
+                <div class="collapse navbar-collapse" id="controllerNav">
+                    <ul class="navbar-nav w-100">
+                        {{MENU}}
+                    </ul>
+                </div>
+            </div>
         </nav>
         {{BODY}}
     </body>

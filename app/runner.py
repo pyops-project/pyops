@@ -153,7 +153,7 @@ def purgeLeftoverServiceJobs():
         for job in jobs:
             logger.debug(f"Purging leftover service job {job.id} in state {job.state}")
             session.delete(job)
-            lib_runner.drop(job.id, job.owner, job.set)
+            lib_runner.drop(job.id, job.set)
         commit_with_retry(session)
 
 def getNextToDo():
@@ -361,7 +361,7 @@ def postTerm(job_id: str, killed: bool = False):
             if job.state == "remove":
                 logger.debug(f"postTerm: before delete, session ID {id(session)}, deleting {job_id} (state '{old_state}') at {datetime.now()}")
                 session.delete(job)
-                lib_runner.drop(job_id, job.owner, job.set)
+                lib_runner.drop(job_id, job.set)
             else:
                 job.end = datetime.now()
 
