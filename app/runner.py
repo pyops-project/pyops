@@ -533,7 +533,7 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
                 if job_id is not None:
                     try:
                         logger.debug(f"main: loading job {job_id}")
-                        owner, set, name, kind, param, code, overrides, max_retries = loadJob(job_id)
+                        owner, setname, name, kind, param, code, overrides, max_retries = loadJob(job_id)
 
                         port = None
                         if kind == "debug":
@@ -548,13 +548,13 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
                         override_dict = json.loads(overrides) if overrides else None
 
                         if param:
-                            param = job_lib.process_imports(param, set, kind, libs, override_dict)
-                        code = job_lib.process_imports(code, set, kind, libs, override_dict)
+                            param = job_lib.process_imports(param, setname, kind, libs, override_dict)
+                        code = job_lib.process_imports(code, setname, kind, libs, override_dict)
 
                         logger.debug(f"Run job {job_id}")
-                        ensure_set_environment(set)
-                        venv_python = os.path.join(venv_path, set, 'bin', 'python')
-                        json_kwargs = json.dumps({"job_id": job_id, "owner": owner, "set": set, "name": name, "kind": kind, "param": param, "code": code, "libs": libs, "overrides": overrides, "runner_sock_path": "/tmp/pyops/runner.sock", "max_retries": max_retries, "port": port, "conf_data": files.conf_data(), "conf_runner": files.conf_runner(), "conf_users": files.conf_users(), "conf_web": files.conf_web()})
+                        ensure_set_environment(setname)
+                        venv_python = os.path.join(venv_path, setname, 'bin', 'python')
+                        json_kwargs = json.dumps({"job_id": job_id, "owner": owner, "setname": setname, "name": name, "kind": kind, "param": param, "code": code, "libs": libs, "overrides": overrides, "runner_sock_path": "/tmp/pyops/runner.sock", "max_retries": max_retries, "port": port, "conf_data": files.conf_data(), "conf_runner": files.conf_runner(), "conf_users": files.conf_users(), "conf_web": files.conf_web()})
                         try:
                             p = subprocess.Popen([venv_python, os.path.abspath('app/job_runner.py'), json_kwargs], cwd=files.project_root, stdout=sys.stdout, stderr=sys.stderr, text=True)
                         except Exception as e:
