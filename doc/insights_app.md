@@ -303,7 +303,7 @@ graph TD
 | `pkgspace` | `data/pkg/` |
 | `jobsspace` | `data/jobs/` |
 | `control` | `pyops.Control(owner, web_bind)` |
-| `listener` | `pyops.ServiceListener(owner, job_id)` (service/debug only) |
+| `listener` | `pyops.ServiceListener(owner, job_id)` (service/debug/draft) |
 
 #### Output Isolation
 

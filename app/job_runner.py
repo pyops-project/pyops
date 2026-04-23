@@ -49,7 +49,7 @@ def setup_execution_environment(venv_path: str, pkg_path: str, setname: str, wor
 
 def setup_job_globals(owner: str, setspace: str, workspace: str, web_bind: str, job_id: str, kind: str, setname: str, name: str) -> dict:
     """Create the globals dict for job execution"""
-    if kind in ("service", "debug"):
+    if kind in ("service", "debug", "draft"):
         listener = pyops.ServiceListener(owner, job_id)
     else:
         listener = None
