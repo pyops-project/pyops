@@ -91,28 +91,33 @@ export function createTempDir(): string {
 
 const JOB_STATE_TIMEOUT = parseInt(process.env.PYOPS_JOB_STATE_TIMEOUT || '5000', 10);
 
-export async function waitForJobState(jobId: string, expectedState: string, timeoutMs: number = JOB_STATE_TIMEOUT): Promise<void> {
+// States reachable from enqueue; used when the caller only needs to sync "job exists and has begun
+// progressing" — avoids a race where the runner moves past 'todo' before the first poll lands.
+export const JOB_PROGRESSED_STATES = ['todo', 'dequeued', 'loading', 'running', 'done', 'failed', 'cancelled'];
+
+export async function waitForJobState(jobId: string, expectedState: string | string[], timeoutMs: number = JOB_STATE_TIMEOUT): Promise<void> {
   const serverUrl = process.env.PYOPS_SERVER_URL || 'http://localhost:8000';
   const startTime = Date.now();
+  const expected = Array.isArray(expectedState) ? expectedState : [expectedState];
 
   while (Date.now() - startTime < timeoutMs) {
     const response = await fetch(`${serverUrl}/scriptlet/job/item?id=${jobId}`);
     if (!response.ok) {
       if (response.status === 404) {
         // Job deleted
-        if (expectedState === 'removed') {
+        if (expected.includes('removed')) {
           return;
         }
       }
       throw new Error(`Failed to fetch job: ${response.status}`);
     }
     const job = await response.json() as { state: string };
-    if (job.state === expectedState) {
+    if (expected.includes(job.state)) {
       return;
     }
     await new Promise(resolve => setTimeout(resolve, 1000)); // Poll every 1s
   }
-  throw new Error(`Job ${jobId} did not reach state ${expectedState} within ${timeoutMs}ms`);
+  throw new Error(`Job ${jobId} did not reach state ${expected.join('|')} within ${timeoutMs}ms`);
 }
 
 

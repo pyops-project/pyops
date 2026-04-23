@@ -296,14 +296,14 @@ graph TD
 | Name | Value |
 |------|-------|
 | `user` | job owner (DB column is still `owner`) |
-| `set`, `name` | scriptlet identity |
-| `workspace` | `data/jobs/{set}/{id}/` |
-| `setspace` | `data/jobs/{set}/` (shared across all users) |
+| `setname`, `name` | scriptlet identity |
+| `workspace` | `data/jobs/{setname}/{id}/` |
+| `setspace` | `data/jobs/{setname}/` (shared across all users) |
 | `gitspace` | `data/git/` |
 | `pkgspace` | `data/pkg/` |
 | `jobsspace` | `data/jobs/` |
 | `control` | `pyops.Control(owner, web_bind)` |
-| `listener` | `pyops.ServiceListener(owner, job_id)` (service/debug only) |
+| `listener` | `pyops.ServiceListener(owner, job_id)` (service/debug/draft) |
 
 #### Output Isolation
 

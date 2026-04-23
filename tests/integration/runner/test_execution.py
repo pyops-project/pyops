@@ -169,6 +169,26 @@ class TestExecution:
 
         mock_send.assert_called_once_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
 
+    @patch('app.job_runner.job_lib.send_completion')
+    @patch('app.job_runner.subprocess.run')
+    @patch('app.lib.sets.subprocess.check_call')
+    @patch('app.lib.pyops.ServiceListener')
+    def test_run_draft_provides_listener(self, mock_listener, mock_check_call, mock_run, mock_send, tmp_path, mock_conf):
+        """Regression: drafted services need `listener` in globals (see job_runner.setup_job_globals kind tuple)."""
+        from app.job_runner import main as run
+        mock_listener.return_value = Mock()
+        mock_check_call.return_value = None
+        mock_run.return_value = Mock(returncode=0)
+        data_base = os.path.join(tmp_path, "data")
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
+        code = "assert listener is not None, 'listener must exist for draft jobs'"
+
+        run("id", "owner", "set", "name", "draft", "", code, [], "/tmp/pyops/runner.sock", 0, None, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
+
+        mock_listener.assert_called_once_with("owner", "id")
+        mock_send.assert_called_once_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
+
     def test_draft_jobs_allow_concurrent_execution(self, mock_conf, mock_db):
         """Test that multiple draft jobs can run concurrently (unlike debug jobs)."""
         from app.lib import runner as lib_runner

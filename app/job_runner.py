@@ -28,9 +28,9 @@ _conf_runner = None
 _conf_users = None
 _conf_web = None
 
-def setup_workspace(data_base: str, set: str, job_id: str) -> tuple[str, str]:
+def setup_workspace(data_base: str, setname: str, job_id: str) -> tuple[str, str]:
     """Create and return workspace paths: (setspace, workspace)"""
-    setspace = os.path.abspath(os.path.join(data_base, f"{set}"))
+    setspace = os.path.abspath(os.path.join(data_base, f"{setname}"))
     workspace = os.path.abspath(os.path.join(setspace, f"{job_id}"))
 
     os.makedirs(setspace, exist_ok=True)
@@ -38,7 +38,7 @@ def setup_workspace(data_base: str, set: str, job_id: str) -> tuple[str, str]:
 
     return setspace, workspace
 
-def setup_execution_environment(venv_path: str, pkg_path: str, set: str, workspace: str, log_level: int) -> tuple[TextIOWrapper, TextIOWrapper]:
+def setup_execution_environment(venv_path: str, pkg_path: str, setname: str, workspace: str, log_level: int) -> tuple[TextIOWrapper, TextIOWrapper]:
     """Change to workspace directory and return stdout/stderr files"""
     os.chdir(workspace)
 
@@ -47,16 +47,16 @@ def setup_execution_environment(venv_path: str, pkg_path: str, set: str, workspa
 
     return stdout_file, stderr_file
 
-def setup_job_globals(owner: str, setspace: str, workspace: str, web_bind: str, job_id: str, kind: str, set: str, name: str) -> dict:
+def setup_job_globals(owner: str, setspace: str, workspace: str, web_bind: str, job_id: str, kind: str, setname: str, name: str) -> dict:
     """Create the globals dict for job execution"""
-    if kind in ("service", "debug"):
+    if kind in ("service", "debug", "draft"):
         listener = pyops.ServiceListener(owner, job_id)
     else:
         listener = None
 
     return {
         "user": owner,
-        "set": set,
+        "setname": setname,
         "name": name,
         "setspace": setspace,
         "workspace": workspace,
@@ -126,7 +126,7 @@ def execute_job_code(param: str, compiled_code, compiled_libs, glob: dict, job_t
         if 'listener' in glob and glob['listener']:
             glob['listener'].close()
 
-def run_debug_job(job_id: str, owner: str, set: str, name: str, param: str, code: str, libs: list[dict[str, str]], runner_sock_path: str, overrides: str | None = None, port: int | None = None):
+def run_debug_job(job_id: str, owner: str, setname: str, name: str, param: str, code: str, libs: list[dict[str, str]], runner_sock_path: str, overrides: str | None = None, port: int | None = None):
     """Executes debug job in isolated workspace with file-based compilation."""
     data_jobs = os.path.join(_project_root, _conf_data["jobs"])
     venv_path = os.path.join(_project_root, _conf_runner["venv"])
@@ -138,10 +138,10 @@ def run_debug_job(job_id: str, owner: str, set: str, name: str, param: str, code
 
     try:
         # Step 1: Workspace setup
-        setspace, workspace = setup_workspace(data_jobs, set, job_id)
+        setspace, workspace = setup_workspace(data_jobs, setname, job_id)
 
         # Step 2: Execution environment setup
-        stdout_file, stderr_file = setup_execution_environment(venv_path, pkg_path, set, workspace, logging.DEBUG)
+        stdout_file, stderr_file = setup_execution_environment(venv_path, pkg_path, setname, workspace, logging.DEBUG)
 
         logger.debug(f"{os.getpid():<10}start debug job({job_id})")
 
@@ -154,7 +154,7 @@ def run_debug_job(job_id: str, owner: str, set: str, name: str, param: str, code
             with redirect_stderr(stderr_file):
                 try:
                     # Ensure debugpy is installed early
-                    pip_path = os.path.join(venv_path, set, 'bin', 'pip')
+                    pip_path = os.path.join(venv_path, setname, 'bin', 'pip')
                     subprocess.run([pip_path, 'install', 'debugpy'], check=True, stdout=stdout_file, stderr=stderr_file)
 
                     # Start debugpy adapter immediately
@@ -173,14 +173,14 @@ debugpy.breakpoint()
                     # Apply overrides for debug kind
                     if overrides:
                         override_dict = json.loads(overrides)
-                        if f"{set}::{name}" in override_dict:
-                            code = override_dict[f"{set}::{name}"]
+                        if f"{setname}::{name}" in override_dict:
+                            code = override_dict[f"{setname}::{name}"]
                         for lib in libs:
                             if lib["filename"] in override_dict:
                                 lib["code"] = override_dict[lib["filename"]]
 
                     # Process installs w/ env prop.
-                    param, code, libs = job_lib.process_code_installs(param, code, libs, venv_path, pkg_path, set, job_id, stdout_file, stderr_file)
+                    param, code, libs = job_lib.process_code_installs(param, code, libs, venv_path, pkg_path, setname, job_id, stdout_file, stderr_file)
                     # Update libs with git module for process_imports
                     libs = libs
 
@@ -189,7 +189,7 @@ debugpy.breakpoint()
                     os.makedirs(debug_src_dir, exist_ok=True)
 
                     # Create task directory for main set
-                    main_task_dir = os.path.join(debug_src_dir, set, "task")
+                    main_task_dir = os.path.join(debug_src_dir, setname, "task")
                     os.makedirs(main_task_dir, exist_ok=True)
 
                     # Write param if present
@@ -224,7 +224,7 @@ debugpy.breakpoint()
                         with open(lib_file, 'r') as f:
                             compiled_libs.append(compile(f.read(), lib_file, 'exec'))
 
-                    glob = setup_job_globals(owner, setspace, workspace, web_bind, job_id, "debug", set, name)
+                    glob = setup_job_globals(owner, setspace, workspace, web_bind, job_id, "debug", setname, name)
 
                     info_handler, warn_handler = setup_logging(logging.DEBUG, stdout_file, stderr_file)
 
@@ -266,7 +266,7 @@ debugpy.breakpoint()
             stderr_file.close()
         logger.debug(f"{os.getpid():<10}end debug job({job_id})")
 
-def run_draft_job(job_id: str, owner: str, set: str, name: str, param: str, code: str, libs: list[dict[str, str]], runner_sock_path: str):
+def run_draft_job(job_id: str, owner: str, setname: str, name: str, param: str, code: str, libs: list[dict[str, str]], runner_sock_path: str):
     """Executes draft job in isolated workspace with in-memory compilation."""
     data_jobs = os.path.join(_project_root, _conf_data["jobs"])
     venv_path = os.path.join(_project_root, _conf_runner["venv"])
@@ -278,10 +278,10 @@ def run_draft_job(job_id: str, owner: str, set: str, name: str, param: str, code
 
     try:
         # Step 1: Workspace setup
-        setspace, workspace = setup_workspace(data_jobs, set, job_id)
+        setspace, workspace = setup_workspace(data_jobs, setname, job_id)
 
         # Step 2: Execution environment setup
-        stdout_file, stderr_file = setup_execution_environment(venv_path, pkg_path, set, workspace, logging.INFO)
+        stdout_file, stderr_file = setup_execution_environment(venv_path, pkg_path, setname, workspace, logging.INFO)
 
         logger.debug(f"{os.getpid():<10}start draft job({job_id})")
 
@@ -290,20 +290,20 @@ def run_draft_job(job_id: str, owner: str, set: str, name: str, param: str, code
             with redirect_stderr(stderr_file):
                 try:
                     # Process installs w/ env prop.
-                    param, code, libs = job_lib.process_code_installs(param, code, libs, venv_path, pkg_path, set, job_id, stdout_file, stderr_file)
+                    param, code, libs = job_lib.process_code_installs(param, code, libs, venv_path, pkg_path, setname, job_id, stdout_file, stderr_file)
 
                     # Compile code objects with custom filenames for accurate tracebacks
-                    code_filename = f"{set}/task/{name}.py"
+                    code_filename = f"{setname}/task/{name}.py"
                     compiled_code = compile(code, code_filename, 'exec')
 
                     # Compile libs with generated subdirectory filenames for debugger mapping
                     compiled_libs = []
                     for lib in libs:
                         lib_name = lib["filename"].split('::')[1]
-                        lib_filename = f"{set}/library/{lib_name}.py"
+                        lib_filename = f"{setname}/library/{lib_name}.py"
                         compiled_libs.append(compile(lib["code"], lib_filename, 'exec'))
 
-                    glob = setup_job_globals(owner, setspace, workspace, web_bind, job_id, "draft", set, name)
+                    glob = setup_job_globals(owner, setspace, workspace, web_bind, job_id, "draft", setname, name)
 
                     info_handler, warn_handler = setup_logging(logging.INFO, stdout_file, stderr_file)
 
@@ -339,7 +339,7 @@ def run_draft_job(job_id: str, owner: str, set: str, name: str, param: str, code
             stderr_file.close()
         logger.debug(f"{os.getpid():<10}end draft job({job_id})")
 
-def run_task_job(job_id: str, owner: str, set: str, name: str, param: str, code: str, libs: list[dict[str, str]], runner_sock_path: str, max_retries: int = 0):
+def run_task_job(job_id: str, owner: str, setname: str, name: str, param: str, code: str, libs: list[dict[str, str]], runner_sock_path: str, max_retries: int = 0):
     """Executes task job in isolated workspace with in-memory compilation and retry logic."""
     data_jobs = os.path.join(_project_root, _conf_data["jobs"])
     venv_path = os.path.join(_project_root, _conf_runner["venv"])
@@ -351,10 +351,10 @@ def run_task_job(job_id: str, owner: str, set: str, name: str, param: str, code:
 
     try:
         # Step 1: Workspace setup
-        setspace, workspace = setup_workspace(data_jobs, set, job_id)
+        setspace, workspace = setup_workspace(data_jobs, setname, job_id)
 
         # Step 2: Execution environment setup
-        stdout_file, stderr_file = setup_execution_environment(venv_path, pkg_path, set, workspace, logging.INFO)
+        stdout_file, stderr_file = setup_execution_environment(venv_path, pkg_path, setname, workspace, logging.INFO)
 
         logger.debug(f"{os.getpid():<10}start task job({job_id})")
 
@@ -363,20 +363,20 @@ def run_task_job(job_id: str, owner: str, set: str, name: str, param: str, code:
             with redirect_stderr(stderr_file):
                 try:
                     # Process installs w/ env prop.
-                    param, code, libs = job_lib.process_code_installs(param, code, libs, venv_path, pkg_path, set, job_id, stdout_file, stderr_file)
+                    param, code, libs = job_lib.process_code_installs(param, code, libs, venv_path, pkg_path, setname, job_id, stdout_file, stderr_file)
 
                     # Compile code objects with custom filenames for accurate tracebacks
-                    code_filename = f"{set}/task/{name}.py"
+                    code_filename = f"{setname}/task/{name}.py"
                     compiled_code = compile(code, code_filename, 'exec')
 
                     # Compile libs with generated subdirectory filenames for debugger mapping
                     compiled_libs = []
                     for lib in libs:
                         lib_name = lib["filename"].split('::')[1]
-                        lib_filename = f"{set}/library/{lib_name}.py"
+                        lib_filename = f"{setname}/library/{lib_name}.py"
                         compiled_libs.append(compile(lib["code"], lib_filename, 'exec'))
 
-                    glob = setup_job_globals(owner, setspace, workspace, web_bind, job_id, "task", set, name)
+                    glob = setup_job_globals(owner, setspace, workspace, web_bind, job_id, "task", setname, name)
 
                     info_handler, warn_handler = setup_logging(logging.INFO, stdout_file, stderr_file)
 
@@ -412,7 +412,7 @@ def run_task_job(job_id: str, owner: str, set: str, name: str, param: str, code:
             stderr_file.close()
         logger.debug(f"{os.getpid():<10}end task job({job_id})")
 
-def run_service_job(job_id: str, owner: str, set: str, name: str, param: str, code: str, libs: list[dict[str, str]], runner_sock_path: str):
+def run_service_job(job_id: str, owner: str, setname: str, name: str, param: str, code: str, libs: list[dict[str, str]], runner_sock_path: str):
     """Executes service job in isolated workspace with in-memory compilation."""
     data_jobs = os.path.join(_project_root, _conf_data["jobs"])
     venv_path = os.path.join(_project_root, _conf_runner["venv"])
@@ -424,10 +424,10 @@ def run_service_job(job_id: str, owner: str, set: str, name: str, param: str, co
 
     try:
         # Step 1: Workspace setup
-        setspace, workspace = setup_workspace(data_jobs, set, job_id)
+        setspace, workspace = setup_workspace(data_jobs, setname, job_id)
 
         # Step 2: Execution environment setup
-        stdout_file, stderr_file = setup_execution_environment(venv_path, pkg_path, set, workspace, logging.INFO)
+        stdout_file, stderr_file = setup_execution_environment(venv_path, pkg_path, setname, workspace, logging.INFO)
 
         logger.debug(f"{os.getpid():<10}start service job({job_id})")
 
@@ -436,20 +436,20 @@ def run_service_job(job_id: str, owner: str, set: str, name: str, param: str, co
             with redirect_stderr(stderr_file):
                 try:
                     # Process installs w/ env prop.
-                    param, code, libs = job_lib.process_code_installs(param, code, libs, venv_path, pkg_path, set, job_id, stdout_file, stderr_file)
+                    param, code, libs = job_lib.process_code_installs(param, code, libs, venv_path, pkg_path, setname, job_id, stdout_file, stderr_file)
 
                     # Compile code objects with custom filenames for accurate tracebacks
-                    code_filename = f"{set}/task/{name}.py"
+                    code_filename = f"{setname}/task/{name}.py"
                     compiled_code = compile(code, code_filename, 'exec')
 
                     # Compile libs with generated subdirectory filenames for debugger mapping
                     compiled_libs = []
                     for lib in libs:
                         lib_name = lib["filename"].split('::')[1]
-                        lib_filename = f"{set}/library/{lib_name}.py"
+                        lib_filename = f"{setname}/library/{lib_name}.py"
                         compiled_libs.append(compile(lib["code"], lib_filename, 'exec'))
 
-                    glob = setup_job_globals(owner, setspace, workspace, web_bind, job_id, "service", set, name)
+                    glob = setup_job_globals(owner, setspace, workspace, web_bind, job_id, "service", setname, name)
 
                     info_handler, warn_handler = setup_logging(logging.INFO, stdout_file, stderr_file)
 
@@ -485,7 +485,7 @@ def run_service_job(job_id: str, owner: str, set: str, name: str, param: str, co
             stderr_file.close()
         logger.debug(f"{os.getpid():<10}end service job({job_id})")
 
-def main(job_id: str, owner: str, set: str, name: str, kind: str, param: str, code: str, libs: list[dict[str, str]], runner_sock_path: str, max_retries: int, overrides: str | None, port: int | None, conf_data: dict, conf_runner: dict, conf_users: dict, conf_web: dict):
+def main(job_id: str, owner: str, setname: str, name: str, kind: str, param: str, code: str, libs: list[dict[str, str]], runner_sock_path: str, max_retries: int, overrides: str | None, port: int | None, conf_data: dict, conf_runner: dict, conf_users: dict, conf_web: dict):
     """Executes job in isolated workspace by dispatching to appropriate handler based on kind."""
 
     global _conf_data, _conf_runner, _conf_users, _conf_web
@@ -497,13 +497,13 @@ def main(job_id: str, owner: str, set: str, name: str, kind: str, param: str, co
     if kind == "debug":
         if port is None:
             raise ValueError("Port must be provided for debug jobs")
-        run_debug_job(job_id, owner, set, name, param, code, libs, runner_sock_path, overrides, port)
+        run_debug_job(job_id, owner, setname, name, param, code, libs, runner_sock_path, overrides, port)
     elif kind == "draft":
-        run_draft_job(job_id, owner, set, name, param, code, libs, runner_sock_path)
+        run_draft_job(job_id, owner, setname, name, param, code, libs, runner_sock_path)
     elif kind == "task":
-        run_task_job(job_id, owner, set, name, param, code, libs, runner_sock_path, max_retries)
+        run_task_job(job_id, owner, setname, name, param, code, libs, runner_sock_path, max_retries)
     elif kind == "service":
-        run_service_job(job_id, owner, set, name, param, code, libs, runner_sock_path)
+        run_service_job(job_id, owner, setname, name, param, code, libs, runner_sock_path)
     else:
         raise ValueError(f"Unknown job kind: {kind}")
 

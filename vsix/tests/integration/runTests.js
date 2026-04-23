@@ -76,7 +76,7 @@ async function main() {
     console.log('- Version:', version);
 
     // Install Python extension for debug tests
-    const vscodeExecutablePathEarly = await downloadAndUnzipVSCode(version);
+    const vscodeExecutablePathEarly = await downloadAndUnzipVSCode({ version, timeout: 60000 });
     const cliPath = resolveCliPathFromVSCodeExecutablePath(vscodeExecutablePathEarly);
     const cliArgs = ['--install-extension', 'ms-python.python', '--force', '--user-data-dir', userDataDir];
     if (process.getuid && process.getuid() === 0) {

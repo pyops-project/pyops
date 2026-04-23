@@ -39,9 +39,11 @@
 
 Execution environment provides these globals:
 - `user`: owner of this job (string; identifies the requesting user)
-- `setspace`: `data/jobs/{set}/` (set's jobs root; shared across all users)
-- `workspace`: `data/jobs/{set}/{id}/` (this job's workspace)
-- `listener`: ServiceListener for inbound ZMQ IPC (services only). `listener.listen()` blocking; `listener.poll()` non-blocking (None/"TERM"/msg); `listener.async_poll()` returns list of pending messages; `response(dict)` or `async_response(identity, dict)`.
+- `setname`: set this scriptlet belongs to (string)
+- `name`: scriptlet name (string)
+- `setspace`: `data/jobs/{setname}/` (set's jobs root; shared across all users)
+- `workspace`: `data/jobs/{setname}/{id}/` (this job's workspace)
+- `listener`: ServiceListener for inbound ZMQ IPC (services, debug, and draft jobs). `listener.listen()` blocking; `listener.poll()` non-blocking (None/"TERM"/msg); `listener.async_poll()` returns list of pending messages; `response(dict)` or `async_response(identity, dict)`.
 
 ## Scriptlet Types
 
