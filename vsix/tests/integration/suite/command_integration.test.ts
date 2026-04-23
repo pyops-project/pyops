@@ -29,7 +29,7 @@ export async function run(): Promise<void> {
     testJobId = await helpers.createTestJob('test', testScriptletName!);
 
     // Wait for job to be ready
-    await helpers.waitForJobState(testJobId!, 'todo');
+    await helpers.waitForJobState(testJobId!, helpers.JOB_PROGRESSED_STATES);
 
     // Test 1: copyJobParam command
     console.log('Test 1: copyJobParam command...');
@@ -72,7 +72,7 @@ export async function run(): Promise<void> {
 
     // Create another job for remaining tests
     const testJobId2 = await helpers.createTestJob('test', testScriptletName!);
-    await helpers.waitForJobState(testJobId2, 'todo');
+    await helpers.waitForJobState(testJobId2, helpers.JOB_PROGRESSED_STATES);
     await vscode.commands.executeCommand('pyops.refreshMonitor');
     await helpers.pollTree(jobsProvider, [testJobId2]);
     const jobItem2 = (await jobsProvider.getChildren()).find((item: any) => item.id === testJobId2);
@@ -87,7 +87,7 @@ export async function run(): Promise<void> {
     // Test 5: viewJob command
     console.log('Test 5: viewJob command...');
     const viewJobId = await helpers.createTestJob('test', testScriptletName!);
-    await helpers.waitForJobState(viewJobId, 'todo');
+    await helpers.waitForJobState(viewJobId, helpers.JOB_PROGRESSED_STATES);
     await vscode.commands.executeCommand('pyops.refreshMonitor');
     await helpers.pollTree(jobsProvider, [viewJobId]);
     const viewJobItem = (await jobsProvider.getChildren()).find((item: any) => item.id === viewJobId);
@@ -162,7 +162,7 @@ export async function run(): Promise<void> {
     for (let i = 0; i < 3; i++) {
       const bulkJobId = await helpers.createTestJob('test', testScriptletName!, sleepParam);
       bulkJobIds.push(bulkJobId);
-      await helpers.waitForJobState(bulkJobId, 'todo');
+      await helpers.waitForJobState(bulkJobId, helpers.JOB_PROGRESSED_STATES);
     }
     await vscode.commands.executeCommand('pyops.refreshMonitor');
     await helpers.pollTree(jobsProvider, bulkJobIds);
