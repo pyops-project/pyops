@@ -58,6 +58,7 @@ WebUI/VSIX → FastAPI (app/web.py) → SQLite DB ↔ Runner daemon (app/runner.
 - `job_runner.py` — Subprocess entry point; accepts JSON-serialized kwargs; dispatches to `run_task_job`, `run_service_job`, `run_debug_job`, `run_draft_job`
 - `gunicorn.py` — WSGI config; also spawns the runner process; reads `PYOPS_CONFIG` env var for config path override (default `etc/pyops.json`)
 - `routers/scriptlet/` — REST API: `job.py`, `editor.py`, `inventory.py`, `schedule.py`, `sets.py`, etc.
+- `routers/monitoring.py` — top-level (not under `/scriptlet/`), unauthenticated `/health`, `/health/failed`, `/metrics` for external monitoring (Zabbix/Prometheus)
 - `orm/` — SQLAlchemy models: `Job` (states: todo→dequeued→loading→running→done/failed/cancelled/remove/removed) and `Schedule` (cron-based)
 - `lib/` — Shared utilities
 

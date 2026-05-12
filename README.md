@@ -167,3 +167,28 @@ server {
 ```bash
 htpasswd -c ./volumes/nginx/auth/htpasswd SOMEUSER
 ```
+
+## Monitoring
+
+Three unauthenticated endpoints intended for an external monitoring system (e.g. Zabbix, Prometheus). They are read-only and cheap enough to scrape every few seconds.
+
+| Path | Format | Use |
+|------|--------|-----|
+| `GET /health` | JSON | Aggregated status (`ok` / `degraded` / `fail`); subsystem checks (database, runner socket, data dirs, ulimits, GPU); job/schedule/set summary. Returns HTTP 503 only when the database is unreachable. |
+| `GET /health/failed` | JSON | All failed jobs (no pagination), full detail per row. Filter on `set`, `name`, `owner`, or `detail` substring on the monitoring side. |
+| `GET /metrics` | Prometheus exposition (`text/plain; version=0.0.4`) | Per-state job counts, per-(set, name, state) breakdown, ulimit gauges, GPU status (`pyops_gpu_ok{status=…}`) plus a dedicated `pyops_gpu_reboot_required` flag for driver/runtime version mismatch, oldest-todo-age and last-completed-age gauges. |
+
+Behind nginx + Basic Auth, exempt the monitoring source from auth — for example:
+
+```
+location ~ ^/(health|metrics) {
+    allow 10.0.0.0/8;       # monitoring subnet
+    deny  all;
+    auth_basic off;
+    proxy_pass http://pyops_app.SOMEDOMAIN;
+}
+```
+
+Or scrape the upstream container directly on the compose-internal port (preferred when the monitoring host is on the same LAN), which is how this repo is deployed at `aiops_app.ralph.or.at:1080`.
+
+See `doc/insights_app.md` § "Monitoring Router" for the full metric list, GPU status taxonomy, and the ulimit threshold semantics.

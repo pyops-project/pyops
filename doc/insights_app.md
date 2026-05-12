@@ -468,6 +468,20 @@ All routers mount under `/scriptlet/`. Owner resolved from `X-User` header (defa
 | `sets.py` | `/scriptlet/sets/` | Git set management (clone, switch branch, remove) |
 | `jslib.py` | `/scriptlet/jslib/{set}/{name}` | Serve JS libraries |
 
+### Monitoring Router (`app/routers/monitoring.py`)
+
+Mounted at root (no `/scriptlet/` prefix). Unauthenticated — designed to be scraped from `localhost` and behind reverse-proxy ACLs.
+
+| Endpoint | Format | Purpose |
+|----------|--------|---------|
+| `GET /health` | JSON | Aggregated status (`ok` / `degraded` / `fail`); checks DB, runner socket, data dirs, ulimits, GPU; returns 503 only when DB unreachable. `degraded` if any failed jobs exist or a subsystem is unhealthy. |
+| `GET /health/failed` | JSON | All failed jobs (no pagination), full detail (`set`, `name`, `kind`, `owner`, `detail`, `start`, `end`); newest first. Lets the monitoring side filter by set or scriptlet name. |
+| `GET /metrics` | Prometheus exposition (`text/plain; version=0.0.4`) | All gauges; per-state job counts, per-(set,name,state) breakdown, separate `pyops_service_jobs`, ulimit gauges (`pyops_open_fds`, `pyops_max_fds_soft`, `pyops_threads`, `pyops_max_nproc_soft`), `pyops_gpu_ok{status}` plus dedicated `pyops_gpu_reboot_required` flag, `pyops_oldest_todo_age_seconds`, `pyops_last_completed_seconds`. |
+
+GPU check distinguishes `ok`, `no_gpu_expected` (no `nvidia-smi` and no `/dev/nvidia*`), `reboot_required` (nvidia-smi reports "Driver/library version mismatch"), `fail`, `missing_smi`, `timeout`, `unknown`. The reboot-required path was added because driver/runtime mismatches after a kernel update otherwise present as silent CUDA-init failures inside jobs.
+
+Ulimit check tracks RLIMIT_NOFILE and RLIMIT_NPROC against current usage from `/proc/self/fd` and `psutil`; flips to `degraded` once usage crosses 80% of the soft limit, so an FD/thread leak is caught before the process actually hits the wall.
+
 ---
 
 ## Testing
