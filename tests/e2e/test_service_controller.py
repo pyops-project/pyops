@@ -374,7 +374,11 @@ def _cleanup_set(e2e_page):
     if row.count() > 0 and row.is_visible():
         e2e_page.once("dialog", lambda d: d.accept())
         frame.locator(f'[data-testid="set-remove-{SET_NAME}"]').click()
-        row.wait_for(state="hidden", timeout=5_000)
+        # DELETE blocks on the bootstrap lock if a per-set venv pip install
+        # is still running (BackgroundTask scheduled by /scriptlet/sets/create
+        # plus the runner's per-job-spawn refresh). Cold devpi cache + aarch64
+        # wheels can push that to ~30s.
+        row.wait_for(state="hidden", timeout=60_000)
 
     assert frame.locator(f'[data-testid="set-row-{SET_NAME}"]').count() == 0
 

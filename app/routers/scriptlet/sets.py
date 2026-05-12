@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, BackgroundTasks
 from fastapi.responses import HTMLResponse
 from starlette.status import HTTP_200_OK, HTTP_500_INTERNAL_SERVER_ERROR
 from pydantic import BaseModel
@@ -48,10 +48,11 @@ async def list_sets_endpoint():
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/scriptlet/sets/clone")
-async def clone_set_endpoint(request: CloneRequest):
+async def clone_set_endpoint(request: CloneRequest, background_tasks: BackgroundTasks):
     try:
         git_base = files.conf_data()["git"]
         name = sets.clone_set(git_base, request.url, request.username, request.password, request.git_name, request.git_email)
+        background_tasks.add_task(sets.ensure_set_environment, name)
         return {"status": "ok", "message": f"Cloned set '{name}'"}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -59,10 +60,11 @@ async def clone_set_endpoint(request: CloneRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/scriptlet/sets/create")
-async def create_set_endpoint(request: CreateRequest):
+async def create_set_endpoint(request: CreateRequest, background_tasks: BackgroundTasks):
     try:
         git_base = files.conf_data()["git"]
         sets.create_set(git_base, request.name)
+        background_tasks.add_task(sets.ensure_set_environment, request.name)
         return {"status": "ok", "message": f"Created set '{request.name}'"}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

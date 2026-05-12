@@ -1,6 +1,7 @@
 import os
 import sys
 import subprocess
+import fcntl
 from pathlib import Path
 import shutil
 from urllib.parse import urlparse
@@ -8,39 +9,92 @@ from urllib.parse import urlparse
 from .git import repo_lock, _call, _check
 from .files import conf_runner, project_root
 
-def ensure_set_environment(name):
-    """
-    Ensure per-set venv and pkg directories exist and venv is initialized.
-    Creates directories and initializes venv if not present.
-    """
-    if not name:
-        raise ValueError("Set name cannot be empty")
+def _set_paths(name):
     runner_conf = conf_runner()
     venv_base = runner_conf.get("venv", "data/venv")
     pkg_base = runner_conf.get("pkg", "data/pkg")
-    venv_path = os.path.join(project_root, venv_base, name)
-    pkg_path = os.path.join(project_root, pkg_base, name)
+    return (
+        os.path.join(project_root, venv_base, name),
+        os.path.join(project_root, pkg_base, name),
+    )
+
+def ensure_set_dirs(name):
+    """Create venv/pkg directories synchronously. Cheap, does not bootstrap the venv."""
+    if not name:
+        raise ValueError("Set name cannot be empty")
+    venv_path, pkg_path = _set_paths(name)
     os.makedirs(venv_path, exist_ok=True)
-    if not os.path.exists(os.path.join(venv_path, 'bin', 'python')):
-        subprocess.check_call([sys.executable, '-m', 'venv', venv_path])
-        pip_path = os.path.join(venv_path, 'bin', 'pip')
-        subprocess.check_call([pip_path, 'install', '--upgrade', 'pip', 'setuptools', 'wheel'])
-        subprocess.check_call([pip_path, 'install', 'pyzmq', 'msgpack', 'psutil', 'debugpy', 'requests'])
     os.makedirs(pkg_path, exist_ok=True)
+
+def _bootstrap_lock_path(name):
+    """Lock file path for the set bootstrap. MUST live outside venv_path —
+    `python -m venv venv_path` resets the directory contents, which would unlink
+    a lock file inside it and let concurrent callers race past the flock."""
+    runner_conf = conf_runner()
+    venv_base = runner_conf.get("venv", "data/venv")
+    lock_dir = os.path.join(project_root, venv_base, ".locks")
+    os.makedirs(lock_dir, exist_ok=True)
+    return os.path.join(lock_dir, f"{name}.lock")
+
+def ensure_set_environment(name):
+    """
+    Ensure per-set venv and pkg directories exist, and refresh runtime deps
+    to their currently-resolvable versions on devpi.
+
+    Called on every job spawn (`runner.py` before Popen) plus from the
+    HTTP create/clone BackgroundTask. The bootstrap lock serializes all
+    pip-install / venv-creation activity for this set against itself and
+    against `remove_set_environment`. Pyops's graceful shutdown waits for
+    in-flight pip installs to finish before exiting (gunicorn graceful_timeout
+    + runner's kill_now check before each spawn) — pip is never killed
+    mid-flight under controlled shutdown, so the venv stays consistent.
+    """
+    ensure_set_dirs(name)
+    venv_path, _ = _set_paths(name)
+    with open(_bootstrap_lock_path(name), 'w') as lock_fd:
+        fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX)
+        # Spawn pip/venv in their own session so a SIGTERM to pyops's process
+        # group (killpg from systemd KillMode=control-group, the test conftest,
+        # gunicorn graceful shutdown propagating, etc.) does NOT reach pip
+        # directly. The caller (gunicorn worker BG task / runner main loop)
+        # still blocks in subprocess.check_call until pip exits cleanly, so
+        # the in-flight install completes and the venv stays consistent.
+        if not os.path.exists(os.path.join(venv_path, 'bin', 'python')):
+            subprocess.check_call(
+                [sys.executable, '-m', 'venv', venv_path],
+                start_new_session=True,
+            )
+        pip_path = os.path.join(venv_path, 'bin', 'pip')
+        # Two-step: pip cannot upgrade itself in the same invocation that
+        # installs other packages — its certifi vendor path becomes invalid
+        # mid-flight ("Could not find a suitable TLS CA certificate bundle").
+        subprocess.check_call(
+            [pip_path, 'install', '--upgrade', 'pip', 'setuptools', 'wheel'],
+            start_new_session=True,
+        )
+        subprocess.check_call(
+            [pip_path, 'install', '--upgrade', 'pyzmq', 'msgpack', 'psutil', 'debugpy', 'requests'],
+            start_new_session=True,
+        )
 
 def remove_set_environment(name):
     """
     Remove per-set venv and pkg directories.
+
+    Acquires the bootstrap lock first — otherwise a concurrent
+    `ensure_set_environment` (HTTP background task or runner lazy bootstrap)
+    might have pip mid-install when we rmtree the venv, leaving pip with
+    `[Errno 2] No such file or directory: '.../bin/'` and a corrupt half-deleted
+    state. Waiting is the right semantics; the e2e test's 5s UI timeout doesn't
+    represent a real-world expectation.
     """
     if not name:
         raise ValueError("Set name cannot be empty")
-    runner_conf = conf_runner()
-    venv_base = runner_conf.get("venv", "data/venv")
-    pkg_base = runner_conf.get("pkg", "data/pkg")
-    venv_path = os.path.join(project_root, venv_base, name)
-    pkg_path = os.path.join(project_root, pkg_base, name)
+    venv_path, pkg_path = _set_paths(name)
     if os.path.exists(venv_path):
-        shutil.rmtree(venv_path)
+        with open(_bootstrap_lock_path(name), 'w') as lock_fd:
+            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX)
+            shutil.rmtree(venv_path)
     if os.path.exists(pkg_path):
         shutil.rmtree(pkg_path)
 
@@ -116,7 +170,7 @@ def clone_set(git_dir, url, username=None, password=None, git_name=None, git_ema
         if git_email:
             _call(["git", "config", "user.email", git_email], str(sets_dir))
 
-        ensure_set_environment(name)
+        ensure_set_dirs(name)
 
     return name
 
@@ -149,7 +203,7 @@ def create_set(git_dir, name):
     from . import git
     git.get_repo_path(name)
 
-    ensure_set_environment(name)
+    ensure_set_dirs(name)
 
     return True
 

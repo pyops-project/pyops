@@ -268,6 +268,42 @@ class TestLoadUtils:
                 fetched = test_session.get(Job, "123")
                 assert fetched.state == "dequeued"  # State not updated on missing scriptlet
 
+    def test_load_job_cas_aborts_when_cancel_races_mid_flight(self, mock_db, mock_git_ops):
+        """Cancel arrives between loadJob's initial 'dequeued' read and its commit.
+
+        The conditional UPDATE must affect 0 rows, loadJob must raise, and the
+        'cancel' state must NOT be overwritten with 'loading' — otherwise the
+        runner term-loop loses track of the cancel and the job runs to completion
+        as 'done' (the bulk-cancel race observed against the vsix integration tests).
+        """
+        from app import runner
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        with Session(get_db_engine()) as test_session:
+            job = Job(id="123", set="set", name="name", kind="task", param="param", state="dequeued", owner="owner")
+            test_session.add(job)
+            test_session.commit()
+        mock_git_ops.infer_type_from_filename.return_value = 'task'
+
+        def cancel_races_in_during_io(*args, **kwargs):
+            # Simulate the HTTP cancel handler flipping the state from another
+            # process while loadJob is still reading code from disk.
+            with Session(get_db_engine()) as cancel_session:
+                cancel_target = cancel_session.get(Job, "123")
+                cancel_target.state = "cancel"
+                cancel_session.commit()
+            return 'code'
+
+        mock_git_ops.read_content.side_effect = cancel_races_in_during_io
+        with patch('os.listdir', return_value=['name.task.py']):
+            with pytest.raises(Exception, match=r"state changed to cancel during loadJob"):
+                runner.loadJob("123")
+        with Session(get_db_engine()) as test_session:
+            fetched = test_session.get(Job, "123")
+            # CAS lost — state preserved at 'cancel', NOT overwritten to 'loading'.
+            assert fetched.state == "cancel"
+            assert fetched.start is None  # 'loading' write never happened
+
 class TestProcessImports:
     @patch('app.lib.job.loadLib')
     def test_process_imports_valid_lib(self, mock_load_lib):

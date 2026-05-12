@@ -8,6 +8,8 @@ variables:
 stages:
   - test
   - build
+  - image
+  - release
 
 test:
   stage: test
@@ -132,3 +134,64 @@ build:
     - if: '$CI_COMMIT_BRANCH == "main" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"'
       when: always
     - when: manual
+
+# Multi-arch container image build. Runs `./build.sh` which reads VERSION
+# and pushes :VERSION + :MAJOR + :MINOR + :latest + tagless to
+# registry.ralph.or.at/pyops/pyops. Manual trigger only — the operator goes
+# into the pipeline after a main-merge and starts this when they actually
+# want a published image.
+#
+# Host requirements on the runner (graz-2 — see /srv/docker02/gitlab/README.md):
+#   1. qemu-user-static + binfmt-support installed → ARM64 emulation for the
+#      multi-arch buildx step
+#   2. /var/run/docker.sock mounted into job containers via runner config
+#      volumes — required because the runner runs with privileged=false so
+#      docker:dind is not an option, we share the host docker daemon instead
+image:
+  stage: image
+  needs: [build]
+  image: docker:latest
+  before_script:
+    - apk add --no-cache bash
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" registry.ralph.or.at
+  script:
+    - ./build.sh
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      when: manual
+
+# Tags the current main HEAD with vVERSION, uploads the VSIX as a Generic
+# Package, and creates a GitLab Release linking back to it. Manual — the
+# operator triggers this AFTER the image stage so the registry tag and the
+# git tag stay in sync and the Docker reference in the release notes is
+# valid.
+#
+# Requires CI/CD variable CI_PUSH_TOKEN — a Project Access Token with the
+# write_repository scope. Without it the git push of the tag fails.
+release:
+  stage: release
+  needs: [build, image]
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  before_script:
+    - apk add --no-cache bash git curl
+  script:
+    - VERSION=$(tr -d '[:space:]' < VERSION)
+    - VSIX_FILE=$(ls vsix/*.vsix | head -1)
+    - VSIX_NAME=$(basename "$VSIX_FILE")
+    - PACKAGE_URL="$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/pyops-vsix/$VERSION/$VSIX_NAME"
+    # Upload VSIX to project Generic Packages
+    - 'curl --fail --header "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file "$VSIX_FILE" "$PACKAGE_URL"'
+    # Tag main HEAD with vVERSION and push back to GitLab
+    - git config user.email "ci@pyops.local"
+    - git config user.name "PyOps CI"
+    - git tag "v$VERSION"
+    - 'git push "https://oauth2:$CI_PUSH_TOKEN@$CI_SERVER_HOST/$CI_PROJECT_PATH.git" "v$VERSION"'
+    # Create the Release object pinned to the new tag
+    - |
+      release-cli create \
+        --tag-name "v$VERSION" \
+        --description "Docker Image: registry.ralph.or.at/pyops/pyops:$VERSION" \
+        --assets-link "{\"name\":\"PyOps VSCode Extension\",\"url\":\"$PACKAGE_URL\",\"link_type\":\"package\"}"
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      when: manual

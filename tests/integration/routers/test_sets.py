@@ -56,6 +56,31 @@ def test_create_set_invalid(mock_conf_data, mock_sets):
     response = client.post("/scriptlet/sets/create", json=data)
     assert response.status_code == 400
 
+def test_create_set_schedules_venv_bootstrap_after_create(mock_conf_data, mock_sets):
+    """Regression: the venv bootstrap (pip install over devpi, 5+ s) must run
+    as a BackgroundTask after the HTTP response is formed, not inline. Order
+    matters: create_set must complete before ensure_set_environment so the
+    git repo exists when bootstrap starts.
+    """
+    call_order = []
+    mock_sets.create_set.side_effect = lambda *a, **kw: call_order.append("create_set") or True
+    mock_sets.ensure_set_environment.side_effect = lambda *a, **kw: call_order.append("ensure_set_environment")
+    response = client.post("/scriptlet/sets/create", json={"name": "bgtest"})
+    assert response.status_code == 200
+    mock_sets.create_set.assert_called_once_with("/tmp/mock_git", "bgtest")
+    mock_sets.ensure_set_environment.assert_called_once_with("bgtest")
+    assert call_order == ["create_set", "ensure_set_environment"]
+
+def test_clone_set_schedules_venv_bootstrap_after_clone(mock_conf_data, mock_sets):
+    """Same regression as above for the clone endpoint."""
+    call_order = []
+    mock_sets.clone_set.side_effect = lambda *a, **kw: call_order.append("clone_set") or "repo"
+    mock_sets.ensure_set_environment.side_effect = lambda *a, **kw: call_order.append("ensure_set_environment")
+    response = client.post("/scriptlet/sets/clone", json={"url": "https://example/repo.git"})
+    assert response.status_code == 200
+    mock_sets.ensure_set_environment.assert_called_once_with("repo")
+    assert call_order == ["clone_set", "ensure_set_environment"]
+
 def test_remove_set(mock_conf_data, mock_sets):
     mock_sets.remove_set.return_value = None
     response = client.delete("/scriptlet/sets/remove/testset")
