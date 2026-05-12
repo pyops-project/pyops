@@ -31,7 +31,7 @@ def _add_job(state, set_="s1", name="t1", kind="task", owner="anonymous",
     with Session(get_db_engine()) as session:
         # ID format mirrors the runner's generator (timestamp suffix is
         # parsed by /health stuck-detection).
-        suffix = datetime.utcnow().strftime("%Y%m%dT%H%M%S%f")
+        suffix = datetime.now().strftime("%Y%m%dT%H%M%S%f")
         job = Job(
             id=f"{owner}_{set_}_{name}_{suffix}",
             set=set_, name=name, owner=owner, kind=kind, state=state,
@@ -136,7 +136,7 @@ class TestHealthEndpoint:
 
     def test_health_stuck_last_completed(self, client):
         """`last_completed_at` reflects the most recent done/failed/cancelled `end`."""
-        end_time = datetime.utcnow() - timedelta(minutes=5)
+        end_time = datetime.now() - timedelta(minutes=5)
         _add_job("done", end=end_time)
         r = client.get("/health")
         body = r.json()

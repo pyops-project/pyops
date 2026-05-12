@@ -235,7 +235,7 @@ def _stuck_indicators(session) -> dict:
     - last_completed_at / last_completed_seconds — gap since last terminal
       transition. A long gap on a busy queue is a throughput stall signal.
     """
-    now = datetime.utcnow()
+    now = datetime.now()
 
     oldest_todo_age = None
     head = session.execute(
