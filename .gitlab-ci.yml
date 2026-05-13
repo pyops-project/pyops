@@ -113,6 +113,23 @@ test:vsix:
       when: always
     - when: manual
 
+# Test that the Dockerfile still builds on the runner's native arch. NOT
+# a real build: `build_dev.sh` keeps `:dev` local and doesn't push. The
+# point is to fail CI fast when a Dockerfile change breaks the image
+# definition, instead of only finding out during the manual `build:image:`
+# multi-arch run on main.
+test:image_build:
+  stage: test
+  image: docker:latest
+  before_script:
+    - apk add --no-cache bash
+  script:
+    - ./build_dev.sh
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"'
+      when: always
+    - when: manual
+
 build:
   stage: build
   needs: [test, test:vsix]
@@ -134,6 +151,7 @@ build:
     - if: '$CI_COMMIT_BRANCH == "main" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"'
       when: always
     - when: manual
+
 
 # Multi-arch container image build. Runs `./build.sh` which reads VERSION
 # and pushes :VERSION + :MAJOR + :MINOR + :latest + tagless to
