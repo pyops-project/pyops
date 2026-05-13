@@ -849,6 +849,119 @@ class TestProcessInstallLines:
         stdout_file = io.StringIO()
         stderr_file = io.StringIO()
         result_lines = process_install_lines(lines, "/venv", "/pkg", "set", "id", stdout_file, stderr_file)
-        assert mock_run.call_count == 2
-        expected_cmd = ". /venv/set/bin/activate && pip install --no-cache-dir --upgrade --upgrade-strategy eager torch --index-url https://download.pytorch.org/whl/cpu"
-        mock_run.assert_called_with(expected_cmd, shell=True, stdout=stdout_file, stderr=stderr_file, text=True, check=True)
+        # Per-job: single pip call, no bootstrap upgrade, array form (not shell), no --upgrade.
+        assert mock_run.call_count == 1
+        mock_run.assert_called_with(
+            ['/venv/set/bin/pip', 'install', '--no-cache-dir', 'torch', '--index-url', 'https://download.pytorch.org/whl/cpu'],
+            stdout=stdout_file, stderr=stderr_file, text=True, check=True,
+        )
+
+    @patch('app.lib.job.subprocess.run')
+    def test_process_install_lines_pip_upgrade_mode(self, mock_run, mock_conf):
+        """Update Dependencies path passes upgrade=True → pip gets `--upgrade --upgrade-strategy eager`."""
+        from app.lib.job import process_install_lines
+        import io
+        lines = ["#!torch\n"]
+        mock_run.return_value = Mock()
+        stdout_file = io.StringIO()
+        stderr_file = io.StringIO()
+        process_install_lines(lines, "/venv", "/pkg", "set", "id", stdout_file, stderr_file, upgrade=True)
+        mock_run.assert_called_with(
+            ['/venv/set/bin/pip', 'install', '--no-cache-dir', '--upgrade', '--upgrade-strategy', 'eager', 'torch'],
+            stdout=stdout_file, stderr=stderr_file, text=True, check=True,
+        )
+
+    @patch('os.path.exists')
+    @patch('app.lib.job.subprocess.run')
+    def test_process_install_lines_git_no_pull_in_per_job_mode(self, mock_run, mock_exists, mock_conf):
+        """Per-job: existing git repo → checkout if branch given but NO `git pull`.
+        The "Update Dependencies" path is the only one that pulls."""
+        from app.lib.job import process_install_lines
+        import io
+        mock_run.return_value = Mock(returncode=0, stderr="")
+        mock_exists.return_value = True  # repo_dir already exists
+        lines = ["#! https://repo.git mybranch\n"]
+        stdout_file = io.StringIO()
+        stderr_file = io.StringIO()
+        process_install_lines(lines, "/venv", "/pkg", "set", "id", stdout_file, stderr_file)
+        # Calls: git checkout mybranch, then pip install -e (no pull).
+        commands = [c.args[0] for c in mock_run.call_args_list]
+        assert any('checkout' in cmd and 'mybranch' in cmd for cmd in commands), commands
+        assert not any('pull' in cmd for cmd in commands), f"git pull should not run in per-job mode: {commands}"
+
+    @patch('os.path.exists')
+    @patch('app.lib.job.subprocess.run')
+    def test_process_install_lines_git_pull_in_upgrade_mode(self, mock_run, mock_exists, mock_conf):
+        """Update Dependencies path: existing git repo → checkout + `git pull`."""
+        from app.lib.job import process_install_lines
+        import io
+        mock_run.return_value = Mock(returncode=0, stderr="")
+        mock_exists.return_value = True
+        lines = ["#! https://repo.git mybranch\n"]
+        stdout_file = io.StringIO()
+        stderr_file = io.StringIO()
+        process_install_lines(lines, "/venv", "/pkg", "set", "id", stdout_file, stderr_file, upgrade=True)
+        commands = [c.args[0] for c in mock_run.call_args_list]
+        assert any('pull' in cmd for cmd in commands), f"git pull expected in upgrade mode: {commands}"
+
+
+class TestInstallGitRepoUpgradeFlag:
+    @patch('app.lib.job.subprocess.run')
+    def test_per_job_no_upgrade_flag(self, mock_run):
+        """install_git_repo(upgrade=False) → plain `pip install -e`. No --upgrade,
+        no --upgrade-strategy. Fast 'already satisfied' path on re-spawn."""
+        from app.lib.job import install_git_repo
+        mock_run.return_value = Mock(returncode=0)
+        install_git_repo("/venv/bin/pip", "/pkg/myrepo", None, None, upgrade=False)
+        cmd = mock_run.call_args.args[0]
+        assert "--upgrade" not in cmd
+        assert "--upgrade-strategy" not in cmd
+        assert cmd[-2:] == ["-e", "/pkg/myrepo"]
+
+    @patch('app.lib.job.subprocess.run')
+    def test_update_path_adds_upgrade_eager(self, mock_run):
+        """install_git_repo(upgrade=True) → adds --upgrade --upgrade-strategy eager
+        so pip re-resolves and picks up newer commit's setup.py changes."""
+        from app.lib.job import install_git_repo
+        mock_run.return_value = Mock(returncode=0)
+        install_git_repo("/venv/bin/pip", "/pkg/myrepo", None, None, upgrade=True)
+        cmd = mock_run.call_args.args[0]
+        assert "--upgrade" in cmd
+        assert "--upgrade-strategy" in cmd
+        idx = cmd.index("--upgrade-strategy")
+        assert cmd[idx + 1] == "eager"
+
+
+class TestProcessCodeInstallsUpgradeFlag:
+    """process_code_installs threads `upgrade` through to process_install_lines.
+    The Update Dependencies flow needs upgrade=True to propagate end-to-end."""
+
+    def test_upgrade_flag_propagates_to_pip_install(self, mock_conf, tmp_path, monkeypatch):
+        from app.lib import job as job_lib
+
+        observed = []
+
+        def fake_install_lines(lines, venv_path, pkg_path, set_, job_id, stdout, stderr, upgrade=False):
+            observed.append(upgrade)
+            return lines
+
+        # Make set_install_lock a no-op so the test doesn't hit real flock
+        from contextlib import contextmanager
+
+        @contextmanager
+        def fake_lock(name):
+            yield
+
+        monkeypatch.setattr(job_lib, "process_install_lines", fake_install_lines)
+        monkeypatch.setattr("app.lib.sets.set_install_lock", fake_lock)
+
+        from unittest.mock import MagicMock
+        job_lib.process_code_installs(
+            "#!somepkg\n",
+            "#!othercode\n",
+            [{"code": "#!libpkg\n", "filename": "x::y"}],
+            "/venv", "/pkg", "alpha", "j1",
+            MagicMock(), MagicMock(),
+            upgrade=True,
+        )
+        assert observed == [True, True, True], f"upgrade should propagate to all 3 calls: {observed}"

@@ -143,6 +143,73 @@ class TestHealthEndpoint:
         assert body["stuck"]["last_completed_at"] is not None
         assert body["stuck"]["last_completed_seconds"] >= 290  # ~5 min
 
+    def test_health_dependency_conflicts_surface_from_warnings_file(self, client, tmp_path, monkeypatch):
+        """The 'Update Dependencies' flow writes `<set>/.update_warnings.json`
+        when scriptlets pin conflicting versions. /health must read those files
+        and surface non-empty conflicts so a monitoring system can alert."""
+        import json as _json
+        # Override conf_data so monitoring's _collect_dependency_conflicts
+        # walks our tmp_path instead of the real data/git.
+        from app.lib import files as files_lib
+        git_dir = tmp_path / "fake_git"
+        set_dir = git_dir / "myset"
+        set_dir.mkdir(parents=True)
+        warnings_path = set_dir / ".update_warnings.json"
+        warnings_path.write_text(_json.dumps({
+            "set": "myset",
+            "conflicts": {
+                "pip": [{
+                    "pkg": "requests",
+                    "winner": {"spec": "==2.32.0", "extra": [], "source": "new.task.py", "mtime": 200},
+                    "losers": [{"spec": "==2.30.0", "extra": [], "source": "old.task.py", "mtime": 100}],
+                }],
+                "git": [],
+            },
+            "installed": {"pip": [], "git": []},
+        }))
+
+        original_conf_data = files_lib.conf_data
+        def fake_conf_data():
+            d = dict(original_conf_data())
+            d["git"] = str(git_dir)
+            return d
+        monkeypatch.setattr(files_lib, "conf_data", fake_conf_data)
+
+        r = client.get("/health")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["status"] == "degraded"
+        assert body["checks"]["dependency_conflicts"] == "conflicts"
+        conflicts = body["dependency_conflicts"]
+        assert len(conflicts) == 1
+        assert conflicts[0]["set"] == "myset"
+        assert conflicts[0]["pip"][0]["pkg"] == "requests"
+
+    def test_health_clean_when_warnings_file_empty(self, client, tmp_path, monkeypatch):
+        """An update that resolved cleanly writes an empty conflicts list —
+        /health must NOT flip to degraded on that."""
+        import json as _json
+        from app.lib import files as files_lib
+        git_dir = tmp_path / "fake_git"
+        set_dir = git_dir / "cleanset"
+        set_dir.mkdir(parents=True)
+        (set_dir / ".update_warnings.json").write_text(_json.dumps({
+            "set": "cleanset",
+            "conflicts": {"pip": [], "git": []},
+            "installed": {"pip": [], "git": []},
+        }))
+        original_conf_data = files_lib.conf_data
+        def fake_conf_data():
+            d = dict(original_conf_data())
+            d["git"] = str(git_dir)
+            return d
+        monkeypatch.setattr(files_lib, "conf_data", fake_conf_data)
+
+        r = client.get("/health")
+        body = r.json()
+        assert body["checks"]["dependency_conflicts"] == "ok"
+        assert body["dependency_conflicts"] == []
+
     def test_health_returns_503_when_db_unavailable(self, client, monkeypatch):
         """When the DB engine is unreachable, /health surfaces fail with 503
         so monitoring can distinguish 'pyops can't introspect itself' from

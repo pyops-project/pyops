@@ -113,32 +113,9 @@ class TestPreExecutionErrorLogging:
         assert "Error executing task job id" in call_args["detail"]
         assert "Disk full" in call_args["detail"]
 
-    @patch('app.job_runner.job_lib.send_completion')
-    @patch('app.job_runner.os.makedirs')
-    @patch('app.job_runner.os.chdir')
-    @patch('builtins.open')
-    @patch('subprocess.run')
-    def test_run_task_install_processing_failure(self, mock_run, mock_open, mock_chdir, mock_makedirs, mock_send, job_env):
-        """Test that install processing failures are logged and reported."""
-        from app.job_runner import main as run
-
-        # Simulate pip install failure
-        from subprocess import CalledProcessError
-        mock_run.side_effect = CalledProcessError(1, "pip", output="", stderr="no such package")
-
-        run(
-            "id", "owner", "set", "name", "task", "#!nonexistent-package-xyz", "pass", [],
-            "/tmp/pyops/runner.sock", 0, None, None,
-            job_env["conf_data"], job_env["conf_runner"], job_env["conf_users"], job_env["conf_web"]
-        )
-
-        # Verify error was logged and reported
-        mock_send.assert_called_once()
-        call_args = mock_send.call_args[0][1]
-        assert call_args["state"] == "failed"
-        assert "Install processing failed for task job id" in call_args["detail"]
-        # The error message contains the CalledProcessError details, not the package name directly
-        assert "Command 'pip' returned non-zero exit status 1" in call_args["detail"]
+    # NOTE: install-processing failures are tested against `job_setup.py` in
+    # tests/unit/test_job_setup.py — installs no longer run inside
+    # `job_runner.main`; they're done in the setup phase before os.execv.
 
     @patch('app.job_runner.job_lib.send_completion')
     @patch('app.job_runner.os.makedirs')
@@ -399,29 +376,7 @@ class TestNoSilentFailures:
         assert call_args["state"] == "failed"
         assert "detail" in call_args
 
-    @patch('app.job_runner.job_lib.send_completion')
-    @patch('app.job_runner.os.makedirs')
-    @patch('app.job_runner.os.chdir')
-    @patch('builtins.open')
-    @patch('subprocess.run')
-    def test_install_error_always_reports_failure(self, mock_run, mock_open, mock_chdir, mock_makedirs, mock_send, job_env):
-        """Ensure install processing errors always result in failure report."""
-        from app.job_runner import main as run
-        from subprocess import CalledProcessError
-
-        # Simulate pip install failure
-        mock_run.side_effect = CalledProcessError(1, "pip", output="", stderr="package not found")
-
-        run(
-            "id", "owner", "set", "name", "task", "#!nonexistent-package", "pass", [],
-            "/tmp/pyops/runner.sock", 0, None, None,
-            job_env["conf_data"], job_env["conf_runner"], job_env["conf_users"], job_env["conf_web"]
-        )
-
-        mock_send.assert_called_once()
-        call_args = mock_send.call_args[0][1]
-        assert call_args["state"] == "failed"
-        assert "detail" in call_args
+    # install-processing failure coverage lives in tests/unit/test_job_setup.py
 
     @patch('app.job_runner.job_lib.send_completion')
     @patch('app.job_runner.os.makedirs')

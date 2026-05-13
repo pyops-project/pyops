@@ -92,6 +92,42 @@ def _check_runner_socket() -> bool:
     return False
 
 
+def _collect_dependency_conflicts() -> list[dict]:
+    """Walk every set's `.update_warnings.json` (written by the
+    "Update Dependencies" flow) and aggregate the non-empty conflict
+    entries. A non-empty result flips `/health` to `degraded` so a
+    monitoring system polling `/health` can alert on it.
+
+    Empty when (a) no set has ever been updated, or (b) the last update
+    resolved cleanly. The file is rewritten on every update, so stale
+    conflicts from prior runs are not preserved across a clean re-update.
+    """
+    git_base = files.conf_data().get("git", "data/git")
+    if not os.path.isabs(git_base):
+        git_base = os.path.join(files.project_root, git_base)
+    if not os.path.isdir(git_base):
+        return []
+    out = []
+    for entry in sorted(os.listdir(git_base)):
+        warnings_path = os.path.join(git_base, entry, '.update_warnings.json')
+        if not os.path.isfile(warnings_path):
+            continue
+        try:
+            with open(warnings_path, 'r') as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            continue
+        conflicts = data.get('conflicts', {})
+        if not conflicts.get('pip') and not conflicts.get('git'):
+            continue
+        out.append({
+            'set': data.get('set', entry),
+            'pip': conflicts.get('pip', []),
+            'git': conflicts.get('git', []),
+        })
+    return out
+
+
 def _check_data_dirs() -> bool:
     """Configured data dirs exist and are writable."""
     try:
@@ -305,12 +341,15 @@ def health():
             logger.exception("monitoring: /health DB summary failed: %s", e)
             db_ok = False
 
+    dep_conflicts = _collect_dependency_conflicts()
+
     degraded = (
         not runner_ok
         or not dirs_ok
         or failed_count > 0
         or ulimits["status"] != "ok"
         or gpu["status"] not in ("ok", "no_gpu_expected")
+        or len(dep_conflicts) > 0
     )
 
     if not db_ok:
@@ -330,11 +369,13 @@ def health():
             "data_dirs": "ok" if dirs_ok else "missing",
             "ulimits": ulimits["status"],
             "gpu": gpu["status"],
+            "dependency_conflicts": "ok" if not dep_conflicts else "conflicts",
         },
         "ulimits": ulimits,
         "gpu": gpu,
         "summary": summary,
         "stuck": stuck,
+        "dependency_conflicts": dep_conflicts,
     }
 
     code = HTTP_503_SERVICE_UNAVAILABLE if status_str == "fail" else HTTP_200_OK

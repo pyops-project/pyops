@@ -607,7 +607,12 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
                         venv_python = os.path.join(venv_path, setname, 'bin', 'python')
                         json_kwargs = json.dumps({"job_id": job_id, "owner": owner, "setname": setname, "name": name, "kind": kind, "param": param, "code": code, "libs": libs, "overrides": overrides, "runner_sock_path": "/tmp/pyops/runner.sock", "max_retries": max_retries, "port": port, "conf_data": files.conf_data(), "conf_runner": files.conf_runner(), "conf_users": files.conf_users(), "conf_web": files.conf_web()})
                         try:
-                            p = subprocess.Popen([venv_python, os.path.abspath('app/job_runner.py'), json_kwargs], cwd=files.project_root, stdout=sys.stdout, stderr=sys.stderr, text=True)
+                            # Spawn job_setup.py — it runs the pip/git directive
+                            # installs under the per-set bootstrap lock, then
+                            # os.execv's into job_runner.py in the same PID with
+                            # a fresh interpreter that picks up any new .pth
+                            # files from `pip install -e` at startup.
+                            p = subprocess.Popen([venv_python, os.path.abspath('app/job_setup.py'), json_kwargs], cwd=files.project_root, stdout=sys.stdout, stderr=sys.stderr, text=True)
                         except Exception as e:
                             finishJob(job_id, "failed", f"Launch failed: {e}")
                             continue

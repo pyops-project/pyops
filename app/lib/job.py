@@ -96,10 +96,29 @@ def terminate_debugpy_adapter(owner: str, port: int):
     else:
         logger.warning("no debugpy adapter process found for port %s", port)
 
-def install_git_repo(pip_path: str, repo_dir: str, stdout_file, stderr_file):
-    """Install git repo as editable package."""
+def install_git_repo(pip_path: str, repo_dir: str, stdout_file, stderr_file, upgrade: bool = False):
+    """Install git repo as editable package.
+
+    The `.pth` file pip writes here is picked up on the next interpreter
+    start — by design, `job_setup.py` `os.execv`s into `job_runner.py` after
+    all installs are done so the user-code interpreter sees a complete
+    `sys.path`.
+
+    `upgrade=False` (the default, used by per-job installs): plain
+    `pip install -e`. If the package is already installed at any version,
+    pip says "already satisfied" and returns in milliseconds — no index
+    lookup, no network round-trip. This makes second+ job spawns fast.
+
+    `upgrade=True` (used by the operator-triggered "Update Dependencies"
+    flow): adds `--upgrade --upgrade-strategy eager` so pip re-resolves
+    against the index and pulls any newer commit's setup.py changes.
+    """
+    cmd = [pip_path, 'install', '--no-cache-dir']
+    if upgrade:
+        cmd += ['--upgrade', '--upgrade-strategy', 'eager']
+    cmd += ['-e', repo_dir]
     result = subprocess.run(
-        [pip_path, 'install', '--no-cache-dir', '--upgrade', '--upgrade-strategy', 'eager', '-e', repo_dir],
+        cmd,
         stdout=stdout_file, stderr=stderr_file, text=True, check=True
     )
     return result
@@ -155,15 +174,31 @@ def process_imports(text: str, current_set: str, kind: str, libs: list, override
                 raise
     return text
 
-def process_install_lines(lines, venv_path: str, pkg_path: str, set: str, job_id: str, stdout_file, stderr_file):
-    """Process #! lines for installs; uses env prop + CWD for shebang/path resolution."""
-    venv_activate = os.path.join(venv_path, set, 'bin', 'activate')
-    # Bootstrap: Upgrade core packaging tools to ensure proper dependency resolution
-    # and help newer venv packages override any older system-level versions
-    subprocess.run(
-        f". {venv_activate} && pip install --upgrade pip setuptools wheel",
-        shell=True, check=True, stdout=stdout_file, stderr=stderr_file
-    )
+def process_install_lines(lines, venv_path: str, pkg_path: str, set: str, job_id: str, stdout_file, stderr_file, upgrade: bool = False):
+    """Process #! lines for installs; uses env prop + CWD for shebang/path
+    resolution. The caller (process_code_installs) must hold
+    `sets.set_install_lock(set)` for the duration — pip has no venv-wide
+    lock and concurrent jobs in the same set would otherwise corrupt
+    `site-packages` or race on `git clone` into the same target dir.
+
+    `upgrade=False` (per-job default): plain `pip install <pkg>` and
+    no `git pull` on existing repos. If the package or repo is already
+    in the venv, pip / the existing checkout are reused as-is — no index
+    lookups, no network round-trips, milliseconds per directive. The
+    explicit "Update Dependencies" set-level action is the only path that
+    refreshes versions.
+
+    `upgrade=True` (Update Dependencies path): pip with `--upgrade
+    --upgrade-strategy eager`, plus `git pull` on existing repos. Does the
+    network round-trip per directive.
+
+    For pinned pip directives (`#!<pkg>==<ver>`), the version constraint
+    is in the directive text — pip honours it whether `upgrade` is true or
+    false. For git directives with a branch (`#!<url> <branch>`), the
+    branch is `git checkout`-ed even on the per-job path so a scriptlet
+    that switches branches between runs is honoured; only the `git pull`
+    that would advance to the upstream tip is the upgrade-only step.
+    """
     for line in lines:
         stripped = line.lstrip()
         if stripped.startswith('#!'):
@@ -197,50 +232,100 @@ def process_install_lines(lines, venv_path: str, pkg_path: str, set: str, job_id
                         )
                         if ck_result.returncode != 0:
                             raise Exception(f"git checkout {arg2} in {repo_dir} failed: {ck_result.stderr}")
-                    pull_result = subprocess.run(
-                        ['git', '-C', repo_dir, 'pull'],
-                        stdout=stdout_file, stderr=stderr_file, text=True, cwd=repo_dir
-                    )
-                    if pull_result.returncode != 0:
-                        raise Exception(f"git pull in {repo_dir} failed: {pull_result.stderr}")
+                    if upgrade:
+                        pull_result = subprocess.run(
+                            ['git', '-C', repo_dir, 'pull'],
+                            stdout=stdout_file, stderr=stderr_file, text=True, cwd=repo_dir
+                        )
+                        if pull_result.returncode != 0:
+                            raise Exception(f"git pull in {repo_dir} failed: {pull_result.stderr}")
                 pip_path = os.path.join(venv_path, set, 'bin', 'pip')
-                install_git_repo(pip_path, repo_dir, stdout_file, stderr_file)
+                install_git_repo(pip_path, repo_dir, stdout_file, stderr_file, upgrade=upgrade)
             else:
                 # Skip if it looks like a library directive (starts with { or contains ::)
                 if rest.startswith('{') or '::' in rest:
                     continue
                 # Split rest into pip install arguments
                 args = rest.split()
-                # Use safe flags to avoid conflicts with system site-packages
-                cmd = f". {venv_activate} && pip install --no-cache-dir --upgrade --upgrade-strategy eager {' '.join(args)}"
-                result = subprocess.run(cmd, shell=True, stdout=stdout_file, stderr=stderr_file, text=True, check=True)
+                pip_path = os.path.join(venv_path, set, 'bin', 'pip')
+                cmd = [pip_path, 'install', '--no-cache-dir']
+                if upgrade:
+                    cmd += ['--upgrade', '--upgrade-strategy', 'eager']
+                cmd += args
+                result = subprocess.run(cmd, stdout=stdout_file, stderr=stderr_file, text=True, check=True)
 
     stdout_file.flush()
     stderr_file.flush()
     return lines
 
-def process_code_installs(param: str, code: str, libs: list, venv_path: str, pkg_path: str, set: str, job_id: str, stdout_file, stderr_file) -> tuple:
-    """Process #!pip/#!git installs in param, code, and libs"""
-    # Process param
-    if param:
-        param_lines = param.splitlines(keepends=True)
-        new_param_lines = process_install_lines(param_lines, venv_path, pkg_path, set, job_id, stdout_file, stderr_file)
-        param = ''.join(new_param_lines)
+def _has_install_directives(text: str) -> bool:
+    """True if `text` has any `#!`-prefixed line that is a real install
+    directive (pip pkg or git url) — not a library import (`#!{set::name}`)
+    which is handled by `process_imports`. Used to short-circuit
+    `process_code_installs` when there's no install work to do — the
+    common case for jobs without directives — so we skip both the lock
+    acquisition and the per-line subprocess setup entirely."""
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        if not stripped.startswith('#!'):
+            continue
+        rest = stripped[2:].lstrip()
+        if rest.startswith('{') or '::' in rest:
+            continue
+        if rest:
+            return True
+    return False
 
-    # Process libs
-    new_libs = []
-    for lib in libs:
-        l_code = lib["code"]
-        l_lines = l_code.splitlines(keepends=True)
-        new_l_lines = process_install_lines(l_lines, venv_path, pkg_path, set, job_id, stdout_file, stderr_file)
-        new_lib = {"code": ''.join(new_l_lines), "filename": lib["filename"]}
-        new_libs.append(new_lib)
-    libs = new_libs
 
-    # Process code
-    code_lines = code.splitlines(keepends=True)
-    new_code_lines = process_install_lines(code_lines, venv_path, pkg_path, set, job_id, stdout_file, stderr_file)
-    code = ''.join(new_code_lines)
+def process_code_installs(param: str, code: str, libs: list, venv_path: str, pkg_path: str, set: str, job_id: str, stdout_file, stderr_file, upgrade: bool = False) -> tuple:
+    """Process #!pip / #!git installs in param, libs, and code, all under
+    one per-set bootstrap flock when there is anything to do.
+
+    Holding the lock across the whole call (not per-`process_install_lines`
+    invocation) gives the job *job-level atomicity*: another job in the same
+    set cannot slip between this job's param-install and libs-install and
+    swap a package version underneath. Different sets remain parallel.
+
+    Short-circuits to a no-op (no lock, no subprocess) when none of the
+    inputs contain a real install directive — the common case for jobs
+    that just `import` from already-installed packages.
+
+    `upgrade=False` (per-job): no `--upgrade` flag, no `git pull`. Already-
+    installed packages and existing repos are reused as-is. The "Update
+    Dependencies" set-level action passes `upgrade=True`.
+    """
+    # Cheap pre-check: skip the lock entirely when nothing to do.
+    have_work = (
+        (param and _has_install_directives(param))
+        or any(_has_install_directives(lib.get("code", "")) for lib in libs)
+        or _has_install_directives(code)
+    )
+    if not have_work:
+        return param, code, libs
+
+    # Imported locally to avoid pulling `app.lib.sets` (which imports
+    # `app.lib.git`) at module load time from contexts that don't have
+    # that subtree on sys.path (e.g. minimal job_runner setups in tests).
+    from app.lib.sets import set_install_lock
+
+    with set_install_lock(set):
+        if param:
+            param_lines = param.splitlines(keepends=True)
+            new_param_lines = process_install_lines(param_lines, venv_path, pkg_path, set, job_id, stdout_file, stderr_file, upgrade=upgrade)
+            param = ''.join(new_param_lines)
+
+        new_libs = []
+        for lib in libs:
+            l_code = lib["code"]
+            l_lines = l_code.splitlines(keepends=True)
+            new_l_lines = process_install_lines(l_lines, venv_path, pkg_path, set, job_id, stdout_file, stderr_file, upgrade=upgrade)
+            new_lib = {"code": ''.join(new_l_lines), "filename": lib["filename"]}
+            new_libs.append(new_lib)
+        libs = new_libs
+
+        code_lines = code.splitlines(keepends=True)
+        new_code_lines = process_install_lines(code_lines, venv_path, pkg_path, set, job_id, stdout_file, stderr_file, upgrade=upgrade)
+        code = ''.join(new_code_lines)
 
     return param, code, libs
 

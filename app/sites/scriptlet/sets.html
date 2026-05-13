@@ -115,8 +115,11 @@
 
             function genActions(name, branch) {
                 return `
-                    <button type="button" onclick="onPull('${name}')" class="btn btn-primary p-0" data-testid="set-pull-${name}">
+                    <button type="button" onclick="onPull('${name}')" class="btn btn-primary p-0" data-testid="set-pull-${name}" title="Git pull">
                         <span class="material-icons-round">sync</span>
+                    </button>
+                    <button type="button" onclick="onUpdateDeps('${name}')" class="btn btn-info p-0" data-testid="set-update-deps-${name}" title="Update Dependencies (pip + git for all scriptlets in this set)">
+                        <span class="material-icons-round">system_update_alt</span>
                     </button>
                     <button type="button" onclick="onSwitchBranch('${name}')" class="btn btn-warning p-0" data-testid="set-switch-${name}">
                         <span class="material-icons-round">swap_horiz</span>
@@ -360,6 +363,39 @@
                     else
                         console.error("POST", `/scriptlet/sets/pull/${name}`, r.statusText);
                 }).catch((e)=>console.error("POST", `/scriptlet/sets/pull/${name}`, e.toString()));
+            }
+
+            function onUpdateDeps(name) {
+                console.debug("onUpdateDeps", name);
+                if(!window.confirm(`Update all pip/git dependencies for set '${name}'?\n\nThis upgrades pyops core packages, scans every scriptlet for #! directives, resolves any version/branch conflicts via newest-mtime-wins, and runs pip install --upgrade / git pull. Takes a while.`)) {
+                    return;
+                }
+
+                fetch(`/scriptlet/sets/update_deps/${name}`, {
+                    method: "POST"
+                }).then(async (r)=>{
+                    const body = await r.json().catch(()=>({}));
+                    if(r.ok) {
+                        const conflicts = (body.summary && body.summary.conflicts) || {pip: [], git: []};
+                        const nPip = (conflicts.pip || []).length;
+                        const nGit = (conflicts.git || []).length;
+                        if(nPip || nGit) {
+                            alert(`Update completed with ${nPip + nGit} conflict(s). See /health and server logs for detail.\n\n` +
+                                  (conflicts.pip || []).map(c => `pip ${c.pkg}: chose ${c.winner.spec || '(no version)'} from ${c.winner.source}`).join('\n') +
+                                  '\n' +
+                                  (conflicts.git || []).map(c => `git ${c.url}: chose branch=${c.winner.branch || '(default)'} from ${c.winner.source}`).join('\n'));
+                        } else {
+                            console.debug("Update Dependencies completed cleanly for", name);
+                        }
+                        enqueueRefreshList();
+                    } else {
+                        console.error("POST", `/scriptlet/sets/update_deps/${name}`, r.statusText, body);
+                        alert(`Update failed: ${body.detail || r.statusText}`);
+                    }
+                }).catch((e)=>{
+                    console.error("POST", `/scriptlet/sets/update_deps/${name}`, e.toString());
+                    alert(`Update request failed: ${e.toString()}`);
+                });
             }
 
             function onRemove(name) {

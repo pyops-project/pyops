@@ -72,12 +72,12 @@ def test_ensure_set_environment_serializes_concurrent_callers(lock_env, monkeypa
     for t in threads:
         t.join(timeout=10)
 
-    # Each ensure_set_environment runs three slow steps: python -m venv (only
-    # first time, since fake check_call creates bin/python),
-    # pip install pip+setuptools+wheel, pip install pyzmq+...
-    # The first caller does all three (3 entries). The second sees bin/python and
-    # skips python -m venv but still runs both pip install steps (2 entries).
-    assert len(enter_times) == 5, f"expected 5 slow steps total, got {len(enter_times)}"
+    # Per-job ensure_set_environment runs two slow steps the first time:
+    #   1. python -m venv (creates bin/python via the fake check_call below)
+    #   2. pip install <CORE_DEPS> — single combined call, no --upgrade
+    # The second caller sees bin/python and skips python -m venv but still
+    # runs the single pip install step (1 entry).
+    assert len(enter_times) == 3, f"expected 3 slow steps total, got {len(enter_times)}"
 
     # Serialization invariant: every step must finish before the next one starts.
     pairs = sorted(zip(enter_times, exit_times))
