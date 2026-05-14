@@ -323,6 +323,16 @@ flowchart TD
 - Dynamic UI with Bootstrap, Ace, jQuery
 - Supports light/dark theme
 
+#### Monitoring (`app/routers/monitoring.py`)
+
+Top-level (not under `/scriptlet/`), unauthenticated, read-only.
+
+- `GET /health` — JSON aggregated status (`ok` / `degraded` / `fail`); subsystem checks (database, runner socket, data dirs, ulimits, GPU); job/schedule/set summary; stuck-job indicators. HTTP 503 only when DB unreachable.
+- `GET /health/failed` — JSON list of every job in `failed` state, full detail, no pagination.
+- `GET /metrics` — Prometheus exposition (`text/plain; version=0.0.4`); per-state job counts, per-(set, name, state) breakdown, ulimit gauges, GPU status with dedicated `pyops_gpu_reboot_required` flag for driver/runtime mismatch.
+
+Designed for Zabbix/Prometheus polling; see `doc/insights_app.md` § "Monitoring Router" for the GPU status taxonomy and ulimit threshold semantics.
+
 ## Testing
 
 `tests/` uses pytest with >90% coverage.

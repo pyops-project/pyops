@@ -63,7 +63,12 @@ def pytest_collection_modifyitems(config, items):
 E2E_PORT = 18321
 BASE_URL = f"http://127.0.0.1:{E2E_PORT}"
 SERVER_STARTUP_TIMEOUT = int(os.environ.get("E2E_STARTUP_TIMEOUT", 30))
-SERVER_SHUTDOWN_TIMEOUT = 10
+# Graceful shutdown can outlast a pip install — pyops's contract is that
+# in-flight `ensure_set_environment` (called from the create/clone HTTP
+# BackgroundTask or from runner.py before each Popen) is never killed
+# mid-flight, so the worker holds the bootstrap lock for the full pip duration.
+# Matches gunicorn's graceful_timeout in app/gunicorn.py (120s).
+SERVER_SHUTDOWN_TIMEOUT = 120
 
 # Log patterns that indicate unexpected errors (checked after each test).
 # Case-sensitive on purpose: Python logging emits FATAL/CRITICAL in uppercase,

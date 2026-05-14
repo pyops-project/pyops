@@ -132,8 +132,9 @@ class TestPipInstall:
     def test_second_run_reuses_venv_without_reinstall_errors(self, api, pyops_server):
         """Running the same pip-install task twice succeeds both times.
 
-        pip install --upgrade is idempotent; the second run should not fail
-        because the package is already present.
+        Per-job (default) runs `pip install <pkg>` without `--upgrade`. The
+        second run sees the package already in the venv → pip says
+        "already satisfied" → fast, no index lookup, no reinstall.
         """
         api.post("/scriptlet/sets/create", json={"name": SET + "_reuse"})
 

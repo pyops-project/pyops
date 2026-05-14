@@ -29,6 +29,22 @@ class Config:
         logger.debug("Conf loaded successfully")
         return config
 
+    @classmethod
+    def init_from_dict(cls, raw_conf: dict):
+        """Initialize the module-level singleton from an in-memory dict.
+
+        Used by job subprocesses (`job_setup.py`, `job_runner.py`) that
+        receive the already-resolved per-section dicts via JSON kwargs from
+        `runner.py`. Re-applying section defaults inside `data()` /
+        `runner()` / `users()` / `web()` is idempotent so the dict can be
+        either the original conf file content or pre-merged sections.
+        """
+        global config
+        config = cls()
+        config._raw_conf = raw_conf
+        logger.debug("Conf initialized from in-memory dict")
+        return config
+
     def data(self):
         try:
             logger.debug("Accessing conf_data, _raw_conf type: %s", type(self._raw_conf))

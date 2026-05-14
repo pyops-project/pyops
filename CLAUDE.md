@@ -46,24 +46,26 @@ pytest tests/e2e/ -v
 PyOps is a monorepo execution platform for Python Operations Scriptlets. Core flow:
 
 ```
-WebUI/VSIX → FastAPI (app/web.py) → SQLite DB ↔ Runner daemon (app/runner.py) → Isolated subprocess (app/job_runner.py)
+WebUI/VSIX → FastAPI (app/web.py) → SQLite DB ↔ Runner daemon (app/runner.py) → Per-job subprocess: app/job_setup.py (installs under lock) → os.execv → app/job_runner.py (fresh interpreter, exec user code)
 ```
 
-**Key separation**: `app/runner.py` is the daemon that polls the DB and spawns jobs. `app/job_runner.py` is the subprocess entry point that executes inside the per-set venv. They communicate via ZMQ ROUTER/REQ over `/tmp/pyops/runner.sock` (msgpack-packed messages).
+**Key separation**: `app/runner.py` is the daemon that polls the DB and spawns jobs. Per job it Popens `app/job_setup.py` in the per-set venv, which runs every `#!pip`/`#!<git-url>` directive under `sets.set_install_lock(set)` then `os.execv`s into `app/job_runner.py` (same PID, fresh interpreter — `site.py` ingests any `.pth` from editable installs at startup, so user `import` works on first try). All three talk to the daemon via ZMQ ROUTER/REQ over `/tmp/pyops/runner.sock` (msgpack).
 
 ### app/ structure
 
 - `web.py` — FastAPI app; mounts routers, serves static files, proxies controller requests to ZMQ services
-- `runner.py` — Background daemon: polls DB for `todo` jobs, spawns `job_runner.py` via `subprocess.Popen` in per-set venvs, handles ZMQ completion signals, manages stale PIDs with psutil
-- `job_runner.py` — Subprocess entry point; accepts JSON-serialized kwargs; dispatches to `run_task_job`, `run_service_job`, `run_debug_job`, `run_draft_job`
+- `runner.py` — Background daemon: polls DB for `todo` jobs, spawns `job_setup.py` via `subprocess.Popen` in per-set venvs, handles ZMQ completion signals, manages stale PIDs with psutil
+- `job_setup.py` — First-phase subprocess; opens workspace log files in `'w'`, runs `process_code_installs` under `set_install_lock`, on success `os.execv`s into `job_runner.py`, on failure sends ZMQ completion `state="failed"` and exits 1
+- `job_runner.py` — Second-phase subprocess (post-execv, same PID, fresh interpreter); opens workspace log files in `'a'` so install logs are preserved; dispatches to `run_task_job`, `run_service_job`, `run_debug_job`, `run_draft_job`
 - `gunicorn.py` — WSGI config; also spawns the runner process; reads `PYOPS_CONFIG` env var for config path override (default `etc/pyops.json`)
 - `routers/scriptlet/` — REST API: `job.py`, `editor.py`, `inventory.py`, `schedule.py`, `sets.py`, etc.
+- `routers/monitoring.py` — top-level (not under `/scriptlet/`), unauthenticated `/health`, `/health/failed`, `/metrics` for external monitoring (Zabbix/Prometheus)
 - `orm/` — SQLAlchemy models: `Job` (states: todo→dequeued→loading→running→done/failed/cancelled/remove/removed) and `Schedule` (cron-based)
 - `lib/` — Shared utilities
 
 ### lib/ key modules
 
-- `runner.py` — Shared job execution utilities used by both `runner.py` and `job_runner.py`: `send_completion`, `terminate_debugpy_adapter`, `process_imports`, `process_install_lines`, `process_code_installs`, `kill_proc_tree`, `get_process_tree`
+- `runner.py` — Shared job execution utilities used by `runner.py`, `job_setup.py`, and `job_runner.py`: `send_completion`, `terminate_debugpy_adapter`, `process_imports`, `process_install_lines`, `process_code_installs` (acquires `sets.set_install_lock` for whole call), `kill_proc_tree`, `get_process_tree`
 - `pyops.py` — `Control` (API proxy for scriptlets) and `ServiceListener` (ZMQ service IPC); available in scriptlet global namespace
 - `git.py` — Git operations for scriptlet storage; serialized via `repo_lock()` per set; scriptlets stored as `{name}.{type}.py` in `data/git/{set}/`
 - `files.py` — Config (`etc/pyops.json`) access: `conf_data()`, `conf_runner()`, `conf_web()`, `conf_log()`, `conf_users()`; supports dynamic reload
@@ -71,7 +73,7 @@ WebUI/VSIX → FastAPI (app/web.py) → SQLite DB ↔ Runner daemon (app/runner.
 
 ### Config isolation in subprocesses
 
-`job_runner.py` receives config as JSON-serialized kwargs on the command line — no file reads or module patching in subprocess. Relative paths are resolved using a locally computed `project_root`.
+Both `job_setup.py` and `job_runner.py` receive config as the same JSON-serialized kwargs on the command line — `job_setup.py` passes them through to `job_runner.py` verbatim via `os.execv`. No file reads or module patching in subprocess. Relative paths are resolved using a locally computed `project_root`.
 
 ### Debug mode
 

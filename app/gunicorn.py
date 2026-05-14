@@ -36,6 +36,13 @@ loglevel = log_conf["loglevel"]
 wsgi_app = "app.web:app"
 worker_class = "uvicorn.workers.UvicornWorker"
 
+# Graceful shutdown must outlast a pip-install bootstrap (cold devpi cache,
+# ARM64 wheels): the worker holds the bootstrap lock during a sync
+# `pip install --upgrade ...` and we won't kill it mid-flight. 120s is
+# comfortably above the worst observed bootstrap (~30s) so SIGKILL never
+# truncates pip and corrupts the venv.
+graceful_timeout = 120
+
 if not os.path.exists(os.path.join(project_root, data_conf["jobs"])):
     os.makedirs(os.path.join(project_root, data_conf["jobs"]))
 

@@ -259,6 +259,42 @@ def _start_service_via_ui(e2e_page):
     return sched_id, job_id
 
 
+def _start_service_via_api_then_runnow(e2e_page, api_anon):
+    """Race-free counterpart to `_start_service_via_ui` for tests that need
+    *exactly one* service instance (e.g. stateful service assertions).
+
+    Creates the schedule via API with `active=False` so the scheduler loop
+    cannot auto-enqueue a parallel service in the gap between create and the
+    UI-driven deactivate. Then triggers Run Now via UI and waits for the
+    monitor to show the running job.
+
+    Returns:
+        tuple[str, str]: (schedule_id, job_id)
+    """
+    resp = api_anon.put(
+        "/scriptlet/schedule/item",
+        json={
+            "set": SET_NAME,
+            "name": SVC_NAME,
+            "drop_done": False,
+            "max_retries": 0,
+            "schedule": "",
+            "param": "",
+            "active": False,
+        },
+    )
+    assert resp.status_code == 200, f"Create schedule failed: {resp.text}"
+    sched_id = str(resp.json()["schedule"])
+    sched_frame = _nav_scheduler(e2e_page)
+    sched_frame.locator(f'[data-testid="schedule-row-{sched_id}"]').wait_for(
+        state="visible", timeout=5_000
+    )
+    _run_schedule_once_via_ui(sched_frame, e2e_page, sched_id)
+    monitor_frame = _nav_monitor(e2e_page)
+    job_id = _wait_for_running_job_in_monitor(monitor_frame)
+    return sched_id, job_id
+
+
 # ---------------------------------------------------------------------------
 # Proxy helpers (fetch from browser context)
 # ---------------------------------------------------------------------------
@@ -374,7 +410,11 @@ def _cleanup_set(e2e_page):
     if row.count() > 0 and row.is_visible():
         e2e_page.once("dialog", lambda d: d.accept())
         frame.locator(f'[data-testid="set-remove-{SET_NAME}"]').click()
-        row.wait_for(state="hidden", timeout=5_000)
+        # DELETE blocks on the bootstrap lock if a per-set venv pip install
+        # is still running (BackgroundTask scheduled by /scriptlet/sets/create
+        # plus the runner's per-job-spawn refresh). Cold devpi cache + aarch64
+        # wheels can push that to ~30s.
+        row.wait_for(state="hidden", timeout=60_000)
 
     assert frame.locator(f'[data-testid="set-row-{SET_NAME}"]').count() == 0
 
@@ -699,9 +739,17 @@ class TestControllerProxy:
     """HTTP→ZMQ→service forwarding tested via browser fetch() calls."""
 
     def _setup_running_service(self, e2e_page, api_anon):
-        """Create scriptlets (API) and start service (Scheduler + Monitor UI)."""
+        """Create scriptlets (API) and start service.
+
+        Uses the race-free API-then-runnow path because the proxy assertions
+        require *exactly one* service instance — the UI-only flow has a
+        narrow but real window (between schedule create-with-active=True
+        and the subsequent UI deactivate) in which the scheduler can
+        auto-enqueue a second service, leading to non-deterministic
+        find-by-id behavior across requests.
+        """
         _setup_full_stack(api_anon)
-        return _start_service_via_ui(e2e_page)
+        return _start_service_via_api_then_runnow(e2e_page, api_anon)
 
     def test_proxy_get_ping(self, e2e_page, api_anon, pyops_server):
         """GET proxy to /ping returns {pong: true} from the service."""

@@ -39,11 +39,15 @@ def setup_workspace(data_base: str, setname: str, job_id: str) -> tuple[str, str
     return setspace, workspace
 
 def setup_execution_environment(venv_path: str, pkg_path: str, setname: str, workspace: str, log_level: int) -> tuple[TextIOWrapper, TextIOWrapper]:
-    """Change to workspace directory and return stdout/stderr files"""
+    """Change to workspace directory and return stdout/stderr files.
+
+    Log files are opened in append mode because `job_setup.py` opened the
+    same files in write mode for the install phase. Appending preserves the
+    install output (pip/git directive logs) above the user-code output."""
     os.chdir(workspace)
 
-    stdout_file = open("stdout.log", 'w', 1)
-    stderr_file = open("stderr.log", 'w', 1)
+    stdout_file = open("stdout.log", 'a', 1)
+    stderr_file = open("stderr.log", 'a', 1)
 
     return stdout_file, stderr_file
 
@@ -179,10 +183,10 @@ debugpy.breakpoint()
                             if lib["filename"] in override_dict:
                                 lib["code"] = override_dict[lib["filename"]]
 
-                    # Process installs w/ env prop.
-                    param, code, libs = job_lib.process_code_installs(param, code, libs, venv_path, pkg_path, setname, job_id, stdout_file, stderr_file)
-                    # Update libs with git module for process_imports
-                    libs = libs
+                    # Installs (pip/git directives) ran in job_setup.py before
+                    # the os.execv into this interpreter — site.py has already
+                    # picked up any new .pth files at startup, so editable
+                    # installs are importable from here on.
 
                     # Create scriptlet files for debug jobs to enable breakpoint verification in .debug/src/ subdirectories
                     debug_src_dir = os.path.join(workspace, ".debug", "src")
@@ -289,8 +293,7 @@ def run_draft_job(job_id: str, owner: str, setname: str, name: str, param: str, 
         with redirect_stdout(stdout_file):
             with redirect_stderr(stderr_file):
                 try:
-                    # Process installs w/ env prop.
-                    param, code, libs = job_lib.process_code_installs(param, code, libs, venv_path, pkg_path, setname, job_id, stdout_file, stderr_file)
+                    # Installs ran in job_setup.py before os.execv into here.
 
                     # Compile code objects with custom filenames for accurate tracebacks
                     code_filename = f"{setname}/task/{name}.py"
@@ -318,7 +321,9 @@ def run_draft_job(job_id: str, owner: str, setname: str, name: str, param: str, 
                         root.removeHandler(warn_handler)
 
     except subprocess.CalledProcessError as e:
-        # Handle pip/git install failures during process_code_installs
+        # Defensive: directive installs run in job_setup.py, but the debugpy
+        # install for debug kind and any unexpected subprocess calls in this
+        # process can still raise CalledProcessError.
         error_msg = f"Install processing failed for draft job {job_id}: {e}\n{traceback.format_exc()}"
         logger.error(error_msg)
         job_lib.send_completion(runner_sock_path, {"id": job_id, "state": "failed", "detail": error_msg})
@@ -362,8 +367,7 @@ def run_task_job(job_id: str, owner: str, setname: str, name: str, param: str, c
         with redirect_stdout(stdout_file):
             with redirect_stderr(stderr_file):
                 try:
-                    # Process installs w/ env prop.
-                    param, code, libs = job_lib.process_code_installs(param, code, libs, venv_path, pkg_path, setname, job_id, stdout_file, stderr_file)
+                    # Installs ran in job_setup.py before os.execv into here.
 
                     # Compile code objects with custom filenames for accurate tracebacks
                     code_filename = f"{setname}/task/{name}.py"
@@ -391,7 +395,9 @@ def run_task_job(job_id: str, owner: str, setname: str, name: str, param: str, c
                         root.removeHandler(warn_handler)
 
     except subprocess.CalledProcessError as e:
-        # Handle pip/git install failures during process_code_installs
+        # Defensive: directive installs run in job_setup.py, but the debugpy
+        # install for debug kind and any unexpected subprocess calls in this
+        # process can still raise CalledProcessError.
         error_msg = f"Install processing failed for task job {job_id}: {e}\n{traceback.format_exc()}"
         logger.error(error_msg)
         job_lib.send_completion(runner_sock_path, {"id": job_id, "state": "failed", "detail": error_msg})
@@ -435,8 +441,7 @@ def run_service_job(job_id: str, owner: str, setname: str, name: str, param: str
         with redirect_stdout(stdout_file):
             with redirect_stderr(stderr_file):
                 try:
-                    # Process installs w/ env prop.
-                    param, code, libs = job_lib.process_code_installs(param, code, libs, venv_path, pkg_path, setname, job_id, stdout_file, stderr_file)
+                    # Installs ran in job_setup.py before os.execv into here.
 
                     # Compile code objects with custom filenames for accurate tracebacks
                     code_filename = f"{setname}/task/{name}.py"
@@ -464,7 +469,9 @@ def run_service_job(job_id: str, owner: str, setname: str, name: str, param: str
                         root.removeHandler(warn_handler)
 
     except subprocess.CalledProcessError as e:
-        # Handle pip/git install failures during process_code_installs
+        # Defensive: directive installs run in job_setup.py, but the debugpy
+        # install for debug kind and any unexpected subprocess calls in this
+        # process can still raise CalledProcessError.
         error_msg = f"Install processing failed for service job {job_id}: {e}\n{traceback.format_exc()}"
         logger.error(error_msg)
         job_lib.send_completion(runner_sock_path, {"id": job_id, "state": "failed", "detail": error_msg})
@@ -493,6 +500,18 @@ def main(job_id: str, owner: str, setname: str, name: str, kind: str, param: str
     _conf_runner = conf_runner
     _conf_users = conf_users
     _conf_web = conf_web
+
+    # The `files.Config` singleton was initialized in `runner.py` via
+    # `Config.init(path)` but that state did not survive subprocess spawn or
+    # the `os.execv` from `job_setup.py`. Mirror it from the kwargs so any
+    # `app.lib.*` code reached from here that calls `files.conf_*()` works.
+    from app.lib import files as files_lib
+    files_lib.Config.init_from_dict({
+        "data": conf_data,
+        "runner": conf_runner,
+        "users": conf_users,
+        "web": conf_web,
+    })
 
     if kind == "debug":
         if port is None:

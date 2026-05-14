@@ -91,6 +91,41 @@ class TestDaemon:
         result = getNextToDo()
         assert result is None
 
+    def test_getNextToDo_cas_drops_job_on_cancel_race(self, mock_db):
+        """If a cancel races in between SELECT and conditional UPDATE,
+        getNextToDo must NOT flip the cancel back to dequeued.
+        Returns None instead so the runner term-loop honours the cancel
+        on the next iteration."""
+        from app.runner import getNextToDo
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        with Session(get_db_engine()) as test_session:
+            job = Job(id="raceme", set="s", name="n", owner="o", kind="task",
+                      state="todo", param=None, detail=None, pid=None, drop_done=False)
+            test_session.add(job)
+            test_session.commit()
+
+        # Hook session.scalar to flip state to 'cancel' immediately after the
+        # candidate-id SELECT returns — simulating an HTTP cancel committing
+        # before getNextToDo's conditional UPDATE runs.
+        orig_scalar = Session.scalar
+        flipped = {"done": False}
+        def flip_after_first_scalar(self, stmt, *args, **kwargs):
+            result = orig_scalar(self, stmt, *args, **kwargs)
+            if result == "raceme" and not flipped["done"]:
+                flipped["done"] = True
+                with Session(get_db_engine()) as cancel_session:
+                    cancel_session.get(Job, "raceme").state = "cancel"
+                    cancel_session.commit()
+            return result
+
+        with patch.object(Session, 'scalar', flip_after_first_scalar):
+            result = getNextToDo()
+        assert result is None
+        with Session(get_db_engine()) as test_session:
+            fetched = test_session.get(Job, "raceme")
+            assert fetched.state == "cancel"  # CAS preserved the cancel
+
     def test_finishJob_done_drop(self, mock_db):
         from app.runner import finishJob
         from app.orm.database import get_db_engine
@@ -162,6 +197,43 @@ class TestDaemon:
             job = test_session.get(Job, "id")
             assert job.state == "failed"
             assert job.detail == "error"
+
+    def test_finishJob_cas_preserves_cancel_on_concurrent_commit(self, mock_db):
+        """Cancel commits between finishJob's snapshot read and its CAS UPDATE.
+
+        finishJob computes candidate='done' from the stale 'running' snapshot,
+        but the atomic CASE evaluates the state at UPDATE time and preserves
+        the now-committed 'cancel' — the runner term-loop can then clean up.
+        Without CAS, the commit overwrites cancel with done and the cancel
+        request is silently lost.
+        """
+        from app.runner import finishJob
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        with Session(get_db_engine()) as test_session:
+            test_session.add(Job(id="rj", set="s", name="n", owner="o", kind="task",
+                                 state="running", param=None, detail=None, pid=None, drop_done=False))
+            test_session.commit()
+
+        orig_get = Session.get
+        fired = {"done": False}
+        def get_then_cancel(self, *args, **kwargs):
+            result = orig_get(self, *args, **kwargs)
+            if not fired["done"] and result is not None and getattr(result, "id", None) == "rj":
+                fired["done"] = True
+                with Session(get_db_engine()) as cs:
+                    cs.get(Job, "rj").state = "cancel"
+                    cs.commit()
+            return result
+
+        with patch.object(Session, 'get', get_then_cancel):
+            finishJob("rj", "done", "ok")
+
+        with Session(get_db_engine()) as test_session:
+            fetched = test_session.get(Job, "rj")
+            # CAS preserved the cancel that committed under us; finishJob did not
+            # overwrite it with the candidate 'done'.
+            assert fetched.state == "cancel"
 
     @patch('app.runner.lib_runner.find')
     @patch('app.runner.lib_runner.enqueue')
@@ -565,4 +637,96 @@ class TestDaemon:
                 mock_sleep.assert_not_called()
             finally:
                 session.commit = original_commit
+
+
+class TestShutdownContract:
+    """Pyops's shutdown contract: no new pip installs / Popen after a SIGTERM,
+    so an in-flight `ensure_set_environment` is never killed mid-flight and the
+    venv stays consistent. Two pieces:
+      1. `GracefulKiller` flips `kill_now` on signal.
+      2. The runner main loop checks `kill_now` BEFORE `getNextToDo` — claims
+         and spawns are skipped once shutdown is signalled.
+    """
+
+    def test_graceful_killer_sigterm_flips_kill_now(self):
+        import signal
+        from app.runner import GracefulKiller
+        killer = GracefulKiller()
+        assert killer.kill_now is False
+        killer.exit_gracefully(signal.SIGTERM, None)
+        assert killer.kill_now is True
+
+    def test_graceful_killer_sigint_flips_kill_now(self):
+        import signal
+        from app.runner import GracefulKiller
+        killer = GracefulKiller()
+        killer.exit_gracefully(signal.SIGINT, None)
+        assert killer.kill_now is True
+
+    def test_main_loop_skips_spawn_when_kill_now_already_set(self, mock_db):
+        """If `kill_now` is True at the top of the loop, while-check exits
+        and getNextToDo / Popen are never reached — no new claims, no new
+        subprocesses, no new pip installs."""
+        from app import runner
+
+        # Stand-in killer with kill_now pre-set: while-check exits immediately.
+        class _PreKilledKiller:
+            kill_now = True
+            def __init__(self): pass
+            def exit_gracefully(self, *a, **kw): pass
+
+        with patch('app.runner.GracefulKiller', _PreKilledKiller), \
+             patch('app.runner.setup_runner_socket', return_value=(Mock(), Mock(), Mock(**{'poll.return_value': []}))), \
+             patch('app.runner.handleOddJobs'), \
+             patch('app.runner.purgeLeftoverServiceJobs'), \
+             patch('app.runner.cleanup_drop_done_jobs'), \
+             patch('app.runner.getNextToDo') as mock_get_next, \
+             patch('app.runner.subprocess.Popen') as mock_popen, \
+             patch('app.runner.os.environ'), \
+             patch('app.runner.logging.basicConfig'), \
+             patch('app.runner.files.Config.init'):
+            runner.main("data", "127.0.0.1:0", "/venv", "/pkg", {})
+
+        mock_get_next.assert_not_called()
+        mock_popen.assert_not_called()
+
+    def test_main_loop_skips_spawn_when_signal_arrives_mid_iteration(self, mock_db):
+        """Signal arrives during the loop body (after the while-check passed):
+        the in-loop guard before getNextToDo must skip the spawn block.
+        Without it, a fresh pip install would launch right as the worker is
+        about to die — exactly the corruption case we're protecting against.
+        """
+        from app import runner
+
+        class _MidIterKiller:
+            kill_now = False
+            def __init__(self): pass
+            def exit_gracefully(self, *a, **kw):
+                self.kill_now = True
+
+        killer_instance = _MidIterKiller()
+
+        # Flip kill_now early in the iteration body — before the in-loop guard
+        # but after the while-check. disposeJobs runs first inside the body.
+        def _dispose_then_signal():
+            killer_instance.kill_now = True
+
+        with patch('app.runner.GracefulKiller', return_value=killer_instance), \
+             patch('app.runner.setup_runner_socket', return_value=(Mock(), Mock(), Mock(**{'poll.return_value': []}))), \
+             patch('app.runner.handleOddJobs'), \
+             patch('app.runner.purgeLeftoverServiceJobs'), \
+             patch('app.runner.cleanup_drop_done_jobs'), \
+             patch('app.runner.disposeJobs', side_effect=_dispose_then_signal), \
+             patch('app.runner.getNextToDo') as mock_get_next, \
+             patch('app.runner.subprocess.Popen') as mock_popen, \
+             patch('app.runner.time.sleep'), \
+             patch('app.runner.os.environ'), \
+             patch('app.runner.logging.basicConfig'), \
+             patch('app.runner.files.Config.init'):
+            runner.main("data", "127.0.0.1:0", "/venv", "/pkg", {})
+
+        # Body ran one iteration, but kill_now flipped before the spawn-block guard,
+        # so no claim/spawn happened.
+        mock_get_next.assert_not_called()
+        mock_popen.assert_not_called()
 

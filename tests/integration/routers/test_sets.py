@@ -56,6 +56,31 @@ def test_create_set_invalid(mock_conf_data, mock_sets):
     response = client.post("/scriptlet/sets/create", json=data)
     assert response.status_code == 400
 
+def test_create_set_schedules_venv_bootstrap_after_create(mock_conf_data, mock_sets):
+    """Regression: the venv bootstrap (pip install over devpi, 5+ s) must run
+    as a BackgroundTask after the HTTP response is formed, not inline. Order
+    matters: create_set must complete before ensure_set_environment so the
+    git repo exists when bootstrap starts.
+    """
+    call_order = []
+    mock_sets.create_set.side_effect = lambda *a, **kw: call_order.append("create_set") or True
+    mock_sets.ensure_set_environment.side_effect = lambda *a, **kw: call_order.append("ensure_set_environment")
+    response = client.post("/scriptlet/sets/create", json={"name": "bgtest"})
+    assert response.status_code == 200
+    mock_sets.create_set.assert_called_once_with("/tmp/mock_git", "bgtest")
+    mock_sets.ensure_set_environment.assert_called_once_with("bgtest")
+    assert call_order == ["create_set", "ensure_set_environment"]
+
+def test_clone_set_schedules_venv_bootstrap_after_clone(mock_conf_data, mock_sets):
+    """Same regression as above for the clone endpoint."""
+    call_order = []
+    mock_sets.clone_set.side_effect = lambda *a, **kw: call_order.append("clone_set") or "repo"
+    mock_sets.ensure_set_environment.side_effect = lambda *a, **kw: call_order.append("ensure_set_environment")
+    response = client.post("/scriptlet/sets/clone", json={"url": "https://example/repo.git"})
+    assert response.status_code == 200
+    mock_sets.ensure_set_environment.assert_called_once_with("repo")
+    assert call_order == ["clone_set", "ensure_set_environment"]
+
 def test_remove_set(mock_conf_data, mock_sets):
     mock_sets.remove_set.return_value = None
     response = client.delete("/scriptlet/sets/remove/testset")
@@ -99,3 +124,59 @@ def test_pull_set_not_found(mock_conf_data, mock_sets):
     mock_sets.pull_set.side_effect = ValueError("Not found")
     response = client.post("/scriptlet/sets/pull/missing")
     assert response.status_code == 404
+
+
+def test_update_deps_returns_summary_with_conflicts(mock_conf_data, mock_sets):
+    """The endpoint exists, runs `update_set_environment`, and returns its
+    summary verbatim — UI parses `summary.conflicts.{pip,git}` to decide
+    whether to alert the operator."""
+    mock_sets.list_sets.return_value = [{"name": "myset", "branch": "main"}]
+    mock_sets.update_set_environment.return_value = {
+        "set": "myset",
+        "conflicts": {
+            "pip": [{
+                "pkg": "requests",
+                "winner": {"spec": "==2.32.0", "extra": [], "source": "new.task.py", "mtime": 200},
+                "losers": [{"spec": "==2.30.0", "extra": [], "source": "old.task.py", "mtime": 100}],
+            }],
+            "git": [],
+        },
+        "installed": {"pip": [], "git": []},
+    }
+    response = client.post("/scriptlet/sets/update_deps/myset")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["summary"]["conflicts"]["pip"][0]["pkg"] == "requests"
+    mock_sets.update_set_environment.assert_called_once_with("myset")
+
+
+def test_update_deps_clean_returns_empty_conflicts(mock_conf_data, mock_sets):
+    mock_sets.list_sets.return_value = [{"name": "cleanset", "branch": "main"}]
+    mock_sets.update_set_environment.return_value = {
+        "set": "cleanset",
+        "conflicts": {"pip": [], "git": []},
+        "installed": {"pip": [], "git": []},
+    }
+    response = client.post("/scriptlet/sets/update_deps/cleanset")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["summary"]["conflicts"]["pip"] == []
+    assert body["summary"]["conflicts"]["git"] == []
+
+
+def test_update_deps_unknown_set_returns_404(mock_conf_data, mock_sets):
+    mock_sets.list_sets.return_value = [{"name": "alpha", "branch": "main"}]
+    response = client.post("/scriptlet/sets/update_deps/missing")
+    assert response.status_code == 404
+    mock_sets.update_set_environment.assert_not_called()
+
+
+def test_update_deps_install_failure_returns_500(mock_conf_data, mock_sets):
+    """If pip / git fail mid-update (e.g. devpi unreachable, branch gone),
+    surface as HTTP 500 with detail — the UI alerts the operator."""
+    mock_sets.list_sets.return_value = [{"name": "myset", "branch": "main"}]
+    mock_sets.update_set_environment.side_effect = RuntimeError("devpi unreachable")
+    response = client.post("/scriptlet/sets/update_deps/myset")
+    assert response.status_code == 500
+    assert "devpi unreachable" in response.json()["detail"]

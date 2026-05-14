@@ -18,6 +18,7 @@ from .routers.scriptlet import scheduler
 from .routers.scriptlet import editor
 from .routers.scriptlet import sets
 from .routers.scriptlet import jslib
+from .routers import monitoring
 
 from .lib import sites, files, pyops, git, runner
 from .lib.async_utils import run_in_executor
@@ -47,6 +48,7 @@ app.include_router(monitor.router)
 app.include_router(editor.router)
 app.include_router(sets.router)
 app.include_router(jslib.router)
+app.include_router(monitoring.router)
 
 @app.get("/version")
 def get_version():

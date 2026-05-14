@@ -159,22 +159,28 @@ def purgeLeftoverServiceJobs():
 def getNextToDo():
     with Session(get_db_engine()) as session:
         logger.debug(f"getNextToDo: session ID {id(session)} at {datetime.now()}")
-        stmt = select(Job).where(
+        stmt = select(Job.id).where(
             Job.state == "todo"
         ).order_by(Job.id.asc())
 
-        job = session.scalar(stmt)
+        job_id = session.scalar(stmt)
 
-        if job is not None:
-            logger.debug(f"getNextToDo: before commit, session ID {id(session)}, job.state '{job.state}' at {datetime.now()}")
-            job.state = "dequeued"
-            commit_with_retry(session)
-            logger.debug(f"getNextToDo: after commit, session ID {id(session)}, committed 'dequeued' for {job.id} at {datetime.now()}")
-            logger.debug(f"getNextToDo: about to return job.id = '{job.id}'")
-
-            return job.id
-        else:
+        if job_id is None:
             return None
+
+        # Conditional claim: only flip 'todo' → 'dequeued'. If a cancel raced in
+        # between SELECT and UPDATE, the WHERE clause excludes us, affected=0, and
+        # we skip — getNextToTerm will pick the cancel up next iteration.
+        affected = session.query(Job).filter(
+            Job.id == job_id,
+            Job.state == "todo",
+        ).update({Job.state: "dequeued"}, synchronize_session=False)
+        commit_with_retry(session)
+        logger.debug(f"getNextToDo: CAS claim for {job_id} affected={affected} at {datetime.now()}")
+
+        if affected == 0:
+            return None
+        return job_id
 
 def assignJob(job_id: str, pid: int):
     logger.debug(f"assignJob(job_id='{job_id}' pid={pid})")
@@ -212,7 +218,12 @@ def assignJob(job_id: str, pid: int):
         logger.debug(f"assignJob: after commit, session ID {id(session)}, committed pid for {job_id} at {datetime.now()}")
 
 def loadJob(job_id: str):
-    """Loads job code from Git (unstaged if kind=="draft", else committed)."""
+    """Loads job code from Git (unstaged if kind=="draft", else committed).
+
+    Uses an atomic conditional UPDATE on (state == 'dequeued') to flip to 'loading'.
+    If a cancel races in while we read the code from disk, the WHERE clause excludes
+    us and we raise — leaving the cancel state intact for the term-loop to honour.
+    """
     logger.debug(f"loadJob(job_id={job_id})")
 
     with Session(get_db_engine()) as session:
@@ -224,40 +235,56 @@ def loadJob(job_id: str):
             logger.info(f"Skipping loadJob {job_id}: state={job.state}")
             finishJob(job_id, job.state, "state no longer dequeued")
             raise Exception(f"Job {job_id} state changed to {job.state}")
-        old_state = job.state
-        repo = git.get_repo_path(job.set)
-        main_key = f"{job.set}::{job.name}"
+        # Snapshot fields needed for the return tuple — read before we release the
+        # ORM identity for this session via the conditional UPDATE.
+        owner, setname, name, kind, param, overrides, max_retries = (
+            job.owner, job.set, job.name, job.kind, job.param, job.overrides, job.max_retries
+        )
+        repo = git.get_repo_path(setname)
+        main_key = f"{setname}::{name}"
         override_code = None
         override_dict = None
-        if job.overrides:
+        if overrides:
             try:
-                override_dict = json.loads(job.overrides)
+                override_dict = json.loads(overrides)
                 if not isinstance(override_dict, dict):
                     raise Exception("Overrides must be a valid JSON dict")
             except json.JSONDecodeError:
                 raise Exception("Invalid overrides JSON")
             if main_key in override_dict:
                 override_code = override_dict[main_key]
-        committed = job.kind not in ("debug", "draft")
+        committed = kind not in ("debug", "draft")
         if override_code is not None:
             code = override_code
         else:
-            logger.debug(f"loadJob: checking repo '{repo}' for files starting with '{job.name}.' ending '.py'")
-            files_list = [f for f in os.listdir(repo) if f.startswith(f"{job.name}.") and f.endswith('.py')]
+            logger.debug(f"loadJob: checking repo '{repo}' for files starting with '{name}.' ending '.py'")
+            files_list = [f for f in os.listdir(repo) if f.startswith(f"{name}.") and f.endswith('.py')]
             logger.debug(f"loadJob: files_list in '{repo}': {files_list}")
             if not files_list:
-                raise Exception(f"Scriptlet {job.set}::{job.name} not existing")
+                raise Exception(f"Scriptlet {setname}::{name} not existing")
             filename = files_list[0]
             type_ = git.infer_type_from_filename(filename)
-            code = git.read_content(repo, job.name, type_, committed=committed)
-        logger.debug(f"loadJob: before commit, session ID {id(session)}, job.state '{old_state}' to 'loading' for {job_id} at {datetime.now()}")
-        job.state = "loading"
-        job.start = datetime.now()
+            code = git.read_content(repo, name, type_, committed=committed)
 
+        logger.debug(f"loadJob: before CAS commit for {job_id} at {datetime.now()}")
+        affected = session.query(Job).filter(
+            Job.id == job_id,
+            Job.state == "dequeued",
+        ).update({
+            Job.state: "loading",
+            Job.start: datetime.now(),
+        }, synchronize_session=False)
         commit_with_retry(session)
-        logger.debug(f"loadJob: after commit, session ID {id(session)}, committed 'loading' for {job_id} at {datetime.now()}")
+        logger.debug(f"loadJob: after CAS commit, affected={affected} for {job_id} at {datetime.now()}")
 
-        return job.owner, job.set, job.name, job.kind, job.param, code, job.overrides, job.max_retries
+        if affected == 0:
+            session.expire_all()
+            current = session.get(Job, job_id)
+            current_state = current.state if current else "<missing>"
+            logger.info(f"loadJob: CAS lost — {job_id} state is now '{current_state}', aborting spawn")
+            raise Exception(f"Job {job_id} state changed to {current_state} during loadJob")
+
+        return owner, setname, name, kind, param, code, overrides, max_retries
 
 def cleanup_drop_done_jobs():
     logger.debug("cleanup_drop_done_jobs: starting")
@@ -292,33 +319,46 @@ def finishJob(job_id: str, state: str, detail: str):
     with Session(get_db_engine()) as session:
         logger.debug(f"finishJob: session ID {id(session)} at {datetime.now()}")
         job = session.get(Job, job_id)
+        if job is None:
+            return
 
-        if job is not None:
-            old_state = job.state
-            if job.kind == "service" and state == "done" and job.drop_done:
-                new_state = "remove"  # Immediately remove done services
-            elif job.state == "running" and state == "done" and job.drop_done and not job.kind == "debug":
-                new_state = state  # Keep as "done" for delayed removal
-            elif job.state != "cancel" and job.state != "cancelling":
-                new_state = state
-            else:
-                new_state = job.state
+        old_state = job.state
+        # Compute the candidate terminal state from the snapshot. The atomic CASE
+        # below preserves cancel/cancelling regardless of when the cancel commit
+        # lands relative to this function.
+        if job.kind == "service" and state == "done" and job.drop_done:
+            candidate = "remove"  # Immediately remove done services
+        elif old_state == "running" and state == "done" and job.drop_done and not job.kind == "debug":
+            candidate = state  # Keep as "done" for delayed removal
+        else:
+            candidate = state
 
-            job.state = new_state
-            job.end = datetime.now()
-            job.detail = detail
+        if job.kind == "service" and state == "failed":
+            logger.info("finishJob: service %s failed detail='%s'", job_id, detail)
 
-            if job.kind == "service" and state == "failed":
-                logger.info("finishJob: service %s failed detail='%s'", job_id, detail)
+        old_pid = job.pid
+        kind = job.kind
+        owner = job.owner
 
-            old_pid = job.pid
-            job.pid = None
-            logger.debug(f"finishJob({job_id}): before commit, session ID {id(session)}, changing {job_id} from '{old_state}' to '{new_state}' at {datetime.now()}")
-            commit_with_retry(session)
-            logger.debug(f"finishJob({job_id}): after commit, session ID {id(session)}, committed state '{job.state}' for {job_id} at {datetime.now()}")
+        # Atomic UPDATE with CASE: never overwrite a cancel that committed under us.
+        session.query(Job).filter(Job.id == job_id).update({
+            Job.state: case(
+                (Job.state.in_(("cancel", "cancelling")), Job.state),
+                else_=candidate,
+            ),
+            Job.end: datetime.now(),
+            Job.detail: detail,
+            Job.pid: None,
+        }, synchronize_session=False)
+        logger.debug(f"finishJob({job_id}): before commit, session ID {id(session)}, candidate '{candidate}' from old '{old_state}' at {datetime.now()}")
+        commit_with_retry(session)
+        session.expire_all()
+        committed = session.get(Job, job_id)
+        committed_state = committed.state if committed else "<missing>"
+        logger.debug(f"finishJob({job_id}): after commit, session ID {id(session)}, committed state '{committed_state}' for {job_id} at {datetime.now()}")
 
-            if old_pid:
-                threading.Thread(target=terminate_job_processes, args=(job.id, old_pid, job.kind == "debug", job.owner), daemon=True).start()
+        if old_pid:
+            threading.Thread(target=terminate_job_processes, args=(job_id, old_pid, kind == "debug", owner), daemon=True).start()
 
 def disposeJobs():
     with Session(get_db_engine()) as session:
@@ -525,6 +565,17 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
             # clean up drop_done jobs that have been done for delay+ seconds
             cleanup_drop_done_jobs()
 
+            # Once shutdown has been signalled, stop claiming new jobs.
+            # In-flight terminations and ZMQ completions above still run so
+            # already-spawned jobs drain. Any new pip install in
+            # ensure_set_environment (which runs unguarded inside the spawn
+            # block) would risk being killed mid-flight by the upcoming
+            # process exit, corrupting the venv.
+            if killer.kill_now:
+                logger.debug("main: shutdown signalled — skipping getNextToDo")
+                time.sleep(0.5)
+                continue
+
             try:
                 logger.debug("main: calling getNextToDo")
                 job_id = getNextToDo()
@@ -556,7 +607,12 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
                         venv_python = os.path.join(venv_path, setname, 'bin', 'python')
                         json_kwargs = json.dumps({"job_id": job_id, "owner": owner, "setname": setname, "name": name, "kind": kind, "param": param, "code": code, "libs": libs, "overrides": overrides, "runner_sock_path": "/tmp/pyops/runner.sock", "max_retries": max_retries, "port": port, "conf_data": files.conf_data(), "conf_runner": files.conf_runner(), "conf_users": files.conf_users(), "conf_web": files.conf_web()})
                         try:
-                            p = subprocess.Popen([venv_python, os.path.abspath('app/job_runner.py'), json_kwargs], cwd=files.project_root, stdout=sys.stdout, stderr=sys.stderr, text=True)
+                            # Spawn job_setup.py — it runs the pip/git directive
+                            # installs under the per-set bootstrap lock, then
+                            # os.execv's into job_runner.py in the same PID with
+                            # a fresh interpreter that picks up any new .pth
+                            # files from `pip install -e` at startup.
+                            p = subprocess.Popen([venv_python, os.path.abspath('app/job_setup.py'), json_kwargs], cwd=files.project_root, stdout=sys.stdout, stderr=sys.stderr, text=True)
                         except Exception as e:
                             finishJob(job_id, "failed", f"Launch failed: {e}")
                             continue

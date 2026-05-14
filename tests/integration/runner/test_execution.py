@@ -277,10 +277,10 @@ class TestExecution:
         stderr_file = io.StringIO()
         result = process_install_lines(lines, venv_path, pkg_path, set, id, stdout_file, stderr_file)
         assert result == lines
-        # Check that pip install was called
-        assert mock_run.call_count == 2
-        expected_cmd = f". {venv_path}/testset/bin/activate && pip install --no-cache-dir --upgrade --upgrade-strategy eager requests"
-        mock_run.assert_called_with(expected_cmd, shell=True, stdout=stdout_file, stderr=stderr_file, text=True, check=True)
+        # Per-job: single pip call, no bootstrap upgrade, no --upgrade flag.
+        assert mock_run.call_count == 1
+        pip_path = os.path.join(venv_path, set, 'bin', 'pip')
+        mock_run.assert_called_with([pip_path, 'install', '--no-cache-dir', 'requests'], stdout=stdout_file, stderr=stderr_file, text=True, check=True)
 
     @patch('os.makedirs')
     @patch('app.job_runner.subprocess.run')
@@ -300,10 +300,9 @@ class TestExecution:
         stderr_file = io.StringIO()
         result = process_install_lines(lines, venv_path, pkg_path, set, id, stdout_file, stderr_file)
         assert result == lines
-        # Check that pip install was called
-        assert mock_run.call_count == 2
-        expected_cmd = f". {venv_path}/testset/bin/activate && pip install --no-cache-dir --upgrade --upgrade-strategy eager torch --index-url https://download.pytorch.org/whl/cu130"
-        mock_run.assert_called_with(expected_cmd, shell=True, stdout=stdout_file, stderr=stderr_file, text=True, check=True)
+        assert mock_run.call_count == 1
+        pip_path = os.path.join(venv_path, set, 'bin', 'pip')
+        mock_run.assert_called_with([pip_path, 'install', '--no-cache-dir', 'torch', '--index-url', 'https://download.pytorch.org/whl/cu130'], stdout=stdout_file, stderr=stderr_file, text=True, check=True)
 
     @patch('os.makedirs')
     @patch('app.job_runner.subprocess.run')
@@ -321,9 +320,10 @@ class TestExecution:
         stderr_file = io.StringIO()
         result = process_install_lines(lines, venv_path, pkg_path, set, id, stdout_file, stderr_file)
         assert result == lines
-        # Should call bootstrap but not install commands for lib directives
-        pip_calls = [call for call in mock_run.call_args_list if 'pip' in str(call)]
-        assert len(pip_calls) == 1
+        # Library directive (#!{set::name}) is handled by process_imports, not
+        # process_install_lines — it's skipped here. With the per-job no-bootstrap
+        # change there are no pip subprocess calls at all.
+        assert mock_run.call_count == 0
 
     @patch('subprocess.run')
     @patch('os.path.exists')
@@ -362,8 +362,8 @@ class TestExecution:
         process_install_lines(lines, venv_path, pkg_path, set, id, stdout_file, stderr_file)
         pip_path = os.path.join(venv_path, set, 'bin', 'pip')
         repo_dir = os.path.join(pkg_path, set, 'repo')
-        # Check pip install -e called
-        mock_run.assert_any_call([pip_path, 'install', '--no-cache-dir', '--upgrade', '--upgrade-strategy', 'eager', '-e', repo_dir], stdout=stdout_file, stderr=stderr_file, text=True, check=True)
+        # Per-job: pip install -e without --upgrade.
+        mock_run.assert_any_call([pip_path, 'install', '--no-cache-dir', '-e', repo_dir], stdout=stdout_file, stderr=stderr_file, text=True, check=True)
 
     @patch('subprocess.run')
     @patch('os.path.exists')
@@ -371,7 +371,9 @@ class TestExecution:
         from app.lib.job import process_install_lines
         import io
         from subprocess import CalledProcessError
-        mock_run.side_effect = [Mock(returncode=0), Mock(returncode=0, stderr=""), CalledProcessError(1, 'pip', stderr='no setup.py')]  # bootstrap, clone success, pip fail
+        # Per-job: no bootstrap upgrade, so the call sequence is just clone,
+        # then pip install -e.
+        mock_run.side_effect = [Mock(returncode=0, stderr=""), CalledProcessError(1, 'pip', stderr='no setup.py')]
         mock_exists.return_value = False  # repo_dir not exist
         lines = ["#! https://repo.git"]
         venv_path = os.path.join(tmp_path, "venv")
@@ -388,7 +390,9 @@ class TestExecution:
     def test_process_install_lines_git_error(self, mock_run, mock_makedirs, mock_conf, tmp_path):
         from app.lib.job import process_install_lines
         import io
-        mock_run.side_effect = [Mock(returncode=0), Mock(returncode=1, stderr="clone fail")]
+        # Per-job: no bootstrap upgrade, the first subprocess call is the clone
+        # itself which fails.
+        mock_run.side_effect = [Mock(returncode=1, stderr="clone fail")]
         lines = ["#! https://fail.git"]
         venv_path = os.path.join(tmp_path, "venv")
         pkg_path = os.path.join(tmp_path, "pkg")
@@ -409,7 +413,8 @@ class TestExecution:
         stderr_file = io.StringIO()
         result = process_install_lines(lines, venv_path, "/pkg", "testset", "id", stdout_file, stderr_file)
         assert result == lines
-        assert mock_run.call_count == 1
+        # No #! lines and no bootstrap upgrade → no subprocess calls.
+        assert mock_run.call_count == 0
 
     def test_shutdown_updates_running_jobs_to_cancelled(self, mock_conf, mock_db):
         from sqlalchemy import select

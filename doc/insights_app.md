@@ -20,7 +20,8 @@ graph TD
     B --> K[routers/ - API Endpoints]
     B --> L[orm/ - Database Models]
     B --> M[sites/ - HTML Views]
-    B --> N[job_runner.py - Subprocess Entry]
+    B --> N1[job_setup.py - Install Phase]
+    B --> N2[job_runner.py - Execute Phase]
     B --> O[files/ - Static Assets]
 ```
 
@@ -65,12 +66,13 @@ graph TD
 |------|------|
 | `app/web.py` | FastAPI app, routes, controller proxy |
 | `app/runner.py` | Background daemon: polls DB, spawns jobs, handles ZMQ |
-| `app/job_runner.py` | Subprocess entry point: executes inside per-set venv |
+| `app/job_setup.py` | First-phase subprocess: per-set venv, runs directive installs under bootstrap lock, then `os.execv`s into job_runner.py |
+| `app/job_runner.py` | Second-phase subprocess (post-execv): same PID, fresh interpreter; executes user code |
 | `app/gunicorn.py` | WSGI config; also spawns the runner process |
 | `app/lib/files.py` | Config access (`etc/pyops.json`) |
 | `app/lib/git.py` | Scriptlet storage in Git repos |
 | `app/lib/runner.py` | DB-level job utilities: `enqueue`, `query`, `find`, `cancel`, `remove`, `drop` |
-| `app/lib/job.py` | Execution utilities: `send_completion`, `terminate_debugpy_adapter`, `process_imports`, `process_install_lines`, `process_code_installs`, `kill_proc_tree`, `get_process_tree`, `get_debug_port`, `get_debugpy_adapter_pid`, `has_debugpy_adapter`, `validate_debug_prerequisites`, `loadLib`, `install_git_repo` |
+| `app/lib/job.py` | Execution utilities: `send_completion`, `terminate_debugpy_adapter`, `process_imports`, `process_install_lines`, `process_code_installs` (acquires `sets.set_install_lock`), `kill_proc_tree`, `get_process_tree`, `get_debug_port`, `get_debugpy_adapter_pid`, `has_debugpy_adapter`, `validate_debug_prerequisites`, `loadLib`, `install_git_repo` |
 | `app/lib/pyops.py` | `Control` (API proxy), `ServiceListener`, `ServiceClient` |
 | `app/lib/sets.py` | Git set management (clone, remove, switch branch) |
 | `app/lib/sites.py` | Site rendering utilities |
@@ -205,7 +207,9 @@ flowchart TD
 
 ## Job Execution
 
-The execution pipeline spans three components: `app/runner.py` (daemon), `app/job_runner.py` (subprocess entry), and `app/lib/job.py` (shared utilities).
+The execution pipeline spans four components: `app/runner.py` (daemon, host venv), `app/job_setup.py` (first phase in per-set venv), `app/job_runner.py` (second phase in per-set venv, fresh interpreter), and `app/lib/job.py` (shared utilities).
+
+The two-phase split (`job_setup.py` → `os.execv` → `job_runner.py`) exists so editable installs (`pip install -e`) take effect before user code runs. `pip install -e` writes a `.pth` file that Python only reads at interpreter startup via `site.py`. Running installs inside the *same* interpreter that then tries to `import` the new package fails with `ModuleNotFoundError` (the running `sys.path` is frozen). Separating install from execution into two interpreters — the second one launched via `os.execv` so the PID stays the same and runner-side process tracking is unaffected — lets `site.py` ingest every `.pth` on the runner's fresh startup. From the runner's perspective there is still exactly one Popen per job.
 
 ### Runner Daemon (`app/runner.py`)
 
@@ -243,8 +247,10 @@ flowchart TD
 graph TD
     A[Runner] --> B[ensure_set_environment]
     B --> C[venv/bin/python]
-    C --> D["Popen: python job_runner.py json_kwargs"]
-    D --> E[Isolated Job Execution in Workspace]
+    C --> D["Popen: python job_setup.py json_kwargs"]
+    D --> E["Phase 1: process_code_installs (lock-held)"]
+    E --> F["os.execv → job_runner.py (same PID, fresh interpreter)"]
+    F --> G[Phase 2: Isolated Job Execution in Workspace]
 ```
 
 - `loadJob(job_id)`: fetches from DB, sets state `loading`, returns owner, set, name, kind, param, code, overrides, max_retries
@@ -266,9 +272,24 @@ graph TD
 3. Poll `has_debugpy_adapter(port)` up to 50×0.1s (5s); if adapter absent and process alive → `finishJob("failed", ...)`
 4. `assignJob` only called after adapter confirmed up
 
+### Job Setup (`app/job_setup.py`)
+
+First-phase subprocess; the runner Popens this entry point with the venv's Python and the JSON kwargs. Single responsibility:
+
+1. Read kwargs from `sys.argv[1]`.
+2. Create the workspace at `data/jobs/{set}/{job_id}/`, `chdir` into it.
+3. Open `stdout.log` and `stderr.log` in `'w'` mode (truncate; this is the first interpreter to touch the workspace).
+4. Call `job_lib.process_code_installs(...)` — which acquires `sets.set_install_lock(set)` and runs every `#!pip` / `#!<git-url>` directive in param, libs, and code under one lock for *job-level atomicity*.
+5. Close the log files.
+6. `os.execv(venv_python, [venv_python, "job_runner.py", json_kwargs])` — replaces this process image. PID stays the same; the new interpreter runs `site.py` at startup and ingests any `.pth` files written by the editable installs in step 4.
+
+On install failure: writes the error trace to `stderr.log`, calls `job_lib.send_completion(...)` with `state="failed"`, exits 1, never reaches `os.execv`. The runner sees the same ZMQ completion message it would from `job_runner.py`, so the job is marked failed without waiting for stale-PID detection.
+
 ### Job Runner (`app/job_runner.py`)
 
-Subprocess entry point; runs inside per-set venv. Receives all config as JSON kwargs on command line (no file reads). Dispatches to `run_task_job`, `run_service_job`, `run_debug_job`, `run_draft_job`.
+Second-phase subprocess (post-execv); runs inside per-set venv with `site.py` already having loaded every editable install's `.pth`. Receives all config as JSON kwargs on command line (no file reads). Dispatches to `run_task_job`, `run_service_job`, `run_debug_job`, `run_draft_job`.
+
+Opens `stdout.log` and `stderr.log` in `'a'` mode so the install logs written by `job_setup.py` are preserved above the user-code output.
 
 #### Config Isolation
 
@@ -278,11 +299,10 @@ Config dicts (`conf_data`, `conf_runner`, `conf_users`, `conf_web`) are passed a
 graph TD
     A[main kwargs] --> B["_conf_data/_conf_runner/_conf_users/_conf_web = kwargs"]
     B --> C["run_task_job / run_service_job / run_debug_job / run_draft_job"]
-    C --> D["setup_workspace(data_jobs, set, job_id)"]
-    D --> E["setup_execution_environment → open stdout.log/stderr.log"]
+    C --> D["setup_workspace(data_jobs, set, job_id) idempotent"]
+    D --> E["setup_execution_environment → stdout.log/stderr.log in 'a' mode"]
     E --> F["with redirect_stdout/redirect_stderr"]
-    F --> G["process_code_installs → pip/git installs to files"]
-    G --> H["compile code objects"]
+    F --> H["compile code objects (installs already done in job_setup.py)"]
     H --> I["setup_job_globals → setup_logging"]
     I --> J["execute_job_code → exec(param/libs/code)"]
     J --> K["send_completion ZMQ"]
@@ -349,10 +369,33 @@ Directive type detection:
 
 #### Install Processing: `process_install_lines()` / `process_code_installs()`
 
-`process_code_installs()` applies `process_install_lines()` to param, libs, and code in order. `process_install_lines()` bootstraps pip/setuptools/wheel first, then for each `#!` line:
-- **pip**: `pip install --no-cache-dir --upgrade --upgrade-strategy eager {args}`
-- **git**: clones to `data/pkg/{set}/{repo}/` or pulls if exists; then `pip install -e`
+`process_code_installs()` short-circuits to a no-op when no input contains a real install directive (the common case), otherwise acquires `sets.set_install_lock(set)` and holds it across all three sub-calls (param, libs, code) — *job-level atomicity*: another job in the same set cannot slip between this job's param-install and libs-install and swap a package version. Jobs in *different* sets each have their own lock file and remain parallel. The same lock is held by `ensure_set_environment` / `remove_set_environment` / `update_set_environment`, so an HTTP `remove_set` or "Update Dependencies" click lands after — never during — a directive install.
+
+Both `process_code_installs()` and `process_install_lines()` take an `upgrade: bool = False` parameter. **Per-job (`upgrade=False`)**: plain `pip install <pkg>` and no `git pull` on existing repos. Already-installed packages and existing checkouts are reused as-is — no index lookups, no network round-trips, milliseconds per directive. **Update Dependencies (`upgrade=True`)**: `pip install --upgrade --upgrade-strategy eager` and `git pull` on existing repos.
+
+For each `#!` line:
+- **pip**: `pip install --no-cache-dir [--upgrade --upgrade-strategy eager] {args}`
+- **git**: clones to `data/pkg/{set}/{repo}/` or `checkout`s the requested branch on existing; `git pull` only on the upgrade path; then `pip install -e` (with optional `--upgrade`)
 - **library**: skipped (handled by `process_imports`)
+
+Installs run inside `job_setup.py` — before `os.execv` into `job_runner.py`. By the time user code attempts an `import`, the second interpreter has already loaded every `.pth` file via `site.py`.
+
+#### "Update Dependencies" — set-level operator action
+
+`POST /scriptlet/sets/update_deps/{name}` → `sets.update_set_environment(name)`. Synchronous; the operator clicks the button and gets the conflict summary in the response.
+
+1. Acquires `set_install_lock(name)` for the full duration; running jobs in the same set queue behind, other sets are unaffected.
+2. Upgrades pyops core deps: `pip install --upgrade pip setuptools wheel` then `pip install --upgrade pyzmq msgpack psutil debugpy requests`. Two calls because pip cannot upgrade itself in the same invocation that installs other packages (certifi vendor path issue).
+3. Walks `data/git/{name}/*.py` for `#!`-prefixed install directives. Each directive is annotated with `source` (file basename) and `mtime` (filesystem mtime, so unstaged edits count — git commit time would miss them).
+4. **Conflict resolution**: aggregate by canonical pip package name (PEP 503 normalized) and git URL.
+   - All scriptlets agree on the spec/branch → use the unified spec.
+   - Any disagreement → **newest-mtime-wins**. Logged via `logger.warning(...)` and recorded in the conflict list.
+   - This pre-empts pip resolve failures from impossible-constraint situations like `>=2.0` AND `<1.5` — pip only ever sees the survivor spec.
+5. Reconstructs synthetic `#!` lines from the survivors and feeds them to `process_install_lines(upgrade=True)` — same code path as the job-time installs, just in upgrade mode.
+6. Writes `data/git/{name}/.update_warnings.json` with the conflict summary (always; empty conflicts overwrite a previous warning state).
+7. Returns the summary as the HTTP response.
+
+`/health` reads every set's `.update_warnings.json` (`_collect_dependency_conflicts`); any non-empty conflicts flip status to `degraded` and surface under `dependency_conflicts: [...]` so a monitoring system polling `/health` can alert on them.
 
 ### Debug Mode
 
@@ -465,8 +508,22 @@ All routers mount under `/scriptlet/`. Owner resolved from `X-User` header (defa
 | `scheduler.py` | `/scriptlet/scheduler/` | Activate cron triggers; UI |
 | `manager.py` | `/scriptlet/manager/` | Bulk ops UI |
 | `monitor.py` | `/scriptlet/monitor/` | Job/schedule state listing UI |
-| `sets.py` | `/scriptlet/sets/` | Git set management (clone, switch branch, remove) |
+| `sets.py` | `/scriptlet/sets/` | Git set management (clone, switch branch, remove, **`update_deps`** for the per-set "Update Dependencies" flow) |
 | `jslib.py` | `/scriptlet/jslib/{set}/{name}` | Serve JS libraries |
+
+### Monitoring Router (`app/routers/monitoring.py`)
+
+Mounted at root (no `/scriptlet/` prefix). Unauthenticated — designed to be scraped from `localhost` and behind reverse-proxy ACLs.
+
+| Endpoint | Format | Purpose |
+|----------|--------|---------|
+| `GET /health` | JSON | Aggregated status (`ok` / `degraded` / `fail`); checks DB, runner socket, data dirs, ulimits, GPU, **dependency_conflicts**; returns 503 only when DB unreachable. `degraded` if any failed jobs exist, a subsystem is unhealthy, or any set has non-empty `.update_warnings.json` from the last "Update Dependencies" run. |
+| `GET /health/failed` | JSON | All failed jobs (no pagination), full detail (`set`, `name`, `kind`, `owner`, `detail`, `start`, `end`); newest first. Lets the monitoring side filter by set or scriptlet name. |
+| `GET /metrics` | Prometheus exposition (`text/plain; version=0.0.4`) | All gauges; per-state job counts, per-(set,name,state) breakdown, separate `pyops_service_jobs`, ulimit gauges (`pyops_open_fds`, `pyops_max_fds_soft`, `pyops_threads`, `pyops_max_nproc_soft`), `pyops_gpu_ok{status}` plus dedicated `pyops_gpu_reboot_required` flag, `pyops_oldest_todo_age_seconds`, `pyops_last_completed_seconds`. |
+
+GPU check distinguishes `ok`, `no_gpu_expected` (no `nvidia-smi` and no `/dev/nvidia*`), `reboot_required` (nvidia-smi reports "Driver/library version mismatch"), `fail`, `missing_smi`, `timeout`, `unknown`. The reboot-required path was added because driver/runtime mismatches after a kernel update otherwise present as silent CUDA-init failures inside jobs.
+
+Ulimit check tracks RLIMIT_NOFILE and RLIMIT_NPROC against current usage from `/proc/self/fd` and `psutil`; flips to `degraded` once usage crosses 80% of the soft limit, so an FD/thread leak is caught before the process actually hits the wall.
 
 ---
 
@@ -545,7 +602,7 @@ flowchart TD
     A["run.sh: gunicorn --capture-output"] --> B["app/gunicorn.py: spawn runner"]
     B --> C["runner.py: StreamHandler(sys.stdout/stderr)"]
     C --> D["Gunicorn: unified stdout/stderr stream"]
-    B --> E["Spawn job_runner.py stdout=sys.stdout stderr=sys.stderr"]
+    B --> E["Spawn job_setup.py → execv → job_runner.py, stdout=sys.stdout stderr=sys.stderr"]
     E --> F["job_runner: redirect_stdout/stderr → stdout.log/stderr.log"]
     F --> G["Job workspace: isolated per-job output files"]
 ```

@@ -32,6 +32,13 @@ class ScheduleArgument(BaseModel):
     max_retries: int = 0
     schedule: str
     param: str
+    # Whether the schedule starts active. Defaults to True for backwards
+    # compatibility with the UI's "create then deactivate" pattern. Tests
+    # that need to avoid the auto-start race window (between create-active
+    # and an explicit deactivate) pass `active=False` to skip the window
+    # entirely. Honored only on create — updates do not change `active`
+    # (use the dedicated activate/deactivate endpoints).
+    active: bool = True
 
 @router.get("/scriptlet/schedule/list", tags=["schedule"])
 async def list_get():
@@ -143,7 +150,7 @@ async def item_put(cr: ScheduleArgument, user: str = Depends(get_current_user)):
                     set       = cr.set,
                     name        = cr.name,
                     owner       = user,
-                    active      = True,
+                    active      = cr.active,
                     drop_done   = cr.drop_done,
                     max_retries = cr.max_retries,
                     schedule    = cr.schedule,
