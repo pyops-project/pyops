@@ -209,9 +209,14 @@ def process_install_lines(lines, venv_path: str, pkg_path: str, set: str, job_id
             arg1 = parts[0].strip()
             arg2 = parts[1].strip() if len(parts) > 1 else None
             if '://' in arg1 or arg1.startswith('git@'):
-                repo_name = os.path.splitext(os.path.basename(arg1))[0]
-                # Sanitize for Python import (e.g., 'my-lib-1.0' -> 'my_lib_1_0')
-                repo_name = re.sub(r'[^\w]', '_', repo_name)
+                # Mirrors app/internal/set_update_deps.task.py::_install_git
+                # so both paths land in the same directory. Strip a trailing
+                # `.git` only — the package is reached via `pip install -e`
+                # which resolves the name from setup.py/pyproject.toml, so
+                # the directory name doesn't need to be a Python identifier.
+                repo_name = os.path.basename(arg1.rstrip('/'))
+                if repo_name.endswith('.git'):
+                    repo_name = repo_name[:-4]
                 repo_dir = os.path.join(pkg_path, set, repo_name)
                 if not os.path.exists(repo_dir):
                     clone_args = ['clone', arg1, repo_dir]

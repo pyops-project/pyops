@@ -1,0 +1,98 @@
+<div class="table-responsive">
+    <table class="table table-secondary" data-testid="sets-table">
+        <thead>
+            <tr>
+                <th scope="col">Name</th>
+                <th scope="col">Branch</th>
+                <th scope="col">Actions</th>
+            </tr>
+        </thead>
+        <tbody id="sets" data-testid="sets-rows"></tbody>
+    </table>
+</div>
+
+<!-- Clone modal -->
+<div class="modal fade" data-bs-backdrop="static" id="cloneModal" tabindex="-1" aria-hidden="true" data-testid="sets-clone-modal">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Clone Set</h5>
+                <p id="cloneModal-error" class="text-danger" data-testid="sets-clone-error"></p>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label for="cloneModal-url" class="col-form-label">URL:</label>
+                    <input id="cloneModal-url" type="text" class="form-control" data-testid="sets-clone-url">
+                </div>
+                <div class="mb-3">
+                    <label for="cloneModal-username" class="col-form-label">Username (optional):</label>
+                    <input id="cloneModal-username" type="text" class="form-control" data-testid="sets-clone-username">
+                </div>
+                <div class="mb-3">
+                    <label for="cloneModal-password" class="col-form-label">Password (optional):</label>
+                    <input id="cloneModal-password" type="password" class="form-control" data-testid="sets-clone-password">
+                </div>
+                <div class="mb-3">
+                    <label for="cloneModal-git_name" class="col-form-label">Git Name:</label>
+                    <input id="cloneModal-git_name" type="text" class="form-control" data-testid="sets-clone-git-name">
+                </div>
+                <div class="mb-3">
+                    <label for="cloneModal-git_email" class="col-form-label">Git Email:</label>
+                    <input id="cloneModal-git_email" type="text" class="form-control" data-testid="sets-clone-git-email">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-danger" data-bs-dismiss="modal" data-testid="sets-clone-cancel">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="onCloneSubmit()" data-testid="sets-clone-submit">Clone</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Create modal -->
+<div class="modal fade" data-bs-backdrop="static" id="createModal" tabindex="-1" aria-hidden="true" data-testid="sets-create-modal">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Create Set</h5>
+                <p id="createModal-error" class="text-danger" data-testid="sets-create-error"></p>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label for="createModal-name" class="col-form-label">Name:</label>
+                    <input id="createModal-name" type="text" class="form-control" data-testid="sets-create-name">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-danger" data-bs-dismiss="modal" data-testid="sets-create-cancel">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="onCreateSubmit()" data-testid="sets-create-submit">Create</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Switch branch modal -->
+<div class="modal fade" data-bs-backdrop="static" id="switchModal" tabindex="-1" aria-hidden="true" data-testid="sets-switch-modal">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Switch Branch</h5>
+                <p id="switchModal-error" class="text-danger" data-testid="sets-switch-error"></p>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label class="col-form-label">Set:</label>
+                    <input id="switchModal-name" type="text" class="form-control" disabled data-testid="sets-switch-name">
+                </div>
+                <div class="mb-3">
+                    <label for="switchModal-branch" class="col-form-label">Branch:</label>
+                    <input id="switchModal-branch" type="text" class="form-control" data-testid="sets-switch-branch">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-danger" data-bs-dismiss="modal" data-testid="sets-switch-cancel">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="onSwitchSubmit()" data-testid="sets-switch-submit">Switch</button>
+            </div>
+        </div>
+    </div>
+</div>

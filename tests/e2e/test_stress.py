@@ -50,9 +50,9 @@ def _api_session():
     return session
 
 
-def _create_set(name):
+def _create_set(name, set_factory):
     api = _api_session()
-    resp = api.post("/scriptlet/sets/create", json={"name": name})
+    resp = set_factory(name)
     api.close()
     return resp
 
@@ -184,14 +184,14 @@ def _check_result(resp, label):
 class TestConcurrentScriptletOps:
     """Hammer the inventory API with concurrent creates, saves, reads."""
 
-    def test_concurrent_creates_in_same_set(self, api, pyops_server):
+    def test_concurrent_creates_in_same_set(self, api, pyops_server, set_factory):
         """Create many scriptlets in one set concurrently.
 
         Some may fail with git contention — verify most succeed and
         the final state is consistent.
         """
         set_name = f"{SET_PREFIX}_creates"
-        api.post("/scriptlet/sets/create", json={"name": set_name})
+        set_factory(set_name)
 
         count = 10
 
@@ -218,14 +218,14 @@ class TestConcurrentScriptletOps:
             allow=_GIT_CONTENTION_LOG_ALLOW
         )
 
-    def test_concurrent_saves_same_scriptlet(self, api, pyops_server):
+    def test_concurrent_saves_same_scriptlet(self, api, pyops_server, set_factory):
         """Concurrent committed saves to the same scriptlet.
 
         Under contention, git commit may fail with "nothing to commit"
         or index.lock errors.  The final file must be readable.
         """
         set_name = f"{SET_PREFIX}_saves"
-        api.post("/scriptlet/sets/create", json={"name": set_name})
+        set_factory(set_name)
         resp = _create_scriptlet(set_name, "target")
         assert resp.status_code == 200
 
@@ -252,10 +252,10 @@ class TestConcurrentScriptletOps:
             allow=_GIT_CONTENTION_LOG_ALLOW
         )
 
-    def test_concurrent_drafts_same_scriptlet(self, api, pyops_server):
+    def test_concurrent_drafts_same_scriptlet(self, api, pyops_server, set_factory):
         """Concurrent draft saves (no git commit) should ALL succeed."""
         set_name = f"{SET_PREFIX}_drafts"
-        api.post("/scriptlet/sets/create", json={"name": set_name})
+        set_factory(set_name)
         resp = _create_scriptlet(set_name, "drafted")
         assert resp.status_code == 200
 
@@ -276,10 +276,10 @@ class TestConcurrentScriptletOps:
 
         pyops_server.assert_no_unexpected_errors()
 
-    def test_concurrent_reads_and_writes(self, api, pyops_server):
+    def test_concurrent_reads_and_writes(self, api, pyops_server, set_factory):
         """Mix reads and draft writes to the same scriptlet concurrently."""
         set_name = f"{SET_PREFIX}_rw"
-        api.post("/scriptlet/sets/create", json={"name": set_name})
+        set_factory(set_name)
         resp = _create_scriptlet(set_name, "mixed")
         assert resp.status_code == 200
         _save_code(set_name, "mixed", 'print("initial")\n')
@@ -308,13 +308,13 @@ class TestConcurrentScriptletOps:
 
         pyops_server.assert_no_unexpected_errors()
 
-    def test_concurrent_creates_across_sets(self, api, pyops_server):
+    def test_concurrent_creates_across_sets(self, api, pyops_server, set_factory):
         """Create scriptlets across multiple sets concurrently."""
         set_count = 4
         scripts_per_set = 5
 
         for i in range(set_count):
-            api.post("/scriptlet/sets/create", json={"name": f"{SET_PREFIX}_multi_{i}"})
+            set_factory(f"{SET_PREFIX}_multi_{i}")
 
         def worker(si, ti):
             set_name = f"{SET_PREFIX}_multi_{si}"
@@ -343,21 +343,21 @@ class TestConcurrentScriptletOps:
 class TestConcurrentJobExecution:
     """Run multiple jobs concurrently and verify all complete."""
 
-    def _setup_task(self, api, set_name, task_name, code):
-        api.post("/scriptlet/sets/create", json={"name": set_name})
+    def _setup_task(self, api, set_name, task_name, code, set_factory):
+        set_factory(set_name)
         resp = _create_scriptlet(set_name, task_name)
         assert resp.status_code == 200
         resp = _save_code(set_name, task_name, code)
         assert resp.status_code == 200
 
-    def test_concurrent_job_enqueue_and_run(self, api, pyops_server):
+    def test_concurrent_job_enqueue_and_run(self, api, pyops_server, set_factory):
         """Enqueue multiple tasks at once; most should reach done state."""
         set_name = f"{SET_PREFIX}_jobs"
-        self._setup_task(
-            api,
+        self._setup_task(api,
             set_name,
             "worker",
             'import time; time.sleep(0.2); print("done")\n',
+        set_factory,
         )
 
         job_count = 6
@@ -381,14 +381,14 @@ class TestConcurrentJobExecution:
 
         pyops_server.assert_no_unexpected_errors()
 
-    def test_concurrent_jobs_and_inventory_ops(self, api, pyops_server):
+    def test_concurrent_jobs_and_inventory_ops(self, api, pyops_server, set_factory):
         """Run jobs while also doing draft saves in parallel."""
         set_name = f"{SET_PREFIX}_mixed"
-        self._setup_task(
-            api,
+        self._setup_task(api,
             set_name,
             "busy",
             'import time; time.sleep(0.5); print("ok")\n',
+        set_factory,
         )
         resp = _create_scriptlet(set_name, "editable")
         assert resp.status_code == 200
@@ -425,14 +425,14 @@ class TestConcurrentJobExecution:
 
         pyops_server.assert_no_unexpected_errors()
 
-    def test_rapid_enqueue_same_task(self, api, pyops_server):
+    def test_rapid_enqueue_same_task(self, api, pyops_server, set_factory):
         """Rapidly enqueue the same task many times; all should complete."""
         set_name = f"{SET_PREFIX}_rapid"
-        self._setup_task(
-            api,
+        self._setup_task(api,
             set_name,
             "quick",
             'print("fast")\n',
+        set_factory,
         )
 
         job_count = 10
@@ -456,14 +456,14 @@ class TestConcurrentJobExecution:
 class TestLockContention:
     """Specifically target repo_lock contention patterns."""
 
-    def test_interleaved_commit_and_draft_same_file(self, api, pyops_server):
+    def test_interleaved_commit_and_draft_same_file(self, api, pyops_server, set_factory):
         """Alternate between committed saves and draft writes.
 
         Commits may fail under contention; drafts should all succeed.
         No deadlocks or crashes.
         """
         set_name = f"{SET_PREFIX}_lock"
-        api.post("/scriptlet/sets/create", json={"name": set_name})
+        set_factory(set_name)
         resp = _create_scriptlet(set_name, "contested")
         assert resp.status_code == 200
 
@@ -499,10 +499,10 @@ class TestLockContention:
             allow=_GIT_CONTENTION_LOG_ALLOW
         )
 
-    def test_concurrent_create_and_delete(self, api, pyops_server):
+    def test_concurrent_create_and_delete(self, api, pyops_server, set_factory):
         """Create and delete scriptlets concurrently in the same set."""
         set_name = f"{SET_PREFIX}_cd"
-        api.post("/scriptlet/sets/create", json={"name": set_name})
+        set_factory(set_name)
 
         for i in range(5):
             resp = _create_scriptlet(set_name, f"pre_{i}")
@@ -537,11 +537,11 @@ class TestLockContention:
             allow=_GIT_CONTENTION_LOG_ALLOW
         )
 
-    def test_concurrent_operations_across_sets(self, api, pyops_server):
+    def test_concurrent_operations_across_sets(self, api, pyops_server, set_factory):
         """Operations on different sets use separate locks — should not interfere."""
         set_count = 3
         for i in range(set_count):
-            api.post("/scriptlet/sets/create", json={"name": f"{SET_PREFIX}_iso_{i}"})
+            set_factory(f"{SET_PREFIX}_iso_{i}")
             resp = _create_scriptlet(f"{SET_PREFIX}_iso_{i}", "target")
             assert resp.status_code == 200
 
@@ -575,10 +575,10 @@ class TestLockContention:
             allow=_GIT_CONTENTION_LOG_ALLOW
         )
 
-    def test_no_deadlock_under_sustained_load(self, api, pyops_server):
+    def test_no_deadlock_under_sustained_load(self, api, pyops_server, set_factory):
         """Sustained mixed operations complete within timeout (no deadlock)."""
         set_name = f"{SET_PREFIX}_deadlock"
-        api.post("/scriptlet/sets/create", json={"name": set_name})
+        set_factory(set_name)
         resp = _create_scriptlet(set_name, "target")
         assert resp.status_code == 200
 

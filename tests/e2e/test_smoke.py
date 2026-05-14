@@ -43,49 +43,29 @@ class TestServerStartup:
         pyops_server.assert_no_unexpected_errors()
 
     def test_empty_job_list(self, api, pyops_server):
-        """Fresh instance has no jobs."""
+        """Fresh instance has no USER jobs.
+
+        The pyops-internal essential service `internal::data` is always
+        enqueued by the runner schedule loop on every boot — its job id
+        follows the `system_internal_data_<timestamp>` pattern, so filter
+        on the id prefix (the list endpoint does not return `set`/`name`)."""
         resp = api.get("/scriptlet/job/list")
         assert resp.status_code == 200
-        assert resp.json() == []
+        user_jobs = [j for j in resp.json() if not j["id"].startswith("system_internal_data_")]
+        assert user_jobs == []
         pyops_server.assert_no_unexpected_errors()
 
-    def test_no_unexpected_errors_on_startup(self, pyops_server):
+    def test_no_unexpected_errors_on_startup(self, pyops_server, set_factory):
         """Server starts without any unexpected errors in the log."""
-        pyops_server.assert_no_unexpected_errors()
-
-
-class TestSetManagement:
-    """Workflow: create a set, verify it appears, remove it."""
-
-    def test_create_and_list_set(self, api, pyops_server):
-        resp = api.post("/scriptlet/sets/create", json={"name": "e2e_test"})
-        assert resp.status_code == 200
-        assert resp.json()["status"] == "ok"
-
-        resp = api.get("/scriptlet/sets/list")
-        assert resp.status_code == 200
-        sets = resp.json()["sets"]
-        assert any(s["name"] == "e2e_test" for s in sets)
-        pyops_server.assert_no_unexpected_errors()
-
-    def test_create_and_remove_set(self, api, pyops_server):
-        api.post("/scriptlet/sets/create", json={"name": "to_remove"})
-
-        resp = api.delete("/scriptlet/sets/remove/to_remove")
-        assert resp.status_code == 200
-
-        resp = api.get("/scriptlet/sets/list")
-        sets = resp.json()["sets"]
-        assert not any(s["name"] == "to_remove" for s in sets)
         pyops_server.assert_no_unexpected_errors()
 
 
 class TestTaskWorkflow:
     """Full workflow: create set -> create task -> save code -> run -> verify completion."""
 
-    def _create_set_and_task(self, api, set_name="wf_test", task_name="hello"):
+    def _create_set_and_task(self, api, set_factory, set_name="wf_test", task_name="hello"):
         """Helper: create a set and a task scriptlet in it."""
-        api.post("/scriptlet/sets/create", json={"name": set_name})
+        set_factory(set_name)
         resp = api.put(
             "/scriptlet/inventory/item",
             json={"set": set_name, "name": task_name, "type": "task"},
@@ -131,9 +111,9 @@ class TestTaskWorkflow:
             time.sleep(0.5)
         pytest.fail(f"Job {job_id} did not reach terminal state within {timeout}s (last state: {job['state']})")
 
-    def test_create_and_run_simple_task(self, api, pyops_server):
+    def test_create_and_run_simple_task(self, api, pyops_server, set_factory):
         """Create a task that prints output, run it, verify it completes with stdout."""
-        self._create_set_and_task(api, "wf_test", "hello")
+        self._create_set_and_task(api, set_factory, "wf_test", "hello")
         self._save_task_code(api, "wf_test", "hello", 'print("Hello from E2E test!")\n')
 
         job_id = self._enqueue_task(api, "wf_test", "hello")
@@ -144,9 +124,9 @@ class TestTaskWorkflow:
         assert "Hello from E2E test!" in job["stdout"]
         pyops_server.assert_no_unexpected_errors()
 
-    def test_failing_task(self, api, pyops_server):
+    def test_failing_task(self, api, pyops_server, set_factory):
         """A task that raises an exception should end in 'failed' state."""
-        self._create_set_and_task(api, "wf_fail", "bad_task")
+        self._create_set_and_task(api, set_factory, "wf_fail", "bad_task")
         self._save_task_code(api, "wf_fail", "bad_task", 'raise RuntimeError("intentional failure")\n')
 
         job_id = self._enqueue_task(api, "wf_fail", "bad_task")
@@ -158,9 +138,9 @@ class TestTaskWorkflow:
         # The intentional failure traceback is expected in server logs
         pyops_server.assert_no_unexpected_errors(allow=["intentional failure"])
 
-    def test_task_with_param(self, api, pyops_server):
+    def test_task_with_param(self, api, pyops_server, set_factory):
         """Task receives param (executed as code before main) and uses it."""
-        self._create_set_and_task(api, "wf_param", "echo")
+        self._create_set_and_task(api, set_factory, "wf_param", "echo")
         code = 'print(f"greeting={msg}")\n'
         self._save_task_code(api, "wf_param", "echo", code)
 
@@ -171,9 +151,9 @@ class TestTaskWorkflow:
         assert "greeting=hello_e2e" in job["stdout"]
         pyops_server.assert_no_unexpected_errors()
 
-    def test_task_lifecycle_in_job_list(self, api, pyops_server):
+    def test_task_lifecycle_in_job_list(self, api, pyops_server, set_factory):
         """After running a task, it appears in the job list with correct metadata."""
-        self._create_set_and_task(api, "wf_list", "listed")
+        self._create_set_and_task(api, set_factory, "wf_list", "listed")
         self._save_task_code(api, "wf_list", "listed", 'print("listed")\n')
         job_id = self._enqueue_task(api, "wf_list", "listed")
 
@@ -187,9 +167,9 @@ class TestTaskWorkflow:
         assert matching[0]["state"] == "done"
         pyops_server.assert_no_unexpected_errors()
 
-    def test_delete_completed_job(self, api, pyops_server):
+    def test_delete_completed_job(self, api, pyops_server, set_factory):
         """A completed job can be deleted."""
-        self._create_set_and_task(api, "wf_del", "deleteme")
+        self._create_set_and_task(api, set_factory, "wf_del", "deleteme")
         self._save_task_code(api, "wf_del", "deleteme", 'print("bye")\n')
         job_id = self._enqueue_task(api, "wf_del", "deleteme")
         self._wait_for_job(api, job_id)
@@ -208,8 +188,8 @@ class TestTaskWorkflow:
 class TestScriptletCRUD:
     """Verify scriptlet create, read, update, delete via API."""
 
-    def test_create_read_update_delete(self, api, pyops_server):
-        api.post("/scriptlet/sets/create", json={"name": "crud_test"})
+    def test_create_read_update_delete(self, api, pyops_server, set_factory):
+        set_factory("crud_test")
 
         # Create
         resp = api.put(
@@ -274,41 +254,21 @@ class TestWebUIWorkflow:
         pyops_server.assert_no_unexpected_errors()
 
     def test_navigate_to_sets(self, e2e_page, pyops_server):
-        """Click the Sets menu item and verify the sets page loads."""
-        menu_link = e2e_page.locator('[data-testid="menu-link-scriptlet_sets"]')
-        menu_link.click()
-        frame = e2e_page.frame_locator('[data-testid="content-frame"]')
-        frame.locator('[data-testid="sets-navbar"]').wait_for(state="visible", timeout=10000)
-        assert frame.locator('[data-testid="sets-create"]').is_visible()
-        pyops_server.assert_no_unexpected_errors()
-
-    def test_create_set_via_ui(self, e2e_page, api, pyops_server):
-        """Create a set through the Sets UI and verify it appears."""
+        """Click the Sets menu item and verify the sets controller page loads.
+        Sets now lives as `/controller/internal/sets` — the controller wrapper
+        injects the navbar built from the Sets controller's menu view, which
+        carries the clone/create/refresh buttons."""
         e2e_page.locator('[data-testid="menu-link-scriptlet_sets"]').click()
         frame = e2e_page.frame_locator('[data-testid="content-frame"]')
-        frame.locator('[data-testid="sets-navbar"]').wait_for(state="visible", timeout=10000)
-
-        # Open create modal
-        frame.locator('[data-testid="sets-create"]').click()
-        frame.locator('[data-testid="sets-create-modal"]').wait_for(state="visible", timeout=5000)
-
-        # Fill in name and submit
-        frame.locator('[data-testid="sets-create-name"]').fill("ui_test_set")
-        frame.locator('[data-testid="sets-create-submit"]').click()
-
-        # Wait for modal to close and table to update
-        frame.locator('[data-testid="sets-create-modal"]').wait_for(state="hidden", timeout=10000)
-
-        # Verify via API
-        resp = api.get("/scriptlet/sets/list")
-        sets = resp.json()["sets"]
-        assert any(s["name"] == "ui_test_set" for s in sets)
+        frame.locator('[data-testid="sets-create"]').wait_for(state="visible", timeout=10000)
+        assert frame.locator('[data-testid="sets-clone"]').is_visible()
+        pyops_server.assert_no_unexpected_errors()
         pyops_server.assert_no_unexpected_errors()
 
-    def test_create_scriptlet_via_manager_ui(self, e2e_page, api, pyops_server):
+    def test_create_scriptlet_via_manager_ui(self, e2e_page, api, pyops_server, set_factory):
         """Create a scriptlet through the Manager create modal and verify it appears."""
         # Set must exist before the modal can select it.
-        api.post("/scriptlet/sets/create", json={"name": "ui_create_set"})
+        set_factory("ui_create_set")
 
         e2e_page.locator('[data-testid="menu-link-scriptlet_manager"]').click()
         frame = e2e_page.frame_locator('[data-testid="content-frame"]')

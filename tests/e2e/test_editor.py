@@ -119,9 +119,9 @@ BODY_CODE = """\
 # ---------------------------------------------------------------------------
 
 
-def _setup_basic(api):
+def _setup_basic(api, set_factory):
     """Create set with a task, view, and jslibrary scriptlet via API."""
-    api.post("/scriptlet/sets/create", json={"name": SET_NAME})
+    set_factory(SET_NAME)
 
     for name, type_, code in [
         (TASK_NAME, "task", TASK_CODE),
@@ -140,9 +140,9 @@ def _setup_basic(api):
         assert resp.status_code == 200, f"Save {name} failed: {resp.text}"
 
 
-def _setup_jslib_integration(api):
+def _setup_jslib_integration(api, set_factory):
     """Create the full controller + views + jslib stack for integration tests."""
-    _setup_basic(api)
+    _setup_basic(api, set_factory)
 
     for name, type_, code in [
         (CTRL_NAME, "controller", CTRL_CODE),
@@ -162,9 +162,9 @@ def _setup_jslib_integration(api):
         assert resp.status_code == 200, f"Save {name} failed: {resp.text}"
 
 
-def _setup_library(api):
+def _setup_library(api, set_factory):
     """Create set with a library scriptlet."""
-    api.post("/scriptlet/sets/create", json={"name": SET_NAME})
+    set_factory(SET_NAME)
     resp = api.put(
         "/scriptlet/inventory/item",
         json={"set": SET_NAME, "name": LIB_NAME, "type": "library"},
@@ -177,9 +177,9 @@ def _setup_library(api):
     assert resp.status_code == 200, f"Save {LIB_NAME} failed: {resp.text}"
 
 
-def _setup_controller(api):
+def _setup_controller(api, set_factory):
     """Create set with a simple controller scriptlet."""
-    api.post("/scriptlet/sets/create", json={"name": SET_NAME})
+    set_factory(SET_NAME)
     resp = api.put(
         "/scriptlet/inventory/item",
         json={"set": SET_NAME, "name": CTRL_SIMPLE_NAME, "type": "controller"},
@@ -192,12 +192,12 @@ def _setup_controller(api):
     assert resp.status_code == 200, f"Save {CTRL_SIMPLE_NAME} failed: {resp.text}"
 
 
-def _setup_markdown(api):
+def _setup_markdown(api, set_factory):
     """Create set (README.md is auto-created by get_repo_path) and write initial content.
 
     README.md is always created when a new set is initialised, so a PUT is not needed.
     """
-    api.post("/scriptlet/sets/create", json={"name": SET_NAME})
+    set_factory(SET_NAME)
     resp = api.post(
         "/scriptlet/inventory/item",
         json={"set": SET_NAME, "name": MD_NAME, "code": MD_CODE},
@@ -220,7 +220,7 @@ def _nav_manager(e2e_page):
 def _nav_sets(e2e_page):
     e2e_page.locator('[data-testid="menu-link-scriptlet_sets"]').click()
     frame = e2e_page.frame_locator('[data-testid="content-frame"]')
-    frame.locator('[data-testid="sets-navbar"]').wait_for(state="visible", timeout=10_000)
+    frame.locator('[data-testid="sets-create"]').wait_for(state="visible", timeout=10_000)
     return frame
 
 
@@ -307,7 +307,7 @@ def _cleanup_set(e2e_page):
         e2e_page.once("dialog", lambda d: d.accept())
         frame.locator(f'[data-testid="set-remove-{SET_NAME}"]').click()
         # DELETE blocks on the bootstrap lock if the per-set venv pip install
-        # is still running (BackgroundTask scheduled by /scriptlet/sets/create).
+        # is still running (lazy ensure_set_environment kicked off by the runner spawn path).
         # Cold devpi cache + aarch64 wheels can push that to ~30s.
         row.wait_for(state="hidden", timeout=60_000)
     assert frame.locator(f'[data-testid="set-row-{SET_NAME}"]').count() == 0
@@ -333,9 +333,9 @@ ALL_NAMES = [TASK_NAME, VIEW_NAME, JSLIB_NAME, CTRL_NAME, HEAD_VIEW, MENU_VIEW, 
 class TestEditorWorkflow:
     """Verify that editors open from Manager, load code, and save changes."""
 
-    def test_task_editor_opens_via_manager(self, e2e_page, api_anon, pyops_server):
+    def test_task_editor_opens_via_manager(self, e2e_page, api_anon, pyops_server, set_factory):
         """Clicking Edit on a task opens the task editor with correct code."""
-        _setup_basic(api_anon)
+        _setup_basic(api_anon, set_factory)
         frame = _nav_manager(e2e_page)
         frame.locator('[data-testid="manager-refresh"]').click()
 
@@ -352,9 +352,9 @@ class TestEditorWorkflow:
         _full_cleanup(e2e_page, BASIC_NAMES)
         pyops_server.assert_no_unexpected_errors()
 
-    def test_view_editor_opens_via_manager(self, e2e_page, api_anon, pyops_server):
+    def test_view_editor_opens_via_manager(self, e2e_page, api_anon, pyops_server, set_factory):
         """Clicking Edit on a view opens the view editor with correct HTML."""
-        _setup_basic(api_anon)
+        _setup_basic(api_anon, set_factory)
         frame = _nav_manager(e2e_page)
         frame.locator('[data-testid="manager-refresh"]').click()
 
@@ -371,9 +371,9 @@ class TestEditorWorkflow:
         _full_cleanup(e2e_page, BASIC_NAMES)
         pyops_server.assert_no_unexpected_errors()
 
-    def test_jslibrary_editor_opens_directly(self, e2e_page, api_anon, pyops_server):
+    def test_jslibrary_editor_opens_directly(self, e2e_page, api_anon, pyops_server, set_factory):
         """JS library editor loads via direct URL with correct JavaScript code."""
-        _setup_basic(api_anon)
+        _setup_basic(api_anon, set_factory)
 
         # jslibrary has no edit button in Manager; navigate directly.
         editor_page = e2e_page.context.new_page()
@@ -394,9 +394,9 @@ class TestEditorWorkflow:
         _full_cleanup(e2e_page, BASIC_NAMES)
         pyops_server.assert_no_unexpected_errors()
 
-    def test_edit_and_save_task_code(self, e2e_page, api_anon, pyops_server):
+    def test_edit_and_save_task_code(self, e2e_page, api_anon, pyops_server, set_factory):
         """Modify task code in the editor and save; verify updated content."""
-        _setup_basic(api_anon)
+        _setup_basic(api_anon, set_factory)
         frame = _nav_manager(e2e_page)
         frame.locator('[data-testid="manager-refresh"]').click()
 
@@ -417,9 +417,9 @@ class TestEditorWorkflow:
         _full_cleanup(e2e_page, BASIC_NAMES)
         pyops_server.assert_no_unexpected_errors()
 
-    def test_edit_and_save_view_code(self, e2e_page, api_anon, pyops_server):
+    def test_edit_and_save_view_code(self, e2e_page, api_anon, pyops_server, set_factory):
         """Modify view HTML in the editor and save; verify updated content."""
-        _setup_basic(api_anon)
+        _setup_basic(api_anon, set_factory)
         frame = _nav_manager(e2e_page)
         frame.locator('[data-testid="manager-refresh"]').click()
 
@@ -439,9 +439,9 @@ class TestEditorWorkflow:
         _full_cleanup(e2e_page, BASIC_NAMES)
         pyops_server.assert_no_unexpected_errors()
 
-    def test_edit_and_save_jslibrary_code(self, e2e_page, api_anon, pyops_server):
+    def test_edit_and_save_jslibrary_code(self, e2e_page, api_anon, pyops_server, set_factory):
         """Modify JS library code in the editor and save; verify updated content."""
-        _setup_basic(api_anon)
+        _setup_basic(api_anon, set_factory)
 
         editor_page = e2e_page.context.new_page()
         editor_page.goto(
@@ -463,9 +463,9 @@ class TestEditorWorkflow:
         _full_cleanup(e2e_page, BASIC_NAMES)
         pyops_server.assert_no_unexpected_errors()
 
-    def test_editor_revert_discards_changes(self, e2e_page, api_anon, pyops_server):
+    def test_editor_revert_discards_changes(self, e2e_page, api_anon, pyops_server, set_factory):
         """Clicking Revert restores the last saved version."""
-        _setup_basic(api_anon)
+        _setup_basic(api_anon, set_factory)
         frame = _nav_manager(e2e_page)
         frame.locator('[data-testid="manager-refresh"]').click()
 
@@ -492,9 +492,9 @@ class TestEditorWorkflow:
         _full_cleanup(e2e_page, BASIC_NAMES)
         pyops_server.assert_no_unexpected_errors()
 
-    def test_library_editor_opens_via_manager(self, e2e_page, api_anon, pyops_server):
+    def test_library_editor_opens_via_manager(self, e2e_page, api_anon, pyops_server, set_factory):
         """Clicking Edit on a library scriptlet opens the library editor with its code."""
-        _setup_library(api_anon)
+        _setup_library(api_anon, set_factory)
         frame = _nav_manager(e2e_page)
         frame.locator('[data-testid="manager-refresh"]').click()
 
@@ -512,9 +512,9 @@ class TestEditorWorkflow:
         _full_cleanup(e2e_page, [LIB_NAME])
         pyops_server.assert_no_unexpected_errors()
 
-    def test_controller_editor_opens_via_manager(self, e2e_page, api_anon, pyops_server):
+    def test_controller_editor_opens_via_manager(self, e2e_page, api_anon, pyops_server, set_factory):
         """Clicking Edit on a controller opens the shared library editor with its code."""
-        _setup_controller(api_anon)
+        _setup_controller(api_anon, set_factory)
         frame = _nav_manager(e2e_page)
         frame.locator('[data-testid="manager-refresh"]').click()
 
@@ -531,9 +531,9 @@ class TestEditorWorkflow:
         _full_cleanup(e2e_page, [CTRL_SIMPLE_NAME])
         pyops_server.assert_no_unexpected_errors()
 
-    def test_edit_and_save_library_code(self, e2e_page, api_anon, pyops_server):
+    def test_edit_and_save_library_code(self, e2e_page, api_anon, pyops_server, set_factory):
         """Modify library code in the editor and save; verify updated content."""
-        _setup_library(api_anon)
+        _setup_library(api_anon, set_factory)
         frame = _nav_manager(e2e_page)
         frame.locator('[data-testid="manager-refresh"]').click()
 
@@ -553,9 +553,9 @@ class TestEditorWorkflow:
         _full_cleanup(e2e_page, [LIB_NAME])
         pyops_server.assert_no_unexpected_errors()
 
-    def test_markdown_editor_opens_via_manager(self, e2e_page, api_anon, pyops_server):
+    def test_markdown_editor_opens_via_manager(self, e2e_page, api_anon, pyops_server, set_factory):
         """Clicking Edit on README opens the markdown editor with its content."""
-        _setup_markdown(api_anon)
+        _setup_markdown(api_anon, set_factory)
         frame = _nav_manager(e2e_page)
         frame.locator('[data-testid="manager-refresh"]').click()
 
@@ -573,9 +573,9 @@ class TestEditorWorkflow:
         _full_cleanup(e2e_page, [])
         pyops_server.assert_no_unexpected_errors()
 
-    def test_edit_and_save_markdown_code(self, e2e_page, api_anon, pyops_server):
+    def test_edit_and_save_markdown_code(self, e2e_page, api_anon, pyops_server, set_factory):
         """Modify markdown content in the editor and save; verify updated content."""
-        _setup_markdown(api_anon)
+        _setup_markdown(api_anon, set_factory)
         frame = _nav_manager(e2e_page)
         frame.locator('[data-testid="manager-refresh"]').click()
 
@@ -604,9 +604,9 @@ class TestEditorWorkflow:
 class TestJsLibEndpoint:
     """Verify the /scriptlet/jslib/{set}/{name} endpoint."""
 
-    def test_jslib_serves_javascript(self, e2e_page, api_anon, pyops_server):
+    def test_jslib_serves_javascript(self, e2e_page, api_anon, pyops_server, set_factory):
         """JS library endpoint returns JavaScript with correct content-type."""
-        _setup_basic(api_anon)
+        _setup_basic(api_anon, set_factory)
 
         # Fetch via browser to check response.
         result = e2e_page.evaluate(
@@ -627,9 +627,9 @@ class TestJsLibEndpoint:
         _full_cleanup(e2e_page, BASIC_NAMES)
         pyops_server.assert_no_unexpected_errors()
 
-    def test_jslib_nonexistent_returns_404(self, e2e_page, api_anon, pyops_server):
+    def test_jslib_nonexistent_returns_404(self, e2e_page, api_anon, pyops_server, set_factory):
         """Requesting a nonexistent JS library returns 404."""
-        _setup_basic(api_anon)
+        _setup_basic(api_anon, set_factory)
 
         result = e2e_page.evaluate(
             """async (url) => {
@@ -644,9 +644,9 @@ class TestJsLibEndpoint:
         _full_cleanup(e2e_page, BASIC_NAMES)
         pyops_server.assert_no_unexpected_errors()
 
-    def test_jslib_wrong_type_returns_400(self, e2e_page, api_anon, pyops_server):
+    def test_jslib_wrong_type_returns_400(self, e2e_page, api_anon, pyops_server, set_factory):
         """Requesting a non-JS scriptlet via jslib endpoint returns 400."""
-        _setup_basic(api_anon)
+        _setup_basic(api_anon, set_factory)
 
         # TASK_NAME is a task, not jslibrary.
         result = e2e_page.evaluate(
@@ -671,9 +671,9 @@ class TestJsLibEndpoint:
 class TestJsLibIntegration:
     """Verify that HTML views can load and execute JS library scriptlets."""
 
-    def test_view_loads_jslib_functions(self, e2e_page, api_anon, pyops_server):
+    def test_view_loads_jslib_functions(self, e2e_page, api_anon, pyops_server, set_factory):
         """Controller page with <script src="/scriptlet/jslib/..."> executes JS."""
-        _setup_jslib_integration(api_anon)
+        _setup_jslib_integration(api_anon, set_factory)
 
         e2e_page.goto(f"{BASE_URL}/controller/{SET_NAME}/{CTRL_NAME}")
         e2e_page.wait_for_load_state("networkidle")
@@ -692,9 +692,9 @@ class TestJsLibIntegration:
         _full_cleanup(e2e_page, ALL_NAMES)
         pyops_server.assert_no_unexpected_errors()
 
-    def test_updated_jslib_reflects_in_controller(self, e2e_page, api_anon, pyops_server):
+    def test_updated_jslib_reflects_in_controller(self, e2e_page, api_anon, pyops_server, set_factory):
         """After editing jslib code, the controller page uses the updated version."""
-        _setup_jslib_integration(api_anon)
+        _setup_jslib_integration(api_anon, set_factory)
 
         # Verify original.
         e2e_page.goto(f"{BASE_URL}/controller/{SET_NAME}/{CTRL_NAME}")
@@ -724,9 +724,9 @@ class TestJsLibIntegration:
         _full_cleanup(e2e_page, ALL_NAMES)
         pyops_server.assert_no_unexpected_errors()
 
-    def test_jslib_available_across_multiple_page_loads(self, e2e_page, api_anon, pyops_server):
+    def test_jslib_available_across_multiple_page_loads(self, e2e_page, api_anon, pyops_server, set_factory):
         """JS library functions work consistently across page reloads."""
-        _setup_jslib_integration(api_anon)
+        _setup_jslib_integration(api_anon, set_factory)
 
         for _ in range(3):
             e2e_page.goto(f"{BASE_URL}/controller/{SET_NAME}/{CTRL_NAME}")
@@ -758,9 +758,9 @@ def _ace_font_size(editor_page, element_id):
 class TestEditorInteractiveActions:
     """Exercise Run/Cancel/Clear Logs/Font Size in the task editor."""
 
-    def test_editor_run_populates_stdout_panel(self, e2e_page, api_anon, pyops_server):
+    def test_editor_run_populates_stdout_panel(self, e2e_page, api_anon, pyops_server, set_factory):
         """Clicking Run executes the draft code and shows output in the stdout Ace panel."""
-        _setup_basic(api_anon)
+        _setup_basic(api_anon, set_factory)
         # Replace default code with something that prints a deterministic string.
         api_anon.post(
             "/scriptlet/inventory/item",
@@ -793,9 +793,9 @@ class TestEditorInteractiveActions:
         _full_cleanup(e2e_page, BASIC_NAMES)
         pyops_server.assert_no_unexpected_errors()
 
-    def test_editor_clear_logs_empties_output_panels(self, e2e_page, api_anon, pyops_server):
+    def test_editor_clear_logs_empties_output_panels(self, e2e_page, api_anon, pyops_server, set_factory):
         """Clear Logs empties both stdout and stderr Ace panels."""
-        _setup_basic(api_anon)
+        _setup_basic(api_anon, set_factory)
         api_anon.post(
             "/scriptlet/inventory/item",
             json={
@@ -832,9 +832,9 @@ class TestEditorInteractiveActions:
         _full_cleanup(e2e_page, BASIC_NAMES)
         pyops_server.assert_no_unexpected_errors()
 
-    def test_editor_cancel_stops_running_draft(self, e2e_page, api_anon, pyops_server):
+    def test_editor_cancel_stops_running_draft(self, e2e_page, api_anon, pyops_server, set_factory):
         """Clicking Cancel on a running draft aborts it and re-enables Run."""
-        _setup_basic(api_anon)
+        _setup_basic(api_anon, set_factory)
         # Long-running draft — sleeps 60s so Cancel has a clear window.
         long_code = "import time\nfor _ in range(120):\n    time.sleep(0.5)\n"
         api_anon.post(
@@ -866,9 +866,9 @@ class TestEditorInteractiveActions:
         _full_cleanup(e2e_page, BASIC_NAMES)
         pyops_server.assert_no_unexpected_errors()
 
-    def test_editor_font_size_change_propagates_to_ace(self, e2e_page, api_anon, pyops_server):
+    def test_editor_font_size_change_propagates_to_ace(self, e2e_page, api_anon, pyops_server, set_factory):
         """Changing the Font Size select updates every Ace panel's fontSize."""
-        _setup_basic(api_anon)
+        _setup_basic(api_anon, set_factory)
         frame = _nav_manager(e2e_page)
         frame.locator('[data-testid="manager-refresh"]').click()
 
@@ -905,12 +905,11 @@ class TestManagerCreateAndEdit:
     """Verify the Create & Edit button creates the scriptlet AND opens an editor."""
 
     def test_create_and_edit_opens_task_editor_for_new_scriptlet(
-        self, e2e_page, api_anon, pyops_server
-    ):
+        self, e2e_page, api_anon, pyops_server, set_factory):
         """manager-create-edit creates the scriptlet and pops open the matching editor."""
         set_name = "create_edit_set"
         new_name = "fresh_task"
-        api_anon.post("/scriptlet/sets/create", json={"name": set_name})
+        set_factory(set_name)
 
         frame = _nav_manager(e2e_page)
         frame.locator('[data-testid="manager-refresh"]').click()
@@ -949,7 +948,7 @@ class TestManagerCreateAndEdit:
             e2e_page.once("dialog", lambda d: d.accept())
             frame.locator(f'[data-testid="scriptlet-delete-{set_name}-{new_name}"]').click()
             row.wait_for(state="hidden", timeout=5_000)
-        api_anon.delete(f"/scriptlet/sets/remove/{set_name}")
+        # cleanup via tmp_path teardown — set removal endpoint is gone
         pyops_server.assert_no_unexpected_errors()
 
     @pytest.mark.parametrize(
@@ -961,12 +960,11 @@ class TestManagerCreateAndEdit:
         ],
     )
     def test_create_and_edit_opens_correct_editor_per_type(
-        self, e2e_page, api_anon, pyops_server, scriptlet_type, expected_navbar
-    ):
+        self, e2e_page, api_anon, pyops_server, scriptlet_type, expected_navbar, set_factory):
         """manager-create-edit picks the editor matching the selected scriptlet type."""
         set_name = f"ce_{scriptlet_type}_set"
         new_name = f"fresh_{scriptlet_type}"
-        api_anon.post("/scriptlet/sets/create", json={"name": set_name})
+        set_factory(set_name)
 
         frame = _nav_manager(e2e_page)
         frame.locator('[data-testid="manager-refresh"]').click()
@@ -1002,7 +1000,7 @@ class TestManagerCreateAndEdit:
             e2e_page.once("dialog", lambda d: d.accept())
             frame.locator(f'[data-testid="scriptlet-delete-{set_name}-{new_name}"]').click()
             row.wait_for(state="hidden", timeout=5_000)
-        api_anon.delete(f"/scriptlet/sets/remove/{set_name}")
+        # cleanup via tmp_path teardown — set removal endpoint is gone
         pyops_server.assert_no_unexpected_errors()
 
 
@@ -1010,11 +1008,10 @@ class TestManagerCreateModal:
     """Paths on the manager create modal that are not part of Create & Edit."""
 
     def test_manager_create_cancel_closes_without_creating(
-        self, e2e_page, api_anon, pyops_server
-    ):
+        self, e2e_page, api_anon, pyops_server, set_factory):
         """Cancel on the create modal closes it and creates no scriptlet."""
         set_name = "mcc_set"
-        api_anon.post("/scriptlet/sets/create", json={"name": set_name})
+        set_factory(set_name)
 
         frame = _nav_manager(e2e_page)
         frame.locator('[data-testid="manager-refresh"]').click()
@@ -1033,7 +1030,7 @@ class TestManagerCreateModal:
         assert not any(
             i["set"] == set_name and i["name"] == "never_made" for i in items
         )
-        api_anon.delete(f"/scriptlet/sets/remove/{set_name}")
+        # cleanup via tmp_path teardown — set removal endpoint is gone
         pyops_server.assert_no_unexpected_errors()
 
     def test_manager_create_without_set_shows_inline_error(

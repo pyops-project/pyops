@@ -17,8 +17,8 @@ TASK_NAME = "dummy"
 TASK_CODE = 'print("hi")\n'
 
 
-def _prepare_set_and_task(api):
-    api.post("/scriptlet/sets/create", json={"name": SET_NAME})
+def _prepare_set_and_task(api, set_factory):
+    set_factory(SET_NAME)
     resp = api.put(
         "/scriptlet/inventory/item",
         json={"set": SET_NAME, "name": TASK_NAME, "type": "task"},
@@ -70,9 +70,9 @@ def _first_schedule_row(frame):
 
 
 class TestSchedulerUI:
-    def test_create_modal_cancel_closes_without_creating(self, e2e_page, api_anon, pyops_server):
+    def test_create_modal_cancel_closes_without_creating(self, e2e_page, api_anon, pyops_server, set_factory):
         """Clicking Cancel on the create modal closes it and creates nothing."""
-        _prepare_set_and_task(api_anon)
+        _prepare_set_and_task(api_anon, set_factory)
         frame = _nav_scheduler(e2e_page)
 
         _open_create_modal(frame)
@@ -88,9 +88,9 @@ class TestSchedulerUI:
         assert resp.json() == []
         pyops_server.assert_no_unexpected_errors()
 
-    def test_create_with_all_fields_persists_values(self, e2e_page, api_anon, pyops_server):
+    def test_create_with_all_fields_persists_values(self, e2e_page, api_anon, pyops_server, set_factory):
         """Every field on the create modal (param, max_retries, drop_done) round-trips."""
-        _prepare_set_and_task(api_anon)
+        _prepare_set_and_task(api_anon, set_factory)
         frame = _nav_scheduler(e2e_page)
 
         _open_create_modal(frame)
@@ -121,9 +121,9 @@ class TestSchedulerUI:
         api_anon.get(f"/scriptlet/schedule/deactivate?id={s['id']}")
         pyops_server.assert_no_unexpected_errors()
 
-    def test_edit_modal_updates_existing_schedule(self, e2e_page, api_anon, pyops_server):
+    def test_edit_modal_updates_existing_schedule(self, e2e_page, api_anon, pyops_server, set_factory):
         """Opening Edit, changing fields, and submitting updates the schedule."""
-        _prepare_set_and_task(api_anon)
+        _prepare_set_and_task(api_anon, set_factory)
         # Create via API — the create flow is already covered above.
         resp = api_anon.put(
             "/scriptlet/schedule/item",
@@ -165,9 +165,9 @@ class TestSchedulerUI:
         assert s["drop_done"] is True
         pyops_server.assert_no_unexpected_errors()
 
-    def test_edit_modal_cancel_preserves_original_values(self, e2e_page, api_anon, pyops_server):
+    def test_edit_modal_cancel_preserves_original_values(self, e2e_page, api_anon, pyops_server, set_factory):
         """Cancel on the edit modal must not alter the schedule."""
-        _prepare_set_and_task(api_anon)
+        _prepare_set_and_task(api_anon, set_factory)
         resp = api_anon.put(
             "/scriptlet/schedule/item",
             json={
@@ -201,10 +201,10 @@ class TestSchedulerUI:
         assert s["max_retries"] == 1
         pyops_server.assert_no_unexpected_errors()
 
-    def test_create_with_unknown_scriptlet_shows_error(self, e2e_page, api_anon, pyops_server):
+    def test_create_with_unknown_scriptlet_shows_error(self, e2e_page, api_anon, pyops_server, set_factory):
         """Submitting create with a non-existent scriptlet surfaces the server error inline."""
         # Set exists, scriptlet does not.
-        api_anon.post("/scriptlet/sets/create", json={"name": SET_NAME})
+        set_factory(SET_NAME)
 
         frame = _nav_scheduler(e2e_page)
         _open_create_modal(frame)
@@ -231,9 +231,9 @@ class TestSchedulerUI:
         frame.locator('[data-testid="scheduler-create-cancel"]').click()
         pyops_server.assert_no_unexpected_errors()
 
-    def test_edit_with_invalid_cron_shows_error(self, e2e_page, api_anon, pyops_server):
+    def test_edit_with_invalid_cron_shows_error(self, e2e_page, api_anon, pyops_server, set_factory):
         """Invalid cron in the edit modal surfaces an error and keeps the modal open."""
-        _prepare_set_and_task(api_anon)
+        _prepare_set_and_task(api_anon, set_factory)
         resp = api_anon.put(
             "/scriptlet/schedule/item",
             json={
@@ -274,9 +274,9 @@ class TestSchedulerUI:
         frame.locator('[data-testid="scheduler-edit-cancel"]').click()
         pyops_server.assert_no_unexpected_errors()
 
-    def test_delete_schedule_removes_row(self, e2e_page, api_anon, pyops_server):
+    def test_delete_schedule_removes_row(self, e2e_page, api_anon, pyops_server, set_factory):
         """Delete button plus confirm dialog removes the schedule."""
-        _prepare_set_and_task(api_anon)
+        _prepare_set_and_task(api_anon, set_factory)
         resp = api_anon.put(
             "/scriptlet/schedule/item",
             json={

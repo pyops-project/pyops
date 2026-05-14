@@ -104,7 +104,14 @@ def e2e_env(tmp_path):
     config = {
         "web": {
             "bind": f"127.0.0.1:{E2E_PORT}",
-            "worker": 1,
+            # 2 workers, not 1: controller_proxy makes a synchronous ZMQ
+            # call to the bound service, which blocks the async event loop
+            # of the handling worker. When the service responds by calling
+            # back into pyops (e.g. data.task.py enqueueing a sub-task via
+            # control.job.create → PUT /scriptlet/job/item), that callback
+            # needs a SECOND worker to be free. worker=1 deadlocks; the
+            # production config uses 4.
+            "worker": 2,
             "timeout": 300,
         },
         "data": {
@@ -132,6 +139,37 @@ def e2e_env(tmp_path):
         "base_url": BASE_URL,
         "port": E2E_PORT,
     }
+
+
+@pytest.fixture(scope="function")
+def set_factory(e2e_env):
+    """Create a user set on disk for tests that need one as a prerequisite.
+
+    Mirrors what `app/internal/set_create.task.py` does (mkdir + git init +
+    minimal initial commit) but talks straight to the filesystem so e2e
+    fixtures don't pay the data-service spawn cost on every test. Use only
+    when set creation is *not* the subject under test — for that, drive
+    the controller path (`POST /controller/internal/sets/create`) directly.
+    """
+    def _make(name):
+        repo = e2e_env["data_dir"] / "git" / name
+        if (repo / ".git").is_dir():
+            # Already created earlier in this test (multiple set_factory(name)
+            # calls from a setup helper that runs more than once). Idempotent.
+            return name
+        repo.mkdir(parents=True, exist_ok=True)
+        env = {"PATH": os.environ["PATH"], "HOME": str(e2e_env["tmp_path"])}
+        run = lambda cmd: subprocess.check_call(cmd, cwd=str(repo), env=env)
+        run(["git", "init", "-q"])
+        run(["git", "config", "user.email", "test@example.com"])
+        run(["git", "config", "user.name", "e2e"])
+        (repo / ".gitignore").write_text("*.bck\n")
+        (repo / "README.md").write_text(f"# {name}\n")
+        run(["git", "add", ".gitignore", "README.md"])
+        run(["git", "commit", "-q", "-m", "init"])
+        return name
+
+    return _make
 
 
 class ServerLog:

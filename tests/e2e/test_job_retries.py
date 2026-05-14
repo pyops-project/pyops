@@ -64,8 +64,8 @@ def _wait_for_job(api, job_id, timeout=30):
     )
 
 
-def _setup(api, set_name, task_name, code):
-    api.post("/scriptlet/sets/create", json={"name": set_name})
+def _setup(api, set_name, task_name, code, set_factory):
+    set_factory(set_name)
     r = api.put(
         "/scriptlet/inventory/item",
         json={"set": set_name, "name": task_name, "type": "task"},
@@ -100,9 +100,9 @@ def _enqueue(api, set_name, task_name, max_retries=0):
 
 
 class TestJobRetries:
-    def test_no_retry_on_zero_max_retries(self, api, pyops_server):
+    def test_no_retry_on_zero_max_retries(self, api, pyops_server, set_factory):
         """With max_retries=0 a failing task reaches 'failed' without retrying."""
-        _setup(api, SET_ZERO, "always_fail", 'raise RuntimeError("fail_immediately")\n')
+        _setup(api, SET_ZERO, "always_fail", 'raise RuntimeError("fail_immediately")\n', set_factory)
 
         job_id = _enqueue(api, SET_ZERO, "always_fail", max_retries=0)
         job = _wait_for_job(api, job_id, timeout=30)
@@ -110,14 +110,14 @@ class TestJobRetries:
         assert job["state"] == "failed"
         pyops_server.assert_no_unexpected_errors(allow=["fail_immediately"])
 
-    def test_task_retries_and_eventually_succeeds(self, api, pyops_server):
+    def test_task_retries_and_eventually_succeeds(self, api, pyops_server, set_factory):
         """With max_retries=1, a task that fails on attempt 1 retries and succeeds on attempt 2.
 
         The retry sleep is 60 s (hard-coded in execute_job_code), so this
         test uses a 150-second timeout to allow for startup and execution
         overhead on top of the mandatory wait.
         """
-        _setup(api, SET_SUCC, "retry_task", RETRY_THEN_SUCCEED_CODE)
+        _setup(api, SET_SUCC, "retry_task", RETRY_THEN_SUCCEED_CODE, set_factory)
 
         job_id = _enqueue(api, SET_SUCC, "retry_task", max_retries=1)
         # 150 s: 60 s retry sleep + startup/execution overhead on both sides.

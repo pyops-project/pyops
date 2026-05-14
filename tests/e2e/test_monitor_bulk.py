@@ -25,8 +25,8 @@ FAIL_CODE = 'raise RuntimeError("planned failure")\n'
 LONG_CODE = "import time\nfor _ in range(60):\n    time.sleep(0.5)\n"
 
 
-def _create_scriptlet(api, name, code):
-    api.post("/scriptlet/sets/create", json={"name": SET_NAME})
+def _create_scriptlet(api, name, code, set_factory):
+    set_factory(SET_NAME)
     resp = api.put(
         "/scriptlet/inventory/item",
         json={"set": SET_NAME, "name": name, "type": "task"},
@@ -91,9 +91,9 @@ def _wait_until_row_gone(api, job_id, timeout=15):
 
 
 class TestMonitorBulkOps:
-    def test_cancel_all_cancels_every_running_job(self, e2e_page, api_anon, pyops_server):
+    def test_cancel_all_cancels_every_running_job(self, e2e_page, api_anon, pyops_server, set_factory):
         """monitor-cancel-all should cancel every in-flight job simultaneously."""
-        _create_scriptlet(api_anon, TASK_LONG, LONG_CODE)
+        _create_scriptlet(api_anon, TASK_LONG, LONG_CODE, set_factory)
 
         job_ids = [_enqueue(api_anon, TASK_LONG) for _ in range(3)]
         # Ensure at least one is actually running before bulk-cancelling.
@@ -113,10 +113,10 @@ class TestMonitorBulkOps:
 
         pyops_server.assert_no_unexpected_errors()
 
-    def test_delete_done_removes_only_done_jobs(self, e2e_page, api_anon, pyops_server):
+    def test_delete_done_removes_only_done_jobs(self, e2e_page, api_anon, pyops_server, set_factory):
         """monitor-delete-done deletes done/cancelled jobs, leaves failed ones alone."""
-        _create_scriptlet(api_anon, TASK_DONE, QUICK_CODE)
-        _create_scriptlet(api_anon, TASK_FAIL, FAIL_CODE)
+        _create_scriptlet(api_anon, TASK_DONE, QUICK_CODE, set_factory)
+        _create_scriptlet(api_anon, TASK_FAIL, FAIL_CODE, set_factory)
 
         done_id = _enqueue(api_anon, TASK_DONE)
         fail_id = _enqueue(api_anon, TASK_FAIL)
@@ -135,10 +135,10 @@ class TestMonitorBulkOps:
 
         pyops_server.assert_no_unexpected_errors(allow=["planned failure"])
 
-    def test_delete_failed_removes_only_failed_jobs(self, e2e_page, api_anon, pyops_server):
+    def test_delete_failed_removes_only_failed_jobs(self, e2e_page, api_anon, pyops_server, set_factory):
         """monitor-delete-failed deletes failed/killed jobs, leaves done ones alone."""
-        _create_scriptlet(api_anon, TASK_DONE, QUICK_CODE)
-        _create_scriptlet(api_anon, TASK_FAIL, FAIL_CODE)
+        _create_scriptlet(api_anon, TASK_DONE, QUICK_CODE, set_factory)
+        _create_scriptlet(api_anon, TASK_FAIL, FAIL_CODE, set_factory)
 
         done_id = _enqueue(api_anon, TASK_DONE)
         fail_id = _enqueue(api_anon, TASK_FAIL)

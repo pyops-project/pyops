@@ -22,8 +22,8 @@ BASE_CODE = 'print("base")\n'
 DRAFT_CODE = 'print("draft-unsaved")\n'
 
 
-def _setup_task(api, set_name=SET, task_name=TASK, code=BASE_CODE):
-    api.post("/scriptlet/sets/create", json={"name": set_name})
+def _setup_task(api, set_factory, set_name=SET, task_name=TASK, code=BASE_CODE):
+    set_factory(set_name)
     r = api.put(
         "/scriptlet/inventory/item",
         json={"set": set_name, "name": task_name, "type": "task"},
@@ -45,10 +45,10 @@ class TestInventorySets:
         assert r.json() == {"sets": []}
         pyops_server.assert_no_unexpected_errors()
 
-    def test_lists_created_sets_sorted(self, api, pyops_server):
-        api.post("/scriptlet/sets/create", json={"name": "zeta"})
-        api.post("/scriptlet/sets/create", json={"name": "alpha"})
-        api.post("/scriptlet/sets/create", json={"name": "mid"})
+    def test_lists_created_sets_sorted(self, api, pyops_server, set_factory):
+        set_factory("zeta")
+        set_factory("alpha")
+        set_factory("mid")
 
         r = api.get("/scriptlet/inventory/sets")
         assert r.status_code == 200
@@ -62,8 +62,8 @@ class TestInventorySets:
 class TestRepoStatus:
     """GET /repo/status — branch / tag info for a given set."""
 
-    def test_fresh_repo_has_master_or_main_branch(self, api, pyops_server):
-        api.post("/scriptlet/sets/create", json={"name": SET})
+    def test_fresh_repo_has_master_or_main_branch(self, api, pyops_server, set_factory):
+        set_factory(SET)
         r = api.get(f"/repo/status?set={SET}")
         assert r.status_code == 200
         status = r.json()
@@ -76,17 +76,17 @@ class TestRepoStatus:
 class TestInventoryStatus:
     """GET /scriptlet/inventory/status — has_unstaged flag."""
 
-    def test_committed_scriptlet_has_no_unstaged(self, api, pyops_server):
+    def test_committed_scriptlet_has_no_unstaged(self, api, pyops_server, set_factory):
         """Right after POST /inventory/item (which commits), has_unstaged is False."""
-        _setup_task(api)
+        _setup_task(api, set_factory)
         r = api.get(f"/scriptlet/inventory/status?set={SET}&name={TASK}")
         assert r.status_code == 200
         assert r.json() == {"has_unstaged": False}
         pyops_server.assert_no_unexpected_errors()
 
-    def test_draft_write_sets_unstaged_true(self, api, pyops_server):
+    def test_draft_write_sets_unstaged_true(self, api, pyops_server, set_factory):
         """After /inventory/draft POST, has_unstaged flips to True."""
-        _setup_task(api)
+        _setup_task(api, set_factory)
         r = api.post(
             "/scriptlet/inventory/draft",
             json={"set": SET, "name": TASK, "code": DRAFT_CODE},
@@ -98,8 +98,8 @@ class TestInventoryStatus:
         assert r.json() == {"has_unstaged": True}
         pyops_server.assert_no_unexpected_errors()
 
-    def test_status_missing_scriptlet_returns_404(self, api, pyops_server):
-        api.post("/scriptlet/sets/create", json={"name": SET})
+    def test_status_missing_scriptlet_returns_404(self, api, pyops_server, set_factory):
+        set_factory(SET)
         r = api.get(f"/scriptlet/inventory/status?set={SET}&name=nope")
         assert r.status_code == 404
         pyops_server.assert_no_unexpected_errors()
@@ -108,9 +108,9 @@ class TestInventoryStatus:
 class TestInventoryDraftRoundtrip:
     """POST /inventory/draft saves draft; GET /inventory/code returns it; DELETE rolls back."""
 
-    def test_draft_is_readable_via_code_endpoint(self, api, pyops_server):
+    def test_draft_is_readable_via_code_endpoint(self, api, pyops_server, set_factory):
         """Draft content is visible via /inventory/code (reads unstaged)."""
-        _setup_task(api)
+        _setup_task(api, set_factory)
 
         r = api.post(
             "/scriptlet/inventory/draft",
@@ -123,9 +123,9 @@ class TestInventoryDraftRoundtrip:
         assert "draft-unsaved" in r.json()["code"]
         pyops_server.assert_no_unexpected_errors()
 
-    def test_draft_delete_rolls_back_to_committed(self, api, pyops_server):
+    def test_draft_delete_rolls_back_to_committed(self, api, pyops_server, set_factory):
         """DELETE /inventory/draft discards unstaged write."""
-        _setup_task(api)
+        _setup_task(api, set_factory)
         api.post(
             "/scriptlet/inventory/draft",
             json={"set": SET, "name": TASK, "code": DRAFT_CODE},
@@ -149,15 +149,15 @@ class TestInventoryDraftRoundtrip:
         assert status == {"has_unstaged": False}
         pyops_server.assert_no_unexpected_errors()
 
-    def test_draft_delete_unknown_returns_404(self, api, pyops_server):
-        api.post("/scriptlet/sets/create", json={"name": SET})
+    def test_draft_delete_unknown_returns_404(self, api, pyops_server, set_factory):
+        set_factory(SET)
         r = api.delete(f"/scriptlet/inventory/draft?set={SET}&name=ghost")
         assert r.status_code == 404
         pyops_server.assert_no_unexpected_errors()
 
-    def test_draft_delete_wrong_type_returns_400(self, api, pyops_server):
+    def test_draft_delete_wrong_type_returns_400(self, api, pyops_server, set_factory):
         """Providing type_ that mismatches inferred filetype rejects with 400."""
-        _setup_task(api)
+        _setup_task(api, set_factory)
         api.post(
             "/scriptlet/inventory/draft",
             json={"set": SET, "name": TASK, "code": DRAFT_CODE},

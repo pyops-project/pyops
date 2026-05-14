@@ -58,7 +58,8 @@ WebUI/VSIX → FastAPI (app/web.py) → SQLite DB ↔ Runner daemon (app/runner.
 - `job_setup.py` — First-phase subprocess; opens workspace log files in `'w'`, runs `process_code_installs` under `set_install_lock`, on success `os.execv`s into `job_runner.py`, on failure sends ZMQ completion `state="failed"` and exits 1
 - `job_runner.py` — Second-phase subprocess (post-execv, same PID, fresh interpreter); opens workspace log files in `'a'` so install logs are preserved; dispatches to `run_task_job`, `run_service_job`, `run_debug_job`, `run_draft_job`
 - `gunicorn.py` — WSGI config; also spawns the runner process; reads `PYOPS_CONFIG` env var for config path override (default `etc/pyops.json`)
-- `routers/scriptlet/` — REST API: `job.py`, `editor.py`, `inventory.py`, `schedule.py`, `sets.py`, etc.
+- `routers/scriptlet/` — REST API: `job.py`, `editor.py`, `inventory.py`, `schedule.py`, etc. (no `sets.py` — sets management is a controller, see `app/internal/`)
+- `internal/` — Pyops-internal scriptlet bundle (sets controller + data service + six `set_*` sub-tasks + jslib modal). Reached at `/controller/internal/sets`. Runs in the pyops host venv (not a per-set venv) and is the canonical place to add new self-hosted admin operations.
 - `routers/monitoring.py` — top-level (not under `/scriptlet/`), unauthenticated `/health`, `/health/failed`, `/metrics` for external monitoring (Zabbix/Prometheus)
 - `orm/` — SQLAlchemy models: `Job` (states: todo→dequeued→loading→running→done/failed/cancelled/remove/removed) and `Schedule` (cron-based)
 - `lib/` — Shared utilities
@@ -69,7 +70,7 @@ WebUI/VSIX → FastAPI (app/web.py) → SQLite DB ↔ Runner daemon (app/runner.
 - `pyops.py` — `Control` (API proxy for scriptlets) and `ServiceListener` (ZMQ service IPC); available in scriptlet global namespace
 - `git.py` — Git operations for scriptlet storage; serialized via `repo_lock()` per set; scriptlets stored as `{name}.{type}.py` in `data/git/{set}/`
 - `files.py` — Config (`etc/pyops.json`) access: `conf_data()`, `conf_runner()`, `conf_web()`, `conf_log()`, `conf_users()`; supports dynamic reload
-- `sets.py` — Git repo set management (clone/remove/switch branch)
+- `sets.py` — Runner-side per-set venv primitives only (`ensure_set_environment`, `set_install_lock`, bootstrap-lock helpers, `CORE_DEPS`); the user-facing clone/remove/switch/pull/create/update-deps operations are scriptlets under `app/internal/`
 
 ### Config isolation in subprocesses
 
@@ -92,6 +93,6 @@ VSCode extension in TypeScript. Key services: `ManagerTreeDataProvider` (scriptl
 - **Coverage targets** — Python tests >90%; VSIX tests >80%
 - **E2E tests** — skipped by default in `pytest tests/`; run via `pytest tests/e2e/` or `pytest tests/ --e2e`
 
-## Technical Insights (doc/)
+## Technical Insights (docs/)
 
-[doc/insights_app.md](doc/insights_app.md) and [doc/insights_vsix.md](doc/insights_vsix.md) contain deep technical details on the app and VSIX respectively. These files **must be kept up to date** when relevant code changes. They describe **current technical state only** — no historical records, changelogs, or "was changed from X to Y" entries.
+[docs/insights_app.md](docs/insights_app.md) and [docs/insights_vsix.md](docs/insights_vsix.md) contain deep technical details on the app and VSIX respectively. These files **must be kept up to date** when relevant code changes. They describe **current technical state only** — no historical records, changelogs, or "was changed from X to Y" entries.

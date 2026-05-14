@@ -36,12 +36,15 @@ def _init_files_config(kwargs: dict) -> None:
     via `set_install_lock`) can call `files.conf_runner()` etc. — they were
     initialized in `runner.py` via `Config.init(path)` but that state does
     not survive subprocess spawn / `os.execv`."""
-    files_lib.Config.init_from_dict({
+    raw = {
         "data": kwargs["conf_data"],
         "runner": kwargs["conf_runner"],
         "users": kwargs["conf_users"],
         "web": kwargs["conf_web"],
-    })
+    }
+    if kwargs.get("conf_log") is not None:
+        raw["log"] = kwargs["conf_log"]
+    files_lib.Config.init_from_dict(raw)
 
 
 def _setup_workspace(data_base: str, setname: str, job_id: str) -> str:

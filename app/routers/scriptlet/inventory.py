@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException, Query, Depends
 from starlette.status import HTTP_204_NO_CONTENT, HTTP_404_NOT_FOUND, HTTP_409_CONFLICT, HTTP_500_INTERNAL_SERVER_ERROR, HTTP_400_BAD_REQUEST
 from pydantic import BaseModel, create_model
 
-from app.lib import git
+from app.lib import git, files
 from app.lib.async_utils import run_in_executor
 from app.lib.auth import get_current_user
 
@@ -13,6 +13,17 @@ import logging
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _reject_if_internal(set_name: str) -> None:
+    """Block write operations against the pyops-managed internal set —
+    its scriptlets ship with the application source and are versioned
+    via the pyops repo, not via the inventory API."""
+    if files.is_internal_set(set_name):
+        raise HTTPException(
+            status_code=HTTP_400_BAD_REQUEST,
+            detail=f"Set '{set_name}' is pyops-managed and not editable via the API.",
+        )
 
 class CreateArgument(BaseModel):
     set: str
@@ -41,6 +52,7 @@ async def item_put(cr: CreateArgument, user: str = Depends(get_current_user)):
     Creates a new Scriptlet
     """
     try:
+        _reject_if_internal(cr.set)
         git_base = git.get_git_base()
         potential_repo = os.path.join(git_base, cr.set)
         if not os.path.exists(os.path.join(potential_repo, '.git')):
@@ -82,6 +94,7 @@ async def item_post(sa: SaveArgument, user: str = Depends(get_current_user)):
     Updates a Scriptlet's content (with commit/push for explicit save).
     """
     try:
+        _reject_if_internal(sa.set)
         repo = await run_in_executor(git.get_repo_path, sa.set)
         # Infer type from existing file.
         files = [f for f in os.listdir(repo) if f.startswith(f"{sa.name}.") and f.endswith(('.py', '.html', '.md', '.js'))]
@@ -110,6 +123,7 @@ async def draft_post(sa: SaveArgument):
     Use for auto-save; follow with /item POST for explicit save.
     """
     try:
+        _reject_if_internal(sa.set)
         repo = await run_in_executor(git.get_repo_path, sa.set)
         # Infer type from existing file.
         files = [f for f in os.listdir(repo) if f.startswith(f"{sa.name}.") and f.endswith(('.py', '.html', '.md', '.js'))]
@@ -134,6 +148,7 @@ async def item_del(set: str, name: str, user: str = Depends(get_current_user)):
     Deletes a Scriptlet
     """
     try:
+        _reject_if_internal(set)
         repo = await run_in_executor(git.get_repo_path, set)
         files = [f for f in os.listdir(repo) if f.startswith(f"{name}.") and f.endswith(('.py', '.html', '.md', '.js'))]
         if not files:
@@ -158,6 +173,7 @@ async def draft_del(set: str = Query(..., description="Set"), name: str = Query(
     Returns 204 on full success (content match); raises on fail.
     """
     try:
+        _reject_if_internal(set)
         repo = await run_in_executor(git.get_repo_path, set)
         files = [f for f in os.listdir(repo) if f.startswith(f"{name}.") and f.endswith(('.py', '.html', '.md', '.js'))]
         if not files:

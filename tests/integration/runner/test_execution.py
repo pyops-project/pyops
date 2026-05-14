@@ -327,6 +327,34 @@ class TestExecution:
 
     @patch('subprocess.run')
     @patch('os.path.exists')
+    def test_process_install_lines_git_clone_strips_git_suffix_only(self, mock_exists, mock_run, mock_conf, tmp_path):
+        """`<base>.git` → `<base>` (matches set_update_deps.task.py
+        _install_git). Dots inside the repo name (e.g. `causal.py`) are
+        preserved — the dir name is consumed by `pip install -e` which
+        derives the importable package name from setup.py / pyproject.toml,
+        so the directory does NOT need to be a valid Python identifier."""
+        from app.lib.job import process_install_lines
+        import io
+        mock_run.return_value = Mock(returncode=0, stderr="")
+        mock_exists.return_value = False
+
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
+        set_ = "testset"
+        stdout_file = io.StringIO()
+        stderr_file = io.StringIO()
+
+        process_install_lines(["#! https://example.com/causal.py.git"],
+                              venv_path, pkg_path, set_, "id", stdout_file, stderr_file)
+        repo_dir = os.path.join(pkg_path, set_, "causal.py")
+        mock_run.assert_any_call(
+            ['git', 'clone', 'https://example.com/causal.py.git', repo_dir],
+            stdout=stdout_file, stderr=stderr_file, text=True,
+            cwd=os.path.join(pkg_path, set_),
+        )
+
+    @patch('subprocess.run')
+    @patch('os.path.exists')
     def test_process_install_lines_git_clone(self, mock_exists, mock_run, mock_conf, tmp_path):
         from app.lib.job import process_install_lines
         import io
@@ -456,6 +484,7 @@ class TestExecution:
             assert result.end == now
             assert result.pid is None
 
+    @patch('app.runner.INTERNAL_ESSENTIAL_SERVICES', [])
     @patch('app.runner.lib_runner.enqueue')
     @patch('app.runner.lib_runner.find')
     def test_schedule_reenqueues_service_excluding_cancelled(self, mock_find, mock_enqueue, mock_conf, mock_db, mock_croniter):
@@ -490,8 +519,11 @@ class TestExecution:
 
         # Verify find calls
         mock_find.assert_has_calls([
-            call("owner", "set", "name", "service", ["todo", "dequeued", "running", "cancel", "done"]),
-            call("owner", "set", "name", "service", ["failed"])
+            call("owner", "set", "name", "service",
+                 ["todo", "dequeued", "running",
+                  "cancel", "cancelling", "cancelled",
+                  "done", "remove", "removed"]),
+            call("owner", "set", "name", "service", ["failed"]),
         ])
         # Verify enqueue
         mock_enqueue.assert_called_once_with("set", "name", "owner", "service", True, "param", 0, None)

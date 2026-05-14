@@ -27,6 +27,7 @@ _conf_data = None
 _conf_runner = None
 _conf_users = None
 _conf_web = None
+_conf_log = None
 
 def setup_workspace(data_base: str, setname: str, job_id: str) -> tuple[str, str]:
     """Create and return workspace paths: (setspace, workspace)"""
@@ -58,7 +59,7 @@ def setup_job_globals(owner: str, setspace: str, workspace: str, web_bind: str, 
     else:
         listener = None
 
-    return {
+    glob = {
         "user": owner,
         "setname": setname,
         "name": name,
@@ -72,6 +73,23 @@ def setup_job_globals(owner: str, setspace: str, workspace: str, web_bind: str, 
         "__name__": "__main__",
         "__builtins__": __builtins__
     }
+    # Pyops-managed internal-set scriptlets get two extra globals so they
+    # can introspect the running pyops installation without importing from
+    # `app.*` (which is forbidden — scriptlets must stay self-contained,
+    # interfacing with pyops only via `control` / `listener` / globals).
+    # `appspace` exposes the app source tree (e.g. for reading bundled
+    # files like default templates); `config` is the full pyops.json so
+    # the scriptlet can resolve git_base / venv_base / loglevel etc.
+    if setname == "internal":
+        glob["appspace"] = os.path.join(_project_root, "app")
+        glob["config"] = {
+            "data": _conf_data,
+            "runner": _conf_runner,
+            "users": _conf_users,
+            "web": _conf_web,
+            "log": _conf_log,
+        }
+    return glob
 
 def setup_logging(log_level: int, stdout_file, stderr_file):
     """Configure logging handlers for stdout/stderr and return them for cleanup"""
@@ -492,26 +510,30 @@ def run_service_job(job_id: str, owner: str, setname: str, name: str, param: str
             stderr_file.close()
         logger.debug(f"{os.getpid():<10}end service job({job_id})")
 
-def main(job_id: str, owner: str, setname: str, name: str, kind: str, param: str, code: str, libs: list[dict[str, str]], runner_sock_path: str, max_retries: int, overrides: str | None, port: int | None, conf_data: dict, conf_runner: dict, conf_users: dict, conf_web: dict):
+def main(job_id: str, owner: str, setname: str, name: str, kind: str, param: str, code: str, libs: list[dict[str, str]], runner_sock_path: str, max_retries: int, overrides: str | None, port: int | None, conf_data: dict, conf_runner: dict, conf_users: dict, conf_web: dict, conf_log: dict | None = None):
     """Executes job in isolated workspace by dispatching to appropriate handler based on kind."""
 
-    global _conf_data, _conf_runner, _conf_users, _conf_web
+    global _conf_data, _conf_runner, _conf_users, _conf_web, _conf_log
     _conf_data = conf_data
     _conf_runner = conf_runner
     _conf_users = conf_users
     _conf_web = conf_web
+    _conf_log = conf_log
 
     # The `files.Config` singleton was initialized in `runner.py` via
     # `Config.init(path)` but that state did not survive subprocess spawn or
     # the `os.execv` from `job_setup.py`. Mirror it from the kwargs so any
     # `app.lib.*` code reached from here that calls `files.conf_*()` works.
     from app.lib import files as files_lib
-    files_lib.Config.init_from_dict({
+    raw = {
         "data": conf_data,
         "runner": conf_runner,
         "users": conf_users,
         "web": conf_web,
-    })
+    }
+    if conf_log is not None:
+        raw["log"] = conf_log
+    files_lib.Config.init_from_dict(raw)
 
     if kind == "debug":
         if port is None:

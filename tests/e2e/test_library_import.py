@@ -99,9 +99,9 @@ def _run(api, set_name, task_name, timeout=30):
 class TestSameSetLibraryImport:
     """Tasks importing library scriptlets from the same set via #!{::name}."""
 
-    def test_task_calls_library_function(self, api, pyops_server):
+    def test_task_calls_library_function(self, api, pyops_server, set_factory):
         """Task using #!{::greeter} can call greet() and add() in its scope."""
-        api.post("/scriptlet/sets/create", json={"name": SET})
+        set_factory(SET)
         _create(api, SET, "greeter", "library", GREETER_CODE)
 
         task_code = (
@@ -117,9 +117,9 @@ class TestSameSetLibraryImport:
         assert "sum=7" in job["stdout"]
         pyops_server.assert_no_unexpected_errors()
 
-    def test_library_state_is_isolated_between_jobs(self, api, pyops_server):
+    def test_library_state_is_isolated_between_jobs(self, api, pyops_server, set_factory):
         """Each job execution gets a fresh global scope — library state does not leak."""
-        api.post("/scriptlet/sets/create", json={"name": SET + "_iso"})
+        set_factory(SET + "_iso")
         lib_code = "COUNTER = 0\ndef inc(): global COUNTER; COUNTER += 1; return COUNTER\n"
         _create(api, SET + "_iso", "counter_lib", "library", lib_code)
 
@@ -134,9 +134,9 @@ class TestSameSetLibraryImport:
 
         pyops_server.assert_no_unexpected_errors()
 
-    def test_transitive_library_import(self, api, pyops_server):
+    def test_transitive_library_import(self, api, pyops_server, set_factory):
         """Library importing another library resolves transitively before execution."""
-        api.post("/scriptlet/sets/create", json={"name": SET + "_tr"})
+        set_factory(SET + "_tr")
         _create(api, SET + "_tr", "base_lib", "library", BASE_LIB_CODE)
         _create(api, SET + "_tr", "mid_lib", "library", MID_LIB_CODE)
 
@@ -148,9 +148,9 @@ class TestSameSetLibraryImport:
         assert "doubled=84" in job["stdout"]
         pyops_server.assert_no_unexpected_errors()
 
-    def test_missing_library_fails_job(self, api, pyops_server):
+    def test_missing_library_fails_job(self, api, pyops_server, set_factory):
         """Importing a non-existent library causes the job to reach 'failed' state."""
-        api.post("/scriptlet/sets/create", json={"name": SET + "_miss"})
+        set_factory(SET + "_miss")
         task_code = '#!{::no_such_lib}\nprint("unreachable")\n'
         _create(api, SET + "_miss", "bad_import", "task", task_code)
 
@@ -167,12 +167,12 @@ class TestSameSetLibraryImport:
 class TestCrossSetLibraryImport:
     """Tasks importing library scriptlets from a different set via #!{set::name}."""
 
-    def test_task_imports_library_from_other_set(self, api, pyops_server):
+    def test_task_imports_library_from_other_set(self, api, pyops_server, set_factory):
         """#!{otherset::libname} loads the library from the named set."""
-        api.post("/scriptlet/sets/create", json={"name": CROSS_SET})
+        set_factory(CROSS_SET)
         _create(api, CROSS_SET, "shared_utils", "library", GREETER_CODE)
 
-        api.post("/scriptlet/sets/create", json={"name": SET + "_cross"})
+        set_factory(SET + "_cross")
         task_code = f'#!{{{CROSS_SET}::shared_utils}}\nprint(greet("cross"))\n'
         _create(api, SET + "_cross", "cross_task", "task", task_code)
 
@@ -181,9 +181,9 @@ class TestCrossSetLibraryImport:
         assert "hello, cross!" in job["stdout"]
         pyops_server.assert_no_unexpected_errors()
 
-    def test_cross_set_missing_library_fails_job(self, api, pyops_server):
+    def test_cross_set_missing_library_fails_job(self, api, pyops_server, set_factory):
         """Importing from a non-existent set causes the job to fail."""
-        api.post("/scriptlet/sets/create", json={"name": SET + "_cross_miss"})
+        set_factory(SET + "_cross_miss")
         task_code = '#!{nonexistent_set_xyz::some_lib}\nprint("unreachable")\n'
         _create(api, SET + "_cross_miss", "bad_cross", "task", task_code)
 

@@ -1,6 +1,6 @@
 # PyOps Overview
 
-PyOps is an "Execution Platform" for "Python Operations Scriptlets". It is licensed under GNU AGPLv3 and organized as a monorepo with core functionality in `app/`, a VSCode extension in `vsix/`, tests in `tests/`, and documentation in `doc/`.
+PyOps is an "Execution Platform" for "Python Operations Scriptlets". It is licensed under GNU AGPLv3 and organized as a monorepo with core functionality in `app/`, a VSCode extension in `vsix/`, tests in `tests/`, and documentation in `docs/`.
 
 ## Monorepo Structure
 
@@ -11,7 +11,7 @@ graph TD
     A[pyops] --> B[app/ - Core Application]
     A --> C[vsix/ - VSCode Extension]
     A --> D[tests/ - Test Suite]
-    A --> E[doc/ - Documentation]
+    A --> E[docs/ - Documentation]
     A --> F[etc/ - Configuration]
     B --> G[lib/ - Shared Libraries]
     B --> H[web.py - FastAPI Server]
@@ -208,11 +208,17 @@ Distinguishes types by argument:
 #### Post-Termination
 
 - `postTerm()`: Updates state to cancelled if not done/failed, deletes if remove
-- `terminate_job_processes()`: Kills full process tree with SIGTERM then SIGKILL
+- `terminate_job_processes()`: HTTP-cancel path — SIGTERM the tree, wait up to 15s, SIGKILL if still alive (runs in a daemon thread spawned by `finishJob`)
+- `_shutdown_job_processes()`: shutdown path — synchronous; SIGTERMs all live trees, drains ZMQ completion ACKs during the wait so services can finish cleanly, uses `Popen.poll()` (not psutil) to reap zombies, SIGKILLs survivors, then sweeps any non-terminal rows to `cancelled` with detail "killed during shutdown" / "terminated during shutdown"
+
+#### Shutdown Gate
+
+- `lib_runner.SHUTDOWN_FLAG_PATH` (`/tmp/pyops/shutdown.flag`): created by `GracefulKiller.exit_gracefully`, removed on clean startup and exit
+- `lib_runner.enqueue()` raises `ShutdownPending` when the flag is present — gunicorn-worker HTTP enqueues and `internal::data` service callbacks refuse new work as soon as the runner has been signalled
 
 #### Scheduling
 
-- `schedule()`: Enqueues from cron Schedules via croniter
+- `schedule()`: enqueues from cron Schedules via croniter; also re-enqueues `INTERNAL_ESSENTIAL_SERVICES` (currently the `internal::data` service that backs `/controller/internal/sets`) under the same `<3-failed` gating as services without a Schedule row
 
 #### Subprocess Execution Isolation
 
@@ -331,7 +337,7 @@ Top-level (not under `/scriptlet/`), unauthenticated, read-only.
 - `GET /health/failed` — JSON list of every job in `failed` state, full detail, no pagination.
 - `GET /metrics` — Prometheus exposition (`text/plain; version=0.0.4`); per-state job counts, per-(set, name, state) breakdown, ulimit gauges, GPU status with dedicated `pyops_gpu_reboot_required` flag for driver/runtime mismatch.
 
-Designed for Zabbix/Prometheus polling; see `doc/insights_app.md` § "Monitoring Router" for the GPU status taxonomy and ulimit threshold semantics.
+Designed for Zabbix/Prometheus polling; see `docs/insights_app.md` § "Monitoring Router" for the GPU status taxonomy and ulimit threshold semantics.
 
 ## Testing
 
@@ -340,10 +346,10 @@ Designed for Zabbix/Prometheus polling; see `doc/insights_app.md` § "Monitoring
 ### Structure
 
 - `conftest.py`: Fixtures mock_conf, mock_db, mock_client, mock_git_dir, mock_git_ops, etc.
-- unit/lib/: Tests lib_files, lib_git, lib_pyops, lib_runner_utils, lib_sets, lib_sites
+- unit/lib/: Tests lib_files, lib_git, lib_pyops, lib_runner_utils, lib_sites
 - unit/orm/: Tests job, schedule
 - integration/: Tests git, orm, routers, runner execution
-- api/: Tests api_editor, api_endpoints, api_job, api_schedule, api_sets
+- api/: Tests api_editor, api_endpoints, api_job, api_schedule
 - e2e/: Playwright E2E tests against real server instances
 
 ### Fixtures-Mocks

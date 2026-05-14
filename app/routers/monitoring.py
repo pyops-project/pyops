@@ -93,10 +93,16 @@ def _check_runner_socket() -> bool:
 
 
 def _collect_dependency_conflicts() -> list[dict]:
-    """Walk every set's `.update_warnings.json` (written by the
-    "Update Dependencies" flow) and aggregate the non-empty conflict
-    entries. A non-empty result flips `/health` to `degraded` so a
-    monitoring system polling `/health` can alert on it.
+    """Walk every set's `<venv_base>/{set}/.update_warnings.json` (written
+    by the "Update Dependencies" flow) and aggregate the non-empty
+    conflict entries. A non-empty result flips `/health` to `degraded`
+    so a monitoring system polling `/health` can alert on it.
+
+    Source-of-truth for "which sets exist" stays `<git_base>` (the git
+    repos are the user-facing set definition). The warnings file lives
+    under `<venv_base>` though — it's pyops runtime state, not user
+    content, and keeping it out of the git tree avoids surprising
+    operators with untracked files in their set repo.
 
     Empty when (a) no set has ever been updated, or (b) the last update
     resolved cleanly. The file is rewritten on every update, so stale
@@ -105,11 +111,16 @@ def _collect_dependency_conflicts() -> list[dict]:
     git_base = files.conf_data().get("git", "data/git")
     if not os.path.isabs(git_base):
         git_base = os.path.join(files.project_root, git_base)
+    venv_base = files.conf_runner().get("venv", "data/venv")
+    if not os.path.isabs(venv_base):
+        venv_base = os.path.join(files.project_root, venv_base)
     if not os.path.isdir(git_base):
         return []
     out = []
     for entry in sorted(os.listdir(git_base)):
-        warnings_path = os.path.join(git_base, entry, '.update_warnings.json')
+        if not os.path.isdir(os.path.join(git_base, entry)) or entry == "internal":
+            continue
+        warnings_path = os.path.join(venv_base, entry, '.update_warnings.json')
         if not os.path.isfile(warnings_path):
             continue
         try:

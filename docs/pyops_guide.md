@@ -26,7 +26,7 @@ VSIX provides pyops-container in sidebar/activitybar:
   Titlebar: Refresh Manager, Create Scriptlet, Attach to Debug Job.
 - **pyops-monitor**: Jobs by state; right-click: Copy Job Param, Cancel/Download/Delete/View Job.
   Titlebar: Refresh Monitor, Cancel All Jobs, Delete All Done/Canceled, Delete All Failed/Killed.
-- Sets Manager: Open http://{pyops.serverUrl}/scriptlet/sets.html for clone/switch/remove.
+- Sets Manager: Open http://{pyops.serverUrl}/controller/internal/sets for clone/switch/remove.
 
 Local `pyops/` mirrors remote files for editing (create opens file; upload/save syncs changes). Local-only scriptlets (created locally without remote counterpart) can be synced to remote via "Write Local to Remote Draft", which auto-creates the remote scriptlet if it doesn't exist.
 
@@ -79,7 +79,7 @@ Controllers: `debug=True` uses unstaged/draft code (preview).
 
 ## Full Workflow Example
 
-1. **Clone Set**: Browser to http://localhost:8000/scriptlet/sets.html > Add (name="myops", URL=git@github.com/user/myops.git, branch=main).
+1. **Clone Set**: Browser to http://localhost:8000/controller/internal/sets > Add (name="myops", URL=git@github.com/user/myops.git, branch=main).
 2. **Create Components**:
    - pyops-manager titlebar > Create Scriptlet (set="myops", type="service", name="myservice"); opens pyops/myops/service/myservice.py; use Cline to generate code.
    - Create controller/mycontroller.py (globals: set="myops" service="myservice" ...).
@@ -93,10 +93,12 @@ Controllers: `debug=True` uses unstaged/draft code (preview).
 
 ## Sets Manager
 
-PyOps UI: http://{pyops.serverUrl}/scriptlet/sets.html
+PyOps UI: http://{pyops.serverUrl}/controller/internal/sets
+
+The Sets view is itself a pyops scriptlet — a controller backed by the `internal::data` service. Each action (clone, create, pull, switch, remove, update-deps) enqueues a `set_*` task with `drop_done=true`; a modal polls the job and tails its stdout/stderr live until terminal state.
 
 - List sets/branch; auto-refresh.
 - Add: clone (name, Git URL/branch, git name/email, username/password).
-- Actions: pull (sync repos), switch (local branches), remove (confirm).
+- Actions: pull (sync repos), switch (local branches), remove (confirm), update dependencies.
 
-Safe Git ops with per-set locks; errors in UI.
+Safe Git ops with per-set locks; errors and progress shown in the live job modal.

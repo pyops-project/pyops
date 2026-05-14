@@ -6,7 +6,7 @@ import logging
 import json
 
 from fastapi import FastAPI, Request, HTTPException, Query
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from starlette.status import HTTP_200_OK, HTTP_404_NOT_FOUND, HTTP_405_METHOD_NOT_ALLOWED, HTTP_500_INTERNAL_SERVER_ERROR
 
 from .routers.scriptlet import job
@@ -16,7 +16,6 @@ from .routers.scriptlet import manager
 from .routers.scriptlet import monitor
 from .routers.scriptlet import scheduler
 from .routers.scriptlet import editor
-from .routers.scriptlet import sets
 from .routers.scriptlet import jslib
 from .routers import monitoring
 
@@ -46,7 +45,6 @@ app.include_router(schedule.router)
 app.include_router(manager.router)
 app.include_router(monitor.router)
 app.include_router(editor.router)
-app.include_router(sets.router)
 app.include_router(jslib.router)
 app.include_router(monitoring.router)
 
@@ -264,7 +262,14 @@ async def controller_proxy(set: str, name: str, rest: str, request: Request):
         owner_filter = user if kind == "debug" else None
         jobs = runner.find(owner_filter, glob["set"], glob["service"], kind, ["running"])
         if not jobs:
-            raise Exception(f"No running {kind}: {glob['set']}::{glob['service']}")
+            # Bound service not (yet) running. Common during startup or after
+            # a cancel — return a structured payload at HTTP 503 instead of
+            # an exception so the warmup-poll path doesn't dump a traceback
+            # on every miss.
+            return JSONResponse(
+                status_code=503,
+                content={"error": f"No running {kind}: {glob['set']}::{glob['service']}"},
+            )
         job_id = jobs[0]
         s = pyops.ServiceClient(job_id)
 
@@ -341,7 +346,7 @@ async def menu():
                 {
                     "id": "scriptlet_sets",
                     "name": "Sets",
-                    "path": "/scriptlet/sets",
+                    "path": "/controller/internal/sets",
                     "default": False
                 },
             ]

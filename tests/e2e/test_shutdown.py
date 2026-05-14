@@ -17,13 +17,14 @@ ourselves and observe exit timing / state without the conftest's wrapper
 killing the server first.
 """
 
+import contextlib
 import json
 import os
 import signal
+import sqlite3
 import subprocess
 import time
 
-import psutil
 import pytest
 import requests
 
@@ -94,28 +95,57 @@ def _start_server(tmp_path):
     return proc, data_dir, log_file, log_path
 
 
+def _setup_set_on_disk(data_dir, name):
+    """Materialise a user set on disk (git init + initial commit). Mirrors
+    set_create.task.py for fixtures that need a set without going through
+    the data-service spawn cost."""
+    repo = data_dir / "git" / name
+    repo.mkdir(parents=True, exist_ok=False)
+    env = {"PATH": os.environ["PATH"], "HOME": str(data_dir.parent)}
+    run = lambda cmd: subprocess.check_call(cmd, cwd=str(repo), env=env)
+    run(["git", "init", "-q"])
+    run(["git", "config", "user.email", "shutdown@example.com"])
+    run(["git", "config", "user.name", "shutdown-test"])
+    (repo / ".gitignore").write_text("*.bck\n")
+    (repo / "README.md").write_text(f"# {name}\n")
+    run(["git", "add", ".gitignore", "README.md"])
+    run(["git", "commit", "-q", "-m", "init"])
+
+
 def test_shutdown_waits_for_in_flight_pip_install(tmp_path):
     """SIGTERM mid-pip-install: pyops must let pip finish before exiting,
-    otherwise the venv ends up missing runtime deps. Proof: after exit,
-    every runtime dep (pyzmq/msgpack/psutil/debugpy/requests) is present
-    in the venv's site-packages.
+    otherwise the venv ends up missing runtime deps. We trigger a user-set
+    venv bootstrap by enqueueing a job into a fresh set — the runner calls
+    `ensure_set_environment(setname)` before Popen, which pip-installs
+    CORE_DEPS into a brand-new venv. SIGTERM lands mid-flight; the contract
+    says pip must finish before pyops exits.
     """
     proc, data_dir, log_file, log_path = _start_server(tmp_path)
-    set_name = "shutdown_wait_test"
+    set_name = "shutdown_pip_test"
     try:
-        # Trigger create — endpoint returns immediately, BG task starts pip install.
-        r = requests.post(
-            f"{BASE_URL}/scriptlet/sets/create",
-            json={"name": set_name},
+        _setup_set_on_disk(data_dir, set_name)
+        assert requests.put(
+            f"{BASE_URL}/scriptlet/inventory/item",
+            json={"set": set_name, "name": "noop", "type": "task"}, timeout=10,
+        ).status_code == 200
+        assert requests.post(
+            f"{BASE_URL}/scriptlet/inventory/item",
+            json={"set": set_name, "name": "noop", "code": 'print("x")\n'}, timeout=10,
+        ).status_code == 200
+        # Enqueue the job → runner picks it up, calls ensure_set_environment,
+        # pip install starts. We don't wait for the job; we want to SIGTERM
+        # while pip is mid-install (cold venv = real pip work on aarch64).
+        r = requests.put(
+            f"{BASE_URL}/scriptlet/job/item",
+            json={"set": set_name, "name": "noop", "kind": "task",
+                  "drop_done": False, "max_retries": 0, "param": ""},
             timeout=10,
         )
-        assert r.status_code == 200, f"create failed: {r.text}"
+        assert r.status_code == 200, f"enqueue failed: {r.text}"
 
-        # Give the BG task a moment to actually begin pip install (devpi index
-        # lookup + first wheel fetch).
-        time.sleep(1.5)
+        # Give pip a head-start so SIGTERM actually catches it in flight.
+        time.sleep(2.0)
 
-        # Send SIGTERM and time how long the master takes to exit.
         signal_at = time.monotonic()
         os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
         try:
@@ -134,7 +164,7 @@ def test_shutdown_waits_for_in_flight_pip_install(tmp_path):
 
     # If pyops respected the contract, exit took at least a meaningful slice
     # of the pip-install duration. A clean immediate exit (< ~1s) would mean
-    # the BG task was abandoned mid-install.
+    # the bootstrap was abandoned mid-install.
     assert exit_elapsed >= 1.0, (
         f"server exited in {exit_elapsed:.2f}s — pip install was killed "
         f"mid-flight. Server log:\n{log_path.read_text()[-3000:]}"
@@ -160,28 +190,11 @@ def test_shutdown_does_not_claim_new_jobs_after_signal(tmp_path):
     Verified post-mortem against the SQLite DB after the whole pyops stack
     has exited.
     """
-    import contextlib
-    import sqlite3
-
     proc, data_dir, log_file, log_path = _start_server(tmp_path)
     set_name = "shutdown_noclaim_test"
     try:
-        # Setup: create set + scriptlet, wait for first bootstrap so the
-        # subsequent enqueue isn't waiting on a slow pip install path.
-        assert requests.post(
-            f"{BASE_URL}/scriptlet/sets/create",
-            json={"name": set_name}, timeout=10,
-        ).status_code == 200
-        # Wait for BG bootstrap to fully complete (cold devpi + 2 pip steps).
-        # `psutil` is the most reliably-named runtime dep — directory name
-        # matches PyPI name (unlike pyzmq → `zmq` directory).
-        deadline = time.monotonic() + 180
-        site_packages = data_dir / "venv" / set_name / "lib" / "python3.13" / "site-packages"
-        venv_marker = site_packages / "psutil"
-        while time.monotonic() < deadline and not venv_marker.exists():
-            time.sleep(0.5)
-        assert venv_marker.exists(), "initial bootstrap didn't finish in time"
-
+        # Set + scriptlet on disk; the inventory POST commits the code.
+        _setup_set_on_disk(data_dir, set_name)
         assert requests.put(
             f"{BASE_URL}/scriptlet/inventory/item",
             json={"set": set_name, "name": "noclaim", "type": "task"}, timeout=10,
@@ -191,10 +204,25 @@ def test_shutdown_does_not_claim_new_jobs_after_signal(tmp_path):
             json={"set": set_name, "name": "noclaim", "code": 'print("ran")\n'}, timeout=10,
         ).status_code == 200
 
-        # Enqueue, then immediately SIGTERM the whole process group. Race
-        # window: if SIGTERM arrives DURING the runner's getNextToDo (~ms),
-        # the job may get claimed. We retry the enqueue + signal a few times
-        # to make the test robust without making it timing-fragile.
+        # Prime the per-set venv via an initial job so the second enqueue
+        # (whose claim we're testing) isn't racing pip install with SIGTERM.
+        r = requests.put(
+            f"{BASE_URL}/scriptlet/job/item",
+            json={"set": set_name, "name": "noclaim", "kind": "task",
+                  "drop_done": False, "max_retries": 0, "param": ""},
+            timeout=10,
+        )
+        prime_job_id = r.json()["job"]
+        deadline = time.monotonic() + 180
+        while time.monotonic() < deadline:
+            jr = requests.get(f"{BASE_URL}/scriptlet/job/item?id={prime_job_id}", timeout=10)
+            if jr.status_code == 200 and jr.json()["state"] in {"done", "failed"}:
+                break
+            time.sleep(0.5)
+        else:
+            pytest.fail("prime job did not finish in time")
+
+        # Now enqueue the real job under test, then immediately SIGTERM.
         r = requests.put(
             f"{BASE_URL}/scriptlet/job/item",
             json={"set": set_name, "name": "noclaim", "kind": "task",
@@ -204,10 +232,6 @@ def test_shutdown_does_not_claim_new_jobs_after_signal(tmp_path):
         assert r.status_code == 200, f"enqueue failed: {r.text}"
         job_id = r.json()["job"]
 
-        # SIGTERM the gunicorn master's process group → propagates to runner
-        # and worker via the shared pgid. Runner's signal handler flips
-        # `kill_now`, the next main-loop iteration's spawn-block guard skips
-        # getNextToDo, and the loop exits at the next `while` check.
         os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
         try:
             proc.wait(timeout=SERVER_SHUTDOWN_TIMEOUT)
@@ -218,7 +242,6 @@ def test_shutdown_does_not_claim_new_jobs_after_signal(tmp_path):
                 f"server did not exit within {SERVER_SHUTDOWN_TIMEOUT}s of SIGTERM"
             )
 
-        # After everything has exited, the DB is the source of truth.
         db_path = data_dir / "app.db"
         with contextlib.closing(sqlite3.connect(str(db_path))) as conn:
             row = conn.execute(

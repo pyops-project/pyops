@@ -619,5 +619,49 @@ class TestStatusAndRollback:
         assert result is True
 
 
+class TestInternalSetResolver:
+    """get_repo_path / read_content special-case for the pyops-managed
+    internal set: resolves to <project_root>/app/internal/ (not data/git/),
+    no .git init, direct FS reads."""
+
+    def test_get_repo_path_internal_returns_app_internal(self, tmp_path):
+        fake_internal = tmp_path / "app" / "internal"
+        fake_internal.mkdir(parents=True)
+        with patch.object(files, "internal_set_path", str(fake_internal)):
+            result = git.get_repo_path("internal")
+        assert result == str(fake_internal)
+
+    def test_get_repo_path_internal_raises_if_missing(self, tmp_path):
+        missing = tmp_path / "app" / "internal_missing"
+        with patch.object(files, "internal_set_path", str(missing)):
+            with pytest.raises(git.GitNotFoundError):
+                git.get_repo_path("internal")
+
+    def test_get_repo_path_internal_skips_git_init(self, tmp_path):
+        fake_internal = tmp_path / "app" / "internal"
+        fake_internal.mkdir(parents=True)
+        with patch.object(files, "internal_set_path", str(fake_internal)), \
+             patch("app.lib.git._call") as mock_call:
+            git.get_repo_path("internal")
+        # Internal never gets `git init` / commit dance
+        mock_call.assert_not_called()
+        assert not (fake_internal / ".git").exists()
+
+    def test_read_content_internal_direct_fs_read(self, tmp_path):
+        fake_internal = tmp_path / "app" / "internal"
+        fake_internal.mkdir(parents=True)
+        (fake_internal / "set_clone.task.py").write_text("print('hi')\n")
+        with patch.object(files, "internal_set_path", str(fake_internal)):
+            # committed=True/strict=True are intentionally ignored for internal
+            content = git.read_content(str(fake_internal), "set_clone", "task", committed=True, strict=True)
+        assert content == "print('hi')\n"
+
+    def test_read_content_internal_missing_raises_filenotfound(self, tmp_path):
+        fake_internal = tmp_path / "app" / "internal"
+        fake_internal.mkdir(parents=True)
+        with patch.object(files, "internal_set_path", str(fake_internal)):
+            with pytest.raises(FileNotFoundError):
+                git.read_content(str(fake_internal), "no_such", "task", committed=False)
+
 
 # Additional edge cases can be added as needed

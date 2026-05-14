@@ -1,7 +1,7 @@
 # PyOps
 Execution Platform for Python Operations Scriptlets
 
-PyOps is an "Execution Platform" for "Python Operations Scriptlets". It is licensed under GNU AGPLv3 and organized as a monorepo with core functionality in `app/`, a VSCode extension in `vsix/`, tests in `tests/`, and documentation in `doc/`.
+PyOps is an "Execution Platform" for "Python Operations Scriptlets". It is licensed under GNU AGPLv3 and organized as a monorepo with core functionality in `app/`, a VSCode extension in `vsix/`, tests in `tests/`, and documentation in `docs/`.
 
 ## Architecture
 ```mermaid
@@ -191,4 +191,4 @@ location ~ ^/(health|metrics) {
 
 Or scrape the upstream container directly on the compose-internal port (preferred when the monitoring host is on the same LAN), which is how this repo is deployed at `aiops_app.ralph.or.at:1080`.
 
-See `doc/insights_app.md` § "Monitoring Router" for the full metric list, GPU status taxonomy, and the ulimit threshold semantics.
+See `docs/insights_app.md` § "Monitoring Router" for the full metric list, GPU status taxonomy, and the ulimit threshold semantics.
