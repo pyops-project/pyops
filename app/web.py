@@ -1,6 +1,7 @@
 import asyncio, traceback
 import mimetypes
 import os
+import re
 import subprocess
 import logging
 import json
@@ -62,28 +63,140 @@ def get_debug_port(request: Request):
         raise HTTPException(status_code=400, detail=f"No debug_port configured for user '{owner}'")
     return {"port": int(port)}
 
+_BRAND_GLYPH_RE = re.compile(r"^[a-zA-Z0-9_]+$")
+_BRAND_IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico")
+_DEFAULT_BRAND_GLYPH = "miscellaneous_services"
+
+
+def _html_escape(s: str) -> str:
+    return (s.replace("&", "&amp;")
+             .replace("<", "&lt;")
+             .replace(">", "&gt;")
+             .replace('"', "&quot;"))
+
+
+def _is_brand_image(value: str) -> bool:
+    """Treat the brand-icon config as an image path when it ends in a
+    well-known raster/vector extension. Anything else is rendered as a
+    material-icons-round glyph name."""
+    return value.lower().endswith(_BRAND_IMAGE_EXTS)
+
+
+def _resolve_brand_path(value: str) -> str:
+    """Brand-config paths are absolute, or relative to the project root."""
+    return value if os.path.isabs(value) else os.path.join(files.project_root, value)
+
+
+def _brand_icon_html() -> str:
+    """Render the configured `brand.icon` as the full HTML element that
+    `{{BRAND_ICON}}` is replaced with in `root.html`. Three rendering paths:
+
+    1. Material-icons-round glyph name (default) → `<span class="material-
+       icons-round">name</span>`. Inherits text color, sizes via the font.
+    2. SVG file path → the SVG markup inlined inside `<span class="pyops-
+       brand-icon">…</span>`. Inline so the SVG inherits `currentColor`
+       and follows the brand's theme color like the material-icons glyph.
+    3. Raster image path (PNG/JPG/GIF/WEBP/ICO) → `<img class="pyops-
+       brand-icon" src="/brand/icon">`. Raster doesn't theme so a static
+       logo is the operator's responsibility.
+
+    Missing/invalid values log a warning and fall back to the default glyph."""
+    icon = str(files.conf_brand().get("icon") or _DEFAULT_BRAND_GLYPH).strip()
+    if _is_brand_image(icon):
+        path = _resolve_brand_path(icon)
+        if os.path.isfile(path):
+            if path.lower().endswith(".svg"):
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        svg = f.read().strip()
+                    if svg.startswith("<svg") or svg.startswith("<?xml"):
+                        return f'<span class="pyops-brand-icon" aria-hidden="true">{svg}</span>'
+                    logger.warning("brand.icon SVG %r does not begin with <svg> / <?xml — falling back to default glyph", icon)
+                except OSError as ex:
+                    logger.warning("brand.icon SVG %r unreadable: %s — falling back to default glyph", icon, ex)
+            else:
+                return '<img class="pyops-brand-icon" src="/brand/icon" alt="">'
+        else:
+            logger.warning("brand.icon image %r not found — falling back to default glyph", icon)
+        icon = _DEFAULT_BRAND_GLYPH
+    if not _BRAND_GLYPH_RE.match(icon):
+        logger.warning("brand.icon glyph %r is not a valid material-icons name — falling back to default", icon)
+        icon = _DEFAULT_BRAND_GLYPH
+    return f'<span class="material-icons-round" aria-hidden="true">{icon}</span>'
+
+
 @app.get("/")
 async def root():
     try:
-        return HTMLResponse(
-            content=sites.get("root/root"),
-            status_code=HTTP_200_OK
-        )
+        title = _html_escape(str(files.conf_brand().get("title") or "PyOps"))
+        body = (sites.get("root/root")
+                .replace("{{BRAND_TITLE}}", title)
+                .replace("{{BRAND_ICON}}", _brand_icon_html()))
+        return HTMLResponse(content=body, status_code=HTTP_200_OK)
     except Exception as ex:
         logger.exception("Error in root: %s", ex)
-        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
+        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail=str(ex))
+
 
 @app.get("/favicon.ico")
 async def favicon():
+    """Serve the bundled favicon unless `brand.favicon` in config points at
+    an override file. Media type is inferred from extension so PNG / SVG
+    work alongside `.ico`. A missing override falls back to the bundled
+    icon and logs a warning rather than failing the request."""
     try:
+        override = str(files.conf_brand().get("favicon") or "").strip()
+        if override:
+            path = _resolve_brand_path(override)
+            try:
+                with open(path, "rb") as f:
+                    content = f.read()
+                media_type, _ = mimetypes.guess_type(path)
+                return Response(
+                    content=content,
+                    media_type=media_type or "image/x-icon",
+                    status_code=HTTP_200_OK,
+                )
+            except FileNotFoundError:
+                logger.warning("brand.favicon points at %s but the file is missing — serving bundled default", path)
         return Response(
             content=files.get("favicon.ico"),
             media_type="image/x-icon",
-            status_code=HTTP_200_OK
+            status_code=HTTP_200_OK,
         )
     except Exception as ex:
         logger.exception("Error in favicon: %s", ex)
-        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
+        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail=str(ex))
+
+
+@app.get("/brand/icon")
+async def brand_icon():
+    """Serve the operator-configured brand-icon image when `brand.icon` in
+    config points at a `.png` / `.svg` / etc. file. Returns 404 when the
+    config holds a material-icons glyph name (no image to serve) or the
+    file is missing — the root HTML only references this endpoint when
+    `_brand_icon_html` has already confirmed a usable image."""
+    try:
+        icon = str(files.conf_brand().get("icon") or "").strip()
+        if not icon or not _is_brand_image(icon):
+            raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="brand.icon is a glyph name, not an image")
+        path = _resolve_brand_path(icon)
+        try:
+            with open(path, "rb") as f:
+                content = f.read()
+        except FileNotFoundError:
+            raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail=f"brand.icon file not found: {path}")
+        media_type, _ = mimetypes.guess_type(path)
+        return Response(
+            content=content,
+            media_type=media_type or "application/octet-stream",
+            status_code=HTTP_200_OK,
+        )
+    except HTTPException:
+        raise
+    except Exception as ex:
+        logger.exception("Error in brand_icon: %s", ex)
+        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail=str(ex))
 
 @app.get("/files/{path:path}")
 async def file(path: str):

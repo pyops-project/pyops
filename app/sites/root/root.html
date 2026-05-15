@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en">
     <head>
-        <title>PyOps</title>
+        <title>{{BRAND_TITLE}}</title>
 
         <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
@@ -23,6 +23,30 @@
             #sidebarOffcanvas .pyops-brand {
                 padding: 0.75rem 1rem;
                 border-bottom: 1px solid rgba(255,255,255,0.15);
+            }
+
+            /* Brand icon. Three renderers all share .pyops-brand-icon so
+               the brand row keeps its layout:
+                 - default: a material-icons-round glyph span (sized by
+                   the icon font's font-size),
+                 - raster image: img tag served from /brand/icon,
+                 - SVG: span wrapping inline <svg> so it inherits
+                   currentColor and follows the brand text color exactly
+                   like the material-icons glyph does. */
+            .pyops-brand-icon {
+                display: inline-flex;
+                width: 1.5rem;
+                height: 1.5rem;
+                vertical-align: middle;
+                color: inherit;
+            }
+            img.pyops-brand-icon {
+                object-fit: contain;
+            }
+            span.pyops-brand-icon > svg {
+                width: 100%;
+                height: 100%;
+                fill: currentColor;
             }
             #menu {
                 padding: 0.25rem 0.5rem;
@@ -208,8 +232,8 @@
                     <span class="navbar-toggler-icon"></span>
                 </button>
                 <span class="navbar-brand d-flex align-items-center gap-2 mb-0">
-                    <span class="material-icons-round" aria-hidden="true">miscellaneous_services</span>
-                    <span class="fs-5">PyOps</span>
+                    {{BRAND_ICON}}
+                    <span class="fs-5">{{BRAND_TITLE}}</span>
                 </span>
             </div>
         </nav>
@@ -220,8 +244,8 @@
                 <div class="pyops-brand d-flex align-items-center justify-content-between">
                     <span class="d-flex align-items-center gap-2 fs-5"
                           id="sidebarOffcanvasLabel" data-testid="app-title">
-                        <span class="material-icons-round" aria-hidden="true">miscellaneous_services</span>
-                        <span>PyOps</span>
+                        {{BRAND_ICON}}
+                        <span>{{BRAND_TITLE}}</span>
                     </span>
                     <button type="button" class="btn-close btn-close-white d-lg-none"
                             data-bs-dismiss="offcanvas" data-bs-target="#sidebarOffcanvas"

@@ -91,11 +91,12 @@ graph TD
 
 ### JSON Structure
 
-- `web`: `{"bind": "127.0.0.1:8000", "worker": 8, "timeout": 300}`
+- `web`: `{"bind": "127.0.0.1:8000", "worker": 8, "timeout": 300, "expanded_sets": []}`
+- `brand` *(optional)*: `{"title": "PyOps", "icon": "miscellaneous_services", "favicon": null}` — operator-facing chrome. `title` → `<title>` + sidebar/topbar header; `icon` → material-icons-round glyph name OR image path served via `/brand/icon`; `favicon` → optional image served at `/favicon.ico`. Paths can be absolute or project-root-relative. Defaults reproduce the bundled look so existing deployments don't need to opt in.
 - `data`: `{"jobs": "data/jobs", "git": "data/git", "db": "data/app.db"}`
 - `runner`: `{"venv": "data/venv", "pkg": "data/pkg", "git_pull_interval": 60, "drop_done_delay_seconds": 60}`
 - `log`: `{"loglevel": "debug"}`
-- `users`: `{"anonymous": {"debug_port": 15678}}`
+- `users`: `{"anonymous": {"debug_port": 45678}}`
 
 ### Access Methods
 
@@ -540,7 +541,12 @@ FastAPI application; mounts all routers; serves static files.
 
 ### Controller Proxy Detail
 
-`controller_proxy` determines kind (`debug` if `glob.get("debug")` else `service`); for debug kind filters by requesting user (`X-User`). Finds running job via `runner.find()`, creates `ServiceClient(job_id)`, forwards request with `data_type` inferred from `Content-Type`. When no matching job is running (warmup window or after a cancel) it returns a structured `503 JSONResponse` with `{"error": "No running {kind}: {set}::{name}"}` rather than raising — clients polling for service readiness no longer dump a traceback into the server log on every miss.
+`controller_proxy` resolves the kind it forwards to from `glob["debug"]`:
+
+- `debug=True` (preview mode) — tries `debug` kind first (debugger-attached, started from VSIX), then falls back to `draft` kind (a Manager-started preview without debugger). The first kind that has a running job for this `{set, name}` and the requesting user (`X-User`) wins. If neither is running, the proxy returns 503.
+- `debug=False` (the default, production mode) — forwards to the `service` kind only.
+
+The proxy finds the running job via `runner.find()`, creates `ServiceClient(job_id)`, and forwards the request with `data_type` inferred from `Content-Type`. When no matching job is running (warmup window or after a cancel) it returns a structured `503 JSONResponse` with `{"error": "No running {kind}: {set}::{name}"}` rather than raising — clients polling for service readiness no longer dump a traceback into the server log on every miss. The `kind` reported in the error is `"preview"` in `debug=True` mode (so the message is informative regardless of which preview kind the client expected) and `"service"` otherwise.
 
 ### Scriptlet Routers (`app/routers/scriptlet/`)
 
@@ -689,3 +695,5 @@ docker  ── SIGTERM ──▶  gunicorn master (PID 1)
 Worst-case clock: 120s (workers) + 15s (runner) ≈ **135s**. Docker's default `stop_grace_period` is **10s** — that's nowhere near enough; docker SIGKILLs the container before the runner ever gets its SIGTERM, leaving any then-running service rows in state `running`. The next start's `handleOddJobs` marks those as `failed` with the sentinel detail `"incomplete execution detected on startup"` (deduplicated per identity so the per-service `<3 failed` gate never accumulates across repeated unclean restarts).
 
 **Compose deployments must set `stop_grace_period: 180s`** (or higher) on the pyops service so the chain has room to finish. See the example in the project README.
+
+**Compose deployments must also raise `nofile` to 65535** (`ulimits.nofile.soft`/`hard`) on the pyops service. Default Docker `nofile` (1024 soft historically) is the first wall pyops hits — between gunicorn workers, the runner subprocess, per-job log streams, and ZMQ sockets, the FD count climbs fast and `/health` flips to `degraded` once the `pyops_open_fds / pyops_max_fds_soft` ratio crosses the warning threshold. The README example deploys with `nofile: 65535`.

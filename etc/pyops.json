@@ -19,6 +19,6 @@
         "loglevel": "debug"
     },
     "users": {
-        "anonymous": {"debug_port": 15678}
+        "anonymous": {"debug_port": 45678}
     }
 }

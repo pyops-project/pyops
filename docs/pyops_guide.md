@@ -62,7 +62,7 @@ Cline outputs full file content; paste/replace in editor, then save via VSIX. It
 Add to `etc/pyops.json`:
 ```json
 "users": {
-  "anonymous": {"debug_port": 15678}
+  "anonymous": {"debug_port": 45678}
 }
 ```
 - GET /debug/port returns {"port": port} for owner (X-User/anonymous).
@@ -113,7 +113,7 @@ Force-expand specific sets at boot via `etc/pyops.json`:
 {
     "web": {
         "bind": "0.0.0.0:80",
-        "worker": 4,
+        "worker": 8,
         "timeout": 300,
         "expanded_sets": ["system", "myops"]
     }

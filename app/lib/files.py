@@ -136,6 +136,26 @@ class Config:
             logger.error("Conf log access failed: %s", e)
             raise
 
+    def brand(self):
+        """Per-instance branding for the operator-facing chrome.
+
+        Keys (all optional, defaults reproduce the bundled pyops look):
+          • `title`   — string shown in the browser tab and in the
+                        sidebar / mobile-topbar header. Default: ``"PyOps"``.
+          • `icon`    — material-icons-round glyph name shown next to the
+                        title. Default: ``"miscellaneous_services"``.
+          • `favicon` — path to an icon file the `/favicon.ico` route
+                        serves instead of the bundled default. Absolute,
+                        or relative to the project root. Default: ``None``
+                        (bundled `app/files/favicon.ico`).
+        """
+        if self._raw_conf is None:
+            raise ValueError("Config not initialized. Call Config.init(conf_path) first.")
+        defaults = {"title": "PyOps", "icon": "miscellaneous_services", "favicon": None}
+        defaults.update(self._raw_conf.get("brand") or {})
+        return defaults
+
+
 config = None
 
 def conf_data():
@@ -167,3 +187,9 @@ def conf_log():
     if config is None:
         raise ValueError("Config not initialized. Call Config.init(conf_path) first.")
     return config.log()
+
+def conf_brand():
+    global config
+    if config is None:
+        raise ValueError("Config not initialized. Call Config.init(conf_path) first.")
+    return config.brand()

@@ -97,11 +97,11 @@ graph TD
 
 ### JSON Structure
 
-- `web`: `{"bind": "127.0.0.1:8000", "worker": 4, "timeout": 300}`
+- `web`: `{"bind": "127.0.0.1:8000", "worker": 8, "timeout": 300}`
 - `data`: `{"jobs": "data/jobs", "git": "data/git", "db": "data/app.db"}`
 - `runner`: `{"venv": "data/venv", "pkg": "data/pkg", "git_pull_interval": 60, "drop_done_delay_seconds": 60}`
 - `log`: `{"loglevel": "debug"}`
-- `users`: `{"anonymous": {"debug_port": 15678}}`
+- `users`: `{"anonymous": {"debug_port": 45678}}`
 
 ### Access Methods
 
