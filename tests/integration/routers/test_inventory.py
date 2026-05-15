@@ -127,3 +127,51 @@ class TestInventoryRouter:
         with patch("os.path.exists", return_value=False):
             response = mock_client.put("/scriptlet/inventory/item", json={"set": "nonexistent", "name": "test", "type": "task"}, headers={"X-User": "testuser"})
             assert response.status_code == 400
+
+
+class TestInventoryInternalGuard:
+    """Inventory write endpoints must reject `set=internal` — those scriptlets
+    ship with the pyops source and are versioned via the pyops repo, not via
+    the API. Allowing writes would corrupt the application's own code."""
+
+    def test_put_internal_rejected(self, mock_client, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
+        response = mock_client.put(
+            "/scriptlet/inventory/item",
+            json={"set": "internal", "name": "set_clone", "type": "task"},
+            headers={"X-User": "alice"},
+        )
+        assert response.status_code == 400
+        assert "pyops-managed" in response.json()["detail"]
+
+    def test_post_internal_rejected(self, mock_client, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
+        response = mock_client.post(
+            "/scriptlet/inventory/item",
+            json={"set": "internal", "name": "set_clone", "code": "print('hi')"},
+            headers={"X-User": "alice"},
+        )
+        assert response.status_code == 400
+        assert "pyops-managed" in response.json()["detail"]
+
+    def test_draft_post_internal_rejected(self, mock_client, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
+        response = mock_client.post(
+            "/scriptlet/inventory/draft",
+            json={"set": "internal", "name": "set_clone", "code": "print('hi')"},
+            headers={"X-User": "alice"},
+        )
+        assert response.status_code == 400
+
+    def test_delete_internal_rejected(self, mock_client, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
+        response = mock_client.delete(
+            "/scriptlet/inventory/item",
+            params={"set": "internal", "name": "set_clone"},
+            headers={"X-User": "alice"},
+        )
+        assert response.status_code == 400
+
+    def test_draft_delete_internal_rejected(self, mock_client, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
+        response = mock_client.delete(
+            "/scriptlet/inventory/draft",
+            params={"set": "internal", "name": "set_clone"},
+            headers={"X-User": "alice"},
+        )
+        assert response.status_code == 400

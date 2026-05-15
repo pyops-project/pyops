@@ -8,6 +8,22 @@ files_path = os.path.join(project_root, "app/files")
 
 version_path = os.path.join(project_root, "VERSION")
 
+# Pyops-managed set whose scriptlets ship with the application source
+# (under app/internal/). Treated as a set for the runner/controller layer
+# but lives outside the user-managed data/git tree.
+INTERNAL_SET_NAME = "internal"
+internal_set_path = os.path.join(project_root, "app", INTERNAL_SET_NAME)
+
+
+def is_internal_set(name: str) -> bool:
+    """True when `name` refers to the pyops-managed internal set.
+
+    Callers gate write operations (inventory PUT/POST/DELETE, sets remove,
+    editor save) on this — pyops-shipped scriptlets are versioned with
+    the source tree, not via the UI.
+    """
+    return name == INTERNAL_SET_NAME
+
 def get(path: str):
     with open(os.path.join(files_path, path), "rb") as file:
         return file.read()
@@ -120,6 +136,26 @@ class Config:
             logger.error("Conf log access failed: %s", e)
             raise
 
+    def brand(self):
+        """Per-instance branding for the operator-facing chrome.
+
+        Keys (all optional, defaults reproduce the bundled pyops look):
+          • `title`   — string shown in the browser tab and in the
+                        sidebar / mobile-topbar header. Default: ``"PyOps"``.
+          • `icon`    — material-icons-round glyph name shown next to the
+                        title. Default: ``"miscellaneous_services"``.
+          • `favicon` — path to an icon file the `/favicon.ico` route
+                        serves instead of the bundled default. Absolute,
+                        or relative to the project root. Default: ``None``
+                        (bundled `app/files/favicon.ico`).
+        """
+        if self._raw_conf is None:
+            raise ValueError("Config not initialized. Call Config.init(conf_path) first.")
+        defaults = {"title": "PyOps", "icon": "miscellaneous_services", "favicon": None}
+        defaults.update(self._raw_conf.get("brand") or {})
+        return defaults
+
+
 config = None
 
 def conf_data():
@@ -151,3 +187,9 @@ def conf_log():
     if config is None:
         raise ValueError("Config not initialized. Call Config.init(conf_path) first.")
     return config.log()
+
+def conf_brand():
+    global config
+    if config is None:
+        raise ValueError("Config not initialized. Call Config.init(conf_path) first.")
+    return config.brand()

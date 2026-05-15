@@ -374,3 +374,22 @@ def test_version_matches_project_version_file():
     with open(files.version_path, "r") as f:
         expected = f.read().strip()
     assert files.version() == expected
+
+
+def test_is_internal_set_true():
+    from app.lib import files
+    assert files.is_internal_set("internal") is True
+    assert files.is_internal_set(files.INTERNAL_SET_NAME) is True
+
+
+def test_is_internal_set_false():
+    from app.lib import files
+    assert files.is_internal_set("myops") is False
+    assert files.is_internal_set("Internal") is False
+    assert files.is_internal_set("") is False
+
+
+def test_internal_set_path_under_app():
+    from app.lib import files
+    assert files.internal_set_path.endswith(os.path.join("app", "internal"))
+    assert os.path.isabs(files.internal_set_path)

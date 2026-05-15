@@ -85,13 +85,13 @@ def _run(api, set_name, task_name, param="", timeout=120):
 class TestPipInstall:
     """Tasks that install pip packages via #!<package> in code or param."""
 
-    def test_package_installed_and_importable(self, api, pyops_server):
+    def test_package_installed_and_importable(self, api, pyops_server, set_factory):
         """#!six in task code installs the package and makes it importable.
 
         'six' is chosen because it is tiny (~33 KB) and has no transitive
         dependencies, minimising download time.
         """
-        api.post("/scriptlet/sets/create", json={"name": SET})
+        set_factory(SET)
 
         task_code = (
             "#!six\n"
@@ -109,13 +109,13 @@ class TestPipInstall:
         assert "is_py3=True" in job["stdout"]
         pyops_server.assert_no_unexpected_errors()
 
-    def test_pip_install_in_param_available_in_task(self, api, pyops_server):
+    def test_pip_install_in_param_available_in_task(self, api, pyops_server, set_factory):
         """#!<package> in param is processed before task code executes.
 
         The param runs first; its pip install makes the package available
         to the main task code even though the main code has no #! line.
         """
-        api.post("/scriptlet/sets/create", json={"name": SET + "_param"})
+        set_factory(SET + "_param")
 
         # Main code imports six — no #! directive here.
         task_code = "import six\nprint(f\"param_install={six.__version__}\")\n"
@@ -129,14 +129,14 @@ class TestPipInstall:
         assert "param_install=" in job["stdout"]
         pyops_server.assert_no_unexpected_errors()
 
-    def test_second_run_reuses_venv_without_reinstall_errors(self, api, pyops_server):
+    def test_second_run_reuses_venv_without_reinstall_errors(self, api, pyops_server, set_factory):
         """Running the same pip-install task twice succeeds both times.
 
         Per-job (default) runs `pip install <pkg>` without `--upgrade`. The
         second run sees the package already in the venv → pip says
         "already satisfied" → fast, no index lookup, no reinstall.
         """
-        api.post("/scriptlet/sets/create", json={"name": SET + "_reuse"})
+        set_factory(SET + "_reuse")
 
         task_code = "#!six\nimport six\nprint(f\"ok={six.__version__}\")\n"
         _create(api, SET + "_reuse", "reuse_task", "task", task_code)
@@ -150,9 +150,9 @@ class TestPipInstall:
 
         pyops_server.assert_no_unexpected_errors()
 
-    def test_nonexistent_package_fails_job(self, api, pyops_server):
+    def test_nonexistent_package_fails_job(self, api, pyops_server, set_factory):
         """A #! line naming a non-existent package causes the job to fail."""
-        api.post("/scriptlet/sets/create", json={"name": SET + "_bad"})
+        set_factory(SET + "_bad")
 
         task_code = (
             "#!nonexistent-package-xyzzy-e2e-12345\n"
@@ -173,13 +173,13 @@ class TestPipInstall:
             ]
         )
 
-    def test_library_directive_not_treated_as_pip_install(self, api, pyops_server):
+    def test_library_directive_not_treated_as_pip_install(self, api, pyops_server, set_factory):
         """#!{::libname} lines are skipped by process_install_lines.
 
         process_install_lines skips lines where rest starts with '{',
         so library directives do not accidentally trigger pip installs.
         """
-        api.post("/scriptlet/sets/create", json={"name": SET + "_skip"})
+        set_factory(SET + "_skip")
 
         lib_code = "MAGIC = 99\n"
         _create(api, SET + "_skip", "my_lib", "library", lib_code)

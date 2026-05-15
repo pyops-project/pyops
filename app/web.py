@@ -1,12 +1,13 @@
 import asyncio, traceback
 import mimetypes
 import os
+import re
 import subprocess
 import logging
 import json
 
 from fastapi import FastAPI, Request, HTTPException, Query
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from starlette.status import HTTP_200_OK, HTTP_404_NOT_FOUND, HTTP_405_METHOD_NOT_ALLOWED, HTTP_500_INTERNAL_SERVER_ERROR
 
 from .routers.scriptlet import job
@@ -16,7 +17,6 @@ from .routers.scriptlet import manager
 from .routers.scriptlet import monitor
 from .routers.scriptlet import scheduler
 from .routers.scriptlet import editor
-from .routers.scriptlet import sets
 from .routers.scriptlet import jslib
 from .routers import monitoring
 
@@ -46,7 +46,6 @@ app.include_router(schedule.router)
 app.include_router(manager.router)
 app.include_router(monitor.router)
 app.include_router(editor.router)
-app.include_router(sets.router)
 app.include_router(jslib.router)
 app.include_router(monitoring.router)
 
@@ -64,28 +63,140 @@ def get_debug_port(request: Request):
         raise HTTPException(status_code=400, detail=f"No debug_port configured for user '{owner}'")
     return {"port": int(port)}
 
+_BRAND_GLYPH_RE = re.compile(r"^[a-zA-Z0-9_]+$")
+_BRAND_IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico")
+_DEFAULT_BRAND_GLYPH = "miscellaneous_services"
+
+
+def _html_escape(s: str) -> str:
+    return (s.replace("&", "&amp;")
+             .replace("<", "&lt;")
+             .replace(">", "&gt;")
+             .replace('"', "&quot;"))
+
+
+def _is_brand_image(value: str) -> bool:
+    """Treat the brand-icon config as an image path when it ends in a
+    well-known raster/vector extension. Anything else is rendered as a
+    material-icons-round glyph name."""
+    return value.lower().endswith(_BRAND_IMAGE_EXTS)
+
+
+def _resolve_brand_path(value: str) -> str:
+    """Brand-config paths are absolute, or relative to the project root."""
+    return value if os.path.isabs(value) else os.path.join(files.project_root, value)
+
+
+def _brand_icon_html() -> str:
+    """Render the configured `brand.icon` as the full HTML element that
+    `{{BRAND_ICON}}` is replaced with in `root.html`. Three rendering paths:
+
+    1. Material-icons-round glyph name (default) → `<span class="material-
+       icons-round">name</span>`. Inherits text color, sizes via the font.
+    2. SVG file path → the SVG markup inlined inside `<span class="pyops-
+       brand-icon">…</span>`. Inline so the SVG inherits `currentColor`
+       and follows the brand's theme color like the material-icons glyph.
+    3. Raster image path (PNG/JPG/GIF/WEBP/ICO) → `<img class="pyops-
+       brand-icon" src="/brand/icon">`. Raster doesn't theme so a static
+       logo is the operator's responsibility.
+
+    Missing/invalid values log a warning and fall back to the default glyph."""
+    icon = str(files.conf_brand().get("icon") or _DEFAULT_BRAND_GLYPH).strip()
+    if _is_brand_image(icon):
+        path = _resolve_brand_path(icon)
+        if os.path.isfile(path):
+            if path.lower().endswith(".svg"):
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        svg = f.read().strip()
+                    if svg.startswith("<svg") or svg.startswith("<?xml"):
+                        return f'<span class="pyops-brand-icon" aria-hidden="true">{svg}</span>'
+                    logger.warning("brand.icon SVG %r does not begin with <svg> / <?xml — falling back to default glyph", icon)
+                except OSError as ex:
+                    logger.warning("brand.icon SVG %r unreadable: %s — falling back to default glyph", icon, ex)
+            else:
+                return '<img class="pyops-brand-icon" src="/brand/icon" alt="">'
+        else:
+            logger.warning("brand.icon image %r not found — falling back to default glyph", icon)
+        icon = _DEFAULT_BRAND_GLYPH
+    if not _BRAND_GLYPH_RE.match(icon):
+        logger.warning("brand.icon glyph %r is not a valid material-icons name — falling back to default", icon)
+        icon = _DEFAULT_BRAND_GLYPH
+    return f'<span class="material-icons-round" aria-hidden="true">{icon}</span>'
+
+
 @app.get("/")
 async def root():
     try:
-        return HTMLResponse(
-            content=sites.get("root/root"),
-            status_code=HTTP_200_OK
-        )
+        title = _html_escape(str(files.conf_brand().get("title") or "PyOps"))
+        body = (sites.get("root/root")
+                .replace("{{BRAND_TITLE}}", title)
+                .replace("{{BRAND_ICON}}", _brand_icon_html()))
+        return HTMLResponse(content=body, status_code=HTTP_200_OK)
     except Exception as ex:
         logger.exception("Error in root: %s", ex)
-        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
+        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail=str(ex))
+
 
 @app.get("/favicon.ico")
 async def favicon():
+    """Serve the bundled favicon unless `brand.favicon` in config points at
+    an override file. Media type is inferred from extension so PNG / SVG
+    work alongside `.ico`. A missing override falls back to the bundled
+    icon and logs a warning rather than failing the request."""
     try:
+        override = str(files.conf_brand().get("favicon") or "").strip()
+        if override:
+            path = _resolve_brand_path(override)
+            try:
+                with open(path, "rb") as f:
+                    content = f.read()
+                media_type, _ = mimetypes.guess_type(path)
+                return Response(
+                    content=content,
+                    media_type=media_type or "image/x-icon",
+                    status_code=HTTP_200_OK,
+                )
+            except FileNotFoundError:
+                logger.warning("brand.favicon points at %s but the file is missing — serving bundled default", path)
         return Response(
             content=files.get("favicon.ico"),
             media_type="image/x-icon",
-            status_code=HTTP_200_OK
+            status_code=HTTP_200_OK,
         )
     except Exception as ex:
         logger.exception("Error in favicon: %s", ex)
-        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
+        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail=str(ex))
+
+
+@app.get("/brand/icon")
+async def brand_icon():
+    """Serve the operator-configured brand-icon image when `brand.icon` in
+    config points at a `.png` / `.svg` / etc. file. Returns 404 when the
+    config holds a material-icons glyph name (no image to serve) or the
+    file is missing — the root HTML only references this endpoint when
+    `_brand_icon_html` has already confirmed a usable image."""
+    try:
+        icon = str(files.conf_brand().get("icon") or "").strip()
+        if not icon or not _is_brand_image(icon):
+            raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="brand.icon is a glyph name, not an image")
+        path = _resolve_brand_path(icon)
+        try:
+            with open(path, "rb") as f:
+                content = f.read()
+        except FileNotFoundError:
+            raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail=f"brand.icon file not found: {path}")
+        media_type, _ = mimetypes.guess_type(path)
+        return Response(
+            content=content,
+            media_type=media_type or "application/octet-stream",
+            status_code=HTTP_200_OK,
+        )
+    except HTTPException:
+        raise
+    except Exception as ex:
+        logger.exception("Error in brand_icon: %s", ex)
+        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail=str(ex))
 
 @app.get("/files/{path:path}")
 async def file(path: str):
@@ -191,6 +302,78 @@ async def controller(set: str, name: str):
         <script src="/files/js/js.cookie.min.js"></script>
         <script src="/files/js/bootstrap/bootstrap.bundle.min.js"></script>
 
+        <style>
+            /* Dark-mode overrides for Bootstrap 5.2 surfaces that don't
+               read `data-bs-theme` natively. The theme-sync script below
+               sets `data-bs-theme="dark|light"` on <html>; these rules
+               then drag modal / form / table / btn-close into the dark
+               palette so a view doesn't have to swap each class itself. */
+            [data-bs-theme="dark"] .modal-content {
+                background-color: #2b2b2b;
+                color: #e6e6e6;
+            }
+            [data-bs-theme="dark"] .modal-header,
+            [data-bs-theme="dark"] .modal-footer {
+                border-color: rgba(255, 255, 255, 0.15);
+            }
+            [data-bs-theme="dark"] .form-control,
+            [data-bs-theme="dark"] .form-select,
+            [data-bs-theme="dark"] .form-control:focus,
+            [data-bs-theme="dark"] .form-select:focus {
+                background-color: #1e1e1e;
+                color: #e6e6e6;
+                border-color: rgba(255, 255, 255, 0.15);
+            }
+            [data-bs-theme="dark"] .form-control:disabled,
+            [data-bs-theme="dark"] .form-control[disabled],
+            [data-bs-theme="dark"] .form-select:disabled {
+                background-color: #2a2a2a;
+                color: rgba(255, 255, 255, 0.55);
+            }
+            [data-bs-theme="dark"] .form-label,
+            [data-bs-theme="dark"] .col-form-label {
+                color: #e6e6e6;
+            }
+            [data-bs-theme="dark"] .btn-close {
+                filter: invert(1) grayscale(100%) brightness(200%);
+            }
+            [data-bs-theme="dark"] .table {
+                --bs-table-color: #e6e6e6;
+                --bs-table-bg: transparent;
+                --bs-table-border-color: rgba(255, 255, 255, 0.15);
+            }
+        </style>
+
+        <script>
+            // Global theme sync for every controller-rendered view.
+            // Reads `prefers-color-scheme`, mirrors it onto html[data-bs-theme]
+            // and swaps body bg / text classes. Views that ship their own
+            // theme-sensitive variants (e.g. `table-secondary` vs
+            // `table-dark`) subscribe to `window`'s `pyops:theme` event.
+            (function () {
+                const mq = window.matchMedia('(prefers-color-scheme: dark)');
+                function apply() {
+                    const dark = mq.matches;
+                    const html = document.documentElement;
+                    const body = document.body;
+                    html.setAttribute('data-bs-theme', dark ? 'dark' : 'light');
+                    if (body) {
+                        body.classList.toggle('bg-dark', dark);
+                        body.classList.toggle('text-light', dark);
+                        body.classList.toggle('bg-light', !dark);
+                    }
+                    window.pyopsDark = dark;
+                    window.dispatchEvent(new CustomEvent('pyops:theme', { detail: { dark: dark } }));
+                }
+                mq.addEventListener('change', apply);
+                if (document.readyState === 'loading') {
+                    document.addEventListener('DOMContentLoaded', apply);
+                } else {
+                    apply();
+                }
+            })();
+        </script>
+
         {{HEAD}}
     </head>
     <body class="bg-light">
@@ -260,11 +443,34 @@ async def controller_proxy(set: str, name: str, rest: str, request: Request):
         exec(code, glob)
 
         user = sanitize_owner(request.headers.get("X-User", "anonymous"))
-        kind = "debug" if glob.get("debug", False) else "service"
-        owner_filter = user if kind == "debug" else None
-        jobs = runner.find(owner_filter, glob["set"], glob["service"], kind, ["running"])
+        # debug=True on the controller means "preview mode": route to whichever
+        # preview-kind job for this {set,name} is running — debug (debugger-
+        # attached, started from VSIX) takes precedence, then draft (just the
+        # unstaged code running standalone, started from the Manager). Both
+        # are scoped to the requesting user. debug=False / unset means
+        # production: route to the committed-code service.
+        if glob.get("debug", False):
+            preview_kinds = ("debug", "draft")
+            jobs = []
+            for k in preview_kinds:
+                jobs = runner.find(user, glob["set"], glob["service"], k, ["running"])
+                if jobs:
+                    kind = k
+                    break
+            else:
+                kind = "preview"  # for the error message below
+        else:
+            kind = "service"
+            jobs = runner.find(None, glob["set"], glob["service"], kind, ["running"])
         if not jobs:
-            raise Exception(f"No running {kind}: {glob['set']}::{glob['service']}")
+            # Bound service not (yet) running. Common during startup or after
+            # a cancel — return a structured payload at HTTP 503 instead of
+            # an exception so the warmup-poll path doesn't dump a traceback
+            # on every miss.
+            return JSONResponse(
+                status_code=503,
+                content={"error": f"No running {kind}: {glob['set']}::{glob['service']}"},
+            )
         job_id = jobs[0]
         s = pyops.ServiceClient(job_id)
 
@@ -314,11 +520,21 @@ async def controller_proxy(set: str, name: str, rest: str, request: Request):
 async def menu():
     """
     Generates dynamic menu from Git controllers, preferring draft, collects failures.
+
+    Each section carries an `expanded` flag that the sidebar uses to decide
+    whether the section starts open or collapsed. The built-in "Scriptlet"
+    section is always expanded; user-set sections default to collapsed but
+    can be force-expanded via the `web.expanded_sets` config list (an array
+    of set names whose section should open by default).
     """
     try:
+        web_conf = files.conf_web()
+        expanded_sets = web_conf.get("expanded_sets") or []
+
         content = [{
             "id": "scriptlet",
             "name": "Scriptlet",
+            "expanded": True,
             "items": [
                 {
                     "id": "scriptlet_manager",
@@ -341,13 +557,13 @@ async def menu():
                 {
                     "id": "scriptlet_sets",
                     "name": "Sets",
-                    "path": "/scriptlet/sets",
+                    "path": "/controller/internal/sets",
                     "default": False
                 },
             ]
         }]
         failures = []
-    
+
         # Scan Git for controllers.
         scriptlets = await run_in_executor(git.list_scriptlets)
         sets = sorted(set(s["set"] for s in scriptlets if s["type"] == "controller"))
@@ -356,6 +572,7 @@ async def menu():
             m = {
                 "id": g,
                 "name": g,
+                "expanded": g in expanded_sets,
                 "items": []
             }
             ctrl_scriptlets = [s for s in scriptlets if s["set"] == g and s["type"] == "controller"]

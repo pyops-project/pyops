@@ -2,7 +2,7 @@
 
 ## Overview
 
-PyOps is an "Execution Platform" for "Python Operations Scriptlets". Licensed under GNU AGPLv3, organized as a monorepo: core app in `app/`, VSCode extension in `vsix/`, tests in `tests/`, documentation in `doc/`.
+PyOps is an "Execution Platform" for "Python Operations Scriptlets". Licensed under GNU AGPLv3, organized as a monorepo: core app in `app/`, VSCode extension in `vsix/`, tests in `tests/`, documentation in `docs/`.
 
 ### Monorepo Layout
 
@@ -11,7 +11,7 @@ graph TD
     A[pyops] --> B[app/ - Core Application]
     A --> C[vsix/ - VSCode Extension]
     A --> D[tests/ - Test Suite]
-    A --> E[doc/ - Documentation]
+    A --> E[docs/ - Documentation]
     A --> F[etc/ - Configuration]
     B --> G[lib/ - Shared Libraries]
     B --> H[web.py - FastAPI Server]
@@ -74,7 +74,8 @@ graph TD
 | `app/lib/runner.py` | DB-level job utilities: `enqueue`, `query`, `find`, `cancel`, `remove`, `drop` |
 | `app/lib/job.py` | Execution utilities: `send_completion`, `terminate_debugpy_adapter`, `process_imports`, `process_install_lines`, `process_code_installs` (acquires `sets.set_install_lock`), `kill_proc_tree`, `get_process_tree`, `get_debug_port`, `get_debugpy_adapter_pid`, `has_debugpy_adapter`, `validate_debug_prerequisites`, `loadLib`, `install_git_repo` |
 | `app/lib/pyops.py` | `Control` (API proxy), `ServiceListener`, `ServiceClient` |
-| `app/lib/sets.py` | Git set management (clone, remove, switch branch) |
+| `app/lib/sets.py` | Runner-side per-set venv primitives only: `ensure_set_environment`, `set_install_lock`, bootstrap-lock helpers, `CORE_DEPS`. The user-facing clone/create/pull/switch/remove/list/update-deps operations live as scriptlets under `app/internal/` and are reached via `/controller/internal/sets`. |
+| `app/internal/` | Pyops-internal scriptlet bundle: sets controller, data service, six `set_*` sub-tasks, shared library, jslibrary modal. Self-hosted admin operations — the runtime running these is the same one user code uses. |
 | `app/lib/sites.py` | Site rendering utilities |
 | `app/lib/async_utils.py` | Async helper utilities |
 | `app/lib/auth.py` | `sanitize_owner()` for `X-User` header normalization |
@@ -90,11 +91,12 @@ graph TD
 
 ### JSON Structure
 
-- `web`: `{"bind": "127.0.0.1:8000", "worker": 4, "timeout": 300}`
+- `web`: `{"bind": "127.0.0.1:8000", "worker": 8, "timeout": 300, "expanded_sets": []}`
+- `brand` *(optional)*: `{"title": "PyOps", "icon": "miscellaneous_services", "favicon": null}` — operator-facing chrome. `title` → `<title>` + sidebar/topbar header; `icon` → material-icons-round glyph name OR image path served via `/brand/icon`; `favicon` → optional image served at `/favicon.ico`. Paths can be absolute or project-root-relative. Defaults reproduce the bundled look so existing deployments don't need to opt in.
 - `data`: `{"jobs": "data/jobs", "git": "data/git", "db": "data/app.db"}`
 - `runner`: `{"venv": "data/venv", "pkg": "data/pkg", "git_pull_interval": 60, "drop_done_delay_seconds": 60}`
 - `log`: `{"loglevel": "debug"}`
-- `users`: `{"anonymous": {"debug_port": 15678}}`
+- `users`: `{"anonymous": {"debug_port": 45678}}`
 
 ### Access Methods
 
@@ -180,14 +182,35 @@ Manages scriptlet files as Git repos in `data/git/{set}/`. All mutating operatio
 - `check_name_unique(repo, name)`: prevents duplicate scriptlet names
 - `pull(repo)`: soft-reset to `origin/{branch}` if clean; skips if dirty or on tag; adds new `.py/.html/.js/README` files from HEAD if missing in working directory; retries fetch on `CalledProcessError`
 
-### Sets Management (`app/lib/sets.py`)
+### Sets Management (`app/internal/`)
 
-Groups scriptlets in Git repos. Managed via `/scriptlet/sets` UI/API or VSIX trees.
+Groups of scriptlets each live in their own Git repo under `data/git/{name}/`. The user-facing list/clone/create/pull/switch/remove/update-deps operations are not hardcoded routers — they are pyops scriptlets in the bundled `internal` set, reached at `/controller/internal/sets`.
 
-- `list_sets()`: lists available sets (`data/git/` subdirectories)
-- `clone_set(name, remote)`: clones remote to `data/git/{name}/`; creates `.gitignore` and `README.md`
-- `remove_set(name)`: deletes `data/git/{name}/` directory
-- `switch_branch(name, branch)`: checks out branch in set repo; uses `repo_lock`
+Structure of the bundle:
+
+| File | Role |
+|------|------|
+| `sets.controller.py` | Controller; binds the proxy to `service="data"`, sets the head/menu/body views |
+| `sets_head.html`, `sets_menu.html`, `sets_body.html` | The Sets UI fragments |
+| `data.task.py` | Service (`kind=service`); `ServiceListener` loop that routes incoming `controller/internal/sets/{...}` requests |
+| `set.library.py` | Shared helpers used by the `set_*` tasks (lock paths, run_cmd, status) |
+| `set_clone.task.py`, `set_create.task.py`, `set_pull.task.py`, `set_switch.task.py`, `set_remove.task.py`, `set_update_deps.task.py` | One task per mutating operation, each held against the same `set_install_lock` the runner-side spawn path uses |
+| `internal_job.js` | Jslibrary modal: fires the controller POST, polls `/scriptlet/job/item` until terminal, tails stdout/stderr live |
+
+Request flow for a mutating action (e.g. clone):
+
+1. UI calls `POST /controller/internal/sets/clone` (jslib modal opens).
+2. FastAPI's `controller_proxy` finds the running `data` service and forwards the request via ZMQ.
+3. `data.task.py` enqueues a `set_clone` task with `drop_done=True` via `control.job.create(...)`, returns the job id.
+4. The modal polls `/scriptlet/job/item?id=<id>` and tails the job's stdout/stderr.
+5. The `set_clone.task.py` task runs in the runner, acquires `set_install_lock(name)`, performs the git operation, exits — runner finishes the job, drop_done auto-removes the row.
+
+The `internal` set is a fixed bundle: the git lib resolves the set name `"internal"` to `<project_root>/app/internal/` with direct filesystem reads, no `.git` initialised in there. `list_sets()` (filesystem walk done by `data.task.py`) hides `internal`; the inventory router and the `set_remove` task refuse to touch it.
+
+Runner-side primitives in `app/lib/sets.py` (still used directly by the runner and by `set_install_lock` callers):
+
+- `ensure_set_environment(name)`: idempotent — creates `data/venv/{name}` and pip-installs `CORE_DEPS` (pyzmq, msgpack, psutil, debugpy, requests) under `_bootstrap_lock`. Skipped entirely for `name == "internal"` — those scriptlets run in pyops's own host venv via `sys.executable`.
+- `set_install_lock(name)`: `fcntl.flock` context manager on `data/git/{name}/.install.lock`, used both by `process_code_installs` and by the `set_*` tasks.
 
 ### Status Detection
 
@@ -217,9 +240,10 @@ Background daemon spawned by `app/gunicorn.py`. Polls DB, spawns subprocesses, h
 
 #### Startup Sequence
 
-1. `handleOddJobs()`: dequeued→todo, running→failed (crash recovery)
-2. `purgeLeftoverServiceJobs()`: deletes stale service jobs (dequeued/running/failed/done)
-3. `cleanup_drop_done_jobs()`: marks expired `drop_done` done-jobs as `remove`
+1. Remove a stale `/tmp/pyops/shutdown.flag` from a previous unclean exit (so `lib_runner.enqueue` won't refuse from the first iteration).
+2. `handleOddJobs()`: `dequeued`→`todo`, `running`→`failed`, `cancel`/`cancelling`→`cancelled` (crash + interrupted-cancel recovery).
+3. `purgeLeftoverServiceJobs()`: deletes stale service jobs (dequeued/running/failed/done).
+4. `cleanup_drop_done_jobs()`: marks expired `drop_done` done-jobs as `remove`.
 
 #### Main Loop
 
@@ -255,15 +279,39 @@ graph TD
 
 - `loadJob(job_id)`: fetches from DB, sets state `loading`, returns owner, set, name, kind, param, code, overrides, max_retries
 - `assignJob(job_id, pid)`: sets state `running`, start timestamp, pid; for debug also resolves and stores `debugpy_pid`
-- `finishJob(job_id, state, detail)`: sets state/end/detail/pid=None; service jobs with drop_done and state "done" → immediately sets "remove"; spawns daemon thread to call `terminate_job_processes`
-- `postTerm(job_id)`: if state "remove" → delete job + workspace; else → set state "cancelled"
-- `terminate_job_processes(job_id, pid, is_debug, owner)`: SIGTERM to full process tree; waits up to 15s; SIGKILL if still alive; calls `postTerm`
+- `finishJob(job_id, state, detail)`: atomic UPDATE with CAS — preserves any committed `cancel`/`cancelling` state, otherwise applies the supplied state; service jobs with drop_done and state "done" immediately get re-targeted to "remove"; if `old_pid` is set, spawns a daemon `terminate_job_processes` thread to clean up the process tree
+- `postTerm(job_id, killed=False)`: if state "remove" → delete job + workspace; else → set state "cancelled" with end/pid cleared
+- `terminate_job_processes(job_id, pid, ...)`: HTTP-cancel path — SIGTERM the process tree, poll up to 15s, SIGKILL if still alive, then `postTerm`. Not used in the shutdown path (see Shutdown section below); the daemon-thread escalation is fine while the runner is otherwise idle, but it gets killed when `main()` returns, which is why shutdown needs its own synchronous variant.
 
 #### Scheduling
 
 `schedule()` is called each main loop iteration when no job is queued:
-- **Cron tasks** (non-empty `schedule` string): enqueues `task` job when `next_run ≤ now`; skips if one already running
-- **Persistent services** (empty `schedule` string): enqueues `service` job if none active and failed count < 3
+- **Cron tasks** (non-empty `schedule` string): enqueues `task` job when `next_run ≤ now`; skips if one already running.
+- **Persistent services** (empty `schedule` string): enqueues `service` job if none active and failed count < 3.
+- **Essential services** (`INTERNAL_ESSENTIAL_SERVICES`, currently `[{"set":"internal","name":"data","owner":"system"}]`): same `<3-failed` gating as services-with-empty-schedule, but no `Schedule` row required — the runner keeps the listed services up unconditionally. The `internal::data` service is what backs `/controller/internal/sets`.
+
+Every `lib_runner.enqueue` inside `schedule()` is wrapped in `try/except ShutdownPending → return` so a SIGTERM landing mid-iteration terminates the call cleanly rather than escaping as an exception.
+
+#### Shutdown
+
+When SIGTERM/SIGINT lands, `GracefulKiller.exit_gracefully`:
+
+1. Writes `/tmp/pyops/shutdown.flag` (cross-process gate, see below).
+2. Flips `kill_now = True`.
+
+The main loop's `while not killer.kill_now` exits at the next iteration boundary; before reaching `getNextToDo`/`schedule()` the loop also checks `if killer.kill_now: continue` so no new jobs are claimed mid-iteration. Then `_shutdown_job_processes(processes, timeout=15.0, runner_socket=…, runner_poller=…)` runs *synchronously* in the main thread:
+
+1. Snapshot live targets — `pid → job_id` for every Popen in `processes` whose `poll()` is still `None`.
+2. SIGTERM each process tree (`job_lib.get_process_tree(pid)` + `kill_proc_tree(tree, SIGTERM)`).
+3. Wait loop until `timeout` or all exited. Each pass:
+   - **Drain the runner ZMQ socket** — services that handle SIGTERM via their `ServiceListener` loop out of `listen()`, run through `job_runner`'s wrap-up, call `job_lib.send_completion(...)` and block on the REQ recv() for the ACK. Without this drain they sit there until the timeout and always get SIGKILL'd. With it, the runner ACKs, `finishJob` updates state to whatever the completion said (typically `done`), and the service exits within milliseconds.
+   - Reap exited subprocesses via `subprocess.Popen.poll()`, **not** `psutil.Process.is_running()` — psutil reports zombies as still alive, which made the prior implementation always wait out the full timeout.
+4. SIGKILL any survivors (`kill_proc_tree(tree, SIGKILL)`), wait briefly for them to die.
+5. Final sweep: for each target whose state is still not terminal (no completion arrived — typical for tasks under default Python SIGTERM, and for SIGKILL'd survivors), mark `cancelled` with `detail="killed during shutdown"` (if SIGKILL'd) or `"terminated during shutdown"` (clean exit, no completion sent).
+
+After `_shutdown_job_processes` returns, the runner drains any final ZMQ events, runs `disposeJobs()` for `remove`-state rows, removes the shutdown flag on its way out.
+
+**Cross-process shutdown flag.** `lib_runner.SHUTDOWN_FLAG_PATH = "/tmp/pyops/shutdown.flag"`. Every `lib_runner.enqueue(...)` call checks `is_shutdown_pending()` first and raises `ShutdownPending` if the flag is present. The flag is also visible to other processes — gunicorn workers handling in-flight `PUT /scriptlet/job/item` or `/scriptlet/schedule/run/{id}` requests refuse new enqueues the moment the runner has been signalled, and so does the `internal::data` service when its HTTP-back-channel `control.job.create(...)` runs during the shutdown window.
 
 #### Debug Spawn
 
@@ -382,7 +430,7 @@ Installs run inside `job_setup.py` — before `os.execv` into `job_runner.py`. B
 
 #### "Update Dependencies" — set-level operator action
 
-`POST /scriptlet/sets/update_deps/{name}` → `sets.update_set_environment(name)`. Synchronous; the operator clicks the button and gets the conflict summary in the response.
+UI button → `POST /controller/internal/sets/update_deps` (via the jslib modal) → `internal::data` service routes to → `set_update_deps.task.py` enqueued with `drop_done=True`. The modal polls `/scriptlet/job/item?id=<id>` and tails the live stdout/stderr while the task runs.
 
 1. Acquires `set_install_lock(name)` for the full duration; running jobs in the same set queue behind, other sets are unaffected.
 2. Upgrades pyops core deps: `pip install --upgrade pip setuptools wheel` then `pip install --upgrade pyzmq msgpack psutil debugpy requests`. Two calls because pip cannot upgrade itself in the same invocation that installs other packages (certifi vendor path issue).
@@ -392,10 +440,10 @@ Installs run inside `job_setup.py` — before `os.execv` into `job_runner.py`. B
    - Any disagreement → **newest-mtime-wins**. Logged via `logger.warning(...)` and recorded in the conflict list.
    - This pre-empts pip resolve failures from impossible-constraint situations like `>=2.0` AND `<1.5` — pip only ever sees the survivor spec.
 5. Reconstructs synthetic `#!` lines from the survivors and feeds them to `process_install_lines(upgrade=True)` — same code path as the job-time installs, just in upgrade mode.
-6. Writes `data/git/{name}/.update_warnings.json` with the conflict summary (always; empty conflicts overwrite a previous warning state).
+6. Writes `data/venv/{name}/.update_warnings.json` with the conflict summary (always; empty conflicts overwrite a previous warning state). Kept under `<venv_base>` rather than inside the set's git tree on purpose — the git tree is user content, the warnings file is pyops runtime state, and operators were getting untracked-file noise in their set repos otherwise.
 7. Returns the summary as the HTTP response.
 
-`/health` reads every set's `.update_warnings.json` (`_collect_dependency_conflicts`); any non-empty conflicts flip status to `degraded` and surface under `dependency_conflicts: [...]` so a monitoring system polling `/health` can alert on them.
+`/health` (`_collect_dependency_conflicts`) iterates `<git_base>` for the list of sets and reads each one's `<venv_base>/{set}/.update_warnings.json`; any non-empty conflicts flip status to `degraded` and surface under `dependency_conflicts: [...]` so a monitoring system polling `/health` can alert on them.
 
 ### Debug Mode
 
@@ -489,11 +537,16 @@ FastAPI application; mounts all routers; serves static files.
 - `GET /debug/port` → `{"port": int}` from `conf_users()[owner]["debug_port"]`; 400 if missing; owner from `X-User` header (default `anonymous`)
 - `GET /controller/{set}/{name}` → executes controller.py draft, renders head/menu/body views with `{{SET}}`/`{{NAME}}` injection; wraps the menu fragment in a `navbar-expand-md` collapse with a toggler so user menus fold behind a hamburger below 768px without any author effort
 - `ANY /controller/{set}/{name}/{rest:path}` → `controller_proxy`: executes controller to find running service/debug job, forwards via `ServiceClient.request()`
-- `GET /menu` → `{"menu": [...], "failures": [...]}` — hardcoded Scriptlet group (Manager, Scheduler, Monitor, Sets) + dynamic per-set controller groups from Git; exec failures collected rather than raised
+- `GET /menu` → `{"menu": [...], "failures": [...]}` — hardcoded Scriptlet group (Manager, Scheduler, Monitor, Sets — the Sets entry now points at `/controller/internal/sets`) + dynamic per-set controller groups from Git; exec failures collected rather than raised
 
 ### Controller Proxy Detail
 
-`controller_proxy` determines kind (`debug` if `glob.get("debug")` else `service`); for debug kind filters by requesting user (`X-User`). Finds running job via `runner.find()`, creates `ServiceClient(job_id)`, forwards request with `data_type` inferred from `Content-Type`.
+`controller_proxy` resolves the kind it forwards to from `glob["debug"]`:
+
+- `debug=True` (preview mode) — tries `debug` kind first (debugger-attached, started from VSIX), then falls back to `draft` kind (a Manager-started preview without debugger). The first kind that has a running job for this `{set, name}` and the requesting user (`X-User`) wins. If neither is running, the proxy returns 503.
+- `debug=False` (the default, production mode) — forwards to the `service` kind only.
+
+The proxy finds the running job via `runner.find()`, creates `ServiceClient(job_id)`, and forwards the request with `data_type` inferred from `Content-Type`. When no matching job is running (warmup window or after a cancel) it returns a structured `503 JSONResponse` with `{"error": "No running {kind}: {set}::{name}"}` rather than raising — clients polling for service readiness no longer dump a traceback into the server log on every miss. The `kind` reported in the error is `"preview"` in `debug=True` mode (so the message is informative regardless of which preview kind the client expected) and `"service"` otherwise.
 
 ### Scriptlet Routers (`app/routers/scriptlet/`)
 
@@ -508,8 +561,9 @@ All routers mount under `/scriptlet/`. Owner resolved from `X-User` header (defa
 | `scheduler.py` | `/scriptlet/scheduler/` | Activate cron triggers; UI |
 | `manager.py` | `/scriptlet/manager/` | Bulk ops UI |
 | `monitor.py` | `/scriptlet/monitor/` | Job/schedule state listing UI |
-| `sets.py` | `/scriptlet/sets/` | Git set management (clone, switch branch, remove, **`update_deps`** for the per-set "Update Dependencies" flow) |
 | `jslib.py` | `/scriptlet/jslib/{set}/{name}` | Serve JS libraries |
+
+There is no `sets` router under `/scriptlet/`. Sets management (list/clone/create/pull/switch/remove/update_deps) lives at `/controller/internal/sets/*` — see "Sets Management (`app/internal/`)" above.
 
 ### Monitoring Router (`app/routers/monitoring.py`)
 
@@ -517,7 +571,7 @@ Mounted at root (no `/scriptlet/` prefix). Unauthenticated — designed to be sc
 
 | Endpoint | Format | Purpose |
 |----------|--------|---------|
-| `GET /health` | JSON | Aggregated status (`ok` / `degraded` / `fail`); checks DB, runner socket, data dirs, ulimits, GPU, **dependency_conflicts**; returns 503 only when DB unreachable. `degraded` if any failed jobs exist, a subsystem is unhealthy, or any set has non-empty `.update_warnings.json` from the last "Update Dependencies" run. |
+| `GET /health` | JSON | Aggregated status (`ok` / `degraded` / `fail`); checks DB, runner socket, data dirs, ulimits, GPU, **dependency_conflicts**; returns 503 only when DB unreachable. `degraded` if any failed jobs exist, a subsystem is unhealthy, or any set's `<venv_base>/{set}/.update_warnings.json` from the last "Update Dependencies" run contains a non-empty conflict list. |
 | `GET /health/failed` | JSON | All failed jobs (no pagination), full detail (`set`, `name`, `kind`, `owner`, `detail`, `start`, `end`); newest first. Lets the monitoring side filter by set or scriptlet name. |
 | `GET /metrics` | Prometheus exposition (`text/plain; version=0.0.4`) | All gauges; per-state job counts, per-(set,name,state) breakdown, separate `pyops_service_jobs`, ulimit gauges (`pyops_open_fds`, `pyops_max_fds_soft`, `pyops_threads`, `pyops_max_nproc_soft`), `pyops_gpu_ok{status}` plus dedicated `pyops_gpu_reboot_required` flag, `pyops_oldest_todo_age_seconds`, `pyops_last_completed_seconds`. |
 
@@ -534,11 +588,12 @@ Ulimit check tracks RLIMIT_NOFILE and RLIMIT_NPROC against current usage from `/
 ### Structure
 
 - `conftest.py`: shared fixtures
-- `tests/unit/lib/`: lib_files, lib_git, lib_pyops, lib_runner_utils, lib_sets, lib_sites
+- `tests/unit/lib/`: lib_files, lib_git, lib_pyops, lib_runner_utils, lib_sites
+- `tests/unit/runner/`: test_daemon (covers `_shutdown_job_processes`, `TestShutdownFlag`, `TestHandleOddJobsCancelStates`, essential-services, internal-set host-venv contract)
 - `tests/unit/orm/`: job, schedule
-- `tests/integration/`: git, orm, routers, runner execution, zmq_integration, error_logging
-- `tests/api/`: api_editor, api_endpoints, api_job, api_schedule, api_sets
-- `tests/e2e/`: Playwright E2E tests against a real server instance
+- `tests/integration/`: git, orm, routers, runner execution, zmq_integration, error_logging, `test_internal_set` (rendering + scriptlet parse + controller-proxy reach)
+- `tests/api/`: api_editor, api_endpoints, api_job, api_schedule
+- `tests/e2e/`: Playwright E2E tests against a real server instance — includes `test_sets_via_controller.py` covering the controller-mediated sets-management path end-to-end (REST and UI modal)
 
 ### Key Fixtures
 
@@ -608,3 +663,37 @@ flowchart TD
 ```
 
 Docker deployment uses Nginx as reverse proxy.
+
+### Shutdown timing chain
+
+`docker compose down` (and any other SIGTERM to the container) propagates through three layers, each with its own timeout:
+
+```
+docker  ── SIGTERM ──▶  gunicorn master (PID 1)
+                       │   handles SIGTERM, asks each worker to drain in-flight HTTP
+                       │   requests; waits at most `graceful_timeout` (120s in app/
+                       │   gunicorn.py — sized for the rare cold-cache pip install
+                       │   that lands inside a request)
+                       │
+                       ▼   workers exit
+                  on_exit(server) fires
+                       │   p.terminate() → SIGTERM the runner subprocess (started
+                       │   from multiprocessing.Process in gunicorn.py:on_starting)
+                       │
+                       ▼
+                  runner subprocess
+                       │   GracefulKiller flips kill_now; main loop exits; runs
+                       │   _shutdown_job_processes (timeout=15.0 — SIGTERM all
+                       │   live job trees, drain ZMQ completions, Popen.poll reap,
+                       │   SIGKILL stragglers, final-sweep non-terminal rows to
+                       │   'cancelled')
+                       │
+                       ▼
+                  gunicorn master exits
+```
+
+Worst-case clock: 120s (workers) + 15s (runner) ≈ **135s**. Docker's default `stop_grace_period` is **10s** — that's nowhere near enough; docker SIGKILLs the container before the runner ever gets its SIGTERM, leaving any then-running service rows in state `running`. The next start's `handleOddJobs` marks those as `failed` with the sentinel detail `"incomplete execution detected on startup"` (deduplicated per identity so the per-service `<3 failed` gate never accumulates across repeated unclean restarts).
+
+**Compose deployments must set `stop_grace_period: 180s`** (or higher) on the pyops service so the chain has room to finish. See the example in the project README.
+
+**Compose deployments must also raise `nofile` to 65535** (`ulimits.nofile.soft`/`hard`) on the pyops service. Default Docker `nofile` (1024 soft historically) is the first wall pyops hits — between gunicorn workers, the runner subprocess, per-job log streams, and ZMQ sockets, the FD count climbs fast and `/health` flips to `degraded` once the `pyops_open_fds / pyops_max_fds_soft` ratio crosses the warning threshold. The README example deploys with `nofile: 65535`.

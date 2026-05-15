@@ -107,9 +107,9 @@ def _wait_for_n_terminal_jobs(frame, n, timeout=60):
 class TestCronScheduleWorkflowUI:
     """Full lifecycle of a cron-scheduled task, exercised through the browser UI."""
 
-    def _setup_task(self, api_anon):
+    def _setup_task(self, api_anon, set_factory):
         """Create set and task scriptlet via API (anonymous user)."""
-        api_anon.post("/scriptlet/sets/create", json={"name": CRON_SET})
+        set_factory(CRON_SET)
         resp = api_anon.put(
             "/scriptlet/inventory/item",
             json={"set": CRON_SET, "name": CRON_TASK, "type": "task"},
@@ -121,9 +121,9 @@ class TestCronScheduleWorkflowUI:
         )
         assert resp.status_code == 200
 
-    def test_create_schedule_via_scheduler_ui(self, e2e_page, api_anon, pyops_server):
+    def test_create_schedule_via_scheduler_ui(self, e2e_page, api_anon, pyops_server, set_factory):
         """Schedule created via the Scheduler UI appears as a row in the table."""
-        self._setup_task(api_anon)
+        self._setup_task(api_anon, set_factory)
 
         frame = _nav_scheduler(e2e_page)
         sched_id = _create_cron_schedule_via_ui(frame, e2e_page, CRON_SET, CRON_TASK, CRON_EXPR)
@@ -139,9 +139,9 @@ class TestCronScheduleWorkflowUI:
 
         pyops_server.assert_no_unexpected_errors()
 
-    def test_run_three_times_and_verify_in_monitor(self, e2e_page, api_anon, pyops_server):
+    def test_run_three_times_and_verify_in_monitor(self, e2e_page, api_anon, pyops_server, set_factory):
         """Clicking Run three times produces three completed jobs in the Monitor."""
-        self._setup_task(api_anon)
+        self._setup_task(api_anon, set_factory)
 
         # Create schedule via UI (browser → owner = anonymous).
         frame = _nav_scheduler(e2e_page)
@@ -157,9 +157,9 @@ class TestCronScheduleWorkflowUI:
 
         pyops_server.assert_no_unexpected_errors()
 
-    def test_disable_schedule_via_ui_changes_toggle_state(self, e2e_page, api_anon, pyops_server):
+    def test_disable_schedule_via_ui_changes_toggle_state(self, e2e_page, api_anon, pyops_server, set_factory):
         """Clicking the toggle button on an active schedule marks it inactive (btn-success)."""
-        self._setup_task(api_anon)
+        self._setup_task(api_anon, set_factory)
 
         frame = _nav_scheduler(e2e_page)
         sched_id = _create_cron_schedule_via_ui(frame, e2e_page, CRON_SET, CRON_TASK, CRON_EXPR)
@@ -181,9 +181,9 @@ class TestCronScheduleWorkflowUI:
 
         pyops_server.assert_no_unexpected_errors()
 
-    def test_disabled_schedule_does_not_trigger_new_jobs(self, e2e_page, api_anon, pyops_server):
+    def test_disabled_schedule_does_not_trigger_new_jobs(self, e2e_page, api_anon, pyops_server, set_factory):
         """After disabling the schedule, the scheduler loop does not enqueue new jobs."""
-        self._setup_task(api_anon)
+        self._setup_task(api_anon, set_factory)
 
         # Create schedule via UI and then immediately disable it.
         frame = _nav_scheduler(e2e_page)
@@ -214,9 +214,9 @@ class TestCronScheduleWorkflowUI:
 
         pyops_server.assert_no_unexpected_errors()
 
-    def test_delete_schedule_via_ui_removes_row(self, e2e_page, api_anon, pyops_server):
+    def test_delete_schedule_via_ui_removes_row(self, e2e_page, api_anon, pyops_server, set_factory):
         """Deleting a schedule via the UI removes its row from the scheduler table."""
-        self._setup_task(api_anon)
+        self._setup_task(api_anon, set_factory)
 
         frame = _nav_scheduler(e2e_page)
         sched_id = _create_cron_schedule_via_ui(frame, e2e_page, CRON_SET, CRON_TASK, CRON_EXPR)
@@ -235,9 +235,9 @@ class TestCronScheduleWorkflowUI:
 
         pyops_server.assert_no_unexpected_errors()
 
-    def test_full_cron_lifecycle(self, e2e_page, api_anon, pyops_server):
+    def test_full_cron_lifecycle(self, e2e_page, api_anon, pyops_server, set_factory):
         """End-to-end: create → run 3× → verify monitor → disable → no new jobs → delete."""
-        self._setup_task(api_anon)
+        self._setup_task(api_anon, set_factory)
 
         # 1. Create schedule.
         frame = _nav_scheduler(e2e_page)

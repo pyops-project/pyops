@@ -102,13 +102,16 @@ def test_controller_proxy_path_put_delete(client, mock_git_ops, mock_db):
         assert params["type"] == "DELETE"
 
 def test_controller_proxy_path_error_no_service(client, mock_git_ops, mock_db):
-    # Test error when no running service
-    with patch("app.lib.pyops.ServiceClient", side_effect=Exception("No running service: testset testname")):
-        response = client.get("/controller/testset/testname/v1/models", headers={"X-User": "testuser"})
-        assert response.status_code == 200  # Returns {"error": ...}
-        data = response.json()
-        assert "error" in data
-        assert "No running service" in data["error"]
+    """When no running service backs the controller, proxy returns 503
+    (transient — client should retry while the service spins up) with a
+    structured {"error": ...} payload. Previously this raised and surfaced
+    as a 200 with an error dict; the 503 prevents warmup-poll traffic
+    from dumping a traceback into the server log on every miss."""
+    response = client.get("/controller/testset/testname/v1/models", headers={"X-User": "testuser"})
+    assert response.status_code == 503
+    data = response.json()
+    assert "error" in data
+    assert "no running" in data["error"].lower()
 
 def test_controller_proxy_path_exec_fail(client, mock_git_ops, mock_db):
     # Test exec failure in controller code

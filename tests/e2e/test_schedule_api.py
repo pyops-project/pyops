@@ -24,8 +24,8 @@ TASK = "scheduled_task"
 CRON_EXPR = "*/5 * * * *"
 
 
-def _setup_task(api):
-    api.post("/scriptlet/sets/create", json={"name": SET})
+def _setup_task(api, set_factory):
+    set_factory(SET)
     r = api.put(
         "/scriptlet/inventory/item",
         json={"set": SET, "name": TASK, "type": "task"},
@@ -57,15 +57,15 @@ def _create_schedule(api, cron=CRON_EXPR, name=TASK, set_name=SET):
 class TestScheduleCreate:
     """PUT /scriptlet/schedule/item — create and update."""
 
-    def test_create_schedule_returns_id(self, api, pyops_server):
-        _setup_task(api)
+    def test_create_schedule_returns_id(self, api, pyops_server, set_factory):
+        _setup_task(api, set_factory)
         sched_id = _create_schedule(api)
         assert isinstance(sched_id, int) and sched_id > 0
         pyops_server.assert_no_unexpected_errors()
 
-    def test_create_schedule_for_missing_task_404(self, api, pyops_server):
+    def test_create_schedule_for_missing_task_404(self, api, pyops_server, set_factory):
         """Creating a schedule for a non-existent task returns 404."""
-        api.post("/scriptlet/sets/create", json={"name": SET + "_miss"})
+        set_factory(SET + "_miss")
         r = api.put(
             "/scriptlet/schedule/item",
             json={
@@ -82,9 +82,9 @@ class TestScheduleCreate:
         # which is the normal signal when the scriptlet was never committed.
         pyops_server.assert_no_unexpected_errors(allow=["does not exist in 'HEAD'"])
 
-    def test_update_schedule_changes_fields(self, api, pyops_server):
+    def test_update_schedule_changes_fields(self, api, pyops_server, set_factory):
         """PUT with id updates an existing schedule's fields."""
-        _setup_task(api)
+        _setup_task(api, set_factory)
         sched_id = _create_schedule(api)
 
         r = api.put(
@@ -112,8 +112,8 @@ class TestScheduleCreate:
         assert item["param"] == "updated=1"
         pyops_server.assert_no_unexpected_errors()
 
-    def test_update_unknown_schedule_returns_404(self, api, pyops_server):
-        _setup_task(api)
+    def test_update_unknown_schedule_returns_404(self, api, pyops_server, set_factory):
+        _setup_task(api, set_factory)
         r = api.put(
             "/scriptlet/schedule/item",
             json={
@@ -133,8 +133,8 @@ class TestScheduleCreate:
 class TestScheduleListAndGet:
     """GET /scriptlet/schedule/list and GET /scriptlet/schedule/item."""
 
-    def test_list_returns_created_schedules(self, api, pyops_server):
-        _setup_task(api)
+    def test_list_returns_created_schedules(self, api, pyops_server, set_factory):
+        _setup_task(api, set_factory)
         sched_id = _create_schedule(api)
 
         r = api.get("/scriptlet/schedule/list")
@@ -154,8 +154,8 @@ class TestScheduleListAndGet:
         assert r.json() == []
         pyops_server.assert_no_unexpected_errors()
 
-    def test_get_schedule_by_id(self, api, pyops_server):
-        _setup_task(api)
+    def test_get_schedule_by_id(self, api, pyops_server, set_factory):
+        _setup_task(api, set_factory)
         sched_id = _create_schedule(api)
         r = api.get(f"/scriptlet/schedule/item?id={sched_id}")
         assert r.status_code == 200
@@ -173,8 +173,8 @@ class TestScheduleListAndGet:
 class TestScheduleRun:
     """GET /scriptlet/schedule/run manually triggers a schedule as a job."""
 
-    def test_run_enqueues_job_with_matching_set_name(self, api, pyops_server):
-        _setup_task(api)
+    def test_run_enqueues_job_with_matching_set_name(self, api, pyops_server, set_factory):
+        _setup_task(api, set_factory)
         sched_id = _create_schedule(api)
 
         r = api.get(f"/scriptlet/schedule/run?id={sched_id}")
@@ -203,9 +203,9 @@ class TestScheduleRun:
         assert r.status_code == 404
         pyops_server.assert_no_unexpected_errors()
 
-    def test_run_updates_last_timestamp(self, api, pyops_server):
+    def test_run_updates_last_timestamp(self, api, pyops_server, set_factory):
         """After manual run, schedule.last should advance."""
-        _setup_task(api)
+        _setup_task(api, set_factory)
         sched_id = _create_schedule(api)
 
         before = api.get(f"/scriptlet/schedule/item?id={sched_id}").json()["last"]
@@ -221,8 +221,8 @@ class TestScheduleRun:
 class TestScheduleActivateDeactivate:
     """Activate/deactivate toggles and 404 handling."""
 
-    def test_deactivate_then_activate(self, api, pyops_server):
-        _setup_task(api)
+    def test_deactivate_then_activate(self, api, pyops_server, set_factory):
+        _setup_task(api, set_factory)
         sched_id = _create_schedule(api)
 
         r = api.get(f"/scriptlet/schedule/deactivate?id={sched_id}")
@@ -250,8 +250,8 @@ class TestScheduleActivateDeactivate:
 class TestScheduleDelete:
     """DELETE /scriptlet/schedule/item."""
 
-    def test_delete_removes_from_list(self, api, pyops_server):
-        _setup_task(api)
+    def test_delete_removes_from_list(self, api, pyops_server, set_factory):
+        _setup_task(api, set_factory)
         sched_id = _create_schedule(api)
 
         r = api.delete(f"/scriptlet/schedule/item?id={sched_id}")

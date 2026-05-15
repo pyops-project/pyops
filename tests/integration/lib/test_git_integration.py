@@ -4,7 +4,6 @@ import os
 from unittest.mock import Mock
 from app.lib import git
 from app.lib import files
-from app.lib import sets
 
 @pytest.fixture
 def integration_repo(tmp_path, monkeypatch):
@@ -22,12 +21,12 @@ def integration_repo(tmp_path, monkeypatch):
     monkeypatch.setattr(files, 'conf_data', lambda: {'git': str(test_git_base)})
     monkeypatch.setattr(files, 'conf_runner', lambda: {'git_pull_interval': 0, 'venv': str(test_venv), 'pkg': str(test_pkg)})
 
-    # Mock ensure_set_environment to avoid venv/pip installs
-    monkeypatch.setattr('app.lib.sets.ensure_set_environment', lambda name: None)
-
-    # Create local repo
+    # Create local repo. After the sets-management migration, set CRUD
+    # lives in app/internal/ scriptlets — for this fixture we just need
+    # an empty dir; get_repo_path runs `git init` and writes the standard
+    # .gitignore + README on first access.
     set_name = 'test_set'
-    sets.create_set(test_git_base, set_name)
+    (test_git_base / set_name).mkdir()
     repo = git.get_repo_path(set_name)
     assert os.path.exists(os.path.join(repo, '.git'))
 

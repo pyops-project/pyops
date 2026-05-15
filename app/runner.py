@@ -42,6 +42,16 @@ from app.lib import pyops
 from app.lib.sets import ensure_set_environment
 from app.lib import job as job_lib
 
+
+# Persistent services that run without a `Schedule` row. The schedule loop
+# re-enqueues each entry whenever it isn't already running, gated by the
+# same `<3 failed` rule used for service-with-empty-schedule. The operator
+# unblocks a stuck essential service by deleting its failed records from
+# the Monitor (which removes them from `find(..., "service", ["failed"])`).
+INTERNAL_ESSENTIAL_SERVICES = [
+    {"set": "internal", "name": "data", "owner": "system"},
+]
+
 import logging
 from contextlib import redirect_stdout, redirect_stderr
 logger = logging.getLogger(__name__)
@@ -54,7 +64,153 @@ class GracefulKiller:
         signal.signal(signal.SIGTERM, self.exit_gracefully)
 
     def exit_gracefully(self, signum, frame):
+        # Drop the shutdown flag immediately so any enqueue() call from a
+        # gunicorn worker (HTTP) or the internal data service (HTTP back-
+        # channel) gets refused from this point on. Created here, removed in
+        # main()'s exit path.
+        try:
+            os.makedirs(os.path.dirname(lib_runner.SHUTDOWN_FLAG_PATH), exist_ok=True)
+            with open(lib_runner.SHUTDOWN_FLAG_PATH, "w") as f:
+                f.write(str(os.getpid()))
+        except Exception:
+            # The flag is best-effort: if /tmp is unwritable, schedule() is
+            # still gated by kill_now and the rest of the shutdown sequence
+            # works. Don't crash the signal handler over it.
+            pass
         self.kill_now = True
+
+
+def _shutdown_job_processes(processes: dict[int, subprocess.Popen], timeout: float = 15.0,
+                             runner_socket=None, runner_poller=None):
+    """Bring all running job subprocesses to a stop, synchronously.
+
+    Approach: let the natural completion flow drive state updates. We
+    SIGTERM each process tree and then wait, draining ZMQ completion
+    messages from the runner socket as services exit. A service that
+    handles SIGTERM via its ServiceListener loops out of `listen()`,
+    runs through job_runner's wrap-up which calls
+    `job_lib.send_completion`, and that completion arrives over ZMQ
+    here — finishJob updates the DB to 'done'/'failed' on its own.
+
+    Only processes still alive past `timeout` are SIGKILL'd; those
+    couldn't shut down on their own, so we explicitly mark them
+    'cancelled' with detail='killed during shutdown'. Same for any
+    process whose kind has no completion path (tasks under default
+    Python SIGTERM termination get no completion sent).
+
+    Note on zombies: psutil.Process.is_running() returns True for
+    zombie processes — we use the subprocess.Popen object's poll()
+    instead, which reaps the zombie and reports exit cleanly.
+
+    Required: runner_socket+runner_poller. Without them, services
+    block on send_completion's REQ recv() forever and we always end
+    up SIGKILL'ing.
+    """
+    if not processes:
+        return
+
+    # Snapshot the live targets — no DB writes here, just identification.
+    targets: dict[int, str] = {}
+    with Session(get_db_engine()) as session:
+        for pid, p in list(processes.items()):
+            if p.poll() is not None:
+                continue
+            job = session.query(Job).filter_by(pid=pid).first()
+            if job is None:
+                logger.debug("shutdown: pid %d has no DB job row, skipping", pid)
+                continue
+            targets[pid] = job.id
+
+    if not targets:
+        return
+
+    for pid, job_id in targets.items():
+        logger.info("shutdown: SIGTERM tree of job %s pid %d", job_id, pid)
+        try:
+            tree = job_lib.get_process_tree(pid)
+            job_lib.kill_proc_tree(tree, signal.SIGTERM)
+        except Exception as e:
+            logger.warning("shutdown: SIGTERM failed for %s (pid %d): %s", job_id, pid, e)
+
+    deadline = time.time() + timeout
+    still_alive: dict[int, str] = dict(targets)
+    while still_alive and time.time() < deadline:
+        if runner_socket is not None and runner_poller is not None:
+            events = runner_poller.poll(0)
+            while events:
+                for _sock, _ in events:
+                    try:
+                        receive_and_process(runner_socket)
+                    except Exception as e:
+                        logger.warning("shutdown: ZMQ drain failed: %s", e)
+                events = runner_poller.poll(0)
+
+        survivors: dict[int, str] = {}
+        for pid, job_id in still_alive.items():
+            p = processes.get(pid)
+            if p is not None and p.poll() is not None:
+                continue
+            survivors[pid] = job_id
+        still_alive = survivors
+        if still_alive:
+            time.sleep(0.05)
+
+    sigkilled: set[int] = set()
+    if still_alive:
+        for pid, job_id in still_alive.items():
+            logger.warning("shutdown: SIGKILL tree of job %s pid %d (graceful timeout %.1fs exceeded)", job_id, pid, timeout)
+            try:
+                tree = job_lib.get_process_tree(pid)
+                job_lib.kill_proc_tree(tree, signal.SIGKILL)
+            except Exception as e:
+                logger.warning("shutdown: SIGKILL failed for %s (pid %d): %s", job_id, pid, e)
+            sigkilled.add(pid)
+
+        sigkill_deadline = time.time() + 2.0
+        while still_alive and time.time() < sigkill_deadline:
+            leftover: dict[int, str] = {}
+            for pid, job_id in still_alive.items():
+                p = processes.get(pid)
+                if p is not None and p.poll() is not None:
+                    continue
+                leftover[pid] = job_id
+            still_alive = leftover
+            if still_alive:
+                time.sleep(0.05)
+
+    # Final sweep — drives each row to the right state for the next boot:
+    #   • SIGKILL'd: the service didn't respond to SIGTERM. Mark `failed`
+    #     so it's visible in the monitor and counts toward the per-service
+    #     <3-failed gate.
+    #   • `cancel` / `cancelling`: an operator cancel was mid-flight when
+    #     shutdown started. Finalise to `cancelled` so the next-start
+    #     gate honours the operator intent (cancelled blocks restart).
+    #   • Already terminal in a "preserve across restarts" sense
+    #     (`cancelled`, `failed`): leave alone.
+    #   • Everything else (`done`, `remove`, `running` without completion,
+    #     etc.): a clean container shutdown shouldn't leave behind state
+    #     that blocks the schedule loop from re-enqueueing — DELETE the
+    #     row so the service auto-restarts on next boot. The workspace
+    #     under `data/jobs/{set}/{job_id}/` stays on disk for post-mortem.
+    with Session(get_db_engine()) as session:
+        for pid, job_id in targets.items():
+            job = session.get(Job, job_id)
+            if job is None:
+                continue
+            if pid in sigkilled:
+                job.state = "failed"
+                job.detail = "did not respond to shutdown SIGTERM"
+                job.end = datetime.now()
+                job.pid = None
+            elif job.state in ("cancel", "cancelling"):
+                job.state = "cancelled"
+                job.end = datetime.now()
+                job.pid = None
+            elif job.state in ("cancelled", "failed"):
+                pass
+            else:
+                session.delete(job)
+        commit_with_retry(session)
 
 def terminate_job_processes(job_id: str, pid: int, is_debug: bool, owner: str, graceful_timeout: float = 15.0):
     logger.info("ENTER terminate_job_processes job_id=%s pid=%s is_debug=%s owner=%s", job_id, pid, is_debug, owner)
@@ -125,33 +281,97 @@ def receive_and_process(socket):
     socket.send(b'', zmq.SNDMORE)
     socket.send(b'ack')
 
+INCOMPLETE_ON_STARTUP_DETAIL = "incomplete execution detected on startup"
+
+
 def handleOddJobs():
+    """Reconcile non-terminal rows left behind by a previous unclean run.
+
+    Transient states (`dequeued`, `loading`) get reset to `todo` so the
+    new runner can pick them up. `running` gets marked `failed` with a
+    sentinel detail (`INCOMPLETE_ON_STARTUP_DETAIL`). `cancel`/`cancelling`
+    get finalised to `cancelled` — the daemon-thread terminate from a
+    cancel HTTP got killed by an immediately-following shutdown, or the
+    previous run crashed mid-terminate; the process is gone by the time
+    we see this on startup.
+
+    To keep the per-service `<3 failed` gate from accumulating ghosts
+    across repeated unclean container restarts (docker stop_grace_period
+    exhausted before the runner could clean up), we deduplicate after
+    the sweep: at most ONE row with the incomplete-on-startup detail
+    survives per `(set, name, owner, kind)` tuple. Real failures with
+    real tracebacks are untouched.
+
+    Terminal states (`done`, `failed`-with-other-detail, `cancelled`,
+    `remove`, `removed`) are NOT touched — they're either history we
+    want to preserve (for `<3 failed` and cancelled-blocks-restart) or
+    transient cleanup states that purgeLeftoverServiceJobs handles.
+    """
+    new_incomplete = []  # (id, set, name, owner, kind) of rows we just marked incomplete
     with Session(get_db_engine()) as session:
         stmt = select(Job).where(
-            or_(Job.state == "dequeued", Job.state == "running")
+            or_(Job.state == "dequeued", Job.state == "loading",
+                Job.state == "running",
+                Job.state == "cancel", Job.state == "cancelling")
         ).order_by(Job.id.asc())
 
         jobs = session.scalars(stmt).all()
 
         for job in jobs:
-            if job.state == "dequeued":
+            if job.state in ("dequeued", "loading"):
                 job.state = "todo"
-            else:
+            elif job.state in ("cancel", "cancelling"):
+                job.state = "cancelled"
+                job.detail = (job.detail or "") + " (orphan cancel cleaned on startup)"
+            else:  # running
                 job.state = "failed"
-                job.detail = "incomplete execution detected on startup"
+                job.detail = INCOMPLETE_ON_STARTUP_DETAIL
+                new_incomplete.append((job.id, job.set, job.name, job.owner, job.kind))
         commit_with_retry(session)
 
+    if new_incomplete:
+        with Session(get_db_engine()) as session:
+            for job_id, set_, name_, owner_, kind_ in new_incomplete:
+                # Delete prior `failed` rows for the same identity tuple
+                # whose detail is exactly the incomplete-on-startup sentinel.
+                # Real failures (different detail) survive.
+                session.execute(
+                    delete(Job).where(
+                        and_(Job.id != job_id,
+                             Job.set == set_,
+                             Job.name == name_,
+                             Job.owner == owner_,
+                             Job.kind == kind_,
+                             Job.state == "failed",
+                             Job.detail == INCOMPLETE_ON_STARTUP_DETAIL)
+                    )
+                )
+            commit_with_retry(session)
+
 def purgeLeftoverServiceJobs():
-    """Purge leftover service jobs at startup to ensure clean servicing."""
+    """Clean up stuck `remove`/`removed` service rows from a previous run.
+
+    A service exiting cleanly with drop_done=True goes through
+    `done` → `remove` → `removed` → row deleted (postTerm + disposeJobs),
+    but the daemon thread that drives that finalisation can be killed
+    when the runner exits within its own shutdown window. The row gets
+    stuck in `remove` and then later blocks the schedule loop from
+    re-enqueueing the service. This sweep finishes that cleanup.
+
+    Terminal `failed` / `done` / `cancelled` rows are preserved — the
+    schedule-loop's `<3 failed` gate and the cancelled-blocks-restart
+    rule both rely on those rows surviving across restarts.
+    """
     with Session(get_db_engine()) as session:
         stmt = select(Job).where(
-            and_(Job.kind == "service", or_(Job.state == "dequeued", Job.state == "running", Job.state == "failed", Job.state == "done"))
+            and_(Job.kind == "service",
+                 or_(Job.state == "remove", Job.state == "removed"))
         ).order_by(Job.id.asc())
 
         jobs = session.scalars(stmt).all()
 
         for job in jobs:
-            logger.debug(f"Purging leftover service job {job.id} in state {job.state}")
+            logger.debug(f"Purging stuck-cleanup service job {job.id} in state {job.state}")
             session.delete(job)
             lib_runner.drop(job.id, job.set)
         commit_with_retry(session)
@@ -340,10 +560,18 @@ def finishJob(job_id: str, state: str, detail: str):
         kind = job.kind
         owner = job.owner
 
-        # Atomic UPDATE with CASE: never overwrite a cancel that committed under us.
+        # Atomic UPDATE with CASE: once a row reaches a terminal state we
+        # never re-write it. Two completions arriving for the same job
+        # (e.g. exec() returned "done" + a finally-block close() raised
+        # and run_*_job's outer except sent "failed") must not demote
+        # the already-committed terminal state. Same protection for an
+        # operator cancel that committed under us.
         session.query(Job).filter(Job.id == job_id).update({
             Job.state: case(
-                (Job.state.in_(("cancel", "cancelling")), Job.state),
+                (Job.state.in_((
+                    "cancel", "cancelling", "cancelled",
+                    "done", "failed", "remove", "removed",
+                )), Job.state),
                 else_=candidate,
             ),
             Job.end: datetime.now(),
@@ -442,24 +670,61 @@ def schedule():
                         running_jobs = lib_runner.find(s.owner, s.set, s.name, "task", ["todo", "dequeued", "running"])
                         if not running_jobs:
                             logger.debug(f"schedule: enqueuing task {s.set}::{s.name} (cron {s.schedule}) at {next_run}")
-                            lib_runner.enqueue(s.set, s.name, s.owner, "task", s.drop_done, s.param, s.max_retries, None)
+                            try:
+                                lib_runner.enqueue(s.set, s.name, s.owner, "task", s.drop_done, s.param, s.max_retries, None)
+                            except lib_runner.ShutdownPending:
+                                logger.info("schedule: shutdown pending — skipping task enqueue for %s::%s", s.set, s.name)
+                                return
 
                             schedule_obj = session.get(Schedule, s.id)
                             schedule_obj.last = now
                             logger.debug(f"schedule: before commit, session ID {id(session)}, last {s.last} to {next_run} for {s.id} at {datetime.now()}")
                             commit_with_retry(session)
                             logger.debug(f"schedule: after commit, session ID {id(session)}, committed last={next_run} for {s.id} at {datetime.now()}")
-                elif not lib_runner.find(s.owner, s.set, s.name, "service", ["todo", "dequeued", "running", "cancel", "done"]) and \
+                elif not lib_runner.find(s.owner, s.set, s.name, "service",
+                         ["todo", "dequeued", "loading", "running",
+                          "cancel", "cancelling", "cancelled", "done"]) and \
                      len(lib_runner.find(s.owner, s.set, s.name, "service", ["failed"])) < 3:
                     logger.debug(f"schedule: enqueuing service {s.set}::{s.name} at {now}")
-                    lib_runner.enqueue(s.set, s.name, s.owner, "service", s.drop_done, s.param, s.max_retries, None)
+                    try:
+                        lib_runner.enqueue(s.set, s.name, s.owner, "service", s.drop_done, s.param, s.max_retries, None)
+                    except lib_runner.ShutdownPending:
+                        logger.info("schedule: shutdown pending — skipping service enqueue for %s::%s", s.set, s.name)
+                        return
                     schedule_obj = session.get(Schedule, s.id)
                     old_last = schedule_obj.last
                     schedule_obj.last = now
                     logger.debug(f"schedule: before commit, session ID {id(session)}, last {old_last} to {now} for service {s.id} at {datetime.now()}")
                     commit_with_retry(session)
                     logger.debug(f"schedule: after commit, session ID {id(session)}, committed last={now} for service {s.id} at {datetime.now()}")
-        logger.debug(f"schedule: completed at {datetime.now()}")
+
+    # Essential services without a Schedule row — same gating as the
+    # service-with-empty-schedule branch above. A user-initiated cancel
+    # (`cancel` → `cancelling` → `cancelled`) is a hard stop: the operator
+    # has deliberately taken the service down and must remove the row
+    # before it comes back. Three failures in a row is also a stop until
+    # the operator clears them.
+    for essential in INTERNAL_ESSENTIAL_SERVICES:
+        owner = essential["owner"]
+        set_ = essential["set"]
+        name_ = essential["name"]
+        if lib_runner.find(owner, set_, name_, "service",
+                           ["todo", "dequeued", "loading", "running",
+                            "cancel", "cancelling", "cancelled", "done"]):
+            continue
+        if len(lib_runner.find(owner, set_, name_, "service", ["failed"])) >= 3:
+            continue
+        logger.debug(f"schedule: enqueuing essential service {set_}::{name_} at {now}")
+        try:
+            lib_runner.enqueue(set_, name_, owner, "service", True, None, 0, None)
+        except lib_runner.ShutdownPending:
+            # Race window: SIGTERM landed between our entry to schedule()
+            # and this enqueue. Stop scheduling for this iteration; the
+            # outer while-loop will exit on the next kill_now check.
+            logger.info("schedule: shutdown pending — skipping essential-service enqueue for %s::%s", set_, name_)
+            return
+
+    logger.debug(f"schedule: completed at {datetime.now()}")
 
 def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
     from app.lib import files
@@ -484,6 +749,15 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
     # Init config early for subprocess isolation
     conf_path = os.environ.get("PYOPS_CONFIG", os.path.join(files.project_root, "etc/pyops.json"))
     files.Config.init(conf_path)
+
+    # Stale shutdown flag from a previous unclean exit would otherwise
+    # immediately refuse every enqueue. Remove on a clean startup; the
+    # signal handler re-creates it the moment SIGTERM lands.
+    try:
+        if os.path.exists(lib_runner.SHUTDOWN_FLAG_PATH):
+            os.remove(lib_runner.SHUTDOWN_FLAG_PATH)
+    except Exception as e:
+        logger.warning("Could not clear stale shutdown flag %s: %s", lib_runner.SHUTDOWN_FLAG_PATH, e)
 
     killer = GracefulKiller()
 
@@ -603,9 +877,17 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
                         code = job_lib.process_imports(code, setname, kind, libs, override_dict)
 
                         logger.debug(f"Run job {job_id}")
-                        ensure_set_environment(setname)
-                        venv_python = os.path.join(venv_path, setname, 'bin', 'python')
-                        json_kwargs = json.dumps({"job_id": job_id, "owner": owner, "setname": setname, "name": name, "kind": kind, "param": param, "code": code, "libs": libs, "overrides": overrides, "runner_sock_path": "/tmp/pyops/runner.sock", "max_retries": max_retries, "port": port, "conf_data": files.conf_data(), "conf_runner": files.conf_runner(), "conf_users": files.conf_users(), "conf_web": files.conf_web()})
+                        # Internal-set scriptlets are pyops-native code and
+                        # run in the pyops process's own Python — pyzmq /
+                        # msgpack / psutil / debugpy / requests are already
+                        # there (pyops itself uses them). User sets get their
+                        # own venv via the standard ensure_set_environment.
+                        if setname == "internal":
+                            venv_python = sys.executable
+                        else:
+                            ensure_set_environment(setname)
+                            venv_python = os.path.join(venv_path, setname, 'bin', 'python')
+                        json_kwargs = json.dumps({"job_id": job_id, "owner": owner, "setname": setname, "name": name, "kind": kind, "param": param, "code": code, "libs": libs, "overrides": overrides, "runner_sock_path": "/tmp/pyops/runner.sock", "max_retries": max_retries, "port": port, "conf_data": files.conf_data(), "conf_runner": files.conf_runner(), "conf_users": files.conf_users(), "conf_web": files.conf_web(), "conf_log": files.conf_log()})
                         try:
                             # Spawn job_setup.py — it runs the pip/git directive
                             # installs under the per-set bootstrap lock, then
@@ -663,24 +945,17 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
             logger.exception("Critical error in main loop iteration %d, continuing: %s", loop_count, e)
             time.sleep(1)  # Brief pause before retry to avoid tight loops on persistent errors
 
-    # join running processes for graceful shutdown with timeout/kill logic
-    for pid in list(processes.keys()):
-        p = processes[pid]
-        if p.poll() is None:
-            # Get job info for termination
-            with Session(get_db_engine()) as session:
-                job = session.query(Job).filter_by(pid=pid).first()
-                is_debug = job.kind == "debug" if job else False
-                owner = job.owner if job else None
+    # Synchronously SIGTERM all live job trees, wait up to 15s, SIGKILL
+    # stragglers, then postTerm. Old code spawned daemon threads here, which
+    # got killed the moment main() returned — leaving service subprocesses
+    # orphaned in the pgid until the outer test harness SIGKILL'd them after
+    # its 120s graceful wait. Pass the runner socket so we drain completion
+    # ACKs during the wait — without it every service ends up SIGKILL'd
+    # because its send_completion REQ blocks for the full timeout.
+    _shutdown_job_processes(processes, timeout=15.0,
+                             runner_socket=runner_socket, runner_poller=runner_poller)
 
-            logger.debug(f"Terminating process tree {pid} on shutdown")
-            finishJob(job.id, "cancelling", "shutdown")
-            try:
-                p.wait(timeout=1.0)
-            except subprocess.TimeoutExpired:
-                p.terminate()
-
-    # handle finished or failed jobs
+    # Drain any completion ZMQ events the dying subprocesses managed to send.
     events = runner_poller.poll(0)
     while events:
         for sock, _ in events:
@@ -691,6 +966,14 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
     logger.debug("main: final disposeJobs in shutdown")
     disposeJobs()
     logger.debug("main: final disposeJobs completed")
+
+    # Remove the shutdown flag on the way out — startup also clears it, but
+    # tidying here keeps /tmp/pyops clean for inspection between runs.
+    try:
+        if os.path.exists(lib_runner.SHUTDOWN_FLAG_PATH):
+            os.remove(lib_runner.SHUTDOWN_FLAG_PATH)
+    except Exception as e:
+        logger.warning("Could not remove shutdown flag on exit: %s", e)
 
     # cleanup ZMQ
     runner_poller.unregister(runner_socket)

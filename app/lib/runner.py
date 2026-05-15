@@ -16,6 +16,22 @@ from app.lib import files
 import logging
 logger = logging.getLogger(__name__)
 
+# Cross-process shutdown gate. Once SIGTERM lands on the runner, its signal
+# handler creates this file; every enqueue() — including the ones gunicorn
+# workers and the internal data service make over HTTP — must refuse new
+# work, so already-running jobs can drain without us piling more on. The
+# file lives under /tmp/pyops/ which the runner socket already provisions.
+SHUTDOWN_FLAG_PATH = "/tmp/pyops/shutdown.flag"
+
+
+class ShutdownPending(RuntimeError):
+    """enqueue() refuses while the runner has been signalled to shut down."""
+
+
+def is_shutdown_pending() -> bool:
+    return os.path.exists(SHUTDOWN_FLAG_PATH)
+
+
 def enqueue(set: str, name: str, owner: str, kind: str, drop_done: bool, param: str, max_retries: int = 0, overrides: str | None = None):
     """Enqueues a new job into the database.
 
@@ -30,7 +46,13 @@ def enqueue(set: str, name: str, owner: str, kind: str, drop_done: bool, param: 
 
     Returns:
         str: Generated job ID.
+
+    Raises:
+        ShutdownPending: when the runner is mid-shutdown — no new tasks or
+            services may be enqueued or re-enqueued in that window.
     """
+    if is_shutdown_pending():
+        raise ShutdownPending(f"pyops shutdown in progress; refusing {kind} enqueue for {set}::{name}")
     with Session(get_db_engine()) as session:
         if kind == "debug":
             # Mark existing debug job for cancellation to allow new one (only one debug session at a time)

@@ -115,9 +115,9 @@ def _job_visible(api, job_id):
 class TestDropDone:
     """Jobs with drop_done=True are auto-removed after the configured delay."""
 
-    def test_drop_done_job_removed_after_delay(self, api, pyops_server):
+    def test_drop_done_job_removed_after_delay(self, api, pyops_server, set_factory):
         """A drop_done=True task disappears from the job list after completion + delay."""
-        api.post("/scriptlet/sets/create", json={"name": SET})
+        set_factory(SET)
         api.put(
             "/scriptlet/inventory/item",
             json={"set": SET, "name": "quick", "type": "task"},
@@ -163,9 +163,9 @@ class TestDropDone:
 
         pyops_server.assert_no_unexpected_errors()
 
-    def test_drop_done_false_job_stays_in_list(self, api, pyops_server):
+    def test_drop_done_false_job_stays_in_list(self, api, pyops_server, set_factory):
         """A drop_done=False task stays in the job list after completion."""
-        api.post("/scriptlet/sets/create", json={"name": SET + "_keep"})
+        set_factory(SET + "_keep")
         api.put(
             "/scriptlet/inventory/item",
             json={"set": SET + "_keep", "name": "keeper", "type": "task"},
@@ -200,9 +200,9 @@ class TestDropDone:
 
         pyops_server.assert_no_unexpected_errors()
 
-    def test_failed_job_with_drop_done_is_not_removed(self, api, pyops_server):
+    def test_failed_job_with_drop_done_is_not_removed(self, api, pyops_server, set_factory):
         """drop_done only applies to successful ("done") jobs, not failed ones."""
-        api.post("/scriptlet/sets/create", json={"name": SET + "_fail"})
+        set_factory(SET + "_fail")
         api.put(
             "/scriptlet/inventory/item",
             json={"set": SET + "_fail", "name": "bad", "type": "task"},

@@ -99,9 +99,9 @@ class TestDebugPort:
 class TestDebugJobEnqueue:
     """PUT /scriptlet/job/item with kind='debug' — API-level validation."""
 
-    def test_invalid_override_key_format_returns_400(self, api_anon, pyops_server):
+    def test_invalid_override_key_format_returns_400(self, api_anon, pyops_server, set_factory):
         """Override keys must match set::name format; a bare name returns 400."""
-        api_anon.post("/scriptlet/sets/create", json={"name": SET})
+        set_factory(SET)
         _create(api_anon, SET, "task_a", "task", 'print("committed")\n')
 
         resp = api_anon.put(
@@ -121,14 +121,13 @@ class TestDebugJobEnqueue:
         pyops_server.assert_no_unexpected_errors()
 
     def test_override_covering_main_key_bypasses_existence_check(
-        self, api_anon, pyops_server
-    ):
+        self, api_anon, pyops_server, set_factory):
         """When overrides contains the main set::name key, no committed scriptlet is required.
 
         This is the VSIX local-only debug workflow: the extension provides
         the code via overrides and the scriptlet may not yet be committed.
         """
-        api_anon.post("/scriptlet/sets/create", json={"name": SET + "_bypass"})
+        set_factory(SET + "_bypass")
         # Deliberately do NOT create a committed scriptlet.
 
         resp = api_anon.put(
@@ -154,10 +153,9 @@ class TestDebugJobEnqueue:
         )
 
     def test_debug_without_override_requires_committed_scriptlet(
-        self, api_anon, pyops_server
-    ):
+        self, api_anon, pyops_server, set_factory):
         """kind=debug without an override for the main key needs the committed scriptlet."""
-        api_anon.post("/scriptlet/sets/create", json={"name": SET + "_nocomm"})
+        set_factory(SET + "_nocomm")
         # No scriptlet created → should get 404.
 
         resp = api_anon.put(
@@ -187,7 +185,7 @@ class TestDebugJobEnqueue:
 class TestDebugOverrideExecution:
     """Debug job with overrides runs the override code, not the committed code."""
 
-    def test_override_code_replaces_committed_code(self, api_anon, pyops_server):
+    def test_override_code_replaces_committed_code(self, api_anon, pyops_server, set_factory):
         """A debug job's override for the main scriptlet executes instead of disk code.
 
         The committed scriptlet prints "committed_output". The override prints
@@ -197,7 +195,7 @@ class TestDebugOverrideExecution:
         a fresh environment) and therefore allows a 120-second timeout.
         Port 15679 must be free on the test host.
         """
-        api_anon.post("/scriptlet/sets/create", json={"name": SET + "_exec"})
+        set_factory(SET + "_exec")
         _create(
             api_anon,
             SET + "_exec",

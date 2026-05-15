@@ -76,7 +76,7 @@ export async function run(): Promise<void> {
     const enqueueResult = await debugService.enqueueDebugJob('test', testScriptletName!, testOverrides);
     assert.ok(enqueueResult.jobId, 'JobId returned');
     debugJobId = enqueueResult.jobId!;
-    assert.strictEqual(enqueueResult.port, 15678, 'Default port');
+    assert.strictEqual(enqueueResult.port, 45678, 'Default port');
     // Wait for job to start
     await helpers.waitForJobState(debugJobId!, 'running');
     console.log('✓ Test 3 passed');

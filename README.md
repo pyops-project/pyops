@@ -1,7 +1,7 @@
 # PyOps
 Execution Platform for Python Operations Scriptlets
 
-PyOps is an "Execution Platform" for "Python Operations Scriptlets". It is licensed under GNU AGPLv3 and organized as a monorepo with core functionality in `app/`, a VSCode extension in `vsix/`, tests in `tests/`, and documentation in `doc/`.
+PyOps is an "Execution Platform" for "Python Operations Scriptlets". It is licensed under GNU AGPLv3 and organized as a monorepo with core functionality in `app/`, a VSCode extension in `vsix/`, tests in `tests/`, and documentation in `docs/`.
 
 ## Architecture
 ```mermaid
@@ -25,11 +25,12 @@ flowchart LR
 
 Stored in `etc/pyops.json` (override path via `PYOPS_CONFIG` env var):
 
-- `web`: `{"bind": "127.0.0.1:8000", "worker": 4, "timeout": 300}`
+- `web`: `{"bind": "127.0.0.1:8000", "worker": 8, "timeout": 300, "expanded_sets": []}`
+- `brand` *(optional, per-instance branding for the operator UI)*: `{"title": "PyOps", "icon": "miscellaneous_services", "favicon": null}` — `title` lands in the browser tab and the sidebar header; `icon` is either a material-icons-round glyph name (default) or a path to a PNG/SVG/etc. served via `/brand/icon`; `favicon` is an optional path served at `/favicon.ico`. Paths may be absolute or relative to the project root. Defaults reproduce the bundled pyops look.
 - `data`: `{"jobs": "data/jobs", "git": "data/git", "db": "data/app.db"}`
 - `runner`: `{"venv": "data/venv", "pkg": "data/pkg", "git_pull_interval": 60, "drop_done_delay_seconds": 60}`
 - `log`: `{"loglevel": "debug"}`
-- `users`: `{"anonymous": {"debug_port": 15678}}`
+- `users`: `{"anonymous": {"debug_port": 45678}}`
 
 ## Features
 PyOps supports various scriptlet types: task, service, schedule, controller, view, library, markdown, jslibrary.
@@ -79,6 +80,25 @@ services:
     container_name: pyops_app.SOMEDOMAIN
     image: 'registry.ralph.or.at/pyops/pyops:latest'
     restart: unless-stopped
+    # Clean shutdown chain on `docker compose down`:
+    #   docker SIGTERM → gunicorn master → workers drain (graceful_timeout=120s
+    #   in app/gunicorn.py) → on_exit() SIGTERMs the runner subprocess →
+    #   runner runs _shutdown_job_processes (15s timeout). Total worst-case
+    #   ≈ 135s. Docker's default stop_grace_period of 10s SIGKILLs the
+    #   container before that chain finishes, which leaves service rows in
+    #   "running" state on disk; the next start then marks them failed
+    #   with detail "incomplete execution detected on startup".
+    #   180s gives the chain enough room.
+    stop_grace_period: 180s
+    # Pyops opens file descriptors across multiple workers + the runner
+    # subprocess + per-job log streams + ZMQ sockets; the Docker default
+    # nofile soft limit (1024 historically) is the first wall pyops hits
+    # under load. Bump both limits to the 16-bit max (65535) so the
+    # `pyops_max_fds_*` gauges in /metrics stay well below the threshold.
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
     networks:
       - default
     volumes:
@@ -107,7 +127,7 @@ services:
 {
     "web": {
         "bind": "0.0.0.0:80",
-        "worker": 4,
+        "worker": 8,
         "timeout": 300
     },
     "data": {
@@ -125,7 +145,7 @@ services:
         "loglevel": "debug"
     },
     "users": {
-        "anonymous": {"debug_port": 15678}
+        "anonymous": {"debug_port": 45678}
     }
 }
 ```
@@ -191,4 +211,4 @@ location ~ ^/(health|metrics) {
 
 Or scrape the upstream container directly on the compose-internal port (preferred when the monitoring host is on the same LAN), which is how this repo is deployed at `aiops_app.ralph.or.at:1080`.
 
-See `doc/insights_app.md` § "Monitoring Router" for the full metric list, GPU status taxonomy, and the ulimit threshold semantics.
+See `docs/insights_app.md` § "Monitoring Router" for the full metric list, GPU status taxonomy, and the ulimit threshold semantics.

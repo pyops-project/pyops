@@ -1,0 +1,166 @@
+<script src="/scriptlet/jslib/internal/internal_job"></script>
+<script>
+    // REST helper to the data service via the controller proxy.
+    // path is appended after /controller/{{SET}}/{{NAME}}/
+    function apiCall(method, path, params, callback) {
+        const url = "/controller/{{SET}}/{{NAME}}/" + path;
+        const opts = { method, headers: {} };
+        if (method !== "GET" && params !== null && params !== undefined) {
+            opts.headers["Content-Type"] = "application/json";
+            opts.body = JSON.stringify(params);
+        }
+        fetch(url, opts).then(async (r) => {
+            const body = await r.json().catch(() => ({}));
+            callback(r.ok, body, r.status);
+        }).catch((e) => callback(false, { error: e.toString() }, 0));
+    }
+
+    function refreshList() {
+        apiCall("GET", "list", null, function(ok, body) {
+            if (!ok) {
+                console.error("list failed", body);
+                return;
+            }
+            const tbody = document.getElementById("sets");
+            const existing = {};
+            tbody.querySelectorAll("tr").forEach((tr) => {
+                const n = tr.getAttribute("data-name");
+                if (n) existing[n] = tr;
+            });
+            const seen = new Set();
+            for (const s of (body.sets || [])) {
+                seen.add(s.name);
+                const html = renderRowContent(s.name, s.branch);
+                if (existing[s.name]) {
+                    existing[s.name].innerHTML = html;
+                } else {
+                    const tr = document.createElement("tr");
+                    tr.setAttribute("data-name", s.name);
+                    tr.setAttribute("data-testid", `set-row-${s.name}`);
+                    tr.innerHTML = html;
+                    tbody.appendChild(tr);
+                }
+            }
+            tbody.querySelectorAll("tr").forEach((tr) => {
+                const n = tr.getAttribute("data-name");
+                if (n && !seen.has(n)) tr.remove();
+            });
+        });
+    }
+
+    function renderRowContent(setName, branch) {
+        return `
+            <th scope="row">${setName}</th>
+            <th scope="row">${branch}</th>
+            <td>
+                <button type="button" onclick="onPull('${setName}')" class="btn btn-primary p-0" data-testid="set-pull-${setName}" title="Git pull">
+                    <span class="material-icons-round">sync</span>
+                </button>
+                <button type="button" onclick="onUpdateDeps('${setName}')" class="btn btn-info p-0" data-testid="set-update-deps-${setName}" title="Update Dependencies">
+                    <span class="material-icons-round">system_update_alt</span>
+                </button>
+                <button type="button" onclick="onSwitchOpen('${setName}')" class="btn btn-warning p-0" data-testid="set-switch-${setName}" title="Switch branch">
+                    <span class="material-icons-round">swap_horiz</span>
+                </button>
+                <button type="button" onclick="onRemove('${setName}')" class="btn btn-danger p-0" data-testid="set-remove-${setName}" title="Remove set">
+                    <span class="material-icons-round">delete</span>
+                </button>
+            </td>
+        `;
+    }
+
+    function onCloneSubmit() {
+        const url = document.getElementById("cloneModal-url").value.trim();
+        if (!url) {
+            document.getElementById("cloneModal-error").textContent = "Please provide URL";
+            return;
+        }
+        const params = {
+            url,
+            username: document.getElementById("cloneModal-username").value,
+            password: document.getElementById("cloneModal-password").value,
+            git_name: document.getElementById("cloneModal-git_name").value,
+            git_email: document.getElementById("cloneModal-git_email").value,
+        };
+        bootstrap.Modal.getInstance(document.getElementById("cloneModal")).hide();
+        runInternalJob("/controller/{{SET}}/{{NAME}}/clone", "POST", params, `Clone — ${url}`)
+            .then(() => refreshList());
+    }
+
+    function onCreateSubmit() {
+        const name = document.getElementById("createModal-name").value.trim();
+        if (!name) {
+            document.getElementById("createModal-error").textContent = "Please provide name";
+            return;
+        }
+        bootstrap.Modal.getInstance(document.getElementById("createModal")).hide();
+        runInternalJob("/controller/{{SET}}/{{NAME}}/create", "POST", { name }, `Create — ${name}`)
+            .then(() => refreshList());
+    }
+
+    function onSwitchOpen(setName) {
+        document.getElementById("switchModal-name").value = setName;
+        document.getElementById("switchModal-branch").value = "";
+        document.getElementById("switchModal-error").textContent = "";
+        bootstrap.Modal.getOrCreateInstance(document.getElementById("switchModal")).show();
+    }
+
+    function onSwitchSubmit() {
+        const setName = document.getElementById("switchModal-name").value;
+        const branch = document.getElementById("switchModal-branch").value.trim();
+        if (!branch) {
+            document.getElementById("switchModal-error").textContent = "Please provide branch";
+            return;
+        }
+        bootstrap.Modal.getInstance(document.getElementById("switchModal")).hide();
+        runInternalJob("/controller/{{SET}}/{{NAME}}/switch", "POST", { name: setName, branch }, `Switch — ${setName} → ${branch}`)
+            .then(() => refreshList());
+    }
+
+    function onPull(setName) {
+        runInternalJob(`/controller/{{SET}}/{{NAME}}/pull/${encodeURIComponent(setName)}`, "POST", null, `Pull — ${setName}`)
+            .then(() => refreshList());
+    }
+
+    function onUpdateDeps(setName) {
+        runInternalJob(`/controller/{{SET}}/{{NAME}}/update_deps/${encodeURIComponent(setName)}`, "POST", null, `Update Dependencies — ${setName}`)
+            .then(() => refreshList());
+    }
+
+    function onRemove(setName) {
+        if (!confirm(`Remove set '${setName}'?`)) return;
+        runInternalJob(`/controller/{{SET}}/{{NAME}}/remove/${encodeURIComponent(setName)}`, "DELETE", null, `Remove — ${setName}`)
+            .then(() => refreshList());
+    }
+
+    function onCloneOpen() {
+        ["url", "username", "password", "git_name", "git_email"].forEach((k) => {
+            document.getElementById(`cloneModal-${k}`).value = "";
+        });
+        document.getElementById("cloneModal-error").textContent = "";
+        bootstrap.Modal.getOrCreateInstance(document.getElementById("cloneModal")).show();
+    }
+
+    function onCreateOpen() {
+        document.getElementById("createModal-name").value = "";
+        document.getElementById("createModal-error").textContent = "";
+        bootstrap.Modal.getOrCreateInstance(document.getElementById("createModal")).show();
+    }
+
+    // Theme-aware table variant: the controller wrapper emits a
+    // `pyops:theme` CustomEvent on prefers-color-scheme changes. Swap the
+    // table's Bootstrap variant so it stays readable in both modes.
+    function applySetsTableTheme(dark) {
+        const t = document.querySelector('[data-testid="sets-table"]');
+        if (!t) return;
+        t.classList.toggle('table-dark', dark);
+        t.classList.toggle('table-secondary', !dark);
+    }
+    window.addEventListener('pyops:theme', (ev) => applySetsTableTheme(ev.detail.dark));
+
+    $(document).ready(function () {
+        applySetsTableTheme(window.pyopsDark === true);
+        refreshList();
+        setInterval(refreshList, 10000);
+    });
+</script>

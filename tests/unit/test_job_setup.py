@@ -258,40 +258,6 @@ class TestSetInstallLock:
         assert kinds[0] == "enter" and kinds[1] == "enter", log
         assert kinds[2] == "exit" and kinds[3] == "exit", log
 
-    def test_blocks_remove_set_environment(self, isolated_venv_root):
-        """An HTTP `remove_set` call landing during a directive install must
-        wait until the install finishes — otherwise rmtree races against pip."""
-        from app.lib.sets import set_install_lock, remove_set_environment
-
-        # Create the set's venv & pkg dirs so remove can actually proceed.
-        (isolated_venv_root / "alpha").mkdir()
-        pkg_dir = isolated_venv_root.parent / "pkg" / "alpha"
-        pkg_dir.mkdir()
-
-        events = []
-
-        def installer():
-            with set_install_lock("alpha"):
-                events.append(("install-enter", time.monotonic()))
-                time.sleep(0.2)
-                events.append(("install-exit", time.monotonic()))
-
-        def remover():
-            time.sleep(0.05)
-            events.append(("remove-call", time.monotonic()))
-            remove_set_environment("alpha")
-            events.append(("remove-done", time.monotonic()))
-
-        t1 = threading.Thread(target=installer)
-        t2 = threading.Thread(target=remover)
-        t1.start()
-        t2.start()
-        t1.join()
-        t2.join()
-
-        kinds = [e[0] for e in events]
-        assert kinds == ["install-enter", "remove-call", "install-exit", "remove-done"], events
-
 
 class TestProcessCodeInstallsHoldsLock:
     """process_code_installs must hold one lock for the whole call (atomic

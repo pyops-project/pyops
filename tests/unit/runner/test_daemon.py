@@ -38,39 +38,159 @@ class TestDaemon:
             assert job_running.state == "failed"
             assert job_running.detail == "incomplete execution detected on startup"
 
-    def test_purgeLeftoverServiceJobs_running_service(self, mock_db):
-        from app.runner import purgeLeftoverServiceJobs
+    def test_handleOddJobs_loading_to_todo(self, mock_db):
+        """`loading` is a transient state set by loadJob before spawn. If
+        the runner crashed mid-loadJob the row sits there forever; reset
+        it to `todo` so the new runner picks it up cleanly."""
+        from app.runner import handleOddJobs
         from app.orm.database import get_db_engine
         from app.orm.job import Job
         with Session(get_db_engine()) as test_session:
-            job_running_service = Job(id="run_svc_id", set="test_set", name="test_name", owner="test_owner", kind="service", state="running", param=None, detail=None, pid=123, drop_done=False)
-            job_running_task = Job(id="run_task_id", set="test_set", name="test_name", owner="test_owner", kind="task", state="running", param=None, detail=None, pid=None, drop_done=False)
-            job_done_service = Job(id="done_svc_id", set="test_set", name="test_name", owner="test_owner", kind="service", state="done", param=None, detail=None, pid=None, drop_done=False)
-            test_session.add_all([job_running_service, job_running_task, job_done_service])
+            test_session.add(Job(id="load_id", set="s", name="n", owner="o",
+                                  kind="task", state="loading", param=None,
+                                  detail=None, pid=None, drop_done=False))
             test_session.commit()
-        purgeLeftoverServiceJobs()
+        handleOddJobs()
         with Session(get_db_engine()) as test_session:
-            # Service jobs should be deleted
-            assert test_session.get(Job, "run_svc_id") is None
-            assert test_session.get(Job, "done_svc_id") is None
-            # Non-service jobs should be unchanged
-            job_running_task = test_session.get(Job, "run_task_id")
-            assert job_running_task.state == "running"
+            assert test_session.get(Job, "load_id").state == "todo"
 
-    def test_purgeLeftoverServiceJobs_dequeued_service(self, mock_db):
+    def test_handleOddJobs_deduplicates_incomplete_marker(self, mock_db):
+        """Repeated unclean container restarts shouldn't accumulate ghost
+        `failed` rows toward the per-service `<3 failed` gate. At most one
+        row with the incomplete-on-startup sentinel detail survives per
+        (set, name, owner, kind)."""
+        from app.runner import handleOddJobs, INCOMPLETE_ON_STARTUP_DETAIL
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        with Session(get_db_engine()) as test_session:
+            test_session.add_all([
+                # Prior incomplete-on-startup rows from earlier restarts
+                Job(id="old1", set="s", name="n", owner="o", kind="service",
+                    state="failed", detail=INCOMPLETE_ON_STARTUP_DETAIL,
+                    param=None, pid=None, drop_done=True),
+                Job(id="old2", set="s", name="n", owner="o", kind="service",
+                    state="failed", detail=INCOMPLETE_ON_STARTUP_DETAIL,
+                    param=None, pid=None, drop_done=True),
+                # A REAL failure with a different detail — must survive
+                Job(id="real", set="s", name="n", owner="o", kind="service",
+                    state="failed", detail="ZeroDivisionError: real bug",
+                    param=None, pid=None, drop_done=True),
+                # The currently-orphaned running row that will become incomplete
+                Job(id="now", set="s", name="n", owner="o", kind="service",
+                    state="running", detail=None,
+                    param=None, pid=None, drop_done=True),
+                # Unrelated service — its own incomplete must not be touched
+                Job(id="other", set="s", name="other", owner="o", kind="service",
+                    state="failed", detail=INCOMPLETE_ON_STARTUP_DETAIL,
+                    param=None, pid=None, drop_done=True),
+            ])
+            test_session.commit()
+
+        handleOddJobs()
+
+        with Session(get_db_engine()) as test_session:
+            # Old incomplete rows for (s, n, o, service) are gone
+            assert test_session.get(Job, "old1") is None
+            assert test_session.get(Job, "old2") is None
+            # Real failure preserved
+            real = test_session.get(Job, "real")
+            assert real is not None and real.state == "failed"
+            # New incomplete row is the survivor
+            now = test_session.get(Job, "now")
+            assert now.state == "failed"
+            assert now.detail == INCOMPLETE_ON_STARTUP_DETAIL
+            # Unrelated service untouched
+            other = test_session.get(Job, "other")
+            assert other is not None and other.detail == INCOMPLETE_ON_STARTUP_DETAIL
+
+    def test_handleOddJobs_incomplete_dedup_does_not_block_under_three_gate(self, mock_db):
+        """Three unclean restarts in a row leave ONE failed row, not three,
+        so the schedule's <3 failed gate still permits restart."""
+        from app.runner import handleOddJobs, INCOMPLETE_ON_STARTUP_DETAIL
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        for i, jid in enumerate(["r1", "r2", "r3"]):
+            with Session(get_db_engine()) as test_session:
+                test_session.add(Job(id=jid, set="s", name="n", owner="o",
+                                     kind="service", state="running",
+                                     param=None, pid=None, drop_done=True))
+                test_session.commit()
+            handleOddJobs()
+        with Session(get_db_engine()) as test_session:
+            stmt = select(Job).where(Job.set == "s", Job.name == "n",
+                                      Job.detail == INCOMPLETE_ON_STARTUP_DETAIL)
+            rows = test_session.scalars(stmt).all()
+            assert len(rows) == 1
+
+    def test_handleOddJobs_preserves_terminal_states(self, mock_db):
+        """`done` / `failed` / `cancelled` / `remove` / `removed` rows are
+        never overwritten — the per-service `<3 failed` gate and the
+        cancelled-blocks-restart rule both depend on those rows surviving
+        across restarts."""
+        from app.runner import handleOddJobs
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        with Session(get_db_engine()) as test_session:
+            for jid, state in [("d_id", "done"), ("f_id", "failed"),
+                               ("c_id", "cancelled"), ("rm_id", "remove"),
+                               ("rmd_id", "removed")]:
+                test_session.add(Job(id=jid, set="s", name="n", owner="o",
+                                     kind="task", state=state, param=None,
+                                     detail="original", pid=None, drop_done=False))
+            test_session.commit()
+        handleOddJobs()
+        with Session(get_db_engine()) as test_session:
+            assert test_session.get(Job, "d_id").state == "done"
+            assert test_session.get(Job, "f_id").state == "failed"
+            assert test_session.get(Job, "c_id").state == "cancelled"
+            assert test_session.get(Job, "rm_id").state == "remove"
+            assert test_session.get(Job, "rmd_id").state == "removed"
+
+    def test_purgeLeftoverServiceJobs_clears_stuck_remove(self, mock_db):
+        """`remove`/`removed` service rows are the only ones the startup
+        sweep deletes — they're transient cleanup states whose postTerm
+        got cut short when the previous runner exited."""
         from app.runner import purgeLeftoverServiceJobs
         from app.orm.database import get_db_engine
         from app.orm.job import Job
         with Session(get_db_engine()) as test_session:
-            job_dequeued_service = Job(id="deq_svc_id", set="test_set", name="test_name", owner="test_owner", kind="service", state="dequeued", param=None, detail=None, pid=None, drop_done=False)
-            job_failed_service = Job(id="fail_svc_id", set="test_set", name="test_name", owner="test_owner", kind="service", state="failed", param=None, detail=None, pid=None, drop_done=False)
-            test_session.add_all([job_dequeued_service, job_failed_service])
+            test_session.add_all([
+                Job(id="rm_svc", set="s", name="n", owner="o", kind="service",
+                    state="remove", param=None, detail=None, pid=None, drop_done=True),
+                Job(id="rmd_svc", set="s", name="n", owner="o", kind="service",
+                    state="removed", param=None, detail=None, pid=None, drop_done=True),
+                # non-service in remove — left alone
+                Job(id="rm_task", set="s", name="n", owner="o", kind="task",
+                    state="remove", param=None, detail=None, pid=None, drop_done=True),
+            ])
             test_session.commit()
         purgeLeftoverServiceJobs()
         with Session(get_db_engine()) as test_session:
-            # Service jobs should be deleted
-            assert test_session.get(Job, "deq_svc_id") is None
-            assert test_session.get(Job, "fail_svc_id") is None
+            assert test_session.get(Job, "rm_svc") is None
+            assert test_session.get(Job, "rmd_svc") is None
+            assert test_session.get(Job, "rm_task") is not None  # untouched
+
+    def test_purgeLeftoverServiceJobs_preserves_terminal_rows(self, mock_db):
+        """`failed` / `done` / `cancelled` service rows survive a restart —
+        the `<3 failed` gate and the cancelled-blocks-restart rule both
+        depend on those rows being present on the next runner boot."""
+        from app.runner import purgeLeftoverServiceJobs
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        with Session(get_db_engine()) as test_session:
+            test_session.add_all([
+                Job(id="fail_svc", set="s", name="n", owner="o", kind="service",
+                    state="failed", param=None, detail=None, pid=None, drop_done=False),
+                Job(id="done_svc", set="s", name="n", owner="o", kind="service",
+                    state="done", param=None, detail=None, pid=None, drop_done=False),
+                Job(id="cancel_svc", set="s", name="n", owner="o", kind="service",
+                    state="cancelled", param=None, detail=None, pid=None, drop_done=False),
+            ])
+            test_session.commit()
+        purgeLeftoverServiceJobs()
+        with Session(get_db_engine()) as test_session:
+            for jid in ("fail_svc", "done_svc", "cancel_svc"):
+                assert test_session.get(Job, jid) is not None, jid
 
     def test_getNextToDo_found(self, mock_db):
         from app.runner import getNextToDo
@@ -198,6 +318,44 @@ class TestDaemon:
             assert job.state == "failed"
             assert job.detail == "error"
 
+    def test_finishJob_cas_preserves_terminal_state(self, mock_db):
+        """A row that already reached a terminal state must not be re-written
+        by a later completion. Concrete scenario: a service exits cleanly,
+        send_completion('done') runs and (with drop_done=True) the row gets
+        re-targeted to 'remove'. The finally-block listener.close() then
+        raises, run_*_job's outer except sends a second completion 'failed'.
+        Without CAS protection, the second commit would demote 'remove'
+        back to 'failed' and the schedule loop would treat the service as
+        unrestartable. CAS preserves the terminal 'remove'.
+        """
+        from app.runner import finishJob
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        with Session(get_db_engine()) as test_session:
+            test_session.add(Job(id="t1", set="s", name="n", owner="o",
+                                 kind="service", state="remove", param=None,
+                                 detail=None, pid=None, drop_done=True))
+            test_session.commit()
+
+        # Second completion with state='failed' — must be ignored by CAS.
+        finishJob("t1", "failed", "spurious error from close()")
+
+        with Session(get_db_engine()) as test_session:
+            assert test_session.get(Job, "t1").state == "remove"
+
+    def test_finishJob_cas_preserves_done_against_later_failed(self, mock_db):
+        from app.runner import finishJob
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        with Session(get_db_engine()) as test_session:
+            test_session.add(Job(id="t2", set="s", name="n", owner="o",
+                                 kind="task", state="done", param=None,
+                                 detail=None, pid=None, drop_done=False))
+            test_session.commit()
+        finishJob("t2", "failed", "duplicate completion")
+        with Session(get_db_engine()) as test_session:
+            assert test_session.get(Job, "t2").state == "done"
+
     def test_finishJob_cas_preserves_cancel_on_concurrent_commit(self, mock_db):
         """Cancel commits between finishJob's snapshot read and its CAS UPDATE.
 
@@ -235,6 +393,7 @@ class TestDaemon:
             # overwrite it with the candidate 'done'.
             assert fetched.state == "cancel"
 
+    @patch('app.runner.INTERNAL_ESSENTIAL_SERVICES', [])
     @patch('app.runner.lib_runner.find')
     @patch('app.runner.lib_runner.enqueue')
     @patch('croniter.croniter')
@@ -262,6 +421,7 @@ class TestDaemon:
             test_session.refresh(sched)
             assert sched.last == datetime(2023, 1, 1, 12, 0)
 
+    @patch('app.runner.INTERNAL_ESSENTIAL_SERVICES', [])
     @patch('app.runner.lib_runner.find')
     @patch('app.runner.lib_runner.enqueue')
     @patch('croniter.croniter')
@@ -284,6 +444,7 @@ class TestDaemon:
         schedule()
         mock_enqueue.assert_not_called()  # Should not enqueue future runs
 
+    @patch('app.runner.INTERNAL_ESSENTIAL_SERVICES', [])
     @patch('app.runner.lib_runner.find')
     @patch('app.runner.lib_runner.enqueue')
     @patch('croniter.croniter')
@@ -306,6 +467,7 @@ class TestDaemon:
         schedule()
         mock_enqueue.assert_not_called()
 
+    @patch('app.runner.INTERNAL_ESSENTIAL_SERVICES', [])
     @patch('app.runner.lib_runner.find')
     @patch('app.runner.lib_runner.enqueue')
     @patch('croniter.croniter')
@@ -333,6 +495,7 @@ class TestDaemon:
             test_session.refresh(sched)
             assert sched.last == datetime(2023, 1, 1, 12, 2)
 
+    @patch('app.runner.INTERNAL_ESSENTIAL_SERVICES', [])
     @patch('app.runner.lib_runner.enqueue')
     @patch('app.runner.lib_runner.find')
     @patch('app.runner.datetime')
@@ -355,6 +518,7 @@ class TestDaemon:
             test_session.refresh(sched)
             assert sched.last == mock_dt.now.return_value
 
+    @patch('app.runner.INTERNAL_ESSENTIAL_SERVICES', [])
     @patch('app.runner.lib_runner.find')
     @patch('app.runner.datetime')
     def test_schedule_no_enqueue_existing(self, mock_dt, mock_find, mock_db):
@@ -370,7 +534,11 @@ class TestDaemon:
             sched_id = sched.id
         mock_find.return_value = ["existing_id"]
         schedule()
-        mock_find.assert_called_once_with("test_owner", "test_set", "test_name", "service", ["todo", "dequeued", "running", "cancel", "done"])
+        mock_find.assert_called_once_with(
+            "test_owner", "test_set", "test_name", "service",
+            ["todo", "dequeued", "loading", "running",
+             "cancel", "cancelling", "cancelled", "done"],
+        )
 
     def test_getNextToTerm_cancel(self, mock_db):
         from app.runner import getNextToTerm
@@ -458,68 +626,280 @@ class TestDaemon:
             "both calls would use the same (wrong) id"
         )
 
-    def test_shutdown_graceful(self):
-        from app.runner import Job, get_db_engine
-        from sqlalchemy.orm import Session
-        mock_process = Mock()
-        mock_process.is_alive.return_value = False
-        processes = {123: mock_process}
-        # Mock the shutdown for loop code
-        with patch('app.runner.Session') as mock_session:
-            mock_session.return_value.__enter__.return_value.query.return_value.filter_by.return_value.first.return_value = Job(id="id", pid=123, state="running")
-            mock_session.return_value.__enter__.return_value.commit.return_value = None
-            # Simulate the shutdown for loop for one pid
-            p = processes[123]
-            p.terminate()
-            # p.join(timeout=5.0)  # not called in graceful
-            # Update job
-            session = mock_session.return_value.__enter__.return_value
-            job = session.query(Job).filter_by(pid=123).first()
-            job.end = datetime.now()
-            job.pid = None
-            job.state = "cancelled"
-            job.detail = "terminated gracefully on shutdown"
-            session.commit()
-        mock_process.terminate.assert_called_once()
-        # mock_process.join.assert_called_once_with(timeout=5.0)
-        # assert mock_session.call_count == 1  # manual simulation
+    def test_shutdown_job_processes_completion_deletes_row(self, mock_db):
+        """A service that exits on SIGTERM and reports its `done` completion
+        through the ZMQ drain has its row DELETED at the end of the sweep
+        — clean shutdown should leave nothing behind for the next boot to
+        reason about, so the schedule loop re-enqueues the service freshly.
+        Workspace logs survive (the DB row goes, the on-disk directory
+        doesn't)."""
+        from app.runner import _shutdown_job_processes
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
 
-    def test_shutdown_kill(self):
-        from app.runner import Job, get_db_engine
-        from sqlalchemy.orm import Session
-        mock_process = Mock()
-        mock_process.is_alive.side_effect = [True] * 51 + [False]
-        processes = {123: mock_process}
-        with patch('app.runner.time') as mock_time:
-            time_values = [0.0] + [0.1 * i for i in range(1, 51)]
-            mock_time.time.side_effect = time_values
-            with patch('app.runner.time.sleep', return_value=None):
-                with patch('app.runner.Session') as mock_session:
-                    mock_session.return_value.__enter__.return_value.query.return_value.filter_by.return_value.first.return_value = Job(id="id", pid=123, state="running")
-                    mock_session.return_value.__enter__.return_value.commit.return_value = None
-                    # Simulate the shutdown for loop for one pid
-                    p = processes[123]
-                    p.terminate()
-                    timeout = 5.0
-                    start_time = mock_time.time()
-                    while p.is_alive() and (mock_time.time() - start_time) < timeout:
-                        mock_time.sleep(0.1)
-                    killed = p.is_alive()
-                    if killed:
-                        p.kill()
-                        p.join(timeout=1.0)
-                    # Update job
-                    session = mock_session.return_value.__enter__.return_value
-                    job = session.query(Job).filter_by(pid=123).first()
-                    job.end = datetime.now()
-                    job.pid = None
-                    job.state = "killed"
-                    job.detail = "force killed after 5s timeout on shutdown"
-                    session.commit()
-        mock_process.terminate.assert_called_once()
-        mock_process.kill.assert_called_once()
-        mock_process.join.assert_called_once_with(timeout=1.0)
-        # assert mock_session.call_count == 1  # manual simulation
+        with Session(get_db_engine()) as session:
+            session.add(Job(id="graceful_svc", set="s", name="n", owner="o",
+                            kind="service", state="running", pid=801, drop_done=False))
+            session.commit()
+
+        mock_p = Mock()
+        mock_p.poll.side_effect = [None, None, 0, 0]
+        processes = {801: mock_p}
+
+        proc_obj = Mock(); proc_obj.pid = 801
+        sock = Mock()
+        poller = Mock()
+        poller.poll.side_effect = [[(sock, None)], [], []]
+
+        def fake_receive(_socket):
+            from app.runner import finishJob
+            finishJob("graceful_svc", "done", None)
+        with patch('app.runner.receive_and_process', side_effect=fake_receive), \
+             patch('app.runner.job_lib.get_process_tree', return_value=[proc_obj]), \
+             patch('app.runner.job_lib.kill_proc_tree') as mock_kill, \
+             patch('app.runner.threading.Thread'), \
+             patch('app.runner.lib_runner.drop'), \
+             patch('app.runner.time.sleep'):
+            _shutdown_job_processes(processes, timeout=2.0,
+                                    runner_socket=sock, runner_poller=poller)
+
+        kill_signals = [c.args[1] for c in mock_kill.call_args_list]
+        import signal as _sig
+        assert _sig.SIGTERM in kill_signals
+        assert _sig.SIGKILL not in kill_signals
+        with Session(get_db_engine()) as session:
+            assert session.get(Job, "graceful_svc") is None
+
+    def test_shutdown_job_processes_sigkill_marks_failed(self, mock_db):
+        """A service that doesn't respond to SIGTERM within the timeout
+        gets SIGKILL'd. Since it misbehaved, the row is kept as `failed`
+        with a sentinel detail — visible in the monitor AND counts toward
+        the per-service <3-failed gate so a repeatedly-misbehaving service
+        eventually stops being auto-restarted."""
+        from app.runner import _shutdown_job_processes
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+
+        with Session(get_db_engine()) as session:
+            session.add(Job(id="stuck_svc", set="s", name="n", owner="o",
+                            kind="service", state="running", pid=802, drop_done=False))
+            session.commit()
+
+        mock_p = Mock()
+        mock_p.poll.return_value = None
+        processes = {802: mock_p}
+
+        proc_obj = Mock(); proc_obj.pid = 802
+        poller = Mock(); poller.poll.return_value = []
+
+        with patch('app.runner.job_lib.get_process_tree', return_value=[proc_obj]), \
+             patch('app.runner.job_lib.kill_proc_tree') as mock_kill, \
+             patch('app.runner.time.sleep'):
+            _shutdown_job_processes(processes, timeout=0.1,
+                                    runner_socket=Mock(), runner_poller=poller)
+
+        kill_signals = [c.args[1] for c in mock_kill.call_args_list]
+        import signal as _sig
+        assert _sig.SIGTERM in kill_signals
+        assert _sig.SIGKILL in kill_signals
+        with Session(get_db_engine()) as session:
+            row = session.get(Job, "stuck_svc")
+            assert row is not None and row.state == "failed"
+            assert "shutdown" in (row.detail or "").lower()
+            assert row.pid is None
+
+    def test_shutdown_job_processes_clean_exit_no_completion_deletes_row(self, mock_db):
+        """A task that exits on SIGTERM under default Python signal
+        handling (no ServiceListener, no completion) is also DELETED at
+        the end — no surviving evidence is preferable to a stale row
+        that handleOddJobs would later relabel as failed."""
+        from app.runner import _shutdown_job_processes
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+
+        with Session(get_db_engine()) as session:
+            session.add(Job(id="silent_task", set="s", name="n", owner="o",
+                            kind="task", state="running", pid=803, drop_done=False))
+            session.commit()
+
+        mock_p = Mock()
+        mock_p.poll.side_effect = [None, 0, 0]
+        processes = {803: mock_p}
+
+        proc_obj = Mock(); proc_obj.pid = 803
+        poller = Mock(); poller.poll.return_value = []
+
+        with patch('app.runner.job_lib.get_process_tree', return_value=[proc_obj]), \
+             patch('app.runner.job_lib.kill_proc_tree') as mock_kill, \
+             patch('app.runner.lib_runner.drop'), \
+             patch('app.runner.time.sleep'):
+            _shutdown_job_processes(processes, timeout=2.0,
+                                    runner_socket=Mock(), runner_poller=poller)
+
+        kill_signals = [c.args[1] for c in mock_kill.call_args_list]
+        import signal as _sig
+        assert _sig.SIGTERM in kill_signals
+        assert _sig.SIGKILL not in kill_signals
+        with Session(get_db_engine()) as session:
+            assert session.get(Job, "silent_task") is None
+
+    def test_shutdown_job_processes_preserves_operator_cancel(self, mock_db):
+        """A row already in `cancel`/`cancelling` when shutdown starts
+        represents operator intent — preserve it as `cancelled` so the
+        schedule-loop's cancelled-blocks-restart gate honours the
+        operator's choice across the restart."""
+        from app.runner import _shutdown_job_processes
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+
+        with Session(get_db_engine()) as session:
+            session.add(Job(id="op_cancelled", set="s", name="n", owner="o",
+                            kind="service", state="cancel", pid=804, drop_done=False))
+            session.commit()
+
+        mock_p = Mock()
+        mock_p.poll.side_effect = [None, 0, 0]
+        processes = {804: mock_p}
+
+        proc_obj = Mock(); proc_obj.pid = 804
+        poller = Mock(); poller.poll.return_value = []
+
+        with patch('app.runner.job_lib.get_process_tree', return_value=[proc_obj]), \
+             patch('app.runner.job_lib.kill_proc_tree'), \
+             patch('app.runner.time.sleep'):
+            _shutdown_job_processes(processes, timeout=2.0,
+                                    runner_socket=Mock(), runner_poller=poller)
+
+        with Session(get_db_engine()) as session:
+            row = session.get(Job, "op_cancelled")
+            assert row is not None and row.state == "cancelled"
+
+    def test_shutdown_job_processes_skips_already_exited(self, mock_db):
+        """A process whose poll() returns non-None at snapshot time is
+        skipped entirely — no signals, no DB state change."""
+        from app.runner import _shutdown_job_processes
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+
+        with Session(get_db_engine()) as session:
+            session.add(Job(id="exited_job", set="s", name="n", owner="o",
+                            kind="task", state="done", pid=703, drop_done=False))
+            session.commit()
+
+        mock_p = Mock()
+        mock_p.poll.return_value = 0  # already exited
+        processes = {703: mock_p}
+
+        with patch('app.runner.job_lib.get_process_tree') as mock_tree, \
+             patch('app.runner.job_lib.kill_proc_tree') as mock_kill:
+            _shutdown_job_processes(processes, timeout=2.0,
+                                    runner_socket=Mock(), runner_poller=Mock())
+
+        mock_tree.assert_not_called()
+        mock_kill.assert_not_called()
+        with Session(get_db_engine()) as session:
+            row = session.get(Job, "exited_job")
+            assert row.state == "done"  # untouched
+
+
+class TestShutdownFlag:
+    """The shutdown-flag mechanism gates lib_runner.enqueue across process
+    boundaries — so gunicorn workers (HTTP /scriptlet/job/item, /scriptlet/
+    schedule/run/{id}) and the internal data service (control.job.create →
+    HTTP) all refuse to enqueue once the runner has been signalled."""
+
+    def test_enqueue_raises_when_flag_present(self, mock_db, tmp_path, monkeypatch):
+        from app.lib import runner as lib_runner_mod
+        flag = tmp_path / "shutdown.flag"
+        flag.write_text("123")
+        monkeypatch.setattr(lib_runner_mod, "SHUTDOWN_FLAG_PATH", str(flag))
+
+        with pytest.raises(lib_runner_mod.ShutdownPending):
+            lib_runner_mod.enqueue("s", "n", "o", "task", False, None, 0, None)
+
+    def test_enqueue_proceeds_without_flag(self, mock_db, tmp_path, monkeypatch):
+        from app.lib import runner as lib_runner_mod
+        # Point flag path at a location guaranteed not to exist
+        flag = tmp_path / "absent.flag"
+        monkeypatch.setattr(lib_runner_mod, "SHUTDOWN_FLAG_PATH", str(flag))
+
+        job_id = lib_runner_mod.enqueue("s", "n", "o", "task", False, None, 0, None)
+        assert job_id and job_id.startswith("o_s_n_")
+
+    def test_is_shutdown_pending_reflects_flag_file(self, tmp_path, monkeypatch):
+        from app.lib import runner as lib_runner_mod
+        flag = tmp_path / "shutdown.flag"
+        monkeypatch.setattr(lib_runner_mod, "SHUTDOWN_FLAG_PATH", str(flag))
+        assert lib_runner_mod.is_shutdown_pending() is False
+        flag.write_text("99")
+        assert lib_runner_mod.is_shutdown_pending() is True
+
+    def test_main_clears_stale_flag_on_startup(self, mock_db, tmp_path, monkeypatch):
+        """Stale flag from previous crash must not block enqueues for the
+        new process lifetime."""
+        from app import runner
+        from app.lib import runner as lib_runner_mod
+
+        flag = tmp_path / "shutdown.flag"
+        flag.write_text("old")
+        monkeypatch.setattr(lib_runner_mod, "SHUTDOWN_FLAG_PATH", str(flag))
+
+        class _PreKilledKiller:
+            kill_now = True
+            def __init__(self): pass
+            def exit_gracefully(self, *a, **kw): pass
+
+        with patch('app.runner.GracefulKiller', _PreKilledKiller), \
+             patch('app.runner.setup_runner_socket', return_value=(Mock(), Mock(), Mock(**{'poll.return_value': []}))), \
+             patch('app.runner.handleOddJobs'), \
+             patch('app.runner.purgeLeftoverServiceJobs'), \
+             patch('app.runner.cleanup_drop_done_jobs'), \
+             patch('app.runner.os.environ'), \
+             patch('app.runner.logging.basicConfig'), \
+             patch('app.runner.files.Config.init'), \
+             patch('app.runner._shutdown_job_processes'), \
+             patch('app.runner.disposeJobs'):
+            runner.main("data", "127.0.0.1:0", "/venv", "/pkg", {})
+
+        assert not flag.exists(), "main() must clear the stale flag on startup"
+
+
+class TestHandleOddJobsCancelStates:
+    """handleOddJobs cleans up jobs left in 'cancel'/'cancelling' across
+    a restart — the daemon-thread terminate path from a cancel HTTP request
+    can be killed mid-flight by an immediately-following shutdown, leaving
+    the row stuck. Pre-fix this orphaned the row forever."""
+
+    def test_handleOddJobs_cancelling_to_cancelled(self, mock_db):
+        from app.runner import handleOddJobs
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        with Session(get_db_engine()) as session:
+            session.add(Job(id="orphan", set="s", name="n", owner="o", kind="task",
+                            state="cancelling", pid=None, drop_done=False, detail="shutdown"))
+            session.commit()
+
+        handleOddJobs()
+
+        with Session(get_db_engine()) as session:
+            row = session.get(Job, "orphan")
+            assert row.state == "cancelled"
+            assert "orphan cancel cleaned on startup" in (row.detail or "")
+
+    def test_handleOddJobs_cancel_to_cancelled(self, mock_db):
+        from app.runner import handleOddJobs
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        with Session(get_db_engine()) as session:
+            session.add(Job(id="orphan2", set="s", name="n", owner="o", kind="task",
+                            state="cancel", pid=None, drop_done=False))
+            session.commit()
+
+        handleOddJobs()
+
+        with Session(get_db_engine()) as session:
+            row = session.get(Job, "orphan2")
+            assert row.state == "cancelled"
 
     @patch('app.lib.files.conf_users', return_value={"owner": {"debug_port": 5678}})
     def test_validate_debug_prerequisites_valid(self, mock_conf_users):
@@ -648,20 +1028,29 @@ class TestShutdownContract:
          and spawns are skipped once shutdown is signalled.
     """
 
-    def test_graceful_killer_sigterm_flips_kill_now(self):
+    def test_graceful_killer_sigterm_flips_kill_now(self, tmp_path, monkeypatch):
         import signal
         from app.runner import GracefulKiller
+        from app.lib import runner as lib_runner_mod
+        flag = tmp_path / "shutdown.flag"
+        monkeypatch.setattr(lib_runner_mod, "SHUTDOWN_FLAG_PATH", str(flag))
         killer = GracefulKiller()
         assert killer.kill_now is False
+        assert not flag.exists()
         killer.exit_gracefully(signal.SIGTERM, None)
         assert killer.kill_now is True
+        assert flag.exists(), "exit_gracefully must drop the cross-process shutdown flag"
 
-    def test_graceful_killer_sigint_flips_kill_now(self):
+    def test_graceful_killer_sigint_flips_kill_now(self, tmp_path, monkeypatch):
         import signal
         from app.runner import GracefulKiller
+        from app.lib import runner as lib_runner_mod
+        flag = tmp_path / "shutdown.flag"
+        monkeypatch.setattr(lib_runner_mod, "SHUTDOWN_FLAG_PATH", str(flag))
         killer = GracefulKiller()
         killer.exit_gracefully(signal.SIGINT, None)
         assert killer.kill_now is True
+        assert flag.exists()
 
     def test_main_loop_skips_spawn_when_kill_now_already_set(self, mock_db):
         """If `kill_now` is True at the top of the loop, while-check exits
@@ -677,6 +1066,7 @@ class TestShutdownContract:
 
         with patch('app.runner.GracefulKiller', _PreKilledKiller), \
              patch('app.runner.setup_runner_socket', return_value=(Mock(), Mock(), Mock(**{'poll.return_value': []}))), \
+             patch('app.runner.ensure_set_environment'), \
              patch('app.runner.handleOddJobs'), \
              patch('app.runner.purgeLeftoverServiceJobs'), \
              patch('app.runner.cleanup_drop_done_jobs'), \
@@ -713,6 +1103,7 @@ class TestShutdownContract:
 
         with patch('app.runner.GracefulKiller', return_value=killer_instance), \
              patch('app.runner.setup_runner_socket', return_value=(Mock(), Mock(), Mock(**{'poll.return_value': []}))), \
+             patch('app.runner.ensure_set_environment'), \
              patch('app.runner.handleOddJobs'), \
              patch('app.runner.purgeLeftoverServiceJobs'), \
              patch('app.runner.cleanup_drop_done_jobs'), \
@@ -730,3 +1121,142 @@ class TestShutdownContract:
         mock_get_next.assert_not_called()
         mock_popen.assert_not_called()
 
+
+class TestInternalEssentialServices:
+    """Persistent pyops-internal services run without a Schedule row.
+    The schedule loop iterates INTERNAL_ESSENTIAL_SERVICES with the same
+    `<3 failed` gating as service-with-empty-schedule."""
+
+    @patch('app.runner.INTERNAL_ESSENTIAL_SERVICES', [{"set": "internal", "name": "data", "owner": "system"}])
+    @patch('app.runner.lib_runner.enqueue')
+    @patch('app.runner.lib_runner.find')
+    @patch('app.runner.datetime')
+    def test_enqueues_when_not_running_and_no_failures(self, mock_dt, mock_find, mock_enqueue, mock_db):
+        from app.runner import schedule
+        from datetime import datetime as real_datetime
+        mock_dt.now.return_value = real_datetime(2026, 5, 13, 12, 0)
+        # No live job and no failed records → enqueue
+        mock_find.return_value = []
+        schedule()
+        mock_enqueue.assert_called_once_with("internal", "data", "system", "service", True, None, 0, None)
+
+    @patch('app.runner.INTERNAL_ESSENTIAL_SERVICES', [{"set": "internal", "name": "data", "owner": "system"}])
+    @patch('app.runner.lib_runner.enqueue')
+    @patch('app.runner.lib_runner.find')
+    @patch('app.runner.datetime')
+    def test_skips_when_already_running(self, mock_dt, mock_find, mock_enqueue, mock_db):
+        from app.runner import schedule
+        from datetime import datetime as real_datetime
+        mock_dt.now.return_value = real_datetime(2026, 5, 13, 12, 0)
+        # First find (live states) returns a running job → skip
+        mock_find.return_value = [{"id": "live"}]
+        schedule()
+        mock_enqueue.assert_not_called()
+
+    @patch('app.runner.INTERNAL_ESSENTIAL_SERVICES', [{"set": "internal", "name": "data", "owner": "system"}])
+    @patch('app.runner.lib_runner.enqueue')
+    @patch('app.runner.lib_runner.find')
+    @patch('app.runner.datetime')
+    def test_skips_when_three_or_more_failed(self, mock_dt, mock_find, mock_enqueue, mock_db):
+        from app.runner import schedule
+        from datetime import datetime as real_datetime
+        mock_dt.now.return_value = real_datetime(2026, 5, 13, 12, 0)
+        # First find (live states) empty, second (failed states) has 3 → gate
+        mock_find.side_effect = [[], [{"id": "f1"}, {"id": "f2"}, {"id": "f3"}]]
+        schedule()
+        mock_enqueue.assert_not_called()
+
+    @patch('app.runner.INTERNAL_ESSENTIAL_SERVICES', [{"set": "internal", "name": "data", "owner": "system"}])
+    @patch('app.runner.lib_runner.enqueue')
+    @patch('app.runner.lib_runner.find')
+    @patch('app.runner.datetime')
+    def test_enqueues_when_failed_below_three(self, mock_dt, mock_find, mock_enqueue, mock_db):
+        from app.runner import schedule
+        from datetime import datetime as real_datetime
+        mock_dt.now.return_value = real_datetime(2026, 5, 13, 12, 0)
+        # Live empty, two failures (< 3) → still enqueues
+        mock_find.side_effect = [[], [{"id": "f1"}, {"id": "f2"}]]
+        schedule()
+        mock_enqueue.assert_called_once_with("internal", "data", "system", "service", True, None, 0, None)
+
+    @patch('app.runner.INTERNAL_ESSENTIAL_SERVICES', [{"set": "internal", "name": "data", "owner": "system"}])
+    @patch('app.runner.lib_runner.enqueue')
+    @patch('app.runner.lib_runner.find')
+    @patch('app.runner.datetime')
+    def test_skips_when_a_prior_job_is_cancelled(self, mock_dt, mock_find, mock_enqueue, mock_db):
+        """A user-initiated cancel (state=`cancelled`) must stop the
+        auto-restart. The operator deliberately took the service down and
+        must delete the row before it comes back."""
+        from app.runner import schedule
+        from datetime import datetime as real_datetime
+        mock_dt.now.return_value = real_datetime(2026, 5, 13, 12, 0)
+        # The first find query enumerates the "still active or terminal-
+        # without-failure" states — `cancelled` is in there, returning a
+        # row gates restart even if no failed rows exist.
+        mock_find.return_value = [{"id": "cancelled_by_operator"}]
+        schedule()
+        mock_enqueue.assert_not_called()
+        # Sanity: the lookup includes cancelled and cancelling.
+        states = mock_find.call_args_list[0].args[4]
+        assert "cancelled" in states
+        assert "cancelling" in states
+
+
+class TestServiceRestartGatedOnCancel:
+    """Schedule-row-driven service (empty cron string) shares the same
+    cancel-gate semantics as INTERNAL_ESSENTIAL_SERVICES — a cancelled
+    job in the table stops auto-restart until the operator removes it."""
+
+    @patch('app.runner.lib_runner.enqueue')
+    @patch('app.runner.lib_runner.find')
+    @patch('app.runner.datetime')
+    def test_schedule_service_skips_on_cancelled_row(self, mock_dt, mock_find, mock_enqueue, mock_db):
+        from app.runner import schedule
+        from app.orm.database import get_db_engine
+        from app.orm.schedule import Schedule
+        from datetime import datetime as real_datetime
+        mock_dt.now.return_value = real_datetime(2026, 5, 13, 12, 0)
+        with Session(get_db_engine()) as s:
+            s.add(Schedule(set="usr", name="svc", owner="u", schedule="",
+                           active=True, drop_done=True, param=None, last=None))
+            s.commit()
+        # find() returns a cancelled-state row → no enqueue
+        mock_find.return_value = [{"id": "cancelled_id"}]
+        schedule()
+        mock_enqueue.assert_not_called()
+        states = mock_find.call_args_list[0].args[4]
+        assert "cancelled" in states
+        assert "cancel" in states
+        assert "cancelling" in states
+
+
+class TestInternalSetRunsInHostVenv:
+    """Internal-set scriptlets are pyops-native code and execute in the
+    pyops process's own Python — pyzmq / msgpack / psutil / debugpy /
+    requests are already importable there. The runner skips
+    ensure_set_environment for set=='internal' and uses sys.executable
+    instead of a per-set venv path. User sets keep the standard
+    per-set-venv flow."""
+
+    def test_main_no_internal_bootstrap_at_startup(self, mock_db):
+        """main() must NOT call ensure_set_environment('internal') at
+        startup — the host venv already has every CORE_DEP."""
+        from app import runner
+
+        class _PreKilledKiller:
+            kill_now = True
+            def __init__(self): pass
+            def exit_gracefully(self, *a, **kw): pass
+
+        with patch('app.runner.GracefulKiller', _PreKilledKiller), \
+             patch('app.runner.setup_runner_socket', return_value=(Mock(), Mock(), Mock(**{'poll.return_value': []}))), \
+             patch('app.runner.ensure_set_environment') as mock_ensure, \
+             patch('app.runner.handleOddJobs'), \
+             patch('app.runner.purgeLeftoverServiceJobs'), \
+             patch('app.runner.cleanup_drop_done_jobs'), \
+             patch('app.runner.os.environ'), \
+             patch('app.runner.logging.basicConfig'), \
+             patch('app.runner.files.Config.init'):
+            runner.main("data", "127.0.0.1:0", "/venv", "/pkg", {})
+
+        mock_ensure.assert_not_called()

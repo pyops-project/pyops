@@ -31,8 +31,8 @@ def _wait_for_terminal(api, job_id, timeout=30):
     pytest.fail(f"job {job_id} not terminal within {timeout}s (last={last})")
 
 
-def _setup_and_run(api, code, set_name=SET, task_name="t"):
-    api.post("/scriptlet/sets/create", json={"name": set_name})
+def _setup_and_run(api, code, set_factory, set_name=SET, task_name="t"):
+    set_factory(set_name)
     api.put(
         "/scriptlet/inventory/item",
         json={"set": set_name, "name": task_name, "type": "task"},
@@ -55,9 +55,9 @@ def _setup_and_run(api, code, set_name=SET, task_name="t"):
 class TestJobDownload:
     """GET /scriptlet/job/download returns a ZIP of the job workspace."""
 
-    def test_download_contains_stdout_log(self, api, pyops_server):
+    def test_download_contains_stdout_log(self, api, pyops_server, set_factory):
         """A completed task's workspace ZIP includes its stdout.log with output."""
-        job_id = _setup_and_run(api, 'print("zip_marker_line")\n')
+        job_id = _setup_and_run(api, 'print("zip_marker_line")\n', set_factory)
         _wait_for_terminal(api, job_id)
 
         r = api.get(f"/scriptlet/job/download?id={job_id}")

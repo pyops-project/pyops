@@ -144,17 +144,23 @@ class TestHealthEndpoint:
         assert body["stuck"]["last_completed_seconds"] >= 290  # ~5 min
 
     def test_health_dependency_conflicts_surface_from_warnings_file(self, client, tmp_path, monkeypatch):
-        """The 'Update Dependencies' flow writes `<set>/.update_warnings.json`
-        when scriptlets pin conflicting versions. /health must read those files
-        and surface non-empty conflicts so a monitoring system can alert."""
+        """The 'Update Dependencies' flow writes
+        `<venv_base>/{set}/.update_warnings.json` when scriptlets pin
+        conflicting versions. /health reads those (the set itself is
+        identified by its presence under <git_base>) and surfaces
+        non-empty conflicts so a monitoring system can alert.
+
+        The warnings file lives under <venv_base> rather than inside the
+        set's git tree on purpose — it's pyops runtime state, keeping it
+        out of the user's git repo avoids surprise untracked files."""
         import json as _json
-        # Override conf_data so monitoring's _collect_dependency_conflicts
-        # walks our tmp_path instead of the real data/git.
         from app.lib import files as files_lib
         git_dir = tmp_path / "fake_git"
-        set_dir = git_dir / "myset"
-        set_dir.mkdir(parents=True)
-        warnings_path = set_dir / ".update_warnings.json"
+        venv_dir = tmp_path / "fake_venv"
+        (git_dir / "myset").mkdir(parents=True)
+        set_venv = venv_dir / "myset"
+        set_venv.mkdir(parents=True)
+        warnings_path = set_venv / ".update_warnings.json"
         warnings_path.write_text(_json.dumps({
             "set": "myset",
             "conflicts": {
@@ -169,11 +175,17 @@ class TestHealthEndpoint:
         }))
 
         original_conf_data = files_lib.conf_data
+        original_conf_runner = files_lib.conf_runner
         def fake_conf_data():
             d = dict(original_conf_data())
             d["git"] = str(git_dir)
             return d
+        def fake_conf_runner():
+            d = dict(original_conf_runner())
+            d["venv"] = str(venv_dir)
+            return d
         monkeypatch.setattr(files_lib, "conf_data", fake_conf_data)
+        monkeypatch.setattr(files_lib, "conf_runner", fake_conf_runner)
 
         r = client.get("/health")
         assert r.status_code == 200
@@ -191,19 +203,27 @@ class TestHealthEndpoint:
         import json as _json
         from app.lib import files as files_lib
         git_dir = tmp_path / "fake_git"
-        set_dir = git_dir / "cleanset"
-        set_dir.mkdir(parents=True)
-        (set_dir / ".update_warnings.json").write_text(_json.dumps({
+        venv_dir = tmp_path / "fake_venv"
+        (git_dir / "cleanset").mkdir(parents=True)
+        set_venv = venv_dir / "cleanset"
+        set_venv.mkdir(parents=True)
+        (set_venv / ".update_warnings.json").write_text(_json.dumps({
             "set": "cleanset",
             "conflicts": {"pip": [], "git": []},
             "installed": {"pip": [], "git": []},
         }))
         original_conf_data = files_lib.conf_data
+        original_conf_runner = files_lib.conf_runner
         def fake_conf_data():
             d = dict(original_conf_data())
             d["git"] = str(git_dir)
             return d
+        def fake_conf_runner():
+            d = dict(original_conf_runner())
+            d["venv"] = str(venv_dir)
+            return d
         monkeypatch.setattr(files_lib, "conf_data", fake_conf_data)
+        monkeypatch.setattr(files_lib, "conf_runner", fake_conf_runner)
 
         r = client.get("/health")
         body = r.json()

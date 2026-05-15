@@ -1,12 +1,12 @@
-<html>
+<!doctype html>
+<html lang="en">
     <head>
-        <title>PyOps</title>
+        <title>{{BRAND_TITLE}}</title>
 
         <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
 
-    	<meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
-
-		<link rel="stylesheet" href="/files/css/bootstrap/bootstrap.min.css">
+        <link rel="stylesheet" href="/files/css/bootstrap/bootstrap.min.css">
         <link rel="stylesheet" href="/files/css/material/material-icons.css">
 
         <script src="/files/js/jquery.min.js"></script>
@@ -15,7 +15,114 @@
 
         <style>
             html, body { height: 100%; margin: 0; }
-            #sidebarOffcanvas { overflow-y: auto; }
+
+            #sidebarOffcanvas {
+                width: 280px;
+                --bs-offcanvas-width: 280px;
+            }
+            #sidebarOffcanvas .pyops-brand {
+                padding: 0.75rem 1rem;
+                border-bottom: 1px solid rgba(255,255,255,0.15);
+            }
+
+            /* Brand icon. Three renderers all share .pyops-brand-icon so
+               the brand row keeps its layout:
+                 - default: a material-icons-round glyph span (sized by
+                   the icon font's font-size),
+                 - raster image: img tag served from /brand/icon,
+                 - SVG: span wrapping inline <svg> so it inherits
+                   currentColor and follows the brand text color exactly
+                   like the material-icons glyph does. */
+            .pyops-brand-icon {
+                display: inline-flex;
+                width: 1.5rem;
+                height: 1.5rem;
+                vertical-align: middle;
+                color: inherit;
+            }
+            img.pyops-brand-icon {
+                object-fit: contain;
+            }
+            span.pyops-brand-icon > svg {
+                width: 100%;
+                height: 100%;
+                fill: currentColor;
+            }
+            #menu {
+                padding: 0.25rem 0.5rem;
+                overflow-y: auto;
+            }
+
+            /* Section toggle — looks like a section label, collapses
+               the nav-pills below it. Chevron rotates with state. */
+            .pyops-section-toggle {
+                display: flex;
+                align-items: center;
+                width: 100%;
+                background: transparent;
+                border: 0;
+                color: rgba(255,255,255,0.6);
+                font-size: 0.72rem;
+                font-weight: 600;
+                letter-spacing: 0.04em;
+                text-transform: uppercase;
+                padding: 0.4rem 0.5rem;
+                text-align: left;
+                border-radius: 0.25rem;
+            }
+            .pyops-section-toggle:hover,
+            .pyops-section-toggle:focus {
+                background-color: rgba(255,255,255,0.06);
+                color: #fff;
+                outline: none;
+            }
+            .pyops-section-toggle .pyops-chevron {
+                font-size: 1rem;
+                margin-right: 0.25rem;
+                transition: transform 0.15s ease;
+            }
+            .pyops-section-toggle[aria-expanded="false"] .pyops-chevron {
+                transform: rotate(-90deg);
+            }
+
+            /* Nav items */
+            #menu .nav-link {
+                color: rgba(255,255,255,0.85);
+                padding: 0.25rem 0.6rem 0.25rem 1.5rem;
+                border-radius: 0.25rem;
+                font-size: 0.9rem;
+                line-height: 1.4;
+            }
+            #menu .nav-link:hover,
+            #menu .nav-link:focus {
+                color: #fff;
+                background-color: rgba(255,255,255,0.08);
+            }
+            #menu .nav-link.active {
+                color: #fff;
+                background-color: var(--bs-primary);
+            }
+
+            /* Failures block — shown below the nav when /menu returns any. */
+            .pyops-failures {
+                margin: 0.5rem;
+                padding: 0.5rem 0.75rem;
+                background-color: var(--bs-danger);
+                color: #fff;
+                border-radius: 0.25rem;
+                font-size: 0.8rem;
+            }
+            .pyops-failures h6 {
+                font-size: 0.8rem;
+                margin: 0 0 0.25rem 0;
+                display: flex;
+                align-items: center;
+                gap: 0.25rem;
+            }
+            .pyops-failures ul {
+                padding-left: 1rem;
+                margin: 0;
+            }
         </style>
 
         <script>
@@ -24,104 +131,129 @@
             const urlParams = new URLSearchParams(window.location.search);
             var goto = urlParams.get("goto");
 
-            function genMenuItem(id, name) {
+            function genMenuSection(id, name, expanded) {
+                const open = !!expanded;
                 return `
-                    <li id="${id}" class="mb-1" data-testid="menu-section-${id}">
-                        <button type="button" class="btn btn-toggle btn-primary w-100" data-bs-toggle="collapse" data-bs-target="#${id}-collapse" aria-expanded="true" data-testid="menu-toggle-${id}">
-                            ${name}
+                    <div class="mb-1" data-testid="menu-section-${id}">
+                        <button class="pyops-section-toggle" type="button"
+                                data-bs-toggle="collapse" data-bs-target="#section_${id}"
+                                aria-expanded="${open}" aria-controls="section_${id}"
+                                data-testid="menu-toggle-${id}">
+                            <span class="material-icons-round pyops-chevron" aria-hidden="true">expand_more</span>
+                            <span>${name}</span>
                         </button>
-                        <div id="${id}-collapse" class="collapse show">
-                            <ul id="submenu_${id}" class="btn-toggle-nav list-unstyled">
+                        <ul id="section_${id}" class="${open ? 'collapse show' : 'collapse'} list-unstyled mb-0"></ul>
+                    </div>
+                `;
+            }
 
-                            </ul>
-                        </div>
+            function genMenuItem(parent, id, name, path) {
+                return `
+                    <li data-testid="menu-item-${id}">
+                        <a id="btn_${id}" class="nav-link d-block"
+                           onclick="onMenuItemClick('${id}')"
+                           href="${path}" target="frame"
+                           data-testid="menu-link-${id}">${name}</a>
                     </li>
                 `;
             }
 
-            function unsetActive() {
-                if(goto) {
-                    $("#btn_"+goto).removeClass("btn-warning");
-                    $("#btn_"+goto).addClass("btn-secondary");
-                }
+            function onMenuItemClick(id) {
+                history.replaceState(id, '', '/?goto=' + id);
+                setActive(id);
+                // On mobile the offcanvas is open over the iframe — close it
+                // after the user picks an item. On lg+ the offcanvas isn't in
+                // an "open" state at all, so getInstance returns null and this
+                // is a no-op.
+                const el = document.getElementById('sidebarOffcanvas');
+                const inst = bootstrap.Offcanvas.getInstance(el);
+                if (inst && el.classList.contains('show')) inst.hide();
             }
 
             function setActive(id) {
-                unsetActive()
-
-                goto = id
-                $("#btn_"+id).removeClass("btn-secondary");
-                $("#btn_"+id).addClass("btn-warning");
-            }
-
-            function genSubmenuItem(parent, id, name, path) {
-                //  onclick="window.location.replace(window.location.origin+'/?goto=${id}')"
-                return `
-                    <li id="${id}" data-testid="menu-item-${id}">
-                        <a id="btn_${id}" class="btn btn-secondary w-100 p-0" onclick="history.replaceState('${id}', '', '/?goto=${id}'); setActive('${id}');" href="${path}" target="frame" data-testid="menu-link-${id}">${name}</a>
-                    </li>
-                `;
+                document.querySelectorAll('#menu .nav-link').forEach((a) => a.classList.remove('active'));
+                const el = document.getElementById('btn_' + id);
+                if (el) el.classList.add('active');
+                goto = id;
             }
 
             function renderFailures(failures) {
-                if (failures.length === 0) return '';
-
-                let failureHtml = '<div class="failure-section mt-3 p-2 bg-danger text-white rounded"><h6 class="mb-2"><span class="material-icons-round me-2">error</span>Draft Errors</h6><ul class="list-unstyled small">';
-                failures.forEach(f => {
-                    failureHtml += `<li class="mb-1"><strong>${f.set}::${f.name}:</strong> ${f.error}</li>`;
-                });
-                failureHtml += '</ul></div>';
-                return failureHtml;
+                if (!failures || failures.length === 0) return '';
+                let html = '<div class="pyops-failures"><h6><span class="material-icons-round">error</span>Draft Errors</h6><ul>';
+                for (const f of failures) {
+                    html += `<li><strong>${f.set}::${f.name}:</strong> ${f.error}</li>`;
+                }
+                html += '</ul></div>';
+                return html;
             }
 
             $(document).ready(() => {
-                fetch("/menu").then(async (r)=>{
-                    if(r.ok) {
-                        const d = await r.json();
-                        console.debug("menu", d);
-                        for(const i of d.menu) {
-                            $("#menu").append(genMenuItem(i.id, i.name));
-
-                            for(const si of i.items) {
-                                $("#submenu_"+i.id).append(genSubmenuItem(i.name, si.id, si.name, si.path));
-                                if(!goto && si.default)
-                                    $("#btn_"+si.id).get(0).click()
+                // Snapshot whether the URL carried a goto so we don't
+                // double-click below: setActive() flips the global `goto`
+                // when an item is clicked, which would otherwise make the
+                // post-loop branch fire a second navigation on top of the
+                // default-item click and the iframe would load twice (the
+                // first load gets cancelled by the second — visible flash
+                // and slower first paint).
+                const gotoFromUrl = goto;
+                fetch("/menu").then(async (r) => {
+                    if (!r.ok) {
+                        console.error("GET", "/menu", r.statusText);
+                        return;
+                    }
+                    const d = await r.json();
+                    const menu = document.getElementById('menu');
+                    for (const section of d.menu) {
+                        menu.insertAdjacentHTML('beforeend', genMenuSection(section.id, section.name, section.expanded));
+                        const list = document.getElementById('section_' + section.id);
+                        for (const item of section.items) {
+                            list.insertAdjacentHTML('beforeend', genMenuItem(section.name, item.id, item.name, item.path));
+                            if (!gotoFromUrl && item.default) {
+                                document.getElementById('btn_' + item.id).click();
                             }
                         }
+                    }
+                    menu.insertAdjacentHTML('beforeend', renderFailures(d.failures));
 
-                        // Render failures at bottom of sidebar
-                        const sidebar = $(".p-3.bg-dark.text-light");
-                        sidebar.append(renderFailures(d.failures || []));
-
-                        if(goto && $("#btn_"+goto).length > 0)
-                            $("#btn_"+goto).get(0).click();
-                    } else
-                        console.error("GET", "/menu", r.statusText);
-                }).catch((e)=>console.error("GET", "/menu", e.toString()));
+                    if (gotoFromUrl && document.getElementById('btn_' + gotoFromUrl)) {
+                        document.getElementById('btn_' + gotoFromUrl).click();
+                    }
+                }).catch((e) => console.error("GET", "/menu", e.toString()));
             });
         </script>
     </head>
     <body class="d-flex flex-column h-100">
         <nav class="navbar navbar-dark bg-dark d-lg-none flex-shrink-0" data-testid="mobile-topbar">
             <div class="container-fluid">
-                <button class="navbar-toggler" type="button" data-bs-toggle="offcanvas" data-bs-target="#sidebarOffcanvas" aria-controls="sidebarOffcanvas" aria-label="Toggle navigation" data-testid="sidebar-toggle">
+                <button class="navbar-toggler border-0" type="button"
+                        data-bs-toggle="offcanvas" data-bs-target="#sidebarOffcanvas"
+                        aria-controls="sidebarOffcanvas" aria-label="Toggle navigation"
+                        data-testid="sidebar-toggle">
                     <span class="navbar-toggler-icon"></span>
                 </button>
-                <span class="navbar-brand mb-0">
-                    <span class="material-icons-round text-icon align-middle">miscellaneous_services</span>
-                    <span class="fs-5 align-middle">PyOps</span>
+                <span class="navbar-brand d-flex align-items-center gap-2 mb-0">
+                    {{BRAND_ICON}}
+                    <span class="fs-5">{{BRAND_TITLE}}</span>
                 </span>
             </div>
         </nav>
         <div class="d-flex flex-grow-1 overflow-hidden">
-            <div class="p-3 bg-dark text-light offcanvas-lg offcanvas-start" tabindex="-1" id="sidebarOffcanvas" aria-labelledby="sidebarOffcanvasLabel" style="--bs-offcanvas-width: 280px; width: 280px;" data-testid="sidebar">
-                <p data-testid="app-title" id="sidebarOffcanvasLabel">
-                    <span class="material-icons-round text-icon mt-1">miscellaneous_services</span>
-                    <span class="fs-5">PyOps</span>
-                </p>
-                <hr>
-                <ul id="menu" class="list-unstyled" data-testid="sidebar-menu"></ul>
-            </div>
+            <aside class="bg-dark text-light offcanvas-lg offcanvas-start flex-shrink-0 d-flex flex-column"
+                   tabindex="-1" id="sidebarOffcanvas"
+                   aria-labelledby="sidebarOffcanvasLabel" data-testid="sidebar">
+                <div class="pyops-brand d-flex align-items-center justify-content-between">
+                    <span class="d-flex align-items-center gap-2 fs-5"
+                          id="sidebarOffcanvasLabel" data-testid="app-title">
+                        {{BRAND_ICON}}
+                        <span>{{BRAND_TITLE}}</span>
+                    </span>
+                    <button type="button" class="btn-close btn-close-white d-lg-none"
+                            data-bs-dismiss="offcanvas" data-bs-target="#sidebarOffcanvas"
+                            aria-label="Close"></button>
+                </div>
+                <nav id="menu" class="flex-grow-1"
+                     data-testid="sidebar-menu" aria-label="Main navigation"></nav>
+            </aside>
             <div class="flex-grow-1 h-100">
                 <iframe id="frame" name="frame" class="h-100 w-100 border-0" data-testid="content-frame"></iframe>
             </div>

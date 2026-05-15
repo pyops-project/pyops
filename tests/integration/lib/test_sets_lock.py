@@ -6,8 +6,10 @@ The lock is the contract that lets us promise:
     concurrently — without it the venv would be torn apart by overlapping
     `python -m venv` / `pip install --upgrade pip` (pip can't replace itself
     while another invocation is reading the same files).
-  - `remove_set_environment` waits for any in-flight bootstrap before rmtree,
-    so we never delete `bin/` from under a running pip.
+  - The set_remove task (app/internal/set_remove.task.py) waits for any
+    in-flight bootstrap before rmtree by taking the same fcntl flock on
+    the same lock file — coverage for that lives end-to-end against the
+    real controller path.
 """
 
 import os
@@ -85,53 +87,3 @@ def test_ensure_set_environment_serializes_concurrent_callers(lock_env, monkeypa
         assert e2 >= x1 - 1e-3, f"step starting at {e2} overlapped previous one ending at {x1}"
 
 
-def test_remove_set_environment_waits_for_in_flight_bootstrap(lock_env, monkeypatch):
-    """remove_set_environment must wait for an in-flight ensure_set_environment
-    before rmtree-ing the venv — otherwise pip would explode with
-    `[Errno 2] No such file or directory: '.../bin/'` mid-install.
-    """
-    from app.lib import sets
-
-    bootstrap_done = threading.Event()
-    rmtree_started_before_bootstrap = threading.Event()
-
-    def fake_check_call(cmd, *args, **kwargs):
-        if len(cmd) >= 2 and ('venv' in cmd or 'install' in cmd):
-            time.sleep(0.5)
-            if 'venv' in cmd:
-                venv_path = cmd[-1]
-                os.makedirs(os.path.join(venv_path, 'bin'), exist_ok=True)
-                open(os.path.join(venv_path, 'bin', 'python'), 'w').close()
-            if 'install' in cmd and 'pyzmq' in cmd:
-                bootstrap_done.set()
-        return 0
-
-    monkeypatch.setattr(sets.subprocess, 'check_call', fake_check_call)
-
-    def boot():
-        sets.ensure_set_environment('removeme_set')
-
-    def remove():
-        # Race: start remove while bootstrap is mid-flight.
-        time.sleep(0.05)
-        if not bootstrap_done.is_set():
-            rmtree_started_before_bootstrap.set()
-        sets.remove_set_environment('removeme_set')
-
-    t_boot = threading.Thread(target=boot)
-    t_remove = threading.Thread(target=remove)
-    t_boot.start()
-    t_remove.start()
-    t_boot.join(timeout=10)
-    t_remove.join(timeout=10)
-
-    # remove_started before bootstrap finished — proving the lock waited rather
-    # than letting rmtree race against pip.
-    assert rmtree_started_before_bootstrap.is_set(), \
-        "remove must have started before bootstrap completed (otherwise we're not testing the race)"
-    # Bootstrap got to the end (sentinel-equivalent: 'pyzmq' install started)
-    # despite the concurrent remove — the lock made remove wait.
-    assert bootstrap_done.is_set(), \
-        "ensure_set_environment must have completed pyzmq install before remove ran rmtree"
-    # Final state: venv is gone (remove ran AFTER bootstrap).
-    assert not (lock_env['venv_base'] / 'removeme_set').exists()
