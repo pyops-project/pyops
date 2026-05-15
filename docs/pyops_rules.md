@@ -359,12 +359,46 @@ In views, use {{SET}}/{{NAME}} for dynamic routes ({{NAME}} = basename, e.g., 'o
 Create `view/{name}.html` (raw HTML).
 
 Guidelines:
-- Global: Bootstrap 5 with automatic light/dark theme switching based on system preference (prefers-color-scheme), jQuery, Material Icons (e.g., `<i class="material-icons">add</i>`). No manual toggle buttons are provided; themes switch automatically.
-- Use Bootstrap classes like `bg-light`/`bg-dark`, `text-light`/`text-dark`, `table-secondary`/`table-dark`, `btn-outline-secondary`, etc., for consistent theming across light and dark modes.
+- Global: Bootstrap 5, jQuery, Material Icons (e.g., `<i class="material-icons">add</i>`).
 - No `<title>` or `<h1>` (auto-handled).
 - JS `<script>` preferably in head; inline in body ok for simple scripts. Custom in head.html.
 - Use {{SET}}/{{NAME}} in URLs/AJAX for portability.
 - Mobile: the controller wrapper already places the menu inside a `navbar-expand-md` collapse with a hamburger toggler below 768px. Do not add your own toggler/collapse to menu.html — just emit the `<li>` items. For body content, wrap wide tables in `<div class="table-responsive">` and avoid fixed pixel widths so the layout reflows on phones.
+
+#### Dark / light theme
+
+PyOps follows the visitor's OS-level color scheme (`prefers-color-scheme`). The controller wrapper injects a theme-sync script into every view's `<head>` that runs at page load and on every change of the system preference. It:
+
+1. Sets `<html data-bs-theme="dark|light">`.
+2. Swaps the `<body>` between `bg-light` and `bg-dark text-light`.
+3. Sets the global `window.pyopsDark` (`true|false`) and dispatches a `pyops:theme` CustomEvent on `window` with `detail.dark`.
+
+Most Bootstrap components (`.btn-primary`, `.modal-content`, `.form-control`, default `.table`, …) adapt on their own and need no help. Variants whose contrast does NOT survive a theme flip have to be swapped by the view itself — subscribe to `pyops:theme` and re-apply on `$(document).ready()` for the first paint:
+
+```html
+<script>
+  function applyTableTheme(dark) {
+    const t = document.querySelector('[data-testid="my-table"]');
+    if (!t) return;
+    t.classList.toggle('table-dark', dark);
+    t.classList.toggle('table-secondary', !dark);
+  }
+  window.addEventListener('pyops:theme', (ev) => applyTableTheme(ev.detail.dark));
+  $(document).ready(() => applyTableTheme(window.pyopsDark === true));
+</script>
+```
+
+Variants worth swapping:
+
+| Light variant | Dark variant |
+|---|---|
+| `bg-light` | `bg-dark` |
+| `text-dark` | `text-light` |
+| `table-secondary` (or `table-light`) | `table-dark` |
+| `btn-outline-dark` | `btn-outline-light` |
+| `border-secondary` | `border-light` |
+
+Do **not** add a manual theme toggle button — the wrapper drives this from the OS preference.
 
 #### Head View (my_head.html)
 Styles/scripts only.

@@ -189,6 +189,78 @@ async def controller(set: str, name: str):
         <script src="/files/js/js.cookie.min.js"></script>
         <script src="/files/js/bootstrap/bootstrap.bundle.min.js"></script>
 
+        <style>
+            /* Dark-mode overrides for Bootstrap 5.2 surfaces that don't
+               read `data-bs-theme` natively. The theme-sync script below
+               sets `data-bs-theme="dark|light"` on <html>; these rules
+               then drag modal / form / table / btn-close into the dark
+               palette so a view doesn't have to swap each class itself. */
+            [data-bs-theme="dark"] .modal-content {
+                background-color: #2b2b2b;
+                color: #e6e6e6;
+            }
+            [data-bs-theme="dark"] .modal-header,
+            [data-bs-theme="dark"] .modal-footer {
+                border-color: rgba(255, 255, 255, 0.15);
+            }
+            [data-bs-theme="dark"] .form-control,
+            [data-bs-theme="dark"] .form-select,
+            [data-bs-theme="dark"] .form-control:focus,
+            [data-bs-theme="dark"] .form-select:focus {
+                background-color: #1e1e1e;
+                color: #e6e6e6;
+                border-color: rgba(255, 255, 255, 0.15);
+            }
+            [data-bs-theme="dark"] .form-control:disabled,
+            [data-bs-theme="dark"] .form-control[disabled],
+            [data-bs-theme="dark"] .form-select:disabled {
+                background-color: #2a2a2a;
+                color: rgba(255, 255, 255, 0.55);
+            }
+            [data-bs-theme="dark"] .form-label,
+            [data-bs-theme="dark"] .col-form-label {
+                color: #e6e6e6;
+            }
+            [data-bs-theme="dark"] .btn-close {
+                filter: invert(1) grayscale(100%) brightness(200%);
+            }
+            [data-bs-theme="dark"] .table {
+                --bs-table-color: #e6e6e6;
+                --bs-table-bg: transparent;
+                --bs-table-border-color: rgba(255, 255, 255, 0.15);
+            }
+        </style>
+
+        <script>
+            // Global theme sync for every controller-rendered view.
+            // Reads `prefers-color-scheme`, mirrors it onto html[data-bs-theme]
+            // and swaps body bg / text classes. Views that ship their own
+            // theme-sensitive variants (e.g. `table-secondary` vs
+            // `table-dark`) subscribe to `window`'s `pyops:theme` event.
+            (function () {
+                const mq = window.matchMedia('(prefers-color-scheme: dark)');
+                function apply() {
+                    const dark = mq.matches;
+                    const html = document.documentElement;
+                    const body = document.body;
+                    html.setAttribute('data-bs-theme', dark ? 'dark' : 'light');
+                    if (body) {
+                        body.classList.toggle('bg-dark', dark);
+                        body.classList.toggle('text-light', dark);
+                        body.classList.toggle('bg-light', !dark);
+                    }
+                    window.pyopsDark = dark;
+                    window.dispatchEvent(new CustomEvent('pyops:theme', { detail: { dark: dark } }));
+                }
+                mq.addEventListener('change', apply);
+                if (document.readyState === 'loading') {
+                    document.addEventListener('DOMContentLoaded', apply);
+                } else {
+                    apply();
+                }
+            })();
+        </script>
+
         {{HEAD}}
     </head>
     <body class="bg-light">
@@ -258,9 +330,25 @@ async def controller_proxy(set: str, name: str, rest: str, request: Request):
         exec(code, glob)
 
         user = sanitize_owner(request.headers.get("X-User", "anonymous"))
-        kind = "debug" if glob.get("debug", False) else "service"
-        owner_filter = user if kind == "debug" else None
-        jobs = runner.find(owner_filter, glob["set"], glob["service"], kind, ["running"])
+        # debug=True on the controller means "preview mode": route to whichever
+        # preview-kind job for this {set,name} is running — debug (debugger-
+        # attached, started from VSIX) takes precedence, then draft (just the
+        # unstaged code running standalone, started from the Manager). Both
+        # are scoped to the requesting user. debug=False / unset means
+        # production: route to the committed-code service.
+        if glob.get("debug", False):
+            preview_kinds = ("debug", "draft")
+            jobs = []
+            for k in preview_kinds:
+                jobs = runner.find(user, glob["set"], glob["service"], k, ["running"])
+                if jobs:
+                    kind = k
+                    break
+            else:
+                kind = "preview"  # for the error message below
+        else:
+            kind = "service"
+            jobs = runner.find(None, glob["set"], glob["service"], kind, ["running"])
         if not jobs:
             # Bound service not (yet) running. Common during startup or after
             # a cancel — return a structured payload at HTTP 503 instead of
@@ -319,11 +407,21 @@ async def controller_proxy(set: str, name: str, rest: str, request: Request):
 async def menu():
     """
     Generates dynamic menu from Git controllers, preferring draft, collects failures.
+
+    Each section carries an `expanded` flag that the sidebar uses to decide
+    whether the section starts open or collapsed. The built-in "Scriptlet"
+    section is always expanded; user-set sections default to collapsed but
+    can be force-expanded via the `web.expanded_sets` config list (an array
+    of set names whose section should open by default).
     """
     try:
+        web_conf = files.conf_web()
+        expanded_sets = web_conf.get("expanded_sets") or []
+
         content = [{
             "id": "scriptlet",
             "name": "Scriptlet",
+            "expanded": True,
             "items": [
                 {
                     "id": "scriptlet_manager",
@@ -352,7 +450,7 @@ async def menu():
             ]
         }]
         failures = []
-    
+
         # Scan Git for controllers.
         scriptlets = await run_in_executor(git.list_scriptlets)
         sets = sorted(set(s["set"] for s in scriptlets if s["type"] == "controller"))
@@ -361,6 +459,7 @@ async def menu():
             m = {
                 "id": g,
                 "name": g,
+                "expanded": g in expanded_sets,
                 "items": []
             }
             ctrl_scriptlets = [s for s in scriptlets if s["set"] == g and s["type"] == "controller"]

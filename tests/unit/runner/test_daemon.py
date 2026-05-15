@@ -38,39 +38,159 @@ class TestDaemon:
             assert job_running.state == "failed"
             assert job_running.detail == "incomplete execution detected on startup"
 
-    def test_purgeLeftoverServiceJobs_running_service(self, mock_db):
-        from app.runner import purgeLeftoverServiceJobs
+    def test_handleOddJobs_loading_to_todo(self, mock_db):
+        """`loading` is a transient state set by loadJob before spawn. If
+        the runner crashed mid-loadJob the row sits there forever; reset
+        it to `todo` so the new runner picks it up cleanly."""
+        from app.runner import handleOddJobs
         from app.orm.database import get_db_engine
         from app.orm.job import Job
         with Session(get_db_engine()) as test_session:
-            job_running_service = Job(id="run_svc_id", set="test_set", name="test_name", owner="test_owner", kind="service", state="running", param=None, detail=None, pid=123, drop_done=False)
-            job_running_task = Job(id="run_task_id", set="test_set", name="test_name", owner="test_owner", kind="task", state="running", param=None, detail=None, pid=None, drop_done=False)
-            job_done_service = Job(id="done_svc_id", set="test_set", name="test_name", owner="test_owner", kind="service", state="done", param=None, detail=None, pid=None, drop_done=False)
-            test_session.add_all([job_running_service, job_running_task, job_done_service])
+            test_session.add(Job(id="load_id", set="s", name="n", owner="o",
+                                  kind="task", state="loading", param=None,
+                                  detail=None, pid=None, drop_done=False))
             test_session.commit()
-        purgeLeftoverServiceJobs()
+        handleOddJobs()
         with Session(get_db_engine()) as test_session:
-            # Service jobs should be deleted
-            assert test_session.get(Job, "run_svc_id") is None
-            assert test_session.get(Job, "done_svc_id") is None
-            # Non-service jobs should be unchanged
-            job_running_task = test_session.get(Job, "run_task_id")
-            assert job_running_task.state == "running"
+            assert test_session.get(Job, "load_id").state == "todo"
 
-    def test_purgeLeftoverServiceJobs_dequeued_service(self, mock_db):
+    def test_handleOddJobs_deduplicates_incomplete_marker(self, mock_db):
+        """Repeated unclean container restarts shouldn't accumulate ghost
+        `failed` rows toward the per-service `<3 failed` gate. At most one
+        row with the incomplete-on-startup sentinel detail survives per
+        (set, name, owner, kind)."""
+        from app.runner import handleOddJobs, INCOMPLETE_ON_STARTUP_DETAIL
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        with Session(get_db_engine()) as test_session:
+            test_session.add_all([
+                # Prior incomplete-on-startup rows from earlier restarts
+                Job(id="old1", set="s", name="n", owner="o", kind="service",
+                    state="failed", detail=INCOMPLETE_ON_STARTUP_DETAIL,
+                    param=None, pid=None, drop_done=True),
+                Job(id="old2", set="s", name="n", owner="o", kind="service",
+                    state="failed", detail=INCOMPLETE_ON_STARTUP_DETAIL,
+                    param=None, pid=None, drop_done=True),
+                # A REAL failure with a different detail — must survive
+                Job(id="real", set="s", name="n", owner="o", kind="service",
+                    state="failed", detail="ZeroDivisionError: real bug",
+                    param=None, pid=None, drop_done=True),
+                # The currently-orphaned running row that will become incomplete
+                Job(id="now", set="s", name="n", owner="o", kind="service",
+                    state="running", detail=None,
+                    param=None, pid=None, drop_done=True),
+                # Unrelated service — its own incomplete must not be touched
+                Job(id="other", set="s", name="other", owner="o", kind="service",
+                    state="failed", detail=INCOMPLETE_ON_STARTUP_DETAIL,
+                    param=None, pid=None, drop_done=True),
+            ])
+            test_session.commit()
+
+        handleOddJobs()
+
+        with Session(get_db_engine()) as test_session:
+            # Old incomplete rows for (s, n, o, service) are gone
+            assert test_session.get(Job, "old1") is None
+            assert test_session.get(Job, "old2") is None
+            # Real failure preserved
+            real = test_session.get(Job, "real")
+            assert real is not None and real.state == "failed"
+            # New incomplete row is the survivor
+            now = test_session.get(Job, "now")
+            assert now.state == "failed"
+            assert now.detail == INCOMPLETE_ON_STARTUP_DETAIL
+            # Unrelated service untouched
+            other = test_session.get(Job, "other")
+            assert other is not None and other.detail == INCOMPLETE_ON_STARTUP_DETAIL
+
+    def test_handleOddJobs_incomplete_dedup_does_not_block_under_three_gate(self, mock_db):
+        """Three unclean restarts in a row leave ONE failed row, not three,
+        so the schedule's <3 failed gate still permits restart."""
+        from app.runner import handleOddJobs, INCOMPLETE_ON_STARTUP_DETAIL
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        for i, jid in enumerate(["r1", "r2", "r3"]):
+            with Session(get_db_engine()) as test_session:
+                test_session.add(Job(id=jid, set="s", name="n", owner="o",
+                                     kind="service", state="running",
+                                     param=None, pid=None, drop_done=True))
+                test_session.commit()
+            handleOddJobs()
+        with Session(get_db_engine()) as test_session:
+            stmt = select(Job).where(Job.set == "s", Job.name == "n",
+                                      Job.detail == INCOMPLETE_ON_STARTUP_DETAIL)
+            rows = test_session.scalars(stmt).all()
+            assert len(rows) == 1
+
+    def test_handleOddJobs_preserves_terminal_states(self, mock_db):
+        """`done` / `failed` / `cancelled` / `remove` / `removed` rows are
+        never overwritten — the per-service `<3 failed` gate and the
+        cancelled-blocks-restart rule both depend on those rows surviving
+        across restarts."""
+        from app.runner import handleOddJobs
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        with Session(get_db_engine()) as test_session:
+            for jid, state in [("d_id", "done"), ("f_id", "failed"),
+                               ("c_id", "cancelled"), ("rm_id", "remove"),
+                               ("rmd_id", "removed")]:
+                test_session.add(Job(id=jid, set="s", name="n", owner="o",
+                                     kind="task", state=state, param=None,
+                                     detail="original", pid=None, drop_done=False))
+            test_session.commit()
+        handleOddJobs()
+        with Session(get_db_engine()) as test_session:
+            assert test_session.get(Job, "d_id").state == "done"
+            assert test_session.get(Job, "f_id").state == "failed"
+            assert test_session.get(Job, "c_id").state == "cancelled"
+            assert test_session.get(Job, "rm_id").state == "remove"
+            assert test_session.get(Job, "rmd_id").state == "removed"
+
+    def test_purgeLeftoverServiceJobs_clears_stuck_remove(self, mock_db):
+        """`remove`/`removed` service rows are the only ones the startup
+        sweep deletes — they're transient cleanup states whose postTerm
+        got cut short when the previous runner exited."""
         from app.runner import purgeLeftoverServiceJobs
         from app.orm.database import get_db_engine
         from app.orm.job import Job
         with Session(get_db_engine()) as test_session:
-            job_dequeued_service = Job(id="deq_svc_id", set="test_set", name="test_name", owner="test_owner", kind="service", state="dequeued", param=None, detail=None, pid=None, drop_done=False)
-            job_failed_service = Job(id="fail_svc_id", set="test_set", name="test_name", owner="test_owner", kind="service", state="failed", param=None, detail=None, pid=None, drop_done=False)
-            test_session.add_all([job_dequeued_service, job_failed_service])
+            test_session.add_all([
+                Job(id="rm_svc", set="s", name="n", owner="o", kind="service",
+                    state="remove", param=None, detail=None, pid=None, drop_done=True),
+                Job(id="rmd_svc", set="s", name="n", owner="o", kind="service",
+                    state="removed", param=None, detail=None, pid=None, drop_done=True),
+                # non-service in remove — left alone
+                Job(id="rm_task", set="s", name="n", owner="o", kind="task",
+                    state="remove", param=None, detail=None, pid=None, drop_done=True),
+            ])
             test_session.commit()
         purgeLeftoverServiceJobs()
         with Session(get_db_engine()) as test_session:
-            # Service jobs should be deleted
-            assert test_session.get(Job, "deq_svc_id") is None
-            assert test_session.get(Job, "fail_svc_id") is None
+            assert test_session.get(Job, "rm_svc") is None
+            assert test_session.get(Job, "rmd_svc") is None
+            assert test_session.get(Job, "rm_task") is not None  # untouched
+
+    def test_purgeLeftoverServiceJobs_preserves_terminal_rows(self, mock_db):
+        """`failed` / `done` / `cancelled` service rows survive a restart —
+        the `<3 failed` gate and the cancelled-blocks-restart rule both
+        depend on those rows being present on the next runner boot."""
+        from app.runner import purgeLeftoverServiceJobs
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        with Session(get_db_engine()) as test_session:
+            test_session.add_all([
+                Job(id="fail_svc", set="s", name="n", owner="o", kind="service",
+                    state="failed", param=None, detail=None, pid=None, drop_done=False),
+                Job(id="done_svc", set="s", name="n", owner="o", kind="service",
+                    state="done", param=None, detail=None, pid=None, drop_done=False),
+                Job(id="cancel_svc", set="s", name="n", owner="o", kind="service",
+                    state="cancelled", param=None, detail=None, pid=None, drop_done=False),
+            ])
+            test_session.commit()
+        purgeLeftoverServiceJobs()
+        with Session(get_db_engine()) as test_session:
+            for jid in ("fail_svc", "done_svc", "cancel_svc"):
+                assert test_session.get(Job, jid) is not None, jid
 
     def test_getNextToDo_found(self, mock_db):
         from app.runner import getNextToDo
@@ -197,6 +317,44 @@ class TestDaemon:
             job = test_session.get(Job, "id")
             assert job.state == "failed"
             assert job.detail == "error"
+
+    def test_finishJob_cas_preserves_terminal_state(self, mock_db):
+        """A row that already reached a terminal state must not be re-written
+        by a later completion. Concrete scenario: a service exits cleanly,
+        send_completion('done') runs and (with drop_done=True) the row gets
+        re-targeted to 'remove'. The finally-block listener.close() then
+        raises, run_*_job's outer except sends a second completion 'failed'.
+        Without CAS protection, the second commit would demote 'remove'
+        back to 'failed' and the schedule loop would treat the service as
+        unrestartable. CAS preserves the terminal 'remove'.
+        """
+        from app.runner import finishJob
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        with Session(get_db_engine()) as test_session:
+            test_session.add(Job(id="t1", set="s", name="n", owner="o",
+                                 kind="service", state="remove", param=None,
+                                 detail=None, pid=None, drop_done=True))
+            test_session.commit()
+
+        # Second completion with state='failed' — must be ignored by CAS.
+        finishJob("t1", "failed", "spurious error from close()")
+
+        with Session(get_db_engine()) as test_session:
+            assert test_session.get(Job, "t1").state == "remove"
+
+    def test_finishJob_cas_preserves_done_against_later_failed(self, mock_db):
+        from app.runner import finishJob
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        with Session(get_db_engine()) as test_session:
+            test_session.add(Job(id="t2", set="s", name="n", owner="o",
+                                 kind="task", state="done", param=None,
+                                 detail=None, pid=None, drop_done=False))
+            test_session.commit()
+        finishJob("t2", "failed", "duplicate completion")
+        with Session(get_db_engine()) as test_session:
+            assert test_session.get(Job, "t2").state == "done"
 
     def test_finishJob_cas_preserves_cancel_on_concurrent_commit(self, mock_db):
         """Cancel commits between finishJob's snapshot read and its CAS UPDATE.
@@ -378,9 +536,8 @@ class TestDaemon:
         schedule()
         mock_find.assert_called_once_with(
             "test_owner", "test_set", "test_name", "service",
-            ["todo", "dequeued", "running",
-             "cancel", "cancelling", "cancelled",
-             "done", "remove", "removed"],
+            ["todo", "dequeued", "loading", "running",
+             "cancel", "cancelling", "cancelled", "done"],
         )
 
     def test_getNextToTerm_cancel(self, mock_db):
@@ -469,11 +626,13 @@ class TestDaemon:
             "both calls would use the same (wrong) id"
         )
 
-    def test_shutdown_job_processes_completion_drives_state_no_kill(self, mock_db):
-        """Service exits on SIGTERM, sends completion via ZMQ. The drain
-        in the wait loop ACKs the completion (finishJob updates state to
-        'done'), Popen.poll() reports exit, no SIGKILL is sent. The job
-        state is whatever the completion said — NOT pre-marked cancelled."""
+    def test_shutdown_job_processes_completion_deletes_row(self, mock_db):
+        """A service that exits on SIGTERM and reports its `done` completion
+        through the ZMQ drain has its row DELETED at the end of the sweep
+        — clean shutdown should leave nothing behind for the next boot to
+        reason about, so the schedule loop re-enqueues the service freshly.
+        Workspace logs survive (the DB row goes, the on-disk directory
+        doesn't)."""
         from app.runner import _shutdown_job_processes
         from app.orm.database import get_db_engine
         from app.orm.job import Job
@@ -483,19 +642,13 @@ class TestDaemon:
                             kind="service", state="running", pid=801, drop_done=False))
             session.commit()
 
-        # Popen.poll(): None at snapshot (still alive), then non-None after
-        # the simulated completion has been drained (proc exited).
         mock_p = Mock()
-        mock_p.poll.side_effect = [None, None, 0, 0]  # snapshot, first-wait-pass, then exited
+        mock_p.poll.side_effect = [None, None, 0, 0]
         processes = {801: mock_p}
 
         proc_obj = Mock(); proc_obj.pid = 801
-
-        # Simulate completion arriving: receive_and_process will call
-        # finishJob('done'), which we let actually run against the DB.
         sock = Mock()
         poller = Mock()
-        # First poll(0) returns one event; subsequent returns empty.
         poller.poll.side_effect = [[(sock, None)], [], []]
 
         def fake_receive(_socket):
@@ -505,6 +658,7 @@ class TestDaemon:
              patch('app.runner.job_lib.get_process_tree', return_value=[proc_obj]), \
              patch('app.runner.job_lib.kill_proc_tree') as mock_kill, \
              patch('app.runner.threading.Thread'), \
+             patch('app.runner.lib_runner.drop'), \
              patch('app.runner.time.sleep'):
             _shutdown_job_processes(processes, timeout=2.0,
                                     runner_socket=sock, runner_poller=poller)
@@ -513,16 +667,15 @@ class TestDaemon:
         import signal as _sig
         assert _sig.SIGTERM in kill_signals
         assert _sig.SIGKILL not in kill_signals
-
-        # State driven by the completion message, NOT pre-marked cancelled.
         with Session(get_db_engine()) as session:
-            row = session.get(Job, "graceful_svc")
-            assert row.state == "done"
+            assert session.get(Job, "graceful_svc") is None
 
-    def test_shutdown_job_processes_sigkill_marks_killed(self, mock_db):
-        """A process that doesn't exit before the timeout gets SIGKILL'd,
-        and since no completion arrived, the final sweep marks it
-        'cancelled' with detail='killed during shutdown'."""
+    def test_shutdown_job_processes_sigkill_marks_failed(self, mock_db):
+        """A service that doesn't respond to SIGTERM within the timeout
+        gets SIGKILL'd. Since it misbehaved, the row is kept as `failed`
+        with a sentinel detail — visible in the monitor AND counts toward
+        the per-service <3-failed gate so a repeatedly-misbehaving service
+        eventually stops being auto-restarted."""
         from app.runner import _shutdown_job_processes
         from app.orm.database import get_db_engine
         from app.orm.job import Job
@@ -533,11 +686,11 @@ class TestDaemon:
             session.commit()
 
         mock_p = Mock()
-        mock_p.poll.return_value = None  # never exits during the wait
+        mock_p.poll.return_value = None
         processes = {802: mock_p}
 
         proc_obj = Mock(); proc_obj.pid = 802
-        poller = Mock(); poller.poll.return_value = []  # no completion to drain
+        poller = Mock(); poller.poll.return_value = []
 
         with patch('app.runner.job_lib.get_process_tree', return_value=[proc_obj]), \
              patch('app.runner.job_lib.kill_proc_tree') as mock_kill, \
@@ -549,18 +702,17 @@ class TestDaemon:
         import signal as _sig
         assert _sig.SIGTERM in kill_signals
         assert _sig.SIGKILL in kill_signals
-
         with Session(get_db_engine()) as session:
             row = session.get(Job, "stuck_svc")
-            assert row.state == "cancelled"
-            assert "killed during shutdown" in (row.detail or "")
+            assert row is not None and row.state == "failed"
+            assert "shutdown" in (row.detail or "").lower()
             assert row.pid is None
 
-    def test_shutdown_job_processes_task_no_completion_marks_terminated(self, mock_db):
-        """A task that exits on SIGTERM via default Python signal handling
-        sends no completion message — the final sweep still marks it
-        'cancelled' with detail='terminated during shutdown' (not killed,
-        since it didn't require SIGKILL)."""
+    def test_shutdown_job_processes_clean_exit_no_completion_deletes_row(self, mock_db):
+        """A task that exits on SIGTERM under default Python signal
+        handling (no ServiceListener, no completion) is also DELETED at
+        the end — no surviving evidence is preferable to a stale row
+        that handleOddJobs would later relabel as failed."""
         from app.runner import _shutdown_job_processes
         from app.orm.database import get_db_engine
         from app.orm.job import Job
@@ -571,14 +723,15 @@ class TestDaemon:
             session.commit()
 
         mock_p = Mock()
-        mock_p.poll.side_effect = [None, 0, 0]  # alive at snapshot, exited after SIGTERM
+        mock_p.poll.side_effect = [None, 0, 0]
         processes = {803: mock_p}
 
         proc_obj = Mock(); proc_obj.pid = 803
-        poller = Mock(); poller.poll.return_value = []  # no completion ever
+        poller = Mock(); poller.poll.return_value = []
 
         with patch('app.runner.job_lib.get_process_tree', return_value=[proc_obj]), \
              patch('app.runner.job_lib.kill_proc_tree') as mock_kill, \
+             patch('app.runner.lib_runner.drop'), \
              patch('app.runner.time.sleep'):
             _shutdown_job_processes(processes, timeout=2.0,
                                     runner_socket=Mock(), runner_poller=poller)
@@ -587,12 +740,39 @@ class TestDaemon:
         import signal as _sig
         assert _sig.SIGTERM in kill_signals
         assert _sig.SIGKILL not in kill_signals
+        with Session(get_db_engine()) as session:
+            assert session.get(Job, "silent_task") is None
+
+    def test_shutdown_job_processes_preserves_operator_cancel(self, mock_db):
+        """A row already in `cancel`/`cancelling` when shutdown starts
+        represents operator intent — preserve it as `cancelled` so the
+        schedule-loop's cancelled-blocks-restart gate honours the
+        operator's choice across the restart."""
+        from app.runner import _shutdown_job_processes
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
 
         with Session(get_db_engine()) as session:
-            row = session.get(Job, "silent_task")
-            assert row.state == "cancelled"
-            assert "terminated during shutdown" in (row.detail or "")
-            assert "killed" not in (row.detail or "")
+            session.add(Job(id="op_cancelled", set="s", name="n", owner="o",
+                            kind="service", state="cancel", pid=804, drop_done=False))
+            session.commit()
+
+        mock_p = Mock()
+        mock_p.poll.side_effect = [None, 0, 0]
+        processes = {804: mock_p}
+
+        proc_obj = Mock(); proc_obj.pid = 804
+        poller = Mock(); poller.poll.return_value = []
+
+        with patch('app.runner.job_lib.get_process_tree', return_value=[proc_obj]), \
+             patch('app.runner.job_lib.kill_proc_tree'), \
+             patch('app.runner.time.sleep'):
+            _shutdown_job_processes(processes, timeout=2.0,
+                                    runner_socket=Mock(), runner_poller=poller)
+
+        with Session(get_db_engine()) as session:
+            row = session.get(Job, "op_cancelled")
+            assert row is not None and row.state == "cancelled"
 
     def test_shutdown_job_processes_skips_already_exited(self, mock_db):
         """A process whose poll() returns non-None at snapshot time is

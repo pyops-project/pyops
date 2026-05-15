@@ -474,7 +474,13 @@ class TestServiceControllerCreation:
         pyops_server.assert_no_unexpected_errors()
 
     def test_controller_appears_in_sidebar_menu(self, e2e_page, api_anon, pyops_server, set_factory):
-        """Controller scriptlet creates a clickable entry in the sidebar menu."""
+        """Controller scriptlet creates an entry in the sidebar menu.
+
+        User-set sections collapse by default (see `web.expanded_sets`
+        config); the link is rendered into the DOM but hidden inside the
+        collapse target until the operator clicks the section header.
+        We check structural presence here (state='attached') — the
+        sibling click-through test exercises the expand-then-click path."""
         _setup_full_stack(api_anon, set_factory)
 
         e2e_page.reload()
@@ -483,7 +489,7 @@ class TestServiceControllerCreation:
         menu_link = e2e_page.locator(
             f'[data-testid="menu-link-{SET_NAME}_{CTRL_NAME}"]'
         )
-        menu_link.wait_for(state="visible", timeout=10_000)
+        menu_link.wait_for(state="attached", timeout=10_000)
         assert "E2E Dashboard" in menu_link.inner_text()
 
         _full_cleanup(e2e_page)
@@ -723,6 +729,10 @@ class TestControllerRendering:
         e2e_page.reload()
         e2e_page.wait_for_load_state("networkidle")
 
+        # User-set sections start collapsed (see `web.expanded_sets` config) —
+        # click the section toggle so its child links are reachable.
+        e2e_page.locator(f'[data-testid="menu-toggle-{SET_NAME}"]').click()
+
         menu_link = e2e_page.locator(
             f'[data-testid="menu-link-{SET_NAME}_{CTRL_NAME}"]'
         )
@@ -838,6 +848,80 @@ class TestControllerProxy:
         result = _proxy_get(e2e_page, "ping")
         assert result["status"] == 503
         assert "error" in result["data"]
+
+        _full_cleanup(e2e_page)
+        pyops_server.assert_no_unexpected_errors()
+
+    def test_proxy_with_debug_controller_routes_to_draft_job(self, e2e_page, api_anon, pyops_server, set_factory):
+        """Regression: a controller flagged `debug = True` (saved as a
+        draft) plus the same scriptlet started as `kind="draft"` from the
+        Manager preview flow → the proxy must bind to the draft job.
+
+        Before the preview-routing fix the proxy only looked at
+        `kind="debug"` jobs in debug mode, so a draft started for preview
+        was never reachable.
+        """
+        _setup_full_stack(api_anon, set_factory)
+
+        # Save a controller DRAFT that flips debug=True. The committed
+        # controller still has debug=False; the proxy reads draft code on
+        # every request via get_controller_code(debug=True), so the flip
+        # takes effect without a commit.
+        controller_draft = CONTROLLER_CODE.replace("debug = False", "debug = True")
+        r = api_anon.post(
+            "/scriptlet/inventory/draft",
+            json={"set": SET_NAME, "name": CTRL_NAME, "code": controller_draft},
+        )
+        assert r.status_code == 200, f"draft controller failed: {r.text}"
+
+        # Save a service DRAFT whose /ping response differs from the
+        # committed code so we can prove which one the proxy hit.
+        service_draft = SERVICE_CODE.replace('"pong": True', '"pong": "from-draft"')
+        r = api_anon.post(
+            "/scriptlet/inventory/draft",
+            json={"set": SET_NAME, "name": SVC_NAME, "code": service_draft},
+        )
+        assert r.status_code == 200, f"draft service failed: {r.text}"
+
+        # Enqueue the service as a draft job — kind="draft" runs the
+        # unstaged code via run_draft_job (which gives it a ServiceListener
+        # like a real service does).
+        r = api_anon.put(
+            "/scriptlet/job/item",
+            json={"set": SET_NAME, "name": SVC_NAME, "kind": "draft",
+                  "drop_done": False, "max_retries": 0, "param": ""},
+        )
+        assert r.status_code == 200, f"enqueue draft job failed: {r.text}"
+        job_id = r.json()["job"]
+
+        # Wait for the draft job to reach 'running'.
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            j = api_anon.get(f"/scriptlet/job/item?id={job_id}").json()
+            if j.get("state") == "running":
+                break
+            time.sleep(0.3)
+        else:
+            pytest.fail(f"draft job {job_id} did not reach running in time")
+
+        # Proxy through the browser. The controller draft (debug=True)
+        # tells the proxy to seek a debug/draft preview job, so we land
+        # on the draft service we just started, not the (absent) committed one.
+        result = _proxy_get(e2e_page, "ping")
+        assert result["status"] == 200
+        assert result["data"]["pong"] == "from-draft", (
+            f"proxy did not reach the draft service: {result}"
+        )
+
+        # Cancel the draft job. (UI cancel path is tested elsewhere; here
+        # we go via API to keep the test focused on the routing assertion.)
+        api_anon.get(f"/scriptlet/job/cancel?id={job_id}")
+        deadline = time.time() + 15
+        while time.time() < deadline:
+            j = api_anon.get(f"/scriptlet/job/item?id={job_id}").json()
+            if j.get("state") in {"cancelled", "removed", None}:
+                break
+            time.sleep(0.3)
 
         _full_cleanup(e2e_page)
         pyops_server.assert_no_unexpected_errors()

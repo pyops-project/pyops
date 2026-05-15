@@ -102,3 +102,22 @@ The Sets view is itself a pyops scriptlet — a controller backed by the `intern
 - Actions: pull (sync repos), switch (local branches), remove (confirm), update dependencies.
 
 Safe Git ops with per-set locks; errors and progress shown in the live job modal.
+
+## Sidebar — collapsed-by-default user sets
+
+The left sidebar groups built-in pyops entries (Manager / Scheduler / Monitor / Sets) under one section and one section per discovered user set. The built-in section is always expanded; user-set sections start **collapsed** so a host with many sets stays scannable.
+
+Force-expand specific sets at boot via `etc/pyops.json`:
+
+```json
+{
+    "web": {
+        "bind": "0.0.0.0:80",
+        "worker": 4,
+        "timeout": 300,
+        "expanded_sets": ["system", "myops"]
+    }
+}
+```
+
+`expanded_sets` is an array of set names whose sidebar section should open by default. Each section is still individually collapsible at runtime via the section header chevron — the config only seeds the initial state.

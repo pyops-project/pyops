@@ -91,7 +91,7 @@ graph TD
 
 ### JSON Structure
 
-- `web`: `{"bind": "127.0.0.1:8000", "worker": 4, "timeout": 300}`
+- `web`: `{"bind": "127.0.0.1:8000", "worker": 8, "timeout": 300}`
 - `data`: `{"jobs": "data/jobs", "git": "data/git", "db": "data/app.db"}`
 - `runner`: `{"venv": "data/venv", "pkg": "data/pkg", "git_pull_interval": 60, "drop_done_delay_seconds": 60}`
 - `log`: `{"loglevel": "debug"}`
@@ -657,3 +657,35 @@ flowchart TD
 ```
 
 Docker deployment uses Nginx as reverse proxy.
+
+### Shutdown timing chain
+
+`docker compose down` (and any other SIGTERM to the container) propagates through three layers, each with its own timeout:
+
+```
+docker  ── SIGTERM ──▶  gunicorn master (PID 1)
+                       │   handles SIGTERM, asks each worker to drain in-flight HTTP
+                       │   requests; waits at most `graceful_timeout` (120s in app/
+                       │   gunicorn.py — sized for the rare cold-cache pip install
+                       │   that lands inside a request)
+                       │
+                       ▼   workers exit
+                  on_exit(server) fires
+                       │   p.terminate() → SIGTERM the runner subprocess (started
+                       │   from multiprocessing.Process in gunicorn.py:on_starting)
+                       │
+                       ▼
+                  runner subprocess
+                       │   GracefulKiller flips kill_now; main loop exits; runs
+                       │   _shutdown_job_processes (timeout=15.0 — SIGTERM all
+                       │   live job trees, drain ZMQ completions, Popen.poll reap,
+                       │   SIGKILL stragglers, final-sweep non-terminal rows to
+                       │   'cancelled')
+                       │
+                       ▼
+                  gunicorn master exits
+```
+
+Worst-case clock: 120s (workers) + 15s (runner) ≈ **135s**. Docker's default `stop_grace_period` is **10s** — that's nowhere near enough; docker SIGKILLs the container before the runner ever gets its SIGTERM, leaving any then-running service rows in state `running`. The next start's `handleOddJobs` marks those as `failed` with the sentinel detail `"incomplete execution detected on startup"` (deduplicated per identity so the per-service `<3 failed` gate never accumulates across repeated unclean restarts).
+
+**Compose deployments must set `stop_grace_period: 180s`** (or higher) on the pyops service so the chain has room to finish. See the example in the project README.

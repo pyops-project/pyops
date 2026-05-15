@@ -178,21 +178,38 @@ def _shutdown_job_processes(processes: dict[int, subprocess.Popen], timeout: flo
             if still_alive:
                 time.sleep(0.05)
 
-    # Sweep: any job whose completion message never arrived (default-
-    # SIGTERM'd tasks, SIGKILL'd survivors, or just any not-yet-terminal
-    # row) gets explicit 'cancelled' state with shutdown-aware detail.
+    # Final sweep — drives each row to the right state for the next boot:
+    #   • SIGKILL'd: the service didn't respond to SIGTERM. Mark `failed`
+    #     so it's visible in the monitor and counts toward the per-service
+    #     <3-failed gate.
+    #   • `cancel` / `cancelling`: an operator cancel was mid-flight when
+    #     shutdown started. Finalise to `cancelled` so the next-start
+    #     gate honours the operator intent (cancelled blocks restart).
+    #   • Already terminal in a "preserve across restarts" sense
+    #     (`cancelled`, `failed`): leave alone.
+    #   • Everything else (`done`, `remove`, `running` without completion,
+    #     etc.): a clean container shutdown shouldn't leave behind state
+    #     that blocks the schedule loop from re-enqueueing — DELETE the
+    #     row so the service auto-restarts on next boot. The workspace
+    #     under `data/jobs/{set}/{job_id}/` stays on disk for post-mortem.
     with Session(get_db_engine()) as session:
         for pid, job_id in targets.items():
             job = session.get(Job, job_id)
             if job is None:
                 continue
-            if job.state in ("done", "failed", "cancelled", "remove", "removed"):
-                # Completion-driven path or earlier finalisation — leave alone.
-                continue
-            job.state = "cancelled"
-            job.detail = "killed during shutdown" if pid in sigkilled else "terminated during shutdown"
-            job.end = datetime.now()
-            job.pid = None
+            if pid in sigkilled:
+                job.state = "failed"
+                job.detail = "did not respond to shutdown SIGTERM"
+                job.end = datetime.now()
+                job.pid = None
+            elif job.state in ("cancel", "cancelling"):
+                job.state = "cancelled"
+                job.end = datetime.now()
+                job.pid = None
+            elif job.state in ("cancelled", "failed"):
+                pass
+            else:
+                session.delete(job)
         commit_with_retry(session)
 
 def terminate_job_processes(job_id: str, pid: int, is_debug: bool, owner: str, graceful_timeout: float = 15.0):
@@ -264,42 +281,97 @@ def receive_and_process(socket):
     socket.send(b'', zmq.SNDMORE)
     socket.send(b'ack')
 
+INCOMPLETE_ON_STARTUP_DETAIL = "incomplete execution detected on startup"
+
+
 def handleOddJobs():
+    """Reconcile non-terminal rows left behind by a previous unclean run.
+
+    Transient states (`dequeued`, `loading`) get reset to `todo` so the
+    new runner can pick them up. `running` gets marked `failed` with a
+    sentinel detail (`INCOMPLETE_ON_STARTUP_DETAIL`). `cancel`/`cancelling`
+    get finalised to `cancelled` — the daemon-thread terminate from a
+    cancel HTTP got killed by an immediately-following shutdown, or the
+    previous run crashed mid-terminate; the process is gone by the time
+    we see this on startup.
+
+    To keep the per-service `<3 failed` gate from accumulating ghosts
+    across repeated unclean container restarts (docker stop_grace_period
+    exhausted before the runner could clean up), we deduplicate after
+    the sweep: at most ONE row with the incomplete-on-startup detail
+    survives per `(set, name, owner, kind)` tuple. Real failures with
+    real tracebacks are untouched.
+
+    Terminal states (`done`, `failed`-with-other-detail, `cancelled`,
+    `remove`, `removed`) are NOT touched — they're either history we
+    want to preserve (for `<3 failed` and cancelled-blocks-restart) or
+    transient cleanup states that purgeLeftoverServiceJobs handles.
+    """
+    new_incomplete = []  # (id, set, name, owner, kind) of rows we just marked incomplete
     with Session(get_db_engine()) as session:
         stmt = select(Job).where(
-            or_(Job.state == "dequeued", Job.state == "running",
+            or_(Job.state == "dequeued", Job.state == "loading",
+                Job.state == "running",
                 Job.state == "cancel", Job.state == "cancelling")
         ).order_by(Job.id.asc())
 
         jobs = session.scalars(stmt).all()
 
         for job in jobs:
-            if job.state == "dequeued":
+            if job.state in ("dequeued", "loading"):
                 job.state = "todo"
             elif job.state in ("cancel", "cancelling"):
-                # finishJob+terminate sequence didn't finish — either the
-                # daemon-thread terminate from a cancel HTTP got killed by
-                # an immediately-following shutdown, or the previous run
-                # crashed mid-terminate. Either way the process is gone
-                # by the time we see this on startup, so mark cancelled.
                 job.state = "cancelled"
                 job.detail = (job.detail or "") + " (orphan cancel cleaned on startup)"
-            else:
+            else:  # running
                 job.state = "failed"
-                job.detail = "incomplete execution detected on startup"
+                job.detail = INCOMPLETE_ON_STARTUP_DETAIL
+                new_incomplete.append((job.id, job.set, job.name, job.owner, job.kind))
         commit_with_retry(session)
 
+    if new_incomplete:
+        with Session(get_db_engine()) as session:
+            for job_id, set_, name_, owner_, kind_ in new_incomplete:
+                # Delete prior `failed` rows for the same identity tuple
+                # whose detail is exactly the incomplete-on-startup sentinel.
+                # Real failures (different detail) survive.
+                session.execute(
+                    delete(Job).where(
+                        and_(Job.id != job_id,
+                             Job.set == set_,
+                             Job.name == name_,
+                             Job.owner == owner_,
+                             Job.kind == kind_,
+                             Job.state == "failed",
+                             Job.detail == INCOMPLETE_ON_STARTUP_DETAIL)
+                    )
+                )
+            commit_with_retry(session)
+
 def purgeLeftoverServiceJobs():
-    """Purge leftover service jobs at startup to ensure clean servicing."""
+    """Clean up stuck `remove`/`removed` service rows from a previous run.
+
+    A service exiting cleanly with drop_done=True goes through
+    `done` → `remove` → `removed` → row deleted (postTerm + disposeJobs),
+    but the daemon thread that drives that finalisation can be killed
+    when the runner exits within its own shutdown window. The row gets
+    stuck in `remove` and then later blocks the schedule loop from
+    re-enqueueing the service. This sweep finishes that cleanup.
+
+    Terminal `failed` / `done` / `cancelled` rows are preserved — the
+    schedule-loop's `<3 failed` gate and the cancelled-blocks-restart
+    rule both rely on those rows surviving across restarts.
+    """
     with Session(get_db_engine()) as session:
         stmt = select(Job).where(
-            and_(Job.kind == "service", or_(Job.state == "dequeued", Job.state == "running", Job.state == "failed", Job.state == "done"))
+            and_(Job.kind == "service",
+                 or_(Job.state == "remove", Job.state == "removed"))
         ).order_by(Job.id.asc())
 
         jobs = session.scalars(stmt).all()
 
         for job in jobs:
-            logger.debug(f"Purging leftover service job {job.id} in state {job.state}")
+            logger.debug(f"Purging stuck-cleanup service job {job.id} in state {job.state}")
             session.delete(job)
             lib_runner.drop(job.id, job.set)
         commit_with_retry(session)
@@ -488,10 +560,18 @@ def finishJob(job_id: str, state: str, detail: str):
         kind = job.kind
         owner = job.owner
 
-        # Atomic UPDATE with CASE: never overwrite a cancel that committed under us.
+        # Atomic UPDATE with CASE: once a row reaches a terminal state we
+        # never re-write it. Two completions arriving for the same job
+        # (e.g. exec() returned "done" + a finally-block close() raised
+        # and run_*_job's outer except sent "failed") must not demote
+        # the already-committed terminal state. Same protection for an
+        # operator cancel that committed under us.
         session.query(Job).filter(Job.id == job_id).update({
             Job.state: case(
-                (Job.state.in_(("cancel", "cancelling")), Job.state),
+                (Job.state.in_((
+                    "cancel", "cancelling", "cancelled",
+                    "done", "failed", "remove", "removed",
+                )), Job.state),
                 else_=candidate,
             ),
             Job.end: datetime.now(),
@@ -602,9 +682,8 @@ def schedule():
                             commit_with_retry(session)
                             logger.debug(f"schedule: after commit, session ID {id(session)}, committed last={next_run} for {s.id} at {datetime.now()}")
                 elif not lib_runner.find(s.owner, s.set, s.name, "service",
-                         ["todo", "dequeued", "running",
-                          "cancel", "cancelling", "cancelled",
-                          "done", "remove", "removed"]) and \
+                         ["todo", "dequeued", "loading", "running",
+                          "cancel", "cancelling", "cancelled", "done"]) and \
                      len(lib_runner.find(s.owner, s.set, s.name, "service", ["failed"])) < 3:
                     logger.debug(f"schedule: enqueuing service {s.set}::{s.name} at {now}")
                     try:
@@ -630,9 +709,8 @@ def schedule():
         set_ = essential["set"]
         name_ = essential["name"]
         if lib_runner.find(owner, set_, name_, "service",
-                           ["todo", "dequeued", "running",
-                            "cancel", "cancelling", "cancelled",
-                            "done", "remove", "removed"]):
+                           ["todo", "dequeued", "loading", "running",
+                            "cancel", "cancelling", "cancelled", "done"]):
             continue
         if len(lib_runner.find(owner, set_, name_, "service", ["failed"])) >= 3:
             continue

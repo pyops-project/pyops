@@ -520,9 +520,8 @@ class TestExecution:
         # Verify find calls
         mock_find.assert_has_calls([
             call("owner", "set", "name", "service",
-                 ["todo", "dequeued", "running",
-                  "cancel", "cancelling", "cancelled",
-                  "done", "remove", "removed"]),
+                 ["todo", "dequeued", "loading", "running",
+                  "cancel", "cancelling", "cancelled", "done"]),
             call("owner", "set", "name", "service", ["failed"]),
         ])
         # Verify enqueue

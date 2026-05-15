@@ -147,7 +147,19 @@
         bootstrap.Modal.getOrCreateInstance(document.getElementById("createModal")).show();
     }
 
+    // Theme-aware table variant: the controller wrapper emits a
+    // `pyops:theme` CustomEvent on prefers-color-scheme changes. Swap the
+    // table's Bootstrap variant so it stays readable in both modes.
+    function applySetsTableTheme(dark) {
+        const t = document.querySelector('[data-testid="sets-table"]');
+        if (!t) return;
+        t.classList.toggle('table-dark', dark);
+        t.classList.toggle('table-secondary', !dark);
+    }
+    window.addEventListener('pyops:theme', (ev) => applySetsTableTheme(ev.detail.dark));
+
     $(document).ready(function () {
+        applySetsTableTheme(window.pyopsDark === true);
         refreshList();
         setInterval(refreshList, 10000);
     });
