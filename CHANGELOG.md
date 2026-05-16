@@ -7,6 +7,63 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 from 3.0.0 onward.
 
+## [3.1.0] — 2026-05-16
+
+Adds `pyopsctl`, the operator CLI. Designed to be driven from a
+terminal by both a human operator and agents (LLM-driven or otherwise)
+and shell scripts — no venv, no pip-installed Python deps, distribution
+packages only (`python3` + `python3-requests`). Installed via
+`./ctl/install.sh` which symlinks the launcher into
+`$XDG_BIN_HOME` (defaults to `~/.local/bin/`).
+
+### Added
+
+- **`pyopsctl` CLI** at `/ctl/`, parallel to `app/` and `vsix/`.
+  Stdlib `argparse` dispatch, no Click/Typer. Speaks the existing
+  pyops HTTP API; no new server endpoints introduced.
+- **Per-profile credentials** in `~/.config/pyops/config.toml` (mode
+  0600, refused on broader perms). Each profile carries `url`, `user`,
+  and optional `api_key`. The auth pathway is implicit: `api_key`
+  present → `Authorization: Basic base64(user:api_key)` (nginx in
+  front of pyops decodes and injects `X-User`); `api_key` absent → no
+  `Authorization`, `X-User` falls through to `profile.user` or
+  `"pyopsctl"`. Useful for unproxied dev and bootstrap before
+  credentials exist.
+- **Detached debug jobs**, the load-bearing feature VSIX can't reach.
+  `pyopsctl debug start SET NAME` defaults to a detached debug job —
+  debugpy listens, the runner does not `wait_for_client()`. `--await`
+  injects `#>AWAIT_DEBUG`. `--param TEXT` / `--param-file PATH` carry
+  an arbitrary multi-line parameter (treated as Python script that may
+  itself include `#`-prefixed directives like `#!pip foo`). When both
+  flags are given the merge prepends `#>AWAIT_DEBUG\n` so the user's
+  body stays a valid script with its own directives intact.
+- **Command groups** covering: `scriptlet` (list/sets/status/repo-status/
+  get-code/create/draft/save/delete/diff); `job`
+  (list/view/run/cancel/delete/download/cancel-all/clean); `debug`
+  (start/attach/port/stop); `health` / `metrics` / `version`; `config`
+  (show/check).
+- **Three output modes** — default (human, aligned columns), `--json`
+  (server payloads passed through verbatim; multi-call composites
+  wrapped as `{"data": …, "meta": …}`), and `--quiet` (IDs only, one
+  per line; designed for shell pipelines).
+- **Exit codes** — `0` ok, `2` usage, `3` config/auth, `4` HTTP 4xx,
+  `5` HTTP 5xx, `6` timeout, `7` server-unreachable.
+- **Test coverage**: 42 unit tests (config, client, output, the merge
+  truth-table, argparse-to-request-body wiring) + 10 integration tests
+  (pyopsctl ↔ pyops contract against a real server) + 3 e2e tests
+  (pyopsctl + pyops + debugger TCP client interplay; verifies the
+  runner actually opens debugpy's listener on the reported port and
+  tears it down on `debug stop`). New CI stage `test:pyopsctl` runs
+  all three suites. The existing `test:`, `test:e2e`, `test:vsix*`,
+  `build:`, `build:image:`, and `release:` stages are untouched.
+
+### Documentation
+
+- New `docs/pyopsctl.md` — installation, config example, full command
+  reference, worked operator + agent flows.
+- `ctl/README.md` — prerequisites + `install.sh` usage on the
+  operator's box.
+
 ## [3.0.0] — 2026-05-15
 
 First stable release. Highlights below; full technical detail in
