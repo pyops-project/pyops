@@ -31,11 +31,17 @@ class Profile:
       - `api_key` falsy  → no Authorization header, X-User sent directly
                            (falls through to DEFAULT_X_USER when `user`
                            is also empty).
+
+    `debug_ports` is the per-profile pool of TCP ports pyopsctl may use
+    when starting debug jobs (the bootstrap injected into `param` binds
+    to one of these; the client leases via $XDG_RUNTIME_DIR pidfiles so
+    concurrent invocations don't double-allocate the same port).
     """
     name: str
     url: str
     user: str = ""
     api_key: str = ""
+    debug_ports: tuple[int, ...] = ()
 
 
 def _config_path() -> str:
@@ -106,6 +112,8 @@ def load(args) -> Profile:
     url = getattr(args, "server", None) or base.get("url") or ""
     user = getattr(args, "user", None) or base.get("user") or ""
     api_key = getattr(args, "api_key", None) or base.get("api_key") or ""
+    raw_ports = base.get("debug_ports") or []
+    debug_ports = tuple(_validate_debug_ports(raw_ports, cfg_path))
 
     if getattr(args, "api_key_stdin", False):
         api_key = sys.stdin.readline().rstrip("\n")
@@ -124,7 +132,24 @@ def load(args) -> Profile:
         )
 
     return Profile(name=name or "<no-profile>", url=url.rstrip("/"),
-                   user=user, api_key=api_key)
+                   user=user, api_key=api_key, debug_ports=debug_ports)
+
+
+def _validate_debug_ports(raw, cfg_path: str) -> list[int]:
+    if not isinstance(raw, list):
+        raise ConfigError(
+            f"{cfg_path}: debug_ports must be a list of integers, "
+            f"got {type(raw).__name__}"
+        )
+    out: list[int] = []
+    for entry in raw:
+        if not isinstance(entry, int) or entry < 1025 or entry > 65535:
+            raise ConfigError(
+                f"{cfg_path}: debug_ports entry {entry!r} is not a valid "
+                f"TCP port (1025-65535)"
+            )
+        out.append(entry)
+    return out
 
 
 def redact(profile: Profile) -> dict:
@@ -136,4 +161,5 @@ def redact(profile: Profile) -> dict:
         "api_key": "***" if profile.api_key else "",
         "auth_pathway": "basic" if profile.api_key else "x-user",
         "x_user_sent": profile.user or DEFAULT_X_USER if not profile.api_key else None,
+        "debug_ports": list(profile.debug_ports),
     }

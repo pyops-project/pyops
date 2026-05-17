@@ -2,7 +2,7 @@
 
 Deep technical reference for the operator CLI. Describes current
 state only; release-level notes live in `CHANGELOG.md`, day-to-day
-usage in `docs/pyopsctl.md`.
+usage in [`docs/pyops_guide.md`](pyops_guide.md) § pyopsctl.
 
 ## Layout
 
@@ -16,6 +16,16 @@ ctl/                        # outer "tool" dir at the repo root, parallel to app
     config.py               # TOML loading, profile resolution, redaction
     client.py               # requests.Session wrapper, auth header build, HTTPError
     output.py               # human / --json / --quiet formatters, format_table
+    ports.py                # per-profile debug-port lease store
+    debug_format.py         # human-readable rendering for `debug *` results
+    pdb/
+      client.py             # TCP pdb-wire client (PdbClient + parsers)
+    session/
+      paths.py              # state-dir layout per debug session
+      spawn.py              # fork+pipe handshake for the session daemon
+      protocol.py           # control-socket envelope shapes
+      client.py             # CLI ↔ daemon RPC over the control socket
+      daemon.py             # the session daemon: holds pdb TCP, dispatches ops
     commands/
       __init__.py
       scriptlet.py
@@ -185,42 +195,29 @@ independent flags:
 sink: `--out PATH` writes to file; absence writes to stdout
 (`sys.stdout.buffer`).
 
-## Debug surface — the merge
+## Debug surface — composing the pdb bootstrap
 
-`pyopsctl debug start` is the load-bearing feature pyopsctl ships that
-VSIX cannot reach.
+`pyopsctl debug start` is the load-bearing CLI verb. Since the
+server-side debugger-injection refactor, pyops does not start a
+debugger by itself — the client writes the bootstrap into the job's
+`param`. pyopsctl uses **remote-pdb** (a 50-line pip package wrapping
+stdlib pdb for TCP) so the wire is `(Pdb) `-prompt text and the
+client-side parser is small.
 
-VSIX hard-codes `param='#>AWAIT_DEBUG'` and offers no detached debug
-flow. `pyopsctl` defaults to **detached** (empty `param`, debugpy
-listens but doesn't wait) and adds two flag families that compose:
+The composed `param` shape:
 
-- `--await` injects the `#>AWAIT_DEBUG` directive into `param`. The
-  runner (`app/lib/runner.py:enqueue` + the job-runtime debug bootstrap)
-  treats `"#>AWAIT_DEBUG" in job.param` as the trigger for
-  `debugpy.wait_for_client()`.
-- `--param TEXT` / `--param-file PATH` (mutually exclusive) supply an
-  arbitrary multi-line parameter. `job.param` is treated as a Python
-  script that can carry other `#`-prefixed directives (e.g.
-  `#!pip somepkg`, `#>OTHER_FLAG`).
+```python
+#!pip remote-pdb
+from remote_pdb import RemotePdb
+RemotePdb('0.0.0.0', <leased port>).set_trace()
+<optional user --param body, appended after a blank line>
+```
 
-`commands/debug._merge_debug_param(*, await_flag, user_param)` is the
-single source of truth for how the two combine:
-
-| `await_flag` | `user_param`            | result                              |
-|--------------|-------------------------|-------------------------------------|
-| `True`       | `None` or `""`          | `"#>AWAIT_DEBUG"`                   |
-| `True`       | `"x = 1"`               | `"#>AWAIT_DEBUG\nx = 1"`            |
-| `True`       | `"#!pip foo\nx = 1\n"`  | `"#>AWAIT_DEBUG\n#!pip foo\nx = 1\n"` |
-| `False`      | `"x = 1"`               | `"x = 1"` (verbatim, multi-line OK) |
-| `False`      | `None` or `""`          | `""`                                |
-
-The **newline separator** is load-bearing: the user's body may itself
-begin with a `#`-prefixed directive line, and splicing the
-`#>AWAIT_DEBUG` token into the same line would either invalidate the
-user's directive or hide it from the runner's substring check. With
-the newline, every directive sits on its own line, the runner's `in`
-check finds `#>AWAIT_DEBUG` regardless, and the user's preamble is
-still a valid Python script.
+The leased port comes from the profile's `debug_ports` pool (see
+"Port leasing" below). `--param TEXT` / `--param-file PATH` (mutually
+exclusive) supply an optional preamble that runs **after** pdb is
+attached and paused at the bootstrap's `set_trace()` — i.e. the
+operator sees it only after issuing `continue`.
 
 `_build_overrides(overrides_dir, set_name)` walks
 `overrides_dir/<set>/*.py` and returns a `dict[str, str]` keyed by
@@ -230,14 +227,42 @@ still a valid Python script.
 override dir is given, so the JSON body omits the `overrides` key
 entirely and the server reads from the per-set git working tree.
 
-`_poll_until_running(c, job_id, timeout=30.0, interval=0.5)` is the
-shared poll loop for `--wait-running` and `debug attach`. Bails with
-a clear error on terminal-without-running so the operator doesn't
-print a port for a job that already failed.
+`_poll_until_running(c, job_id, timeout=60.0, interval=0.5)` is the
+shared poll loop for `--wait-running` and `debug attach`. Under the
+new server semantics, `running` means `exec(param)` has returned —
+i.e. `set_trace()` is up and blocking the program waiting for our
+TCP connection. That's exactly the moment we want to attach.
 
 `_host_of(url)` strips the scheme + port off the profile URL for the
-"attach to host:port" human line — VS Code's `attach` debug config
-needs host and port as separate fields.
+attach host. `--debug-host` overrides when pyops sits behind a
+port-forward whose external IP differs from the API URL's host.
+
+## Port leasing
+
+Per-profile pool, configured in `~/.config/pyops/config.toml`:
+
+```toml
+[profiles.local]
+url = "https://pyops.example/"
+debug_ports = [45679, 45680, 45681]
+```
+
+Lease store: `$XDG_RUNTIME_DIR/pyops/debug-ports/<profile>/<port>.lease`
+(operator-only, mode 0600). Contents = the job_id that currently holds
+the port. Concurrent leasers race on `O_CREAT|O_EXCL`; exactly one
+wins per port.
+
+Stale-lease reclaim: `ctl/pyopsctl/ports.py:lease()` accepts an
+`is_stale(job_id)` callback, which `commands/debug._start` wires to
+`GET /scriptlet/job/item?id=<jid>` — terminal states (done, failed,
+cancelled, removed, or 404) free the port for the new lease.
+
+`PYOPS_DEBUG_PORTS_DIR` (env) overrides the lease root, used by tests
+to isolate per-tmp_path stores.
+
+`debug stop` calls `ports.release_for_job(profile, job_id)` so the
+pool reclaims the port immediately rather than waiting for stale
+sweep on the next lease.
 
 ## Endpoint coverage
 
@@ -253,8 +278,10 @@ The 3.1.0 scope hits these pyops endpoints:
 `PUT /scriptlet/job/item`, `DELETE /scriptlet/job/item`,
 `GET /scriptlet/job/cancel`, `GET /scriptlet/job/download`.
 
-**debug** — `PUT /scriptlet/job/item` (with `kind=debug`),
-`GET /debug/port`, plus the job list/item/cancel endpoints above.
+**debug** — `PUT /scriptlet/job/item` (with `kind=debug`), plus the
+job list/item/cancel endpoints above. The debug session runs
+client-side against the remote-pdb listener the param's bootstrap
+opened; no server endpoint mediates the debugger wire.
 
 **monitoring** — `GET /health`, `GET /health/failed`,
 `GET /metrics`, `GET /version`.
@@ -289,40 +316,33 @@ conftest.py                # sys.path + shared fixtures inherited by both subdir
                            #   pyopsctl_env, pyops_server_for_ctl, pyops_set,
                            #   pyopsctl_bin, run_ctl (callable fixture)
 unit/
-  test_config.py
+  test_config.py               # profile resolution + debug_ports validation
   test_client.py
   test_output.py
-  test_debug_param_merge.py    # the merge truth-table — VSIX can't do this
+  test_session_paths.py        # session state dir layout + stale-pid pruning
+  test_ports.py                # port-lease store: pool, stale reclaim
+  test_pdb_client.py           # PdbClient prompt reader + response parsers
+  test_human_output.py         # vertical state-dump renderer
   test_commands_debug.py       # argparse wiring → request body shape
 integration/
   test_smoke.py                # version/config check/health/metrics
-  test_debug_flow.py           # merge semantics against a real server
-e2e/
-  test_debug_client_attach.py  # pyopsctl + pyops + debugger client interplay
+  test_debug_flow.py           # composed-param shape against a real server
 ```
 
 The shared server fixture starts a fresh pyops in a new process group
 (mirrors `tests/e2e/conftest.py`) on port `18322` so it can run
 alongside the main e2e suite without colliding. The fixture also
-writes a TOML config into a tmp `HOME` so the resolved profile is
-reproducible and isolated per test.
+writes a TOML config into a tmp `HOME`, isolates the port-lease store
+under a per-test `PYOPS_DEBUG_PORTS_DIR`, and isolates the session
+state dir under `PYOPS_SESSION_DIR`.
 
-**`integration/test_debug_flow.py`** asserts the merge semantics:
-- creates a scriptlet via the CLI,
-- runs `debug start` with each flag combo,
-- pulls the job back via `job list --json`,
-- verifies the resulting `job.param` against `_merge_debug_param`'s
-  contract — including the embedded `#`-directive case where the
-  user's preamble starts with `#!pip somepkg` and must survive
-  verbatim below `#>AWAIT_DEBUG\n`.
-
-**`e2e/test_debug_client_attach.py`** verifies the cross-system
-contract: pyopsctl says `--await --wait-running` → port; the runner
-side actually has `debugpy.listen()` open on that port; a raw TCP
-client can connect; `debug stop` tears the listener back down so a
-follow-up debug job can re-bind the same port. Without these tests
-the merge could be perfect on the wire and still fail in the field
-because the runner never opened the listener.
+There is no e2e directory currently: an end-to-end test that drives
+the full attach + step + locals + evaluate cycle requires a job
+actually pausing at remote-pdb's `set_trace()` — feasible to add but
+not in scope for the pdb-rewrite PR. The unit tests cover the pdb
+wire client against a stub TCP server (response-shape parsing) and
+the integration tests cover the param-composition contract against a
+real pyops.
 
 ## CI
 
@@ -331,6 +351,121 @@ installs distribution `python3-requests` (matching the operator's
 environment — no pip-installed `requests` for the CLI), and runs
 `pytest tests/pyopsctl -v`. The other test stages (`test:`,
 `test:e2e`, `test:vsix*`, `test:image_build:`) are untouched.
+
+## Interactive debug — session daemon
+
+`pyopsctl debug attach JOB_ID` spawns a long-lived **session daemon**
+that holds the TCP connection to remote-pdb's listener (opened by the
+job's bootstrap `param`). Subsequent `debug` verbs (`state`, `stack`,
+`locals`, `globals`, `evaluate`, `break set/list/remove`, `step`,
+`step-in`, `step-out`, `continue`, `source`, `detach`, `terminate`,
+`session info`) talk to the daemon over a per-job Unix domain socket.
+Each verb is one round-trip: short-lived CLI → daemon sends a pdb
+command → reads until the next `(Pdb) ` prompt → returns the parsed
+response → CLI exits.
+
+### Daemon spawn and state dir
+
+`attach` forks once, then the child runs `daemon_main`. The child
+`setsid`s, redirects fds 0/1/2 to `/dev/null` + `daemon.log`, opens
+TCP to the remote-pdb listener (this releases the program from its
+`set_trace()` accept), reads pdb's opening banner + first prompt,
+binds its control socket, and signals "ready\n" back to the parent
+on a pipe.
+
+State directory layout, resolved via `$PYOPS_SESSION_DIR` (tests) >
+`$XDG_RUNTIME_DIR/pyops/sessions/` > `~/.cache/pyops/sessions/`:
+
+```
+<root>/<job_id>/
+  pid          # daemon PID
+  sock         # AF_UNIX control socket, mode 0600
+  meta.json    # {job_id, server_url, profile, pdb_host, pdb_port, set, name, attached_at}
+  daemon.log   # daemon stdout/stderr (preserved on failure for postmortem)
+```
+
+`AF_UNIX` paths cap at ~108 bytes on Linux; the daemon and CLI both
+`chdir` into the session dir and bind/connect using the relative
+name `sock` to keep the sockaddr short under deep test tmp_path
+hierarchies.
+
+### Control protocol
+
+Newline-delimited JSON envelopes:
+
+```
+{"op": "<verb>", "args": {...}}  →
+{"ok": true,  "result": {...}}                     # success
+{"ok": false, "error": "...", "code": "<sym>"}     # failure
+```
+
+Error codes: `BAD_REQUEST`, `NO_SESSION`, `AMBIGUOUS_SESSION`,
+`PDB_ERROR`, `NO_STOP`, `UNKNOWN_REF`, `TIMEOUT`. Ops are serialised
+per session (the daemon holds one lock for the entire `_lock` block
+per request) so the pdb wire stays well-framed.
+
+### Pdb wire — prompt-based read loop
+
+`PdbClient` (`ctl/pyopsctl/pdb/client.py`) is the wire layer. The
+protocol is trivial: pdb writes its output, then emits `(Pdb) ` to
+signal "ready for the next command". Read-until-prompt = read until
+that 6-byte substring appears. Send a command + newline; the next
+read returns everything pdb wrote in response.
+
+`*** <ErrorClass>: <message>` lines are pdb's non-fatal error output
+(e.g. `*** NameError: name 'undef' is not defined`). The connection
+stays at a prompt — `PdbClient` raises `PdbError` for the caller
+but the session is immediately usable for the next command. Op
+handlers in `session/daemon.py` catch `PdbError` and translate to
+`PDB_ERROR` envelopes.
+
+### Source-path resolution
+
+`break set <set>::<name>:<line>` translates to `b <abs_path>:<line>`.
+The absolute path is derived from the materialised source layout
+the server already maintains: `data/jobs/<set>/<job_id>/.debug/src/
+<set>/{task,library}/<name>.py`. The daemon learns the workspace
+root from the most recent pdb stop's `> /abs/path(line)func()` cursor
+(every stop carries the `.debug/src/...` prefix); for the first
+`break set` before any stop, it issues `w` (where) to pull a frame.
+
+The reverse mapping (path → `<set>::<name>`) is one regex against the
+`/.debug/src/<set>/<kind>/<name>.py` tail, used to surface friendly
+names in the breakpoint list and the state-dump renderer.
+
+### Why attach lands at the bootstrap's set_trace()
+
+Unlike the previous DAP setup, pdb has no race here. The job's
+bootstrap calls `RemotePdb(host, port).set_trace()` which:
+
+  1. Opens a TCP listener on `host:port`.
+  2. accept()s exactly one connection. The program is suspended in
+     `accept()` — no Python instructions execute past `set_trace()`
+     until the client connects.
+  3. Once connected, pdb's prompt is the first thing the client
+     reads. The state is "stopped at the line just after `set_trace()`".
+
+So `debug attach` lands at a known, useful stop every time:
+immediately after the bootstrap, before the user's `--param` body
+runs (which is appended below the bootstrap and only executes once
+the operator issues `continue`).
+
+### What's not supported in v1
+
+- **Pause-mid-run.** Once `continue` runs and execution leaves the
+  prompt, there's no way to interrupt it without server-side signal
+  forwarding (the job process lives in pyops's container, pyopsctl
+  on the operator's host). Operator sets breakpoints upfront.
+- **Re-attach after detach.** `set_trace()` accepts one connection; on
+  EOF, the program proceeds. The bootstrap could install a SIGUSR1
+  handler that re-arms `set_trace()`, but that needs the same
+  server-side signal channel as pause. Operator runs `debug start`
+  again to get a fresh session.
+- **`var` (variablesReference drill-down).** Pdb has no equivalent;
+  the operator drills with `evaluate 'obj.attr'` instead.
+- **`threads`.** Pdb is single-threaded by design (it traces the
+  thread that called `set_trace`); for multi-thread Python jobs the
+  operator picks one thread to debug in the bootstrap.
 
 ## Operator vs agent flows
 

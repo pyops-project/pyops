@@ -301,10 +301,15 @@
           "default": [],
           "description": "List of set names to exclude from the Manager tree view"
         },
-        "pyops.debugPort": {
-          "type": "number",
-          "default": 5678,
-          "description": "Port for PyOps remote debug attach"
+        "pyops.debugPorts": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "minimum": 1025,
+            "maximum": 65535
+          },
+          "default": [5678],
+          "description": "Pool of TCP ports VSIX may use when starting a PyOps debug job. The extension leases one per active debug session and composes a `debugpy.listen(<port>)` call into the job's `param`. The pyops server no longer hands out ports."
         }
       }
     }

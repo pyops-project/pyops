@@ -14,7 +14,7 @@ flowchart TD
     A --> E["ManagerTreeDataProvider\n(sets / scriptlets)"]
     A --> F["JobsTreeDataProvider\n(jobs by state)"]
     A --> G["RefreshTimerManager\n(auto-refresh)"]
-    A --> H["Services\nJobService / ScriptletService\nDebugService / DebugOutputMonitor"]
+    A --> H["Services\nJobService / ScriptletService\nDebugService / DebugSessionWatcher / DebugOutputMonitor"]
     A --> I["PyOpsPythonDebugConfigProvider\n(debug intercept)"]
     A --> J["RemoteContentProvider\n(pyops-remote:// URIs)"]
     A --> K["Commands\n(20+ registered)"]
@@ -37,7 +37,8 @@ flowchart TD
 | `src/services/AuthService.ts` | Static: prompts and stores Basic Auth password |
 | `src/services/JobService.ts` | Job lifecycle: cancel, delete, download, view, bulk ops, polling |
 | `src/services/ScriptletService.ts` | Scriptlet sync: local↔remote draft, diff, delete, open |
-| `src/services/DebugService.ts` | Debug enqueue: build overrides, fetch port, attach config |
+| `src/services/DebugService.ts` | Debug enqueue: compose debugpy bootstrap into `param`, lease/rebind/release port from `pyops.debugPorts` pool, build overrides, `findPortForJob` reverse lookup |
+| `src/services/DebugSessionWatcher.ts` | Per-debug-session 3s poll of underlying job state; calls `vscode.debug.stopDebugging` on terminal state (bridges runner job lifecycle ↔ VSCode session lifecycle) |
 | `src/services/DebugOutputMonitor.ts` | Polls job stdout/stderr; streams to output channel |
 | `src/services/RefreshTimerManager.ts` | Starts/stops auto-refresh timers for tree providers |
 | `src/services/PyOpsPythonDebugConfigProvider.ts` | `DebugConfigurationProvider` intercept for Python task launches |
@@ -55,7 +56,7 @@ flowchart TD
 | `localPyopsDir` | string | `pyops` | Workspace-relative path to local scriptlet directory |
 | `autoRefreshInterval` | number | 10 | Tree auto-refresh interval in seconds |
 | `excludedSets` | string[] | `[]` | Sets excluded from Manager tree |
-| `debugPort` | number | 5678 | Debug port used for Python debugpy attach |
+| `debugPorts` | number[] | `[5678]` | Per-VSCode-session pool of TCP ports leased one-per-concurrent-debug-job by `DebugService` |
 
 `hasValidConfig()` (in `apiClient.ts`) returns false if `serverUrl` is empty/undefined — it does **not** check any other config keys. Auth is optional: `getHeaders()` returns Basic Auth header only if both `username` and a stored password exist.
 
@@ -198,7 +199,10 @@ Manages local↔remote synchronization for scriptlets.
 
 ### DebugService (`src/services/DebugService.ts`)
 
-Handles PyOps debug job enqueueing and Python debugpy attach config.
+Composes the debugpy bootstrap into `job.param` (no server-side debugger
+injection), leases a port from the workspace `pyops.debugPorts` pool,
+PUTs the job, rebinds the lease to the real job id on success or
+releases on failure.
 
 ```mermaid
 sequenceDiagram
@@ -206,21 +210,30 @@ sequenceDiagram
     participant Server as PyOps Server
     participant VSCode as VSCode Debug
 
-    VSIX->>Server: GET /debug/port (auth headers if set)
-    Server-->>VSIX: {"port": N}
-    VSIX->>VSIX: buildOverrides(set, workspaceRoot)
-    VSIX->>Server: PUT /scriptlet/job/item kind=debug + overrides JSON
+    VSIX->>VSIX: leasePort(placeholder) from pyops.debugPorts
+    VSIX->>VSIX: composeDebugpyBootstrap(port)
+    VSIX->>Server: PUT /scriptlet/job/item kind=debug param=<bootstrap> overrides=...
     Server-->>VSIX: {"id": jobId}
-    VSIX->>VSCode: startDebugging(attach, localhost:port)
+    VSIX->>VSIX: rebindLease(port, jobId)
+    Note over VSIX: poll TCP host:port until listener accepts
+    VSIX->>VSCode: startDebugging(attach, host:port) — config carries jobId
 ```
+
+`in_process_debug_adapter=True` in the bootstrap is non-negotiable: the
+default daemonised debugpy adapter `setsid`s out of the job's process
+group and survives the server's `killpg` teardown, holding the port and
+poisoning the next debug job. In-process mode collapses the adapter
+into the program's own thread so the DAP endpoint dies with the program.
 
 **Public methods:**
 
 | Method | Description |
 |--------|-------------|
-| `static buildOverrides(set, workspaceRoot)` | Walks `{localPyopsDir}/pyops/{set}/*.py`; returns `{set}::{name}: code}` overrides dict + debugpy path mappings |
-| `enqueueDebugJob(set, name, overrides)` | Fetches port, enqueues debug job with overrides, returns `{jobId, port}` |
-| `getDebugPort()` | `GET /debug/port`; validates int in range 1–65535 |
+| `static buildOverrides(set, workspaceRoot)` | Walks `{localPyopsDir}/pyops/{set}/*.py`; returns `{ {set}::{name}: code }` overrides dict + debugpy path mappings |
+| `static composeDebugpyBootstrap(port)` | Returns the `#!pip debugpy` + `debugpy.listen((host, port), in_process_debug_adapter=True)` + `wait_for_client()` + `breakpoint()` block written into `param` |
+| `enqueueDebugJob(set, name, overrides)` | Leases a port, composes bootstrap, `PUT /scriptlet/job/item kind=debug`, rebinds the lease to the real job id on success / releases on failure; returns `{jobId, port}` |
+| `leasePort(jobIdHint)` / `releasePort(port)` / `rebindLease(port, jobId)` | Static in-memory port lease table (shared across `DebugService` instances within one VSCode session) |
+| `findPortForJob(jobId)` | Reverse lookup; used by `pyops.attachDebugJob` since `/debug/port` is gone |
 | `getDebugHost()` | Parses hostname from `pyops.serverUrl`; falls back to `'localhost'` |
 
 ### DebugOutputMonitor (`src/services/DebugOutputMonitor.ts`)
@@ -271,26 +284,29 @@ Full debug lifecycle connects VSIX, PyOps server, and the runner:
 
 ### Runner Override Injection
 
-`app/runner.py loadJob()` skips the `os.listdir` file check for `kind="debug"` when `job.overrides` contains a valid JSON dict with `"{set}::{name}"` key. Sets `code = override_dict[main_key]`. Falls back to `git.read_content` on missing override or invalid JSON (logs warning). `committed=False` for debug fallback.
+`app/runner.py loadJob()` parses `job.overrides` as JSON regardless of kind; if the dict contains a `"{set}::{name}"` key, the runner skips the `os.listdir`/`git.read_content` repo lookup and uses `override_dict[main_key]` as the scriptlet body. Missing key falls back to `git.read_content`; invalid JSON aborts the job. `committed=False` for `kind` in `("debug", "draft")` so the fallback reads the unstaged working tree, matching what `writeLocalToRemoteDraft` would have shipped.
 
-### `#>AWAIT_DEBUG` Directive
+### Debugger bootstrap (client-composed)
 
-`app/job_runner.py run_debug_job()` always injects `debugpy.listen(('0.0.0.0', port))`. Appends `debugpy.wait_for_client()` only if `'#>AWAIT_DEBUG' in job.param`. VSIX `DebugService.enqueueDebugJob` sets `param='#>AWAIT_DEBUG'` to enable client-wait on the attach workflow.
+`app/job_runner.py run_debug_job()` no longer injects a debugger. The runner's only debug-specific contributions are (a) source materialisation under `.debug/src/<set>/{task,library}/<name>.py` for path-mapping debuggers, (b) no execution timeout, no retry. VSIX puts the bootstrap on the wire via `DebugService.composeDebugpyBootstrap(port)`. The `running` state transition is universal across kinds and fires when `exec(param)` returns, which for debug jobs happens after VSCode lets debugpy proceed past `wait_for_client()`. Polling `state=running` for "debugger ready to attach" would deadlock — the correct readiness signal is the TCP listener accepting a connection, which `pyops.startDebugJob` polls before calling `vscode.debug.startDebugging`.
+
+### Session lifecycle (DebugSessionWatcher)
+
+`extension.ts` wires:
+
+- `onDidStartDebugSession(s)` → `DebugSessionWatcher.watch(s)` — starts a 3s poll of `GET /scriptlet/job/item?id={jobId}` for each session whose configuration carries a `jobId`. On terminal state (`done`/`failed`/`cancelled`/`killed`/`remove`/`removed`) or HTTP 404, the watcher calls `vscode.debug.stopDebugging(s)`. Bridges the runner-side job lifecycle and the workbench-side debug-session lifecycle, which don't otherwise know about each other.
+- `onDidTerminateDebugSession(s)` → `watcher.cancel(s.id)` + `DebugService.releasePort(port)` — removes the poller and returns the port to the pool.
 
 ### Attach Debug Command (`pyops.attachDebugJob`)
 
 Title bar button in `pyops-manager` panel:
 1. `JobService.listJobs()` — filters `kind="debug"` and `state` in `["running", "dequeued"]`
 2. Requires exactly one matching job; warns on zero or multiple
-3. `DebugService.getDebugPort()` — fetches port for the job's owner
-4. `vscode.debug.startDebugging()` — debugpy attach to `localhost:{port}`, `justMyCode: false`
+3. `DebugService.findPortForJob(jobId)` — reverse-lookup from the in-process lease table (the server has no `/debug/port` route)
+4. `vscode.debug.startDebugging()` — debugpy attach to `host:{port}`, `justMyCode: false`, `jobId` in config for the watcher
 5. Session name: `Attach to PyOps Debug ({set}::{name})`
 
-Enables re-attach to a detached debug session without reenqueue.
-
-### Debug Port Endpoint
-
-`GET /debug/port` uses `sanitize_owner(X-User, default "anonymous")` and reads `conf_users()[owner]["debug_port"]`. Returns `{"port": int}`. Returns 400 if `debug_port` not configured for the user.
+Enables re-attach to a detached debug session in the same VSCode window without reenqueue. The lease is per-VSCode-session in-memory state, so re-attach from a different window won't find the port — that requires running `pyops.startDebugJob` again.
 
 ---
 
@@ -342,7 +358,8 @@ Coverage targets: branches 80%, functions 80%, lines 90%, statements 80%.
 | `services/AuthService.test.ts` | `setupAuth` prompts and storage |
 | `services/JobService.test.ts` | CRUD operations, bulk cancel/delete, `viewJob` polling with stdout/stderr updates, terminal state transitions, error handling, undefined provider handling, timer cleanup |
 | `services/ScriptletService.test.ts` | Local/remote sync, network error handling, `existsSync` filesystem branches, multi-step error scenarios |
-| `services/DebugService.test.ts` | `buildOverrides`, `enqueueDebugJob`, `getDebugPort` success/auth/noauth/fail/invalid-port/throw |
+| `services/DebugService.test.ts` | `buildOverrides`, `composeDebugpyBootstrap` (in-process-adapter required, port plugged verbatim), port lease/release/rebind/`findPortForJob`, `enqueueDebugJob` success-lease-rebind / HTTP-fail-releases / network-exception / empty-pool / overrides passthrough, `getDebugHost` |
+| `services/debugSessionWatcher.test.ts` | Ignores no-jobId sessions, polls cadence + endpoint, terminal-state stop (incl. 404), transient HTTP / network error retry, `cancel`, idempotent `watch`, `dispose` |
 | `services/DebugOutputMonitor.test.ts` | Start/stop monitoring, incremental stdout/stderr append, channel display, stop on terminal states, error log fetch |
 | `services/RefreshTimerManager.test.ts` | `ensureRunning`, `stopIfRunning` |
 | `services/PyOpsPythonDebugConfigProvider.test.ts` | Config provision for task files |

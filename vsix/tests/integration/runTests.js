@@ -56,6 +56,11 @@ async function main() {
     fs.mkdirSync(vscodeDir, { recursive: true });
     fs.writeFileSync(path.join(vscodeDir, 'settings.json'), JSON.stringify({
       "pyops.serverUrl": "http://localhost:8000",
+      // Five-port pool: tolerates a couple of in-flight leases across
+      // serially-running debug tests without exhausting the pool when
+      // onDidTerminateDebugSession fires asynchronously relative to
+      // the test's next enqueue.
+      "pyops.debugPorts": [5678, 5679, 5680, 5681, 5682],
       "python.defaultInterpreterPath": "/usr/bin/python3"
     }, null, 2));
     console.log('Created workspace files: README.md and .vscode/settings.json');
@@ -68,17 +73,32 @@ async function main() {
     fs.mkdirSync(path.join(userDataDir, 'User'), { recursive: true });
     console.log('Created user data directory:', userDataDir);
 
+    // Dedicated extensions dir per run. `--user-data-dir` alone is not
+    // enough for VSCode to honour extensions there at launch — without
+    // an explicit `--extensions-dir` matching what the CLI installed
+    // into, `vscode.extensions.getExtension('ms-python.python')`
+    // returns undefined inside the test even after a successful CLI
+    // install. Pin both.
+    const extensionsDir = path.join(tmpDir, 'extensions-' + Date.now());
+    fs.mkdirSync(extensionsDir, { recursive: true });
+    console.log('Created extensions directory:', extensionsDir);
+
     console.log('Launching VS Code with the following configuration:');
     console.log('- Extension development path:', extensionDevelopmentPath);
     console.log('- Extension tests path:', extensionTestsPath);
     console.log('- Test workspace:', testWorkspace);
     console.log('- User data dir:', userDataDir);
+    console.log('- Extensions dir:', extensionsDir);
     console.log('- Version:', version);
 
     // Install Python extension for debug tests
     const vscodeExecutablePathEarly = await downloadAndUnzipVSCode({ version, timeout: 60000 });
     const cliPath = resolveCliPathFromVSCodeExecutablePath(vscodeExecutablePathEarly);
-    const cliArgs = ['--install-extension', 'ms-python.python', '--force', '--user-data-dir', userDataDir];
+    const cliArgs = [
+      '--install-extension', 'ms-python.python', '--force',
+      '--user-data-dir', userDataDir,
+      '--extensions-dir', extensionsDir,
+    ];
     if (process.getuid && process.getuid() === 0) {
       cliArgs.push('--no-sandbox');
     }
@@ -95,6 +115,7 @@ async function main() {
       launchArgs: [
         testWorkspace, // Explicitly open the workspace folder
         '--user-data-dir', userDataDir,
+        '--extensions-dir', extensionsDir,
         // '--disable-extensions', // Disabled to allow Python extension
         '--disable-workspace-trust', // Disable workspace trust prompts
         '--no-sandbox', // Required for headless environments

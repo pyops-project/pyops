@@ -18,12 +18,21 @@ export function setupConfigMock(options: Record<string, any> = {}) {
     excludedSets: [],
     ...options
   };
-  const pyopsMockGet = jest.fn((key: string) => (pyopsConfig as any)[key] ?? '');
+  // VSCode's WorkspaceConfiguration.get(key, defaultValue) returns the
+  // configured value if present, else `defaultValue`. Honour that
+  // signature here so callers passing `get<T>('foo', [1, 2])` get the
+  // typed default when 'foo' isn't in the test's config object.
+  const pyopsMockGet = jest.fn((key: string, defaultValue?: any) => {
+    if (Object.prototype.hasOwnProperty.call(pyopsConfig, key)) {
+      return (pyopsConfig as any)[key];
+    }
+    return defaultValue !== undefined ? defaultValue : '';
+  });
   (require('vscode').workspace.getConfiguration as jest.Mock).mockImplementation((section?: string) => {
     if (section === 'pyops' || section === undefined || section === '') {
       return { get: pyopsMockGet };
     }
-    return { get: jest.fn(() => undefined) };
+    return { get: jest.fn((_k: string, d?: any) => d) };
   });
 }
 

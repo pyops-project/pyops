@@ -88,7 +88,11 @@ def pyopsctl_env(tmp_path, monkeypatch):
             "drop_done_delay_seconds": 9999,
         },
         "log": {"loglevel": "debug"},
-        "users": {"pyopsctl": {"debug_port": 45679}, "anonymous": {"debug_port": 45680}},
+        # pyops itself no longer reads anything inside owner entries; the
+        # debug-port pool is client-side (configured in the pyopsctl
+        # profile TOML below). The empty owner blocks are kept so the
+        # users section round-trips with at least the canonical names.
+        "users": {"pyopsctl": {}, "anonymous": {}},
     }
     pyops_conf_path = tmp_path / "pyops.json"
     pyops_conf_path.write_text(json.dumps(pyops_conf, indent=2))
@@ -103,19 +107,34 @@ def pyopsctl_env(tmp_path, monkeypatch):
         '[profiles.local]\n'
         f'url = "{SERVER_URL}"\n'
         '# no api_key, no user → X-User defaults to "pyopsctl"\n'
+        'debug_ports = [45679, 45680]\n'
     )
     cfg_path.chmod(0o600)
 
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("PYOPSCTL_CONFIG", str(cfg_path))
+    # Persistent session dir per test so a failing debug-attach leaves
+    # daemon.log behind for postmortem (tmp_path itself is wiped by
+    # pytest on cleanup, but we point inside tmp_path anyway — pytest
+    # keeps the last few `tmp_path`s under `$TMPDIR/pytest-of-<user>/`).
+    sessions = tmp_path / "session-dir"
+    sessions.mkdir()
+    monkeypatch.setenv("PYOPS_SESSION_DIR", str(sessions))
+    # Isolate the port-lease store per test — concurrent test runs would
+    # otherwise step on each other's leases.
+    leases = tmp_path / "debug-ports"
+    leases.mkdir()
+    monkeypatch.setenv("PYOPS_DEBUG_PORTS_DIR", str(leases))
 
     return {
         "tmp_path": tmp_path,
         "data_dir": data,
         "pyops_conf_path": str(pyops_conf_path),
         "pyopsctl_conf_path": str(cfg_path),
+        "session_dir": str(sessions),
+        "leases_dir": str(leases),
         "url": SERVER_URL,
-        "debug_port": 45679,  # the port the runner will open for X-User=pyopsctl
+        "debug_ports": [45679, 45680],
     }
 
 
@@ -152,7 +171,7 @@ def pyops_server_for_ctl(pyopsctl_env):
             pytest.fail(f"pyops server didn't come up in {STARTUP_TIMEOUT}s:\n{tail}")
         yield {"url": pyopsctl_env["url"], "log_path": log_path,
                "data_dir": pyopsctl_env["data_dir"],
-               "debug_port": pyopsctl_env["debug_port"]}
+               "debug_ports": pyopsctl_env["debug_ports"]}
     finally:
         _kill(proc, SHUTDOWN_TIMEOUT)
         log.close()

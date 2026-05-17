@@ -1,23 +1,20 @@
-"""End-to-end debug job flow with the `#>AWAIT_DEBUG\\n + user_param`
-merge — the load-bearing piece of pyopsctl's debug surface, the bit VSIX
-can't do.
+"""End-to-end debug job flow against a real pyops.
 
 Each test:
   1. creates a scriptlet,
   2. invokes `pyopsctl debug start` with various flag combinations,
   3. fetches the job back via `pyopsctl job list --json`,
-  4. asserts the resulting `job.param` matches what `_merge_debug_param`
-     promised: detached (empty), await-only, param-only, or merged with
-     a `#>AWAIT_DEBUG\\n` prefix preserving the user's multi-line script.
+  4. asserts the resulting `job.param` contains the remote-pdb
+     bootstrap (and the user's optional preamble below it).
 """
 import json
-import time
+import os
 
 import pytest
 
 
 def _create_scriptlet(run_ctl, pyopsctl_bin, pyops_set, name, code="print('hi')\n"):
-    """Create then draft+save so the scriptlet has body content."""
+    """Create then save so the scriptlet has body content."""
     run_ctl(pyopsctl_bin, "scriptlet", "create", pyops_set, name,
             "--kind", "task")
     run_ctl(pyopsctl_bin, "scriptlet", "save", pyops_set, name,
@@ -34,61 +31,47 @@ def _enqueue_debug(run_ctl, pyopsctl_bin, set_name, name, *extra):
 
 
 def _job_row(run_ctl, pyopsctl_bin, job_id):
-    """Pull the matching row from `pyopsctl job list --json`. The list
-    endpoint exposes `param`, which the per-id GET endpoint does not."""
     rows = json.loads(run_ctl(pyopsctl_bin, "job", "list", "--json").stdout.strip())
     row = next((r for r in rows if r["id"] == job_id), None)
     assert row is not None, f"job {job_id} not in list"
     return row
 
 
-def test_debug_detached_default_emits_empty_param(pyopsctl_bin, run_ctl, pyops_server_for_ctl, pyops_set):
-    _create_scriptlet(run_ctl, pyopsctl_bin, pyops_set, "scr_detached")
-    job_id = _enqueue_debug(run_ctl, pyopsctl_bin, pyops_set, "scr_detached")
+def test_debug_start_param_carries_pdb_bootstrap(
+    pyopsctl_bin, run_ctl, pyops_server_for_ctl, pyops_set,
+):
+    _create_scriptlet(run_ctl, pyopsctl_bin, pyops_set, "scr_default")
+    job_id = _enqueue_debug(run_ctl, pyopsctl_bin, pyops_set, "scr_default")
     row = _job_row(run_ctl, pyopsctl_bin, job_id)
-    assert row.get("param", "") == ""
+    param = row.get("param") or ""
+    assert "#!pip remote-pdb" in param
+    assert "RemotePdb('0.0.0.0'," in param
+    assert ".set_trace()" in param
     assert row.get("kind") == "debug"
 
 
-def test_debug_await_only_param_is_directive(pyopsctl_bin, run_ctl, pyops_server_for_ctl, pyops_set):
-    _create_scriptlet(run_ctl, pyopsctl_bin, pyops_set, "scr_awaitonly")
-    job_id = _enqueue_debug(run_ctl, pyopsctl_bin, pyops_set, "scr_awaitonly", "--await")
+def test_debug_start_user_param_appended_below_bootstrap(
+    pyopsctl_bin, run_ctl, pyops_server_for_ctl, pyops_set,
+):
+    _create_scriptlet(run_ctl, pyopsctl_bin, pyops_set, "scr_user")
+    user_body = "# preamble\nx = 1\n"
+    job_id = _enqueue_debug(run_ctl, pyopsctl_bin, pyops_set, "scr_user",
+                            "--param", user_body)
     row = _job_row(run_ctl, pyopsctl_bin, job_id)
-    assert row.get("param") == "#>AWAIT_DEBUG"
-
-
-def test_debug_param_only_passes_verbatim(pyopsctl_bin, run_ctl, pyops_server_for_ctl, pyops_set):
-    _create_scriptlet(run_ctl, pyopsctl_bin, pyops_set, "scr_paramonly")
-    body = "x = 1\nprint(x)\n"
-    job_id = _enqueue_debug(run_ctl, pyopsctl_bin, pyops_set, "scr_paramonly", "--param", body)
-    row = _job_row(run_ctl, pyopsctl_bin, job_id)
-    assert row.get("param") == body
-
-
-def test_debug_await_plus_param_merges_with_newline(pyopsctl_bin, run_ctl, pyops_server_for_ctl, pyops_set):
-    """The load-bearing assertion: --await + --param produces
-    `#>AWAIT_DEBUG\\n<user>` so the user's script and any embedded
-    `#`-directives stay valid below the directive line."""
-    _create_scriptlet(run_ctl, pyopsctl_bin, pyops_set, "scr_merge")
-    user_param = "#!pip somepkg\n# preamble\nx = 1\n"
-    job_id = _enqueue_debug(run_ctl, pyopsctl_bin, pyops_set, "scr_merge",
-                            "--await", "--param", user_param)
-    row = _job_row(run_ctl, pyopsctl_bin, job_id)
-    param = row.get("param", "")
-    assert param.startswith("#>AWAIT_DEBUG\n")
-    assert "\n#!pip somepkg\n" in param  # embedded directive survives
+    param = row.get("param") or ""
+    assert param.startswith("#!pip remote-pdb\n")
     assert param.endswith("x = 1\n")
 
 
-def test_debug_param_file_merges_same_as_param(pyopsctl_bin, run_ctl, pyops_server_for_ctl, pyops_set, tmp_path):
-    """Same merge rule via --param-file: the file content takes the
-    user-param slot."""
+def test_debug_start_param_file_appended(
+    pyopsctl_bin, run_ctl, pyops_server_for_ctl, pyops_set, tmp_path,
+):
     _create_scriptlet(run_ctl, pyopsctl_bin, pyops_set, "scr_pfile")
     pfile = tmp_path / "preamble.py"
-    pfile.write_text("# from file\nimport sys\nprint(sys.version)\n")
+    pfile.write_text("import sys\nprint(sys.version)\n")
     job_id = _enqueue_debug(run_ctl, pyopsctl_bin, pyops_set, "scr_pfile",
-                            "--await", "--param-file", str(pfile))
+                            "--param-file", str(pfile))
     row = _job_row(run_ctl, pyopsctl_bin, job_id)
-    param = row.get("param", "")
-    assert param.startswith("#>AWAIT_DEBUG\n")
-    assert "# from file" in param and "import sys" in param
+    param = row.get("param") or ""
+    assert param.startswith("#!pip remote-pdb\n")
+    assert "import sys" in param

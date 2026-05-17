@@ -78,7 +78,7 @@ class TestPreExecutionErrorLogging:
 
         run(
             "id", "owner", "set", "name", "task", "", "pass", [],
-            "/tmp/pyops/runner.sock", 0, None, None,
+            "/tmp/pyops/runner.sock", 0, None,
             job_env["conf_data"], job_env["conf_runner"], job_env["conf_users"], job_env["conf_web"]
         )
 
@@ -102,7 +102,7 @@ class TestPreExecutionErrorLogging:
 
         run(
             "id", "owner", "set", "name", "task", "", "pass", [],
-            "/tmp/pyops/runner.sock", 0, None, None,
+            "/tmp/pyops/runner.sock", 0, None,
             job_env["conf_data"], job_env["conf_runner"], job_env["conf_users"], job_env["conf_web"]
         )
 
@@ -127,7 +127,7 @@ class TestPreExecutionErrorLogging:
 
         run(
             "id", "owner", "set", "name", "draft", "", "pass", [],
-            "/tmp/pyops/runner.sock", 0, None, None,
+            "/tmp/pyops/runner.sock", 0, None,
             job_env["conf_data"], job_env["conf_runner"], job_env["conf_users"], job_env["conf_web"]
         )
 
@@ -146,7 +146,7 @@ class TestPreExecutionErrorLogging:
 
         run(
             "id", "owner", "set", "name", "service", "", "pass", [],
-            "/tmp/pyops/runner.sock", 0, None, None,
+            "/tmp/pyops/runner.sock", 0, None,
             job_env["conf_data"], job_env["conf_runner"], job_env["conf_users"], job_env["conf_web"]
         )
 
@@ -165,7 +165,7 @@ class TestPreExecutionErrorLogging:
 
         run(
             "id", "owner", "set", "name", "debug", "", "pass", [],
-            "/tmp/pyops/runner.sock", 0, None, 5678,
+            "/tmp/pyops/runner.sock", 0, None,
             job_env["conf_data"], job_env["conf_runner"], job_env["conf_users"], job_env["conf_web"]
         )
 
@@ -176,7 +176,12 @@ class TestPreExecutionErrorLogging:
 
 
 class TestDebugJobSpecificErrors:
-    """Tests for debug job specific error handling."""
+    """Debug-kind error paths that survive after pyops stopped injecting
+    a debugger: override JSON validation. Debugpy-install failure and
+    adapter-exec failure paths are gone because the runner no longer
+    runs either step — the client's `param` does its own bootstrap and
+    failures land in the generic `Error executing debug job` catch-all.
+    """
 
     @pytest.fixture
     def mock_conf(self, tmp_path):
@@ -212,85 +217,23 @@ class TestDebugJobSpecificErrors:
             "conf_web": {"bind": "127.0.0.1:8000"}
         }
 
-    @patch('app.lib.files.conf_users', return_value={'owner': {'debug_port': 5678}})
-    @patch('app.lib.job.send_completion')
-    @patch('app.job_runner.os.makedirs')
-    @patch('app.job_runner.os.chdir')
-    @patch('builtins.open')
-    @patch('subprocess.run')
-    def test_run_debug_pip_install_failure(self, mock_run, mock_open, mock_chdir, mock_makedirs, mock_send, mock_conf_users, job_env):
-        """Test that debugpy installation failures are logged and reported."""
-        from app.job_runner import main as run
-        from subprocess import CalledProcessError
-
-        # Simulate debugpy install failure
-        mock_run.side_effect = CalledProcessError(1, "pip", output="", stderr="no module named debugpy")
-
-        with patch.dict('sys.modules', {'debugpy': Mock()}):
-            run(
-                "id", "owner", "set", "name", "debug", "", "pass", [],
-                "/tmp/pyops/runner.sock", 0, None, 5678,
-                job_env["conf_data"], job_env["conf_runner"], job_env["conf_users"], job_env["conf_web"]
-            )
-
-        mock_send.assert_called_once()
-        call_args = mock_send.call_args[0][1]
-        assert call_args["state"] == "failed"
-        assert "Install processing failed for debug job id" in call_args["detail"]
-
     @patch('app.job_runner.job_lib.send_completion')
     @patch('app.job_runner.os.makedirs')
     @patch('app.job_runner.os.chdir')
     @patch('builtins.open')
-    @patch('subprocess.run')
-    def test_run_debug_adapter_execution_failure(self, mock_run, mock_open, mock_chdir, mock_makedirs, mock_send, job_env):
-        """Test that debugpy adapter execution failures are logged and reported."""
-        from app.job_runner import main as run
-
-        # Simulate exec() of debug code failing (e.g., syntax error in generated code)
-        def fail_exec(*args, **kwargs):
-            raise SyntaxError("Syntax error in generated debug code")
-
-        mock_run.return_value = Mock(returncode=0, stdout="")
-
-        with patch.dict('sys.modules', {'debugpy': Mock()}):
-            # Patch the exec function to simulate failure during debug code execution
-            with patch('builtins.exec', side_effect=fail_exec):
-                run(
-                    "id", "owner", "set", "name", "debug", "", "pass", [],
-                    "/tmp/pyops/runner.sock", 0, None, 5678,
-                    job_env["conf_data"], job_env["conf_runner"], job_env["conf_users"], job_env["conf_web"]
-                )
-
-        mock_send.assert_called_once()
-        call_args = mock_send.call_args[0][1]
-        assert call_args["state"] == "failed"
-        assert "Error executing debug job id" in call_args["detail"]
-
-    @patch('app.job_runner.job_lib.send_completion')
-    @patch('app.job_runner.os.makedirs')
-    @patch('app.job_runner.os.chdir')
-    @patch('builtins.open')
-    @patch('subprocess.run')
-    def test_run_debug_invalid_override_json(self, mock_run, mock_open, mock_chdir, mock_makedirs, mock_send, job_env):
+    def test_run_debug_invalid_override_json(self, mock_open, mock_chdir, mock_makedirs, mock_send, job_env):
         """Test that invalid override JSON is logged and reported."""
         from app.job_runner import main as run
 
-        # Simulate debugpy install success but invalid override JSON
-        mock_run.return_value = Mock(returncode=0, stdout="")
-
-        with patch.dict('sys.modules', {'debugpy': Mock()}):
-            run(
-                "id", "owner", "set", "name", "debug", "", "pass", [],
-                "/tmp/pyops/runner.sock", 0, '{"invalid": json}', 5678,  # Invalid JSON
-                job_env["conf_data"], job_env["conf_runner"], job_env["conf_users"], job_env["conf_web"]
-            )
+        run(
+            "id", "owner", "set", "name", "debug", "", "pass", [],
+            "/tmp/pyops/runner.sock", 0, '{"invalid": json}',
+            job_env["conf_data"], job_env["conf_runner"], job_env["conf_users"], job_env["conf_web"]
+        )
 
         mock_send.assert_called_once()
         call_args = mock_send.call_args[0][1]
         assert call_args["state"] == "failed"
-        # The error message should contain either override parsing error or adapter execution error
-        # depending on which phase fails first
         assert "Error" in call_args["detail"] and "job id" in call_args["detail"]
 
 
@@ -344,7 +287,7 @@ class TestNoSilentFailures:
             mock_send.reset_mock()
             run(
                 "id", "owner", "set", "name", "task", "", "pass", [],
-                "/tmp/pyops/runner.sock", 0, None, None,
+                "/tmp/pyops/runner.sock", 0, None,
                 job_env["conf_data"], job_env["conf_runner"], job_env["conf_users"], job_env["conf_web"]
             )
 
@@ -367,7 +310,7 @@ class TestNoSilentFailures:
 
         run(
             "id", "owner", "set", "name", "task", "", "pass", [],
-            "/tmp/pyops/runner.sock", 0, None, None,
+            "/tmp/pyops/runner.sock", 0, None,
             job_env["conf_data"], job_env["conf_runner"], job_env["conf_users"], job_env["conf_web"]
         )
 
@@ -377,95 +320,5 @@ class TestNoSilentFailures:
         assert "detail" in call_args
 
     # install-processing failure coverage lives in tests/unit/test_job_setup.py
-
-    @patch('app.job_runner.job_lib.send_completion')
-    @patch('app.job_runner.os.makedirs')
-    @patch('app.job_runner.os.chdir')
-    @patch('builtins.open')
-    @patch('subprocess.run')
-    def test_debug_install_error_always_reports_failure(self, mock_run, mock_open, mock_chdir, mock_makedirs, mock_send, job_env):
-        """Ensure debugpy install errors always result in failure report."""
-        from app.job_runner import main as run
-        from subprocess import CalledProcessError
-
-        mock_run.side_effect = CalledProcessError(1, "pip", output="", stderr="debugpy not found")
-
-        with patch.dict('sys.modules', {'debugpy': Mock()}):
-            run(
-                "id", "owner", "set", "name", "debug", "", "pass", [],
-                "/tmp/pyops/runner.sock", 0, None, 5678,
-                job_env["conf_data"], job_env["conf_runner"], job_env["conf_users"], job_env["conf_web"]
-            )
-
-        mock_send.assert_called_once()
-        call_args = mock_send.call_args[0][1]
-        assert call_args["state"] == "failed"
-        assert "detail" in call_args
-
-    @patch('app.job_runner.job_lib.send_completion')
-    @patch('app.job_runner.os.makedirs')
-    @patch('app.job_runner.os.chdir')
-    @patch('builtins.open')
-    @patch('subprocess.run')
-    def test_debug_override_error_always_reports_failure(self, mock_run, mock_open, mock_chdir, mock_makedirs, mock_send, job_env):
-        """Ensure override parsing errors always result in failure report."""
-        from app.job_runner import main as run
-
-        mock_run.return_value = Mock(returncode=0, stdout="")
-
-        with patch.dict('sys.modules', {'debugpy': Mock()}):
-            run(
-                "id", "owner", "set", "name", "debug", "", "pass", [],
-                "/tmp/pyops/runner.sock", 0, '{"broken": json}', 5678,
-                job_env["conf_data"], job_env["conf_runner"], job_env["conf_users"], job_env["conf_web"]
-            )
-
-        mock_send.assert_called_once()
-        call_args = mock_send.call_args[0][1]
-        assert call_args["state"] == "failed"
-        assert "detail" in call_args
-
-
-
-class TestFrameworkErrorLogging:
-    """Tests that framework errors log to main stderr, not job stderr.log."""
-
-    @pytest.fixture
-    def job_env(self, tmp_path):
-        data_base = tmp_path / "data"
-        data_base.mkdir(parents=True, exist_ok=True)
-        git_base = data_base / "git"
-        venv_base = tmp_path / "venv"
-        pkg_base = tmp_path / "pkg"
-        return {
-            "conf_data": {
-                "jobs": str(data_base),
-                "git": str(git_base),
-                "db": str(tmp_path / "test.db"),
-                "web": {"bind": "127.0.0.1:8000"}
-            },
-            "conf_runner": {
-                "venv": str(venv_base),
-                "pkg": str(pkg_base),
-            },
-            "conf_users": {"anonymous": {"debug_port": 5678}},
-            "conf_web": {"bind": "127.0.0.1:8000"}
-        }
-
-    @patch("app.job_runner.job_lib.send_completion")
-    @patch("app.job_runner.job_lib.terminate_debugpy_adapter", side_effect=Exception("Config not initialized"))
-    def test_debug_terminate_error_logs_to_main_stderr(self, mock_terminate, mock_send, job_env):
-        """Test that terminate_debugpy_adapter errors log to main stderr before redirect."""
-        from app.job_runner import main as run
-
-        run(
-            "id", "owner", "set", "name", "debug", "", "pass", [],
-            "/tmp/pyops/runner.sock", 0, None, 5678,
-            job_env["conf_data"], job_env["conf_runner"], job_env["conf_users"], job_env["conf_web"]
-        )
-
-        # Verify error was logged and reported
-        mock_send.assert_called_once()
-        call_args = mock_send.call_args[0][1]
-        assert call_args["state"] == "failed"
-        assert "Config not initialized" in call_args["detail"]
+    # debugpy install / adapter / terminate failures are gone: pyops no
+    # longer installs or starts a debugger — that's the client's `param`.

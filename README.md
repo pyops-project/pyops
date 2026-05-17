@@ -30,12 +30,11 @@ Stored in `etc/pyops.json` (override path via `PYOPS_CONFIG` env var):
 - `data`: `{"jobs": "data/jobs", "git": "data/git", "db": "data/app.db"}`
 - `runner`: `{"venv": "data/venv", "pkg": "data/pkg", "git_pull_interval": 60, "drop_done_delay_seconds": 60}`
 - `log`: `{"loglevel": "debug"}`
-- `users`: `{"anonymous": {"debug_port": 45678}}`
 
 ## Features
 PyOps supports various scriptlet types: task, service, schedule, controller, view, library, markdown, jslibrary.
 
-In addition to WebUI it also includes a VSCode extension for direct use from VSCode and derivatives, plus `pyopsctl` — a terminal-driven operator CLI for remote admin (no venv, no pip, distro packages only). See [`docs/pyopsctl.md`](docs/pyopsctl.md).
+In addition to WebUI it also includes a VSCode extension for direct use from VSCode and derivatives, plus `pyopsctl` — a terminal-driven operator CLI for remote admin (no venv, no pip, distro packages only). See [`docs/pyops_guide.md`](docs/pyops_guide.md) § pyopsctl.
 
 - **Task**: One-time executed scriptlets for debugging or batch operations
 - **Service**: Persistent services that run continuously
@@ -143,9 +142,6 @@ services:
     },
     "log": {
         "loglevel": "debug"
-    },
-    "users": {
-        "anonymous": {"debug_port": 45678}
     }
 }
 ```

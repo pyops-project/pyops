@@ -177,7 +177,7 @@ def test_shutdown_waits_for_in_flight_pip_install(tmp_path):
         f"venv tree: {list((data_dir / 'venv' / set_name).rglob('*'))[:30]}"
     )
     installed = {p.name for p in site_packages.iterdir()}
-    for required in ("pyzmq", "msgpack", "psutil", "debugpy", "requests"):
+    for required in ("pyzmq", "msgpack", "psutil", "requests"):
         assert any(name.startswith(required) for name in installed), (
             f"runtime dep {required!r} missing from venv after shutdown — "
             f"pip install was truncated. Have: {sorted(installed)}"

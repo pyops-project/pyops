@@ -27,7 +27,7 @@ import re
 import subprocess
 import sys
 
-CORE_DEPS = ("pyzmq", "msgpack", "psutil", "debugpy", "requests")
+CORE_DEPS = ("pyzmq", "msgpack", "psutil", "requests")
 _PIP_PKG_RE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9_.\-]*)(.*)$")
 
 

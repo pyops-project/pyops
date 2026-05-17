@@ -7,6 +7,77 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 from 3.0.0 onward.
 
+## [Unreleased]
+
+### Changed
+- **Debugger injection moved from pyops to the client.** `kind=debug` no
+  longer imports debugpy, installs it, or starts a listener. The client
+  (VSIX, pyopsctl, or any other operator surface) writes the debugger
+  bootstrap into `param` — typically a `debugpy.listen() / wait_for_client()
+  / breakpoint()` block, but also `gdbserver --attach $$ :<port>`,
+  `cuda-gdbserver`, `lldb-server`, or anything else that speaks a wire
+  the consumer understands. pyops's role shrinks to:
+  - `kind=debug` lifecycle: no timeout, no retry.
+  - Source-on-disk materialisation under `.debug/src/<set>/{task,library}/<name>.py`
+    so any source-path-mapping debugger works without per-debugger plumbing.
+  - The `running` state transition: now fires on a `state=running` ZMQ
+    completion sent by the job process the moment `exec(param)` returns,
+    rather than on a `has_debugpy_adapter(port)` poll. Universal — task,
+    service, draft, and debug all flip `loading` → `running` via the
+    same mechanism.
+
+### Removed
+- `GET /debug/port` HTTP route and the `users.<owner>.debug_port` config
+  field. Port allocation is a client-side concern — each operator runs
+  with their own port pool, configured in the client.
+- `app/lib/job.py`: `get_debug_port`, `has_debugpy_adapter`,
+  `get_debugpy_adapter_pid`, `terminate_debugpy_adapter`,
+  `validate_debug_prerequisites`.
+- `Job.debugpy_pid` ORM column (still present in existing SQLite files;
+  inert, not read).
+- `debugpy` from `CORE_DEPS` in `app/lib/sets.py` and
+  `app/internal/set_update_deps.task.py`. Debug-kind clients pull
+  debugpy via a `#!pip debugpy` directive in `param` when they need it.
+- The `#>AWAIT_DEBUG` substring check in the runner. The directive is now
+  meaningless to pyops; clients that still emit it (current pyopsctl,
+  current VSIX) get it carried verbatim through the job's `param`,
+  ignored by the runtime.
+- `has_debugpy_adapter` 5-second readiness poll in the main loop.
+  Debug jobs spawn exactly like task/service/draft.
+
+### Changed (pyopsctl)
+- **pyopsctl debug now drives stdlib pdb instead of DAP.** The CLI
+  composes a remote-pdb bootstrap into the job's `param`, leases a TCP
+  port from the profile's `debug_ports` pool, and on `attach` spawns
+  a session daemon that holds the TCP connection to remote-pdb for
+  the lifetime of the session. Rationale: pyopsctl is terminal/agent-
+  shaped; pdb's text REPL maps 1:1 to the CLI verbs and has zero
+  external client-library dependency. The DAP path that VSIX uses
+  (debugpy + VSCode's internal client) is unaffected — that pathway
+  rewrite ships separately.
+- New profile field `debug_ports = [...]` in
+  `~/.config/pyops/config.toml`. Lease store at
+  `$XDG_RUNTIME_DIR/pyops/debug-ports/<profile>/<port>.lease`
+  (operator-only, mode 0600), concurrent-safe via `O_CREAT|O_EXCL`,
+  stale-lease reclaim via server job-state check.
+
+### Removed (pyopsctl)
+- `ctl/pyopsctl/dap/` (DapClient + wire) — replaced by
+  `ctl/pyopsctl/pdb/client.py` (PdbClient).
+- `ctl/pyopsctl/session/resolve.py` — friendly-name ↔ DAP frame path
+  resolver. No longer needed: pdb sees real `.debug/src/...` paths
+  directly; reverse-mapping is a single regex in the daemon.
+- `pyopsctl debug` verbs `pause`, `var`, `threads`. Pause needs a
+  server-side signal channel that doesn't exist yet; `var` (DAP
+  variablesReferences) has no pdb equivalent — operator drills with
+  `evaluate 'obj.attr'`; `threads` would need a multi-thread pdb
+  fork, not in scope.
+- `commands/debug._merge_debug_param` and the `#>AWAIT_DEBUG`
+  directive: param is now composed as the pdb bootstrap + (optional)
+  user preamble appended below it.
+- `GET /debug/port` HTTP hop (the route is gone server-side anyway).
+  pyopsctl resolves the port locally via `ports.find_port_for_job`.
+
 ## [3.1.0] — 2026-05-16
 
 Adds `pyopsctl`, the operator CLI. Designed to be driven from a
@@ -57,10 +128,62 @@ packages only (`python3` + `python3-requests`). Installed via
   all three suites. The existing `test:`, `test:e2e`, `test:vsix*`,
   `build:`, `build:image:`, and `release:` stages are untouched.
 
+- **Interactive debugger control** layered on top of `debug attach`:
+  the CLI spawns a long-lived **session daemon** that holds the DAP
+  TCP connection to debugpy on the pyops runner. State dir under
+  `$XDG_RUNTIME_DIR/pyops/sessions/<job_id>/` (or `~/.cache/...`);
+  per-job Unix domain socket carries newline-delimited JSON ops.
+  Subsequent CLI verbs run against that daemon:
+  - `state` / `stack` / `locals` / `globals` / `var --ref N` /
+    `evaluate "EXPR"` for inspection
+  - `break set/list/remove` for breakpoints (line + optional condition)
+  - `step` / `step-in` / `step-out` / `continue` / `pause` for control
+  - `threads` / `source <set>::<name>` for context
+  - `detach` / `terminate` for tearing down
+  - `session list` / `session info` for daemon-state visibility
+
+  Inline DAP client under `ctl/pyopsctl/dap/` (~300 LOC, stdlib socket
+  + json) handles the `Content-Length`-framed wire and the debugpy
+  bootstrap quirk where the `attach` response is held until
+  `configurationDone` arrives.
+
+  The resolver learns `<set>::<name>` ↔ absolute-path mappings from
+  stack frames as stops arrive (debugpy's `loadedSources` isn't
+  reliable). `break set` against a not-yet-known friendly ref stores
+  a pending breakpoint and applies it when a future stop brings the
+  path in.
+
+- **Vertical state-dump output** (default human mode) for every
+  callstack-changing verb: four sections separated by 60-hyphen
+  rules — `globals`, `locals`, `code (set::name)` with `→` on the
+  current line, `callstack` (frame 0 first). 20-line code window
+  centered on the current line; a separate `debug source <set>::<name>`
+  prints the full file. `--json` and `--quiet` remain available for
+  tooling.
+
+### Known limitations (planned 3.1.x follow-ups)
+
+- **`debug attach` doesn't auto-land at user line 1.** It reports
+  `state=running`; the operator runs `debug pause` + `break set` +
+  `continue` to reach a known stop. Fixing this needs a runner-side
+  change so the shim sets a fireable breakpoint at user line 1 from
+  the DAP side during attach. See `docs/insights_ctl.md` § "Why
+  attach doesn't auto-land at user line 1".
+- **Re-attach after detach** isn't supported by the runner: pyops
+  calls `debugpy.listen()` + `wait_for_client()` once per debug job;
+  after DAP disconnect there's no re-listen. Recovery is to start a
+  fresh debug job.
+- **`pause` during `time.sleep`** doesn't fire — debugpy can't
+  preempt the C-level sleep call. Pause works between sleeps (lands
+  on the next Python-level statement).
+
 ### Documentation
 
 - New `docs/pyopsctl.md` — installation, config example, full command
   reference, worked operator + agent flows.
+- New `docs/insights_ctl.md` — architecture deep-dive: session daemon
+  spawn, control protocol, DAP bootstrap quirks, source-path
+  resolution, race-freedom of step/continue.
 - `ctl/README.md` — prerequisites + `install.sh` usage on the
   operator's box.
 

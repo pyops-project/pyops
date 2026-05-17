@@ -506,25 +506,6 @@ def test_version_endpoint(mock_client):
         assert resp.json() == {"version": "9.9.9"}
 
 
-def test_debug_port(mock_client):
-    with patch("app.lib.files.conf_users") as mock_conf_users:
-        mock_conf_users.return_value = {
-            "anonymous": {"debug_port": 5678},
-            "testuser": {"debug_port": 9999}
-        }
-        # anonymous
-        resp = mock_client.get("/debug/port")
-        assert resp.status_code == 200
-        assert resp.json() == {"port": 5678}
-        # testuser
-        resp = mock_client.get("/debug/port", headers={"X-User": "testuser"})
-        assert resp.status_code == 200
-        assert resp.json() == {"port": 9999}
-        # missing user port
-        resp = mock_client.get("/debug/port", headers={"X-User": "missing"})
-        assert resp.status_code == 400
-        assert resp.json()["detail"] == "No debug_port configured for user 'missing'"
-
 def test_controller_path_forwarding(mock_client, mock_controller_glob):
     # Test that additional path is forwarded in ZMQ msg
     with patch("app.lib.pyops.ServiceClient") as mock_service:

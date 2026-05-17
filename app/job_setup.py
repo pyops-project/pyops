@@ -12,8 +12,8 @@ on disk but `sys.path` stays stale → `ModuleNotFoundError` on first job
 run, success only on retry once a fresh interpreter happens to spawn.
 
 Same PID across both phases (via `os.execv`). The runner's
-`processes[pid]`, `assignJob(pid)`, debug-adapter polling, and signal
-delivery all keep working without changes.
+`processes[pid]`, `assignJob(pid)`, and signal delivery all keep
+working without changes.
 """
 
 import json

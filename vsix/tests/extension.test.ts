@@ -3,6 +3,31 @@ import { createMockApiClient, createMockTreeProvider } from './utils/helpers';
 
 jest.mock('vscode');
 jest.mock('../src/utils');
+
+// Stub `net.Socket` to short-circuit the wait-for-debugpy-listener
+// poll in `pyops.startDebugJob`. The handler now does a real TCP
+// connect retry against the leased port; in unit tests there's no
+// listener to connect to, so resolve as "connected" immediately to
+// keep the test fast and deterministic.
+jest.mock('net', () => {
+  return {
+    Socket: jest.fn().mockImplementation(() => {
+      const handlers: Record<string, () => void> = {};
+      return {
+        setTimeout: jest.fn(),
+        once: jest.fn(function(this: unknown, event: string, cb: () => void) {
+          handlers[event] = cb;
+        }),
+        connect: jest.fn(function(this: unknown) {
+          // Defer until the next tick so the caller has wired all
+          // listeners via `once()` before we fire 'connect'.
+          setImmediate(() => { handlers.connect?.(); });
+        }),
+        destroy: jest.fn(),
+      };
+    }),
+  };
+});
 jest.mock('../src/jobsTreeProvider', () => ({
   JobsTreeDataProvider: jest.fn().mockImplementation(function(this: any) {
     const mockObj = createMockTreeProvider('jobs');
@@ -27,14 +52,26 @@ jest.mock('../src/services/AuthService', () => ({
 jest.mock('../src/services/DebugService', () => {
   const mockDebugService = jest.fn().mockImplementation(() => ({
     enqueueDebugJob: jest.fn().mockResolvedValue({ jobId: '123', port: 5678 }),
-    getDebugPort: jest.fn().mockResolvedValue(5678),
+    findPortForJob: jest.fn().mockReturnValue(5678),
+    leasePort: jest.fn().mockReturnValue({ port: 5678, jobId: 'placeholder' }),
+    releasePort: jest.fn(),
+    rebindLease: jest.fn(),
     getDebugHost: jest.fn().mockReturnValue('localhost'),
   }));
   (mockDebugService as any).buildOverrides = jest.fn().mockReturnValue({ overrides: { 'testset::testname': 'print("test")' }, pathMappings: [] });
+  (mockDebugService as any).composeDebugpyBootstrap = jest.fn().mockReturnValue('#!pip debugpy\nimport debugpy\ndebugpy.listen(("0.0.0.0", 5678))\ndebugpy.wait_for_client()\ndebugpy.breakpoint()\n');
+  (mockDebugService as any).currentLeases = jest.fn().mockReturnValue([]);
   return { DebugService: mockDebugService };
 });
 
 jest.mock('../src/services/DebugOutputMonitor', () => ({ DebugOutputMonitor: jest.fn().mockImplementation(() => ({ dispose: jest.fn(), isMonitoring: jest.fn().mockReturnValue(false), startMonitoring: jest.fn().mockResolvedValue(undefined), stopMonitoring: jest.fn(), })) }));
+jest.mock('../src/services/DebugSessionWatcher', () => ({
+  DebugSessionWatcher: jest.fn().mockImplementation(() => ({
+    watch: jest.fn(),
+    cancel: jest.fn(),
+    dispose: jest.fn(),
+  })),
+}));
 jest.mock('../src/services/JobService', () => ({ JobService: jest.fn().mockImplementation(() => ({ dispose: jest.fn(), listJobs: jest.fn(), copyJobParam: jest.fn(), cancelJob: jest.fn(), downloadJob: jest.fn(), deleteJob: jest.fn(), viewJob: jest.fn(), cancelAllJobs: jest.fn(), deleteAllDone: jest.fn(), deleteAllFailed: jest.fn(), })) }));
 jest.mock('../src/services/PyOpsPythonDebugConfigProvider');
 jest.mock('../src/services/RefreshTimerManager', () => ({
@@ -150,7 +187,9 @@ describe('Extension', () => {
       expect(require('vscode').window.registerTreeDataProvider).toHaveBeenCalledWith('pyops-monitor', expect.any(Object));
       expect(require('vscode').debug.registerDebugConfigurationProvider).toHaveBeenCalledWith('python', expect.any(Object));
       expect(require('vscode').commands.registerCommand).toHaveBeenCalledTimes(21); // Updated for attachDebugJob
-      expect(mockContext.subscriptions).toHaveLength(31); // Exact count
+      // 31 from before + 1 for the onDidTerminateDebugSession lease-release hook
+      // + 2 for the DebugSessionWatcher (dispose + onDidStartDebugSession)
+      expect(mockContext.subscriptions).toHaveLength(34);
       expect(require('vscode').window.createOutputChannel).toHaveBeenCalledWith('PyOps');
     });
 

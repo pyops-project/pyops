@@ -125,10 +125,9 @@ def _shutdown_job_processes(processes: dict[int, subprocess.Popen], timeout: flo
         return
 
     for pid, job_id in targets.items():
-        logger.info("shutdown: SIGTERM tree of job %s pid %d", job_id, pid)
+        logger.info("shutdown: SIGTERM group of job %s pid %d", job_id, pid)
         try:
-            tree = job_lib.get_process_tree(pid)
-            job_lib.kill_proc_tree(tree, signal.SIGTERM)
+            job_lib.kill_proc_group(pid, signal.SIGTERM)
         except Exception as e:
             logger.warning("shutdown: SIGTERM failed for %s (pid %d): %s", job_id, pid, e)
 
@@ -145,10 +144,16 @@ def _shutdown_job_processes(processes: dict[int, subprocess.Popen], timeout: flo
                         logger.warning("shutdown: ZMQ drain failed: %s", e)
                 events = runner_poller.poll(0)
 
+        # A group is considered drained when killpg(0) reports
+        # ProcessLookupError. We check both the leader's Popen.poll()
+        # (cheap, reaps zombies) and the group as a whole (catches
+        # any subprocess the user's `param` spawned which we don't
+        # have a Popen handle for, e.g. a debugpy adapter).
         survivors: dict[int, str] = {}
         for pid, job_id in still_alive.items():
             p = processes.get(pid)
-            if p is not None and p.poll() is not None:
+            leader_dead = (p is not None and p.poll() is not None)
+            if leader_dead and not job_lib.proc_group_alive(pid):
                 continue
             survivors[pid] = job_id
         still_alive = survivors
@@ -158,10 +163,9 @@ def _shutdown_job_processes(processes: dict[int, subprocess.Popen], timeout: flo
     sigkilled: set[int] = set()
     if still_alive:
         for pid, job_id in still_alive.items():
-            logger.warning("shutdown: SIGKILL tree of job %s pid %d (graceful timeout %.1fs exceeded)", job_id, pid, timeout)
+            logger.warning("shutdown: SIGKILL group of job %s pid %d (graceful timeout %.1fs exceeded)", job_id, pid, timeout)
             try:
-                tree = job_lib.get_process_tree(pid)
-                job_lib.kill_proc_tree(tree, signal.SIGKILL)
+                job_lib.kill_proc_group(pid, signal.SIGKILL)
             except Exception as e:
                 logger.warning("shutdown: SIGKILL failed for %s (pid %d): %s", job_id, pid, e)
             sigkilled.add(pid)
@@ -171,7 +175,8 @@ def _shutdown_job_processes(processes: dict[int, subprocess.Popen], timeout: flo
             leftover: dict[int, str] = {}
             for pid, job_id in still_alive.items():
                 p = processes.get(pid)
-                if p is not None and p.poll() is not None:
+                leader_dead = (p is not None and p.poll() is not None)
+                if leader_dead and not job_lib.proc_group_alive(pid):
                     continue
                 leftover[pid] = job_id
             still_alive = leftover
@@ -212,18 +217,24 @@ def _shutdown_job_processes(processes: dict[int, subprocess.Popen], timeout: flo
                 session.delete(job)
         commit_with_retry(session)
 
-def terminate_job_processes(job_id: str, pid: int, is_debug: bool, owner: str, graceful_timeout: float = 15.0):
-    logger.info("ENTER terminate_job_processes job_id=%s pid=%s is_debug=%s owner=%s", job_id, pid, is_debug, owner)
-    """
-    Terminate a job's process tree, handling debugpy processes if needed, and update DB.
+def terminate_job_processes(job_id: str, pid: int, owner: str, graceful_timeout: float = 15.0):
+    """Terminate a job and every subprocess it spawned, then update DB.
+
+    The job was started with `preexec_fn=os.setsid`, so `pid` is also
+    its process-group id. SIGTERM to the group reaches the job process
+    AND any descendants (e.g. a debugpy adapter started by the user's
+    `param`, a gdbserver, etc.) atomically — `os.killpg` is one syscall
+    and the kernel walks its own group table, so there's no window
+    where the parent dies first and children re-parent to PID 1 with
+    the kill missing them.
 
     Args:
         job_id (str): The job ID.
-        pid (int): The process ID of the job.
-        is_debug (bool): Whether this is a debug job.
+        pid (int): The process ID of the job (== PGID).
         owner (str): The job owner.
         graceful_timeout (float): Timeout in seconds for graceful termination.
     """
+    logger.info("ENTER terminate_job_processes job_id=%s pid=%s owner=%s", job_id, pid, owner)
     # Guard: Skip if job already in terminal state or pid None
     with Session(get_db_engine()) as session:
         job = session.get(Job, job_id)
@@ -231,30 +242,22 @@ def terminate_job_processes(job_id: str, pid: int, is_debug: bool, owner: str, g
             logger.debug("terminate_job_processes: skip %s state=%s pid=%s", job_id, job.state, job.pid)
             return
 
-    # Get target processes to terminate
-    target_processes = job_lib.get_process_tree(pid)
+    job_lib.kill_proc_group(pid, signal.SIGTERM)
 
-    # Send SIGTERM to targets
-    job_lib.kill_proc_tree(target_processes, signal.SIGTERM)
-
-    # Wait for graceful termination
+    # Wait for the whole group to drain (not just the leader). A child
+    # that survives the parent is exactly the orphan-port-hold case we
+    # added killpg to prevent — keep polling killpg(0) until the group
+    # is empty.
     import time
     start_time = time.time()
     while (time.time() - start_time) < graceful_timeout:
-        # Recreate target processes and check if any are still running
-        target_processes = job_lib.get_process_tree(pid)
-        alive = False
-        for proc in target_processes:
-            logger.debug(f"from {job_id} polling pid={pid} alive={proc.is_running()}")
-            if proc.is_running():
-                alive = True
-        if not alive:
+        if not job_lib.proc_group_alive(pid):
             postTerm(job_id)
             return
-        time.sleep(1.0)
+        time.sleep(0.5)
 
-    # Force kill if still running
-    job_lib.kill_proc_tree(target_processes, signal.SIGKILL)
+    # Force kill the whole group.
+    job_lib.kill_proc_group(pid, signal.SIGKILL)
     postTerm(job_id, killed=True)
     
 def setup_runner_socket(sock_path="/tmp/pyops/runner.sock"):
@@ -273,9 +276,16 @@ def receive_and_process(socket):
     msg = msgpack.unpackb(packed)
     try:
         logger.debug(f"main: processing ZMQ msg {msg}")
-        finishJob(msg["id"], msg["state"], msg["detail"])
+        # `state=running` is the param-done signal: the job's `param` block
+        # has finished executing (which for kind=debug means the client-
+        # supplied debugger bootstrap is up). It's not a terminal state and
+        # must not run through finishJob (which clears pid and sets end).
+        if msg.get("state") == "running":
+            markRunning(msg["id"])
+        else:
+            finishJob(msg["id"], msg["state"], msg["detail"])
     except Exception as e:
-        logger.exception("Failed to finish job %s: %s", msg["id"], e)
+        logger.exception("Failed to process completion for job %s: %s", msg.get("id"), e)
     # Send REP
     socket.send(identity, zmq.SNDMORE)
     socket.send(b'', zmq.SNDMORE)
@@ -403,39 +413,48 @@ def getNextToDo():
         return job_id
 
 def assignJob(job_id: str, pid: int):
+    """Record the spawned subprocess pid + start time. State stays at
+    `loading` here — the flip to `running` happens later, when the job
+    process sends a `state=running` ZMQ completion after its `param`
+    block finished executing. That signal lives in `markRunning`.
+
+    The cancel-race protection is implicit: this UPDATE doesn't touch
+    `Job.state`, so a cancel that committed between loadJob and here is
+    preserved untouched.
+    """
     logger.debug(f"assignJob(job_id='{job_id}' pid={pid})")
 
     with Session(get_db_engine()) as session:
         logger.debug(f"assignJob: session ID {id(session)} at {datetime.now()}")
         job = session.get(Job, job_id)
         old_pid = job.pid
-        debugpy_pid = None
-        if job.kind == "debug":
-            port = job_lib.get_debug_port(job.owner)
-            debugpy_pid = job_lib.get_debugpy_adapter_pid(port)
-            logger.debug(f"assignJob: debugpy_pid {debugpy_pid} for {job_id}")
 
-        # Atomic conditional update: only flip state to "running" if a cancel
-        # did not race in while we were forking the subprocess. Using a CASE
-        # expression keeps the state check and write in one statement so we
-        # don't overwrite a cancel that committed after our initial read.
-        values = {
+        session.query(Job).filter(Job.id == job_id).update({
             Job.pid: pid,
             Job.start: datetime.now(),
-            Job.state: case(
-                (Job.state.in_(("cancel", "cancelling")), Job.state),
-                else_="running",
-            ),
-        }
-        if debugpy_pid is not None:
-            values[Job.debugpy_pid] = debugpy_pid
-
-        session.query(Job).filter(Job.id == job_id).update(
-            values, synchronize_session=False
-        )
+        }, synchronize_session=False)
         logger.debug(f"assignJob: before commit, session ID {id(session)}, job.pid {old_pid} to {pid} for {job_id} at {datetime.now()}")
         commit_with_retry(session)
         logger.debug(f"assignJob: after commit, session ID {id(session)}, committed pid for {job_id} at {datetime.now()}")
+
+
+def markRunning(job_id: str):
+    """Flip `loading` → `running` on the param-done signal from the job
+    process. Idempotent: a duplicate signal (or a signal arriving after
+    a cancel has already committed) leaves a terminal/cancel state
+    untouched via the same CASE protection finishJob uses."""
+    logger.debug(f"markRunning(job_id='{job_id}')")
+    with Session(get_db_engine()) as session:
+        session.query(Job).filter(Job.id == job_id).update({
+            Job.state: case(
+                (Job.state.in_((
+                    "cancel", "cancelling", "cancelled",
+                    "done", "failed", "remove", "removed",
+                )), Job.state),
+                else_="running",
+            ),
+        }, synchronize_session=False)
+        commit_with_retry(session)
 
 def loadJob(job_id: str):
     """Loads job code from Git (unstaged if kind=="draft", else committed).
@@ -586,7 +605,7 @@ def finishJob(job_id: str, state: str, detail: str):
         logger.debug(f"finishJob({job_id}): after commit, session ID {id(session)}, committed state '{committed_state}' for {job_id} at {datetime.now()}")
 
         if old_pid:
-            threading.Thread(target=terminate_job_processes, args=(job_id, old_pid, kind == "debug", owner), daemon=True).start()
+            threading.Thread(target=terminate_job_processes, args=(job_id, old_pid, owner), daemon=True).start()
 
 def disposeJobs():
     with Session(get_db_engine()) as session:
@@ -790,9 +809,17 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
             processes = cleanProcesses(processes)
             logger.debug(f"main: cleaned processes, {len(processes)} remaining")
 
-            # Check for stale PIDs in DB that are not running
+            # Check for stale PIDs in DB that are not running. `loading`
+            # is covered too: a job's pid is set in assignJob *before* the
+            # job process flips state to `running` via markRunning, so a
+            # crash during the param block (or during job_setup.py's
+            # install phase) would otherwise leave a `loading` row with a
+            # dead pid forever.
             with Session(get_db_engine()) as session:
-                stmt = select(Job.id, Job.pid).where(Job.state == "running", Job.pid.isnot(None))
+                stmt = select(Job.id, Job.pid).where(
+                    Job.state.in_(("loading", "running")),
+                    Job.pid.isnot(None),
+                )
                 for job_id, pid in session.execute(stmt).all():
                     try:
                         if psutil.Process(pid).is_running():
@@ -818,12 +845,9 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
                 if job is not None:
                     if job["pid"] in processes:
                         logger.debug(f"Trying to term job {job}")
-                        # Get job kind for termination
                         with Session(get_db_engine()) as session:
                             job_obj = session.get(Job, job["id"])
-                            is_debug = job_obj.kind == "debug" if job_obj else False
-                            owner = job_obj.owner if job_obj else None
-                            detail = job_obj.detail
+                            detail = job_obj.detail if job_obj else None
                         finishJob(job["id"], "cancelling", detail)
                     else:
                         postTerm(job["id"])
@@ -860,14 +884,6 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
                         logger.debug(f"main: loading job {job_id}")
                         owner, setname, name, kind, param, code, overrides, max_retries = loadJob(job_id)
 
-                        port = None
-                        if kind == "debug":
-                            try:
-                                port = job_lib.validate_debug_prerequisites(owner)
-                            except Exception as e:
-                                finishJob(job_id, "failed", str(e))
-                                continue
-
                         libs = []
 
                         override_dict = json.loads(overrides) if overrides else None
@@ -879,50 +895,44 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
                         logger.debug(f"Run job {job_id}")
                         # Internal-set scriptlets are pyops-native code and
                         # run in the pyops process's own Python — pyzmq /
-                        # msgpack / psutil / debugpy / requests are already
-                        # there (pyops itself uses them). User sets get their
+                        # msgpack / psutil / requests are already there
+                        # (pyops itself uses them). User sets get their
                         # own venv via the standard ensure_set_environment.
                         if setname == "internal":
                             venv_python = sys.executable
                         else:
                             ensure_set_environment(setname)
                             venv_python = os.path.join(venv_path, setname, 'bin', 'python')
-                        json_kwargs = json.dumps({"job_id": job_id, "owner": owner, "setname": setname, "name": name, "kind": kind, "param": param, "code": code, "libs": libs, "overrides": overrides, "runner_sock_path": "/tmp/pyops/runner.sock", "max_retries": max_retries, "port": port, "conf_data": files.conf_data(), "conf_runner": files.conf_runner(), "conf_users": files.conf_users(), "conf_web": files.conf_web(), "conf_log": files.conf_log()})
+                        json_kwargs = json.dumps({"job_id": job_id, "owner": owner, "setname": setname, "name": name, "kind": kind, "param": param, "code": code, "libs": libs, "overrides": overrides, "runner_sock_path": "/tmp/pyops/runner.sock", "max_retries": max_retries, "conf_data": files.conf_data(), "conf_runner": files.conf_runner(), "conf_users": files.conf_users(), "conf_web": files.conf_web(), "conf_log": files.conf_log()})
                         try:
                             # Spawn job_setup.py — it runs the pip/git directive
                             # installs under the per-set bootstrap lock, then
                             # os.execv's into job_runner.py in the same PID with
                             # a fresh interpreter that picks up any new .pth
                             # files from `pip install -e` at startup.
-                            p = subprocess.Popen([venv_python, os.path.abspath('app/job_setup.py'), json_kwargs], cwd=files.project_root, stdout=sys.stdout, stderr=sys.stderr, text=True)
+                            # `preexec_fn=os.setsid` puts the job in its own
+                            # process group (PGID == p.pid). Termination then
+                            # goes through `os.killpg(p.pid, sig)` which hits
+                            # the whole tree atomically — including any
+                            # debugger subprocesses the user's `param`
+                            # spawns (debugpy.listen() spawns an adapter
+                            # process; gdbserver runs out-of-process; etc.).
+                            # Without the new session, those grandchildren
+                            # re-parent to PID 1 the instant the job dies
+                            # and keep holding their listening ports.
+                            p = subprocess.Popen(
+                                [venv_python, os.path.abspath('app/job_setup.py'), json_kwargs],
+                                cwd=files.project_root,
+                                stdout=sys.stdout, stderr=sys.stderr, text=True,
+                                preexec_fn=os.setsid,
+                            )
                         except Exception as e:
                             finishJob(job_id, "failed", f"Launch failed: {e}")
                             continue
 
-                        if kind == "debug":
-                            adapter_up = False
-                            for attempt in range(50):  # 5 seconds max
-                                if p.poll() is not None:
-                                    logger.warning("Job process died before debugpy adapter appeared for job %s", job_id)
-                                    break
-                                if job_lib.has_debugpy_adapter(port):
-                                    adapter_up = True
-                                    logger.debug("Debugpy adapter is up for job %s", job_id)
-                                    break
-                                time.sleep(0.1)
-
-                            if not adapter_up:
-                                if p.poll() is None:
-                                    logger.warning("Debugpy adapter did not appear within timeout for job %s - terminating broken debug job", job_id)
-                                    # Mark job as failed
-                                    finishJob(job_id, "failed", "Debug adapter failed to start within timeout")
-                                    continue
-                                else:
-                                    logger.warning("Job process died before debugpy adapter appeared for job %s", job_id)
-                                    # Let normal cleanup handle dead process
-                                    continue
-
-                        # Adapter is up or not a debug job - proceed normally
+                        # State stays at `loading` until the job process
+                        # signals `state=running` (after `exec(param)` returns);
+                        # see markRunning + execute_job_code.
                         assignJob(job_id, p.pid)
                         processes[p.pid] = p
                         logger.debug(f"main: started process for {job_id}, pid {p.pid}")

@@ -1,139 +1,194 @@
-"""E2E for the pyopsctl debug surface — verifies the interplay of three
-systems: pyopsctl (CLI), pyops (server + runner spawning debugpy), and
-a real debugger client (a raw TCP socket here, since the only thing
-this test cares about is that the listener side of the contract is up
-and accepting connections).
+"""TCP-level e2e: leased port + remote-pdb listener actually opens on it.
 
-Integration tests already cover what pyopsctl *sends* to the API. This
-suite covers what *happens* downstream when pyopsctl actually drives a
-real debug job: did the runner open the debug port, did `--await`
-translate into a real `wait_for_client()` on the runner side, can an
-external client attach.
+Verifies the *cross-system* contract: pyopsctl picks a port from the
+profile pool, the runner brings up a job whose `param` calls
+`RemotePdb(host, port).set_trace()`, and a raw TCP connect to that
+port succeeds. `debug stop` releases the lease and the job is gone on
+the next port-reuse attempt.
+
+These tests pay the per-set-venv setup cost (the runner pip-installs
+`remote-pdb` into the freshly-created venv on first job in the set),
+so allow generous timeouts.
 """
 import json
+import os
 import socket
 import time
 
 import pytest
 
 
-def _create_scriptlet(run_ctl, pyopsctl_bin, pyops_set, name, code):
-    run_ctl(pyopsctl_bin, "scriptlet", "create", pyops_set, name,
+# A short scriptlet that exits quickly after `continue` is issued (or
+# after pdb's EOF-on-disconnect releases set_trace). Keeps post-attach
+# state clean for the test's assertions.
+_BASIC_SCRIPTLET = "print('hi from scriptlet')\n"
+
+
+def _create_scriptlet(run_ctl, pyopsctl_bin, set_name, name, code):
+    run_ctl(pyopsctl_bin, "scriptlet", "create", set_name, name,
             "--kind", "task")
-    run_ctl(pyopsctl_bin, "scriptlet", "save", pyops_set, name,
+    run_ctl(pyopsctl_bin, "scriptlet", "save", set_name, name,
             "--stdin", input_text=code)
 
 
-def _port_is_listening(host: str, port: int, *, timeout: float = 1.0) -> bool:
-    """TCP connect probe. True if a process accepts a connection on
-    (host, port) within `timeout`. Used to verify debugpy actually
-    opened its listener after pyopsctl said it was running."""
-    try:
-        with socket.create_connection((host, port), timeout=timeout) as s:
-            # Some servers (debugpy included) hold the connection waiting for
-            # protocol bytes. A bare TCP connect succeeding proves the
-            # listener is up; we don't speak DAP here.
+def _wait_tcp_listen(host: str, port: int, *, timeout: float = 180.0,
+                     interval: float = 0.5) -> bool:
+    """Poll TCP connect until accepted, or return False after timeout.
+    Closes the connection immediately after success — the caller is
+    only proving the listener is bound."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            s = socket.create_connection((host, port), timeout=2.0)
+            s.close()
             return True
-    except OSError:
-        return False
+        except ConnectionRefusedError:
+            time.sleep(interval)
+        except (socket.timeout, OSError):
+            time.sleep(interval)
+    return False
 
 
-def _wait_for_listener(host: str, port: int, *, timeout: float = 30.0) -> None:
-    """Wait until something accepts TCP connections on (host, port).
-    Fails the test on timeout."""
+def _wait_tcp_refused(host: str, port: int, *, timeout: float = 60.0,
+                      interval: float = 0.5) -> bool:
+    """Poll until TCP connect is refused (= listener gone), or False
+    on timeout."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if _port_is_listening(host, port):
-            return
-        time.sleep(0.5)
-    pytest.fail(f"nothing listening on {host}:{port} within {timeout}s")
+        try:
+            s = socket.create_connection((host, port), timeout=1.0)
+            s.close()
+        except ConnectionRefusedError:
+            return True
+        except (socket.timeout, OSError):
+            pass
+        time.sleep(interval)
+    return False
 
 
-def _wait_for_no_listener(host: str, port: int, *, timeout: float = 30.0) -> None:
-    """Wait until (host, port) stops accepting connections — proof the
-    runner cleaned up after `debug stop`."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if not _port_is_listening(host, port):
-            return
-        time.sleep(0.5)
-    pytest.fail(f"port {port} still listening within {timeout}s — runner did not tear down debugpy")
+def _lease_files(leases_dir: str, profile: str = "local") -> list[str]:
+    p = os.path.join(leases_dir, profile)
+    if not os.path.isdir(p):
+        return []
+    return [f for f in os.listdir(p) if f.endswith(".lease")]
 
 
-def test_await_debug_job_opens_real_tcp_listener_on_reported_port(
-    pyopsctl_bin, run_ctl, pyops_server_for_ctl, pyops_set,
+def test_debug_start_leases_port_and_opens_listener(
+    pyopsctl_bin, run_ctl, pyops_server_for_ctl, pyops_set, pyopsctl_env,
 ):
-    """pyopsctl says `--await --wait-running` → port, and that port is
-    actually a live listener accepting TCP. Proves the three systems
-    cooperate: pyopsctl correctly sent the directive; the runner saw
-    `#>AWAIT_DEBUG` and ran `debugpy.listen()`; the listener is on the
-    port `/debug/port` reports.
-    """
-    _create_scriptlet(run_ctl, pyopsctl_bin, pyops_set, "scr_attach",
-                      "print('hello from debug job')\n")
+    """`debug start` writes a lease file under the profile dir and the
+    job's `param` brings up an accept()-ing TCP listener on the leased
+    port."""
+    _create_scriptlet(run_ctl, pyopsctl_bin, pyops_set, "scr_listen",
+                      _BASIC_SCRIPTLET)
 
-    # debug start --await --wait-running: pyopsctl polls until state=running,
-    # then reads /debug/port and returns the host+port for an attacher.
-    result = run_ctl(pyopsctl_bin, "debug", "start", pyops_set, "scr_attach",
-                     "--await", "--wait-running", "--json")
-    composite = json.loads(result.stdout.strip())
-    data = composite["data"]
-    port = data["port"]
-    job_id = data["job_id"]
-    assert port == pyops_server_for_ctl["debug_port"], \
-        f"port mismatch: pyopsctl reported {port}, config said {pyops_server_for_ctl['debug_port']}"
+    # Pool is empty before start.
+    assert _lease_files(pyopsctl_env["leases_dir"]) == []
+
+    result = run_ctl(pyopsctl_bin, "debug", "start", pyops_set, "scr_listen",
+                     "--json")
+    payload = json.loads(result.stdout.strip())
+    job_id = payload["job_id"]
+    port = payload["port"]
+    host = payload["host"]
+    assert port in pyopsctl_env["debug_ports"], \
+        f"leased port {port} not in pool {pyopsctl_env['debug_ports']}"
 
     try:
-        _wait_for_listener("127.0.0.1", port, timeout=15.0)
-        # A second connect should also succeed — debugpy allows reattaching.
-        assert _port_is_listening("127.0.0.1", port)
+        # Lease file exists under profile=local with the port in the name.
+        files = _lease_files(pyopsctl_env["leases_dir"])
+        assert f"{port}.lease" in files, \
+            f"lease file for port {port} not found in {files}"
+
+        # The remote-pdb listener actually came up. First-time path on a
+        # fresh venv pulls remote-pdb from the index — generous timeout.
+        assert _wait_tcp_listen(host, port, timeout=180.0), (
+            f"remote-pdb listener never came up on {host}:{port}; "
+            f"check server.log at {pyops_server_for_ctl['log_path']}"
+        )
     finally:
-        run_ctl(pyopsctl_bin, "debug", "stop", job_id)
+        run_ctl(pyopsctl_bin, "debug", "stop", job_id, check=False)
 
 
-def test_detached_debug_job_also_opens_listener_without_await(
-    pyopsctl_bin, run_ctl, pyops_server_for_ctl, pyops_set,
+def test_debug_stop_releases_lease(
+    pyopsctl_bin, run_ctl, pyops_server_for_ctl, pyops_set, pyopsctl_env,
 ):
-    """Without --await the runner still calls `debugpy.listen()` — it
-    just skips `wait_for_client()`. The detached flow should therefore
-    expose the same listening port, ready for a `pyopsctl debug attach`
-    later. The contract is: detached means "no wait", not "no listen".
-    """
-    _create_scriptlet(run_ctl, pyopsctl_bin, pyops_set, "scr_detached_e2e",
-                      "import time\ntime.sleep(60)\n")
+    """After `debug stop`, the lease file is gone and the port is
+    available to the next `debug start`."""
+    _create_scriptlet(run_ctl, pyopsctl_bin, pyops_set, "scr_stop",
+                      _BASIC_SCRIPTLET)
 
-    result = run_ctl(pyopsctl_bin, "debug", "start", pyops_set, "scr_detached_e2e",
-                     "--wait-running", "--json")
-    composite = json.loads(result.stdout.strip())
-    data = composite["data"]
-    port = data["port"]
-    job_id = data["job_id"]
+    started = json.loads(run_ctl(
+        pyopsctl_bin, "debug", "start", pyops_set, "scr_stop", "--json"
+    ).stdout.strip())
+    job_id = started["job_id"]
+    port = started["port"]
 
     try:
-        _wait_for_listener("127.0.0.1", port, timeout=15.0)
-        # And `pyopsctl debug attach JOBID` should report the same port
-        # without re-triggering the runner — the listener is already up.
-        attach_result = run_ctl(pyopsctl_bin, "debug", "attach", job_id, "--json")
-        attach_payload = json.loads(attach_result.stdout.strip())
-        assert attach_payload["port"] == port
+        # Wait for the listener so we know the runner actually got into
+        # the param block; stopping before that risks racing the spawn.
+        host = started["host"]
+        assert _wait_tcp_listen(host, port, timeout=180.0)
+
+        # Stop: cancel the job AND release the lease.
+        stopped = json.loads(run_ctl(
+            pyopsctl_bin, "debug", "stop", job_id, "--json"
+        ).stdout.strip())
+        assert stopped.get("released_port") == port
+
+        # Lease file gone.
+        files = _lease_files(pyopsctl_env["leases_dir"])
+        assert f"{port}.lease" not in files
     finally:
-        run_ctl(pyopsctl_bin, "debug", "stop", job_id)
+        run_ctl(pyopsctl_bin, "debug", "stop", job_id, check=False)
 
 
-def test_debug_stop_tears_down_listener(
-    pyopsctl_bin, run_ctl, pyops_server_for_ctl, pyops_set,
+def test_pool_first_port_reused_after_stop(
+    pyopsctl_bin, run_ctl, pyops_server_for_ctl, pyops_set, pyopsctl_env,
 ):
-    """Cancelling a debug job has to close the listener so the next
-    debug job for the same user can reuse the configured port. Proves
-    the runner's debug-job teardown path through to the OS socket."""
-    _create_scriptlet(run_ctl, pyopsctl_bin, pyops_set, "scr_teardown",
-                      "import time\ntime.sleep(60)\n")
-    result = run_ctl(pyopsctl_bin, "debug", "start", pyops_set, "scr_teardown",
-                     "--wait-running", "--json")
-    data = json.loads(result.stdout.strip())["data"]
-    port = data["port"]
-    job_id = data["job_id"]
+    """After releasing the first port, the next `debug start` picks
+    the same port back up — the pool walks in order, first free wins."""
+    _create_scriptlet(run_ctl, pyopsctl_bin, pyops_set, "scr_reuse",
+                      _BASIC_SCRIPTLET)
 
-    _wait_for_listener("127.0.0.1", port, timeout=15.0)
-    run_ctl(pyopsctl_bin, "debug", "stop", job_id)
-    _wait_for_no_listener("127.0.0.1", port, timeout=30.0)
+    first = json.loads(run_ctl(
+        pyopsctl_bin, "debug", "start", pyops_set, "scr_reuse", "--json"
+    ).stdout.strip())
+    first_port = first["port"]
+    assert first_port == pyopsctl_env["debug_ports"][0]
+    run_ctl(pyopsctl_bin, "debug", "stop", first["job_id"], "--json")
+
+    second = json.loads(run_ctl(
+        pyopsctl_bin, "debug", "start", pyops_set, "scr_reuse", "--json"
+    ).stdout.strip())
+    try:
+        assert second["port"] == first_port, (
+            f"expected reuse of {first_port}, got {second['port']}"
+        )
+    finally:
+        run_ctl(pyopsctl_bin, "debug", "stop", second["job_id"], check=False)
+
+
+def test_pool_walks_to_next_port_when_first_held(
+    pyopsctl_bin, run_ctl, pyops_server_for_ctl, pyops_set, pyopsctl_env,
+):
+    """Two concurrent debug jobs lease two different ports, in pool
+    order. Validates the no-double-allocation contract."""
+    _create_scriptlet(run_ctl, pyopsctl_bin, pyops_set, "scr_a",
+                      _BASIC_SCRIPTLET)
+    _create_scriptlet(run_ctl, pyopsctl_bin, pyops_set, "scr_b",
+                      _BASIC_SCRIPTLET)
+
+    a = json.loads(run_ctl(
+        pyopsctl_bin, "debug", "start", pyops_set, "scr_a", "--json"
+    ).stdout.strip())
+    b = json.loads(run_ctl(
+        pyopsctl_bin, "debug", "start", pyops_set, "scr_b", "--json"
+    ).stdout.strip())
+    try:
+        assert a["port"] == pyopsctl_env["debug_ports"][0]
+        assert b["port"] == pyopsctl_env["debug_ports"][1]
+        assert a["port"] != b["port"]
+    finally:
+        run_ctl(pyopsctl_bin, "debug", "stop", a["job_id"], check=False)
+        run_ctl(pyopsctl_bin, "debug", "stop", b["job_id"], check=False)

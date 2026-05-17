@@ -53,7 +53,7 @@ url  = "http://localhost:8000"
 
 ## Use
 
-See `docs/pyopsctl.md` in the project root for the full command reference.
+See `docs/pyops_guide.md` § pyopsctl in the project root for the full command reference.
 Quick smoke check:
 
 ```

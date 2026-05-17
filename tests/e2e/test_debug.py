@@ -1,20 +1,20 @@
 """
-Debug mode E2E tests.
+Debug-kind E2E tests.
 
-Covers:
-  1. GET /debug/port — returns the configured debug port for the requesting
-     user (from conf_users()) or 400 if not configured.
-  2. Override key validation — PUT /scriptlet/job/item with kind="debug"
+Covers what the server-side `kind=debug` contract guarantees now that
+pyops no longer injects a debugger:
+
+  1. Override key validation — PUT /scriptlet/job/item with kind="debug"
      and malformed override keys returns HTTP 400.
-  3. Override bypasses existence check — when the main scriptlet key is
+  2. Override bypasses existence check — when the main scriptlet key is
      present in overrides, the job is accepted even if no committed
      scriptlet file exists yet.
-  4. Override code runs instead of committed code — a debug job with an
+  3. Override code runs instead of committed code — a debug job with an
      override executes the override's code, not the on-disk scriptlet.
 
-The e2e server config provides debug_port=15679 for the "anonymous" user
-(no X-User header → owner "anonymous").  The "e2e_test_user" identity
-(the default `api` fixture) has no debug_port entry, so it gets 400.
+Debugger bootstrap (debugpy, gdbserver, ...) is the client's responsibility:
+it goes into `param`. The tests below leave `param` empty so the job runs
+to natural completion.
 """
 
 import time
@@ -27,7 +27,6 @@ import pytest
 # ---------------------------------------------------------------------------
 
 SET = "debug_e2e"
-ANON_DEBUG_PORT = 15679   # matches e2e_env config: users.anonymous.debug_port
 
 
 # ---------------------------------------------------------------------------
@@ -62,33 +61,6 @@ def _create(api, set_name, name, type_, code):
         json={"set": set_name, "name": name, "code": code},
     )
     assert r.status_code == 200, f"save {name} failed: {r.text}"
-
-
-# ---------------------------------------------------------------------------
-# Tests: /debug/port endpoint
-# ---------------------------------------------------------------------------
-
-
-class TestDebugPort:
-    """GET /debug/port returns port from config or 400 if not configured."""
-
-    def test_configured_user_gets_port(self, api_anon, pyops_server):
-        """Anonymous user (debug_port=15679 in config) receives the correct port."""
-        resp = api_anon.get("/debug/port")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert "port" in data
-        assert data["port"] == ANON_DEBUG_PORT
-        pyops_server.assert_no_unexpected_errors()
-
-    def test_unconfigured_user_gets_400(self, api, pyops_server):
-        """User with no debug_port entry in config receives HTTP 400."""
-        # The default `api` fixture sends X-User: e2e_test_user, which has
-        # no entry in the e2e_env users config.
-        resp = api.get("/debug/port")
-        assert resp.status_code == 400
-        assert "debug_port" in resp.json().get("detail", "")
-        pyops_server.assert_no_unexpected_errors()
 
 
 # ---------------------------------------------------------------------------
@@ -148,9 +120,7 @@ class TestDebugJobEnqueue:
         assert resp.status_code == 200, (
             f"Expected 200 when override covers main key, got {resp.status_code}: {resp.text}"
         )
-        pyops_server.assert_no_unexpected_errors(
-            allow=["debugpy", "debug_port", "adapter"]
-        )
+        pyops_server.assert_no_unexpected_errors()
 
     def test_debug_without_override_requires_committed_scriptlet(
         self, api_anon, pyops_server, set_factory):
@@ -190,10 +160,8 @@ class TestDebugOverrideExecution:
 
         The committed scriptlet prints "committed_output". The override prints
         "override_output". The job's stdout must contain "override_output".
-
-        NOTE: This test installs debugpy into the set venv (first debug job in
-        a fresh environment) and therefore allows a 120-second timeout.
-        Port 15679 must be free on the test host.
+        With pyops no longer injecting a debugger, an empty `param` makes
+        the job a fast straight-through run.
         """
         set_factory(SET + "_exec")
         _create(
@@ -211,7 +179,7 @@ class TestDebugOverrideExecution:
                 "name": "target_task",
                 "drop_done": False,
                 "max_retries": 0,
-                "param": "",   # no #>AWAIT_DEBUG → debugpy listens but doesn't block
+                "param": "",
                 "kind": "debug",
                 "overrides": {
                     f"{SET}_exec::target_task": 'print("override_output")',
@@ -221,7 +189,7 @@ class TestDebugOverrideExecution:
         assert resp.status_code == 200
         job_id = resp.json()["job"]
 
-        job = _wait_for_job(api_anon, job_id, timeout=120)
+        job = _wait_for_job(api_anon, job_id, timeout=60)
         assert job["state"] == "done", (
             f"Debug job expected done, got {job['state']}: {job.get('detail', '')}"
         )
@@ -231,6 +199,4 @@ class TestDebugOverrideExecution:
         assert "committed_output" not in job["stdout"], (
             "Committed code should NOT have run"
         )
-        pyops_server.assert_no_unexpected_errors(
-            allow=["debugpy", "adapter", "listen"]
-        )
+        pyops_server.assert_no_unexpected_errors()

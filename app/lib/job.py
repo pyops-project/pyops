@@ -6,26 +6,66 @@ import subprocess
 import time
 import json
 import logging
-from typing import Optional
 
 import psutil
 import zmq
 import msgpack
 
-from app.lib import files
-
 logger = logging.getLogger(__name__)
 
 def kill_proc_tree(processes: list, sig=signal.SIGTERM):
-    """Kill all processes in the list using specified signal."""
+    """Kill all processes in the list using specified signal.
+
+    Prefer `kill_proc_group` for job-process termination — it covers the
+    whole tree atomically without the children-orphaned-before-we-enumerate
+    race that `get_process_tree` has (`psutil.Process.children` returns
+    empty if the parent died first, leaking subprocesses to PID 1).
+    """
     for proc in processes:
         try:
             os.kill(proc.pid, sig)
         except OSError:
             pass  # Process already dead
 
+
+def kill_proc_group(pgid: int, sig=signal.SIGTERM) -> None:
+    """Send `sig` to every process in process-group `pgid`.
+
+    Jobs are spawned with `preexec_fn=os.setsid` so the job's PID equals
+    its PGID, and every subprocess the job spawns (debugpy adapter,
+    gdbserver, …) inherits that PGID. One `killpg` syscall reaches them
+    all atomically — no race window where the parent dies first and
+    children re-parent to PID 1 holding sockets open.
+
+    Silently ignores `ProcessLookupError` (group already gone) and
+    `PermissionError` (signal not deliverable). Other `OSError`s
+    propagate."""
+    try:
+        os.killpg(pgid, sig)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def proc_group_alive(pgid: int) -> bool:
+    """True iff at least one process in `pgid`'s group still exists.
+
+    Implemented via `killpg(0)` which is a no-op signal that returns
+    success if any process in the group can be signalled. The check is
+    cheap (one syscall) and atomic w.r.t. the kernel's group table."""
+    try:
+        os.killpg(pgid, 0)
+        return True
+    except (ProcessLookupError, PermissionError):
+        return False
+
+
 def get_process_tree(pid: int) -> list[psutil.Process]:
-    """Get the process tree for a given PID."""
+    """Get the process tree for a given PID.
+
+    Beware the orphan-race: if `pid`'s process dies between assignment
+    and this call, children re-parent to PID 1 and disappear from this
+    traversal. Use `kill_proc_group` for kill paths instead — it covers
+    them via PGID."""
     try:
         parent = psutil.Process(pid)
         tree = [parent]
@@ -33,68 +73,6 @@ def get_process_tree(pid: int) -> list[psutil.Process]:
         return tree
     except psutil.NoSuchProcess:
         return []
-
-def get_debug_port(owner: str) -> int:
-    """Get the debug port for an owner from config."""
-    users = files.conf_users()
-    user_conf = users.get(owner, {})
-    port = user_conf.get("debug_port")
-    if not port or not isinstance(port, int) or port < 1025 or port > 65535:
-        raise Exception(f"Invalid or missing debug_port for user {owner}")
-    return port
-
-def has_debugpy_adapter(port: int) -> bool:
-    """Check if a debugpy adapter is running on the given port."""
-    return get_debugpy_adapter_pid(port) is not None
-
-def get_debugpy_adapter_pid(port: int) -> Optional[int]:
-    """Get the PID of the debugpy adapter process for a given port."""
-    logger.debug(f"Searching for debugpy adapter on port {port}")
-    port_str = str(port)
-    for pinfo in psutil.process_iter(['pid', 'cmdline']):
-        try:
-            cmdline = pinfo.info['cmdline'] or []
-            # Precise match: --port XXX
-            port_match = False
-            i = 0
-            while i < len(cmdline) - 1:
-                if cmdline[i] == '--port' and cmdline[i + 1] == port_str:
-                    port_match = True
-                    break
-                i += 1
-            adapter_match = any('adapter' in arg.lower() for arg in cmdline)
-            if port_match and adapter_match:
-                logger.debug(f"Found debugpy adapter PID {pinfo.info['pid']}: {cmdline}")
-                return pinfo.info['pid']
-        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-            pass
-    logger.debug("No debugpy adapter found")
-    return None
-
-def validate_debug_prerequisites(owner: str) -> int:
-    """Validate debug prerequisites and return the debug port."""
-    return get_debug_port(owner)
-
-def terminate_debugpy_adapter(owner: str, port: int):
-    """Terminate the debugpy adapter process for the given owner.
-    
-    Args:
-        owner: The job owner (for logging only)
-        port: The debug port (required in subprocess contexts)
-    """
-    logger.info("ENTER terminate_debugpy_adapter owner=%s port=%s", owner, port)
-    if not port:
-        logger.error("No port provided, cannot terminate debugpy adapter for owner %s", owner)
-        return
-    pid = get_debugpy_adapter_pid(port)
-    if pid:
-        try:
-            os.kill(pid, signal.SIGKILL)
-            logger.info("killed debugpy adapter PID %s", pid)
-        except OSError as e:
-            logger.warning("failed to kill debugpy adapter PID %s: %s", pid, e)
-    else:
-        logger.warning("no debugpy adapter process found for port %s", port)
 
 def install_git_repo(pip_path: str, repo_dir: str, stdout_file, stderr_file, upgrade: bool = False):
     """Install git repo as editable package.

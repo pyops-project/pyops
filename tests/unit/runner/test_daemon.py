@@ -655,8 +655,8 @@ class TestDaemon:
             from app.runner import finishJob
             finishJob("graceful_svc", "done", None)
         with patch('app.runner.receive_and_process', side_effect=fake_receive), \
-             patch('app.runner.job_lib.get_process_tree', return_value=[proc_obj]), \
-             patch('app.runner.job_lib.kill_proc_tree') as mock_kill, \
+             patch('app.runner.job_lib.kill_proc_group') as mock_kill, \
+             patch('app.runner.job_lib.proc_group_alive', return_value=False), \
              patch('app.runner.threading.Thread'), \
              patch('app.runner.lib_runner.drop'), \
              patch('app.runner.time.sleep'):
@@ -692,8 +692,11 @@ class TestDaemon:
         proc_obj = Mock(); proc_obj.pid = 802
         poller = Mock(); poller.poll.return_value = []
 
-        with patch('app.runner.job_lib.get_process_tree', return_value=[proc_obj]), \
-             patch('app.runner.job_lib.kill_proc_tree') as mock_kill, \
+        # The whole point of this test: group never drains → SIGTERM
+        # window expires → SIGKILL fires. proc_group_alive must stay
+        # True throughout the SIGTERM grace period.
+        with patch('app.runner.job_lib.kill_proc_group') as mock_kill, \
+             patch('app.runner.job_lib.proc_group_alive', return_value=True), \
              patch('app.runner.time.sleep'):
             _shutdown_job_processes(processes, timeout=0.1,
                                     runner_socket=Mock(), runner_poller=poller)
@@ -729,8 +732,8 @@ class TestDaemon:
         proc_obj = Mock(); proc_obj.pid = 803
         poller = Mock(); poller.poll.return_value = []
 
-        with patch('app.runner.job_lib.get_process_tree', return_value=[proc_obj]), \
-             patch('app.runner.job_lib.kill_proc_tree') as mock_kill, \
+        with patch('app.runner.job_lib.kill_proc_group') as mock_kill, \
+             patch('app.runner.job_lib.proc_group_alive', return_value=False), \
              patch('app.runner.lib_runner.drop'), \
              patch('app.runner.time.sleep'):
             _shutdown_job_processes(processes, timeout=2.0,
@@ -764,8 +767,8 @@ class TestDaemon:
         proc_obj = Mock(); proc_obj.pid = 804
         poller = Mock(); poller.poll.return_value = []
 
-        with patch('app.runner.job_lib.get_process_tree', return_value=[proc_obj]), \
-             patch('app.runner.job_lib.kill_proc_tree'), \
+        with patch('app.runner.job_lib.kill_proc_group'), \
+             patch('app.runner.job_lib.proc_group_alive', return_value=False), \
              patch('app.runner.time.sleep'):
             _shutdown_job_processes(processes, timeout=2.0,
                                     runner_socket=Mock(), runner_poller=poller)
@@ -790,12 +793,10 @@ class TestDaemon:
         mock_p.poll.return_value = 0  # already exited
         processes = {703: mock_p}
 
-        with patch('app.runner.job_lib.get_process_tree') as mock_tree, \
-             patch('app.runner.job_lib.kill_proc_tree') as mock_kill:
+        with patch('app.runner.job_lib.kill_proc_group') as mock_kill:
             _shutdown_job_processes(processes, timeout=2.0,
                                     runner_socket=Mock(), runner_poller=Mock())
 
-        mock_tree.assert_not_called()
         mock_kill.assert_not_called()
         with Session(get_db_engine()) as session:
             row = session.get(Job, "exited_job")
@@ -900,24 +901,6 @@ class TestHandleOddJobsCancelStates:
         with Session(get_db_engine()) as session:
             row = session.get(Job, "orphan2")
             assert row.state == "cancelled"
-
-    @patch('app.lib.files.conf_users', return_value={"owner": {"debug_port": 5678}})
-    def test_validate_debug_prerequisites_valid(self, mock_conf_users):
-        from app.lib.job import validate_debug_prerequisites
-        port = validate_debug_prerequisites("owner")
-        assert port == 5678
-
-    @patch('app.lib.files.conf_users', return_value={"owner": {}})
-    def test_validate_debug_prerequisites_no_port(self, mock_conf_users):
-        from app.lib.job import validate_debug_prerequisites
-        with pytest.raises(Exception, match="Invalid or missing debug_port for user owner"):
-            validate_debug_prerequisites("owner")
-
-    @patch('app.lib.files.conf_users', return_value={"owner": {"debug_port": 1000}})
-    def test_validate_debug_prerequisites_invalid_port(self, mock_conf_users):
-        from app.lib.job import validate_debug_prerequisites
-        with pytest.raises(Exception, match="Invalid or missing debug_port for user owner"):
-            validate_debug_prerequisites("owner")
 
     def test_enqueue_debug_mark_existing_for_cancellation(self, mock_db):
         from app.lib.runner import enqueue
@@ -1232,11 +1215,10 @@ class TestServiceRestartGatedOnCancel:
 
 class TestInternalSetRunsInHostVenv:
     """Internal-set scriptlets are pyops-native code and execute in the
-    pyops process's own Python — pyzmq / msgpack / psutil / debugpy /
-    requests are already importable there. The runner skips
-    ensure_set_environment for set=='internal' and uses sys.executable
-    instead of a per-set venv path. User sets keep the standard
-    per-set-venv flow."""
+    pyops process's own Python — pyzmq / msgpack / psutil / requests are
+    already importable there. The runner skips ensure_set_environment for
+    set=='internal' and uses sys.executable instead of a per-set venv
+    path. User sets keep the standard per-set-venv flow."""
 
     def test_main_no_internal_bootstrap_at_startup(self, mock_db):
         """main() must NOT call ensure_set_environment('internal') at

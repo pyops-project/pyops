@@ -52,8 +52,10 @@ export const Uri = {
 
 export const debug = {
   registerDebugConfigurationProvider: jest.fn(),
+  onDidStartDebugSession: jest.fn(),
   onDidTerminateDebugSession: jest.fn(),
   startDebugging: jest.fn(),
+  stopDebugging: jest.fn(),
 };
 
 export const languages = {

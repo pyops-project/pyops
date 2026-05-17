@@ -1,12 +1,8 @@
 import { DebugService } from '../../src/services/DebugService';
 
-
-
 jest.mock('vscode');
-
 jest.mock('fs', () => require('../utils/helpers').fsMockFactory());
 jest.mock('path', () => require('../utils/helpers').pathMockFactory());
-
 
 
 describe('DebugService', () => {
@@ -16,12 +12,15 @@ describe('DebugService', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    const mockFs = require('fs');
-    const mockPath = require('path');
     const mockVscode = require('vscode');
 
     mockVscode.workspace.workspaceFolders = [{ uri: { fsPath: '/test/workspace' } }];
-    require('../utils/helpers').setupConfigMock({localPyopsDir: 'pyops', serverUrl: 'http://localhost:8000', username: 'testuser'});
+    require('../utils/helpers').setupConfigMock({
+      localPyopsDir: 'pyops',
+      serverUrl: 'http://localhost:8000',
+      username: 'testuser',
+      debugPorts: [5678, 5679, 5680],
+    });
 
     mockApiClient = {
       getServerUrl: jest.fn().mockReturnValue('http://localhost:8000'),
@@ -35,6 +34,11 @@ describe('DebugService', () => {
     };
 
     service = new DebugService(mockApiClient as any, mockOutputChannel as any);
+
+    // Reset the static lease table between tests — it's shared across
+    // DebugService instances (per-VSCode-session).
+    const leases = (DebugService as any)._leases as Map<number, string>;
+    leases.clear();
   });
 
   describe('buildOverrides', () => {
@@ -77,12 +81,12 @@ describe('DebugService', () => {
       const mockPath = require('path');
       mockFs.existsSync.mockReturnValue(true);
       mockFs.readdirSync
-        .mockReturnValueOnce(['lib.py', 'subdir']) // root
-        .mockReturnValueOnce(['sub.py']); // subdir
+        .mockReturnValueOnce(['lib.py', 'subdir'])
+        .mockReturnValueOnce(['sub.py']);
       mockFs.statSync
-        .mockReturnValueOnce({ isDirectory: () => false }) // lib.py
-        .mockReturnValueOnce({ isDirectory: () => true }) // subdir
-        .mockReturnValueOnce({ isDirectory: () => false }); // sub.py
+        .mockReturnValueOnce({ isDirectory: () => false })
+        .mockReturnValueOnce({ isDirectory: () => true })
+        .mockReturnValueOnce({ isDirectory: () => false });
       mockFs.readFileSync
         .mockReturnValueOnce('lib code')
         .mockReturnValueOnce('sub code');
@@ -134,157 +138,157 @@ describe('DebugService', () => {
     });
   });
 
+  describe('composeDebugpyBootstrap', () => {
+    it('emits #!pip + debugpy.listen (in-process) + wait_for_client + breakpoint', () => {
+      const out = DebugService.composeDebugpyBootstrap(45678);
+      expect(out).toContain('#!pip debugpy');
+      expect(out).toContain('import debugpy');
+      // In-process adapter is non-negotiable — without it debugpy
+      // daemonises a child adapter process that survives the job and
+      // poisons the port for subsequent debug runs.
+      expect(out).toContain('in_process_debug_adapter=True');
+      expect(out).toContain('debugpy.listen(("0.0.0.0", 45678)');
+      expect(out).toContain('debugpy.wait_for_client()');
+      expect(out).toContain('debugpy.breakpoint()');
+    });
+
+    it('plugs the leased port verbatim into the bootstrap', () => {
+      expect(DebugService.composeDebugpyBootstrap(45679)).toContain('45679');
+      expect(DebugService.composeDebugpyBootstrap(60000)).toContain('60000');
+    });
+  });
+
+  describe('port leasing', () => {
+    it('leases the first free port from the pool', () => {
+      const lease = service.leasePort('job-a');
+      expect(lease.port).toBe(5678);
+      expect(lease.jobId).toBe('job-a');
+    });
+
+    it('skips occupied ports', () => {
+      service.leasePort('job-a');
+      const lease = service.leasePort('job-b');
+      expect(lease.port).toBe(5679);
+    });
+
+    it('throws when the pool is empty', () => {
+      require('../utils/helpers').setupConfigMock({
+        localPyopsDir: 'pyops', serverUrl: 'http://localhost:8000',
+        debugPorts: [],
+      });
+      expect(() => service.leasePort('job-a')).toThrow(/empty/);
+    });
+
+    it('throws when the pool is fully leased', () => {
+      service.leasePort('job-a');
+      service.leasePort('job-b');
+      service.leasePort('job-c');
+      expect(() => service.leasePort('job-d')).toThrow(/fully leased/);
+    });
+
+    it('release returns the port to the pool', () => {
+      const lease = service.leasePort('job-a');
+      service.releasePort(lease.port);
+      const second = service.leasePort('job-b');
+      expect(second.port).toBe(lease.port);
+    });
+
+    it('release is idempotent', () => {
+      service.releasePort(9999);
+      service.releasePort(9999);
+      // No throw.
+    });
+
+    it('rebindLease updates the holder for an existing lease', () => {
+      service.leasePort('placeholder');
+      service.rebindLease(5678, 'real-job-id');
+      expect(service.findPortForJob('real-job-id')).toBe(5678);
+      expect(service.findPortForJob('placeholder')).toBeUndefined();
+    });
+
+    it('findPortForJob returns undefined when no lease matches', () => {
+      expect(service.findPortForJob('never-leased')).toBeUndefined();
+    });
+  });
+
   describe('enqueueDebugJob', () => {
-    it('enqueues job successfully', async () => {
-      mockApiClient.fetch
-        .mockResolvedValueOnce({
-          ok: true,
-          json: () => Promise.resolve({ port: 5678 }),
-        })
-        .mockResolvedValueOnce({
-          ok: true,
-          json: () => Promise.resolve({ job: 'job123' }),
-        });
+    it('leases a port, composes the debugpy bootstrap, PUTs the job, rebinds the lease', async () => {
+      mockApiClient.fetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ job: 'job123' }),
+      });
 
       const result = await service.enqueueDebugJob('testset', 'testscript');
 
       expect(result).toEqual({ jobId: 'job123', port: 5678 });
-      expect(mockApiClient.fetch).toHaveBeenNthCalledWith(
-        1,
-        '/debug/port',
-        expect.objectContaining({
-          method: 'GET',
-        })
-      );
-      expect(mockApiClient.fetch).toHaveBeenCalledWith(
-        '/scriptlet/job/item',
-        expect.objectContaining({
-          method: 'PUT',
-          headers: expect.objectContaining({
-            'Content-Type': 'application/json',
-          }),
-          body: JSON.stringify({
-            set: 'testset',
-            name: 'testscript',
-            drop_done: false,
-            param: '#>AWAIT_DEBUG',
-            kind: 'debug',
-            overrides: {},
-          }),
-        })
-      );
-      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith('[DEBUG getDebugPort] Success: 5678');
+      expect(mockApiClient.fetch).toHaveBeenCalledTimes(1);
+      const call = mockApiClient.fetch.mock.calls[0];
+      expect(call[0]).toBe('/scriptlet/job/item');
+      expect(call[1].method).toBe('PUT');
+      const body = JSON.parse(call[1].body);
+      expect(body.set).toBe('testset');
+      expect(body.name).toBe('testscript');
+      expect(body.kind).toBe('debug');
+      expect(body.drop_done).toBe(false);
+      expect(body.overrides).toEqual({});
+      // Composed param has the debugpy bootstrap with the leased port.
+      expect(body.param).toContain('#!pip debugpy');
+      expect(body.param).toContain('debugpy.listen(("0.0.0.0", 5678)');
+      expect(body.param).toContain('in_process_debug_adapter=True');
+
+      // Lease is rebound from the placeholder to the real job id.
+      expect(service.findPortForJob('job123')).toBe(5678);
     });
 
-    it('handles job API failure after port fetch', async () => {
-      mockApiClient.fetch
-        .mockResolvedValueOnce({
-          ok: true,
-          json: () => Promise.resolve({ port: 5678 }),
-        })
-        .mockResolvedValueOnce({
-          ok: false,
-          statusText: 'Bad Request',
-          text: () => Promise.resolve('server error'),
-        });
+    it('releases the lease on HTTP failure so the port is reusable', async () => {
+      mockApiClient.fetch.mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+        statusText: 'Server Error',
+        text: () => Promise.resolve('boom'),
+      });
 
       const result = await service.enqueueDebugJob('testset', 'testscript');
 
       expect(result).toEqual({});
-      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith(expect.stringContaining('[DEBUG enqueueDebugJob] Failed with error: server error'));
+      // Port returned to the pool.
+      const second = service.leasePort('next');
+      expect(second.port).toBe(5678);
     });
 
-    it('handles job fetch network error after port', async () => {
-      mockApiClient.fetch
-        .mockResolvedValueOnce({
-          ok: true,
-          json: () => Promise.resolve({ port: 5678 }),
-        })
-        .mockRejectedValue(new Error('network error'));
+    it('releases the lease on network exception so the port is reusable', async () => {
+      mockApiClient.fetch.mockRejectedValue(new Error('network down'));
 
       const result = await service.enqueueDebugJob('testset', 'testscript');
 
       expect(result).toEqual({});
-      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith('[DEBUG enqueueDebugJob] Exception: network error');
+      const second = service.leasePort('next');
+      expect(second.port).toBe(5678);
     });
 
-    it('passes overrides to request', async () => {
+    it('returns {} without hitting the network when the pool is empty', async () => {
+      require('../utils/helpers').setupConfigMock({
+        localPyopsDir: 'pyops', serverUrl: 'http://localhost:8000',
+        debugPorts: [],
+      });
+
+      const result = await service.enqueueDebugJob('testset', 'testscript');
+
+      expect(result).toEqual({});
+      expect(mockApiClient.fetch).not.toHaveBeenCalled();
+    });
+
+    it('passes overrides verbatim to the PUT body', async () => {
       const testOverrides = { 'set::test': 'code' };
-
-      mockApiClient.fetch
-        .mockResolvedValueOnce({
-          ok: true,
-          json: () => Promise.resolve({ port: 5678 }),
-        })
-        .mockResolvedValueOnce({
-          ok: true,
-          json: () => Promise.resolve({ job: 'job123' }),
-        });
+      mockApiClient.fetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ job: 'job123' }),
+      });
 
       await service.enqueueDebugJob('testset', 'testscript', testOverrides);
 
-      const call = mockApiClient.fetch.mock.calls[1][1] as any;
-      expect(JSON.parse(call.body).overrides).toEqual(testOverrides);
-      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith('[DEBUG enqueueDebugJob] Overrides: ' + JSON.stringify(testOverrides));
-    });
-
-    it('throws on debug port fetch fail', async () => {
-        mockApiClient.fetch.mockResolvedValueOnce({
-          ok: false,
-          status: 400,
-          statusText: 'Bad Request',
-          text: () => Promise.resolve('no port configured'),
-        });
-
-        await expect(service.enqueueDebugJob('testset', 'testscript')).rejects.toThrow('Failed to fetch debug port');
-        expect(mockOutputChannel.appendLine).toHaveBeenCalledWith(expect.stringContaining('[DEBUG getDebugPort] Failed: no port configured'));
-    });
-
-    it('throws on invalid port from server', async () => {
-      mockApiClient.fetch.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({ port: 0 }),
-      });
-
-      await expect(service.enqueueDebugJob('testset', 'testscript')).rejects.toThrow('Invalid port');
-    });
-  });
-
-  describe('getDebugPort', () => {
-    it('fetches port successfully', async () => {
-      mockApiClient.fetch.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({ port: 5678 }),
-      });
-
-      const port = await service.getDebugPort();
-      expect(port).toBe(5678);
-      expect(mockApiClient.fetch).toHaveBeenCalledWith(
-        '/debug/port',
-        expect.objectContaining({
-          method: 'GET',
-        })
-      );
-      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith('[DEBUG getDebugPort] Success: 5678');
-    });
-
-    it('throws on port fetch fail', async () => {
-      mockApiClient.fetch.mockResolvedValueOnce({
-        ok: false,
-        text: () => Promise.resolve('No debug_port configured')
-      });
-
-      await expect(service.getDebugPort()).rejects.toThrow('Failed to fetch debug port');
-      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith(expect.stringContaining('[DEBUG getDebugPort] Failed'));
-    });
-
-    it('throws on invalid port value', async () => {
-      mockApiClient.fetch.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({ port: 0 })
-      });
-
-      await expect(service.getDebugPort()).rejects.toThrow('Invalid port');
+      const body = JSON.parse(mockApiClient.fetch.mock.calls[0][1].body);
+      expect(body.overrides).toEqual(testOverrides);
     });
   });
 
@@ -298,13 +302,14 @@ describe('DebugService', () => {
     it('logs warning and returns localhost for invalid serverUrl', () => {
       mockApiClient.getServerUrl.mockReturnValue('invalid');
       expect(service.getDebugHost()).toBe('localhost');
-      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith('[DEBUG getDebugHost] Invalid serverUrl invalid, defaulting to localhost');
+      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith(
+        expect.stringContaining('defaulting to localhost'),
+      );
     });
 
     it('returns localhost if serverUrl is undefined', () => {
       mockApiClient.getServerUrl.mockReturnValue(undefined);
       expect(service.getDebugHost()).toBe('localhost');
-      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith('[DEBUG getDebugHost] Invalid serverUrl undefined, defaulting to localhost');
     });
   });
 });
