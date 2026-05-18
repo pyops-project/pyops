@@ -521,6 +521,32 @@ class TestServiceListener:
     @patch('os.remove')
     @patch('atexit.register')
     @patch('tempfile.gettempdir')
+    @patch('zmq.Poller')
+    @patch('zmq.Context')
+    def test_async_poll_kill_now_returns_term_sentinel(self, mock_context, mock_poller, mock_gettempdir, mock_atexit, mock_remove):
+        """Regression: when kill_now is set, async_poll must surface a
+        (b"", "TERM") sentinel so non-blocking callers (e.g. causal tick
+        loops) exit instead of polling forever past SIGTERM until the
+        runner's 15s SIGKILL escalation. Mirrors listen()'s "TERM" return.
+        """
+        from app.lib import pyops
+        mock_atexit.side_effect = lambda *args: None
+        mock_remove.return_value = None
+        mock_gettempdir.return_value = '/tmp'
+        mock_socket = Mock()
+        mock_context.return_value.socket.return_value = mock_socket
+        listener = pyops.ServiceListener("test_job", "test_owner")
+        listener.kill_now = True
+        result = listener.async_poll()
+        assert result == [(b"", "TERM")]
+        # Must short-circuit: no poll, no recv.
+        mock_poller.return_value.poll.assert_not_called()
+        mock_socket.recv.assert_not_called()
+        listener.close()
+
+    @patch('os.remove')
+    @patch('atexit.register')
+    @patch('tempfile.gettempdir')
     @patch('msgpack.packb')
     @patch('zmq.Context')
     def test_async_response(self, mock_context, mock_packb, mock_gettempdir, mock_atexit, mock_remove):

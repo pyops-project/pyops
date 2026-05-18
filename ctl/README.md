@@ -8,11 +8,12 @@ or absence of pyopsctl.
 
 - `python3` (>= 3.11 for stdlib `tomllib`)
 - `python3-requests` (distro package, not pip)
+- `python3-argcomplete` *(optional — enables zsh tab completion)*
 
 On Debian/Ubuntu:
 
 ```
-sudo apt install python3 python3-requests
+sudo apt install python3 python3-requests python3-argcomplete
 ```
 
 No venv. No pip install of pyopsctl itself.
@@ -27,7 +28,13 @@ Creates a symlink at `$XDG_BIN_HOME/pyopsctl` (default `~/.local/bin/pyopsctl`)
 pointing at this checkout's `bin/pyopsctl`. Idempotent — re-running
 replaces the symlink. Warns if the bin dir isn't on `$PATH`.
 
-To remove:
+If `python3-argcomplete` is installed, the script also drops a zsh
+completion file at `$XDG_DATA_HOME/zsh/site-functions/_pyopsctl`
+(default `~/.local/share/zsh/site-functions/_pyopsctl`) and adds a
+marker-tagged `fpath=(…)` line to `~/.zshrc` — `compinit` picks it up
+on next shell start.
+
+To remove (symlink + completion + the zshrc line):
 
 ```
 ./install.sh --uninstall

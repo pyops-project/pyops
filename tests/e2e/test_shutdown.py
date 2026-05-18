@@ -526,3 +526,160 @@ def test_shutdown_signals_internal_data_service_cleanly(worker_count, tmp_path):
             proc.wait(timeout=5)
         if not log_file.closed:
             log_file.close()
+
+
+# A minimal service scriptlet that uses the non-blocking
+# `listener.async_poll()` instead of the blocking `listener.listen()`.
+# Production example: any causal-based pyops service (e.g. system::os_service)
+# whose tick loop pulls messages every ~100 ms rather than sleeping inside
+# the listener.
+#
+# Regression target: pre-fix, async_poll() did NOT surface kill_now, so
+# SIGTERM never reached the loop and the runner had to SIGKILL after 15 s.
+# A passing run here proves the (b"", "TERM") sentinel is delivered.
+ASYNC_POLL_SERVICE_CODE = """
+import time
+print("async_poll service started", flush=True)
+try:
+    while True:
+        for identity, msg in listener.async_poll():
+            if msg == "TERM":
+                print("async_poll service stopped", flush=True)
+                raise SystemExit(0)
+            listener.async_response(identity, {"echo": msg})
+        time.sleep(0.05)
+except SystemExit:
+    raise
+except Exception as e:
+    print(f"async_poll service crashed: {e}", flush=True)
+    raise
+"""
+
+
+def test_async_poll_service_acks_term_within_grace_window(tmp_path):
+    """Regression: services driven by `listener.async_poll()` must honour
+    SIGTERM without falling through to the runner's 15 s SIGKILL escalation.
+
+    Pre-fix, `ServiceListener.async_poll()` ignored `kill_now`, so causal
+    services (like system::os_service on aiops) stayed in their poll loop
+    after SIGTERM until the runner SIGKILL'd them — rows ended up `failed`
+    with detail "did not respond to shutdown SIGTERM".
+
+    Post-fix, `async_poll` returns `[(b"", "TERM")]` once the signal
+    handler has flipped `kill_now`, the caller sees the sentinel, and the
+    service exits cleanly well before the grace window expires.
+
+    Sister test of `test_shutdown_signals_internal_data_service_cleanly`
+    above, which covers the blocking-`listen()` codepath via the
+    always-running internal data service.
+    """
+    proc, data_dir, log_file, log_path = _start_server(tmp_path)
+    try:
+        set_name = "shutdown_async"
+        svc_name = "async_poll_svc"
+
+        # Materialise the user set + service scriptlet on disk and commit
+        # so the runner can git-show it at schedule-run time.
+        _setup_set_on_disk(data_dir, set_name)
+        repo = data_dir / "git" / set_name
+        (repo / f"{svc_name}.task.py").write_text(ASYNC_POLL_SERVICE_CODE)
+        _commit_drafts_on_disk(data_dir, set_name, "add async_poll service")
+
+        # Empty schedule string → service kind at runtime.
+        r = requests.put(
+            f"{BASE_URL}/scriptlet/schedule/item",
+            json={
+                "set": set_name,
+                "name": svc_name,
+                "drop_done": False,
+                "max_retries": 0,
+                "schedule": "",
+                "param": "",
+            },
+            timeout=10,
+        )
+        assert r.status_code == 200, f"create schedule: {r.status_code} {r.text}"
+        sched_id = r.json()["schedule"]
+
+        r = requests.get(f"{BASE_URL}/scriptlet/schedule/run?id={sched_id}", timeout=10)
+        assert r.status_code == 200, f"run schedule: {r.status_code} {r.text}"
+
+        # Wait for the service to print its startup line.
+        jobs_dir = data_dir / "jobs" / set_name
+        deadline = time.monotonic() + 30
+        svc_job_dir = None
+        while time.monotonic() < deadline:
+            candidates = sorted(jobs_dir.glob(f"anonymous_{set_name}_{svc_name}_*")) if jobs_dir.exists() else []
+            if candidates:
+                latest = candidates[-1]
+                stdout_log = latest / "stdout.log"
+                if stdout_log.exists() and "async_poll service started" in stdout_log.read_text():
+                    svc_job_dir = latest
+                    break
+            time.sleep(0.5)
+        if svc_job_dir is None:
+            pytest.fail(
+                "async_poll service did not start in 30s.\n"
+                f"Server log tail:\n{log_path.read_text()[-2000:]}"
+            )
+
+        # Drive the gunicorn → runner → service SIGTERM cascade.
+        signal_at = time.monotonic()
+        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        try:
+            proc.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            proc.wait(timeout=5)
+            pytest.fail(
+                "Server did not exit within 30s of SIGTERM — async_poll service "
+                "is blocking shutdown.\n"
+                f"Server log tail:\n{log_path.read_text()[-3000:]}\n"
+                f"Service stdout:\n{(svc_job_dir / 'stdout.log').read_text()}"
+            )
+        finally:
+            log_file.close()
+
+        exit_elapsed = time.monotonic() - signal_at
+
+        stdout_content = (svc_job_dir / "stdout.log").read_text()
+        assert "async_poll service stopped" in stdout_content, (
+            "async_poll service never logged its clean-shutdown line — "
+            "async_poll() did not surface kill_now to the caller.\n"
+            f"stdout.log:\n{stdout_content}\n"
+            f"Server log tail:\n{log_path.read_text()[-3000:]}"
+        )
+
+        # Generous upper bound. The fix turns this into a sub-second exit;
+        # the 10 s ceiling exists only to keep the assertion clearly below
+        # the 15 s SIGKILL escalation in _shutdown_job_processes — anything
+        # ≥15 s would mean the test is masking the regression.
+        assert exit_elapsed < 10, (
+            f"async_poll service took {exit_elapsed:.1f}s to honour SIGTERM — "
+            f"close to the 15s SIGKILL escalation. Regression suspected.\n"
+            f"Server log tail:\n{log_path.read_text()[-3000:]}"
+        )
+
+        # Service rows that exit cleanly are reaped by the runner's shutdown
+        # sweep so the schedule loop re-enqueues on next boot. So either
+        # (a) the row is gone (canonical clean-exit signal), or (b) it's
+        # still there but must NOT carry the SIGKILL-escalation detail.
+        db_path = data_dir / "app.db"
+        with contextlib.closing(sqlite3.connect(str(db_path))) as conn:
+            row = conn.execute(
+                "SELECT state, detail FROM job WHERE id=?",
+                (svc_job_dir.name,),
+            ).fetchone()
+        if row is not None:
+            state, detail = row
+            assert "did not respond to shutdown SIGTERM" not in (detail or ""), (
+                f"job ended with shutdown-timeout detail despite the fix: "
+                f"state={state!r} detail={detail!r}"
+            )
+
+    finally:
+        if proc.poll() is None:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            proc.wait(timeout=5)
+        if not log_file.closed:
+            log_file.close()

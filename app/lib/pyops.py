@@ -186,7 +186,16 @@ class ServiceListener:
             self.last_identity = None
 
     def async_poll(self):
-        """Poll for pending messages and return list of (identity, message) tuples."""
+        """Poll for pending messages and return list of (identity, message) tuples.
+
+        If SIGTERM/SIGINT has flipped kill_now, returns a single
+        ``(b"", "TERM")`` sentinel so non-blocking callers (e.g. a causal
+        tick loop calling this every N ms) can react to shutdown. Without
+        this, services using ``async_poll`` poll forever past SIGTERM and
+        the runner has to escalate to SIGKILL after the 15s grace window.
+        """
+        if self.kill_now:
+            return [(b"", "TERM")]
         messages = []
         while True:
             events = self.poller.poll(timeout=0)

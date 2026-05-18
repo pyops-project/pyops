@@ -529,7 +529,7 @@ sequenceDiagram
 - `listen()`: blocks until message received or SIGTERM (returns `"TERM"`); polls with 1000ms timeout
 - `poll()`: non-blocking (timeout=0); returns message dict, `None`, or `"TERM"`
 - `response(msg, status=200)`: sends reply to last received identity
-- `async_poll()`: returns list of all pending `(identity, message)` tuples
+- `async_poll()`: returns list of all pending `(identity, message)` tuples; when `kill_now` is set, returns the single sentinel `[(b"", "TERM")]` instead — same shutdown contract as `listen()`'s `"TERM"` return, so non-blocking callers (causal tick loops) honour SIGTERM within one poll cycle instead of falling through to the runner's 15s SIGKILL escalation
 - `async_response(identity, msg, status=200)`: sends reply to specific client identity
 
 ### Control API (scriptlet-side)

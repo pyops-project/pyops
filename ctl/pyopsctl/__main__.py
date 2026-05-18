@@ -1,3 +1,4 @@
+# PYTHON_ARGCOMPLETE_OK
 """pyopsctl entry point.
 
 argparse-based dispatch. Each command group is a module under
@@ -6,6 +7,13 @@ The parent_flags parser carries the global options every command
 shares (`--profile`, `--server`, `--user`, `--api-key`, `--api-key-stdin`,
 `--json`, `--quiet`, `--timeout`) — keeping them on a parent parser
 means each subcommand inherits them without re-declaring.
+
+The leading `PYTHON_ARGCOMPLETE_OK` marker lets argcomplete's global
+completion hook recognise this script as completion-enabled without
+needing per-command registration. The actual hook (autocomplete call)
+runs in `main()` before `parse_args` — gated by ImportError so hosts
+without `python3-argcomplete` installed still run normally, just
+without tab completion.
 """
 import argparse
 import sys
@@ -59,6 +67,11 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list | None = None) -> int:
     parser = _build_parser()
+    try:
+        import argcomplete
+        argcomplete.autocomplete(parser)
+    except ImportError:
+        pass
     args = parser.parse_args(argv)
     try:
         return args.func(args)

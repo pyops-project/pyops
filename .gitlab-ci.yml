@@ -37,7 +37,7 @@ test:
 test:e2e:
   stage: test
   before_script:
-    - apt-get update && apt-get install -y python3 python3-pip python3-venv git sqlite3 nodejs npm procps
+    - apt-get update && apt-get install -y python3 python3-pip python3-venv python3-argcomplete git sqlite3 nodejs npm procps
     - git config --global user.email "ci@pyops.local"
     - git config --global user.name "PyOps CI"
     - python3 -m venv .venv
@@ -47,7 +47,7 @@ test:e2e:
     - playwright install --with-deps chromium
   script:
     - source .venv/bin/activate
-    - pytest tests/e2e/ -v
+    - pytest tests/e2e/ tests/pyopsctl/e2e/ -v
   variables:
     E2E_STARTUP_TIMEOUT: "60"
   rules:
@@ -121,7 +121,7 @@ test:vsix:
 test:pyopsctl:
   stage: test
   before_script:
-    - apt-get update && apt-get install -y python3 python3-pip python3-venv python3-requests git sqlite3 procps
+    - apt-get update && apt-get install -y python3 python3-pip python3-venv python3-requests python3-argcomplete git sqlite3 procps
     - git config --global user.email "ci@pyops.local"
     - git config --global user.name "PyOps CI"
     - python3 -m venv .venv --system-site-packages
@@ -130,7 +130,9 @@ test:pyopsctl:
     - pip install psutil fastapi uvicorn sqlalchemy pyzmq msgpack croniter jedi requests zipstream-ng gunicorn pytest httpx pytest-cov debugpy
   script:
     - source .venv/bin/activate
-    - pytest tests/pyopsctl -v
+    # E2E pyopsctl tests run in `test:e2e`. This stage covers
+    # unit + integration only.
+    - pytest tests/pyopsctl/unit tests/pyopsctl/integration -v
   rules:
     - if: '$CI_COMMIT_BRANCH == "main" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"'
       when: always

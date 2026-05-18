@@ -23,6 +23,39 @@ from 3.0.0 onward.
 - New data-service endpoint `GET /controller/internal/sets/status/<name>`
   returning the porcelain status (powers the modal preview), and a new
   `has_drafts: bool` field on every `/list` row.
+- **Manager view: "Run Draft" per-task action.** A new `play_arrow`-icon
+  button next to delete/edit on every task row enqueues a `kind=draft`
+  job (empty `param`, `drop_done=false`) via `PUT /scriptlet/job/item`.
+  Lets the operator iterate-run without opening the editor; output is
+  inspected from the Jobs view.
+- **Zsh tab completion for `pyopsctl`.** `ctl/install.sh` now generates
+  `~/.local/share/zsh/site-functions/_pyopsctl` via
+  `register-python-argcomplete` and appends a marker-tagged
+  `fpath=(…)` line to `~/.zshrc` (idempotent; uninstall removes both).
+  Requires the optional `python3-argcomplete` distro package; absent it
+  the install step is a no-op with a one-line hint. `pyopsctl.__main__`
+  gained `argcomplete.autocomplete(parser)` wrapped in `try/except
+  ImportError`, so the CLI runs unchanged on hosts without the package.
+
+### Fixed
+- **`ServiceListener.async_poll()` honours SIGTERM.** Pre-fix, the
+  non-blocking poll never checked `kill_now`, so causal-style services
+  (e.g. `system::os_service`) kept polling past SIGTERM until the
+  runner's 15s SIGKILL escalation marked the row `failed`. `async_poll`
+  now returns `[(b"", "TERM")]` once the signal handler has flipped
+  `kill_now`, mirroring `listen()`'s `"TERM"` return. Regression tests
+  at all three layers (`tests/unit/lib/test_lib_pyops.py`,
+  `tests/integration/lib/test_zmq_integration.py`,
+  `tests/e2e/test_shutdown.py::test_async_poll_service_acks_term_within_grace_window`).
+
+### CI
+- `test:e2e` step now also runs `tests/pyopsctl/e2e/`; `test:pyopsctl`
+  step is scoped to `tests/pyopsctl/unit tests/pyopsctl/integration`
+  only. Root-level `tests/conftest.py` carries the `--e2e` flag and the
+  auto-skip for both e2e dirs.
+- `python3-argcomplete` added to the `test:e2e` and `test:pyopsctl`
+  before_script apt-install lines so the optional completion path is
+  exercised under CI.
 
 ### Removed
 - **Per-file commit/push is gone.** The inventory's

@@ -13,6 +13,48 @@ from sqlalchemy import create_engine, text
 from fastapi.testclient import TestClient
 from pathlib import Path
 
+
+# --- E2E test auto-skip --------------------------------------------------
+#
+# E2E suites under `tests/e2e/` and `tests/pyopsctl/e2e/` spawn real
+# pyops servers and take minutes to run; they don't belong in the
+# default `pytest tests/` invocation that the `test` CI stage runs.
+# Auto-mark and skip them unless --e2e is passed or the e2e path is
+# targeted directly. The matching test:e2e CI stage covers both
+# directories explicitly.
+
+def pytest_addoption(parser):
+    parser.addoption("--e2e", action="store_true", default=False, help="Run E2E tests")
+
+
+def _is_e2e_item(item):
+    p = str(item.fspath)
+    return (
+        "tests/e2e" in p or "tests\\e2e" in p
+        or "tests/pyopsctl/e2e" in p or "tests\\pyopsctl\\e2e" in p
+    )
+
+
+def pytest_collection_modifyitems(config, items):
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", pytest.PytestUnknownMarkWarning)
+        e2e_marker = pytest.mark.e2e
+
+    run_e2e = config.getoption("--e2e", default=False)
+    if not run_e2e:
+        args = config.invocation_params.args
+        run_e2e = any("e2e" in str(a) for a in args)
+
+    for item in items:
+        if _is_e2e_item(item):
+            item.add_marker(e2e_marker)
+            if not run_e2e:
+                item.add_marker(pytest.mark.skip(
+                    reason="E2E tests require --e2e flag or direct tests/<>/e2e/ path"
+                ))
+# -------------------------------------------------------------------------
+
 """Common mock config fixture for tests."""
 @pytest.fixture(scope="function")
 def mock_conf(tmp_path):

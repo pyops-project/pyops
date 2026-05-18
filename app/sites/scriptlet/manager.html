@@ -51,6 +51,9 @@
                     <button type="button" onclick="onEditTask('${set}', '${name}')" class="btn btn-warning p-0" data-testid="scriptlet-edit-${set}-${name}">
                         <span class="material-icons-round">edit</span>
                     </button>
+                    <button type="button" onclick="onRunDraftTask('${set}', '${name}')" class="btn btn-success p-0" data-testid="scriptlet-run-${set}-${name}">
+                        <span class="material-icons-round">play_arrow</span>
+                    </button>
                 `
             }
 
@@ -197,6 +200,33 @@
                 console.debug("onEdit", set, name);
 
                 window.open(`${window.location.origin}/scriptlet/editor_task?set=${set}&name=${name}`,`PyOps - Task Editor ${set}/${name}`,"titlebar=no,toolbar=no,menubar=no,scrollbars=no");
+            }
+
+            function onRunDraftTask(set, name) {
+                console.debug("onRunDraftTask", set, name);
+                fetch("/scriptlet/job/item", {
+                    method: "PUT",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        set: set,
+                        name: name,
+                        drop_done: false,
+                        param: "",
+                        kind: "draft",
+                    }),
+                }).then(async (r) => {
+                    if (r.ok) {
+                        const d = await r.json();
+                        console.debug("run draft", d.job);
+                    } else {
+                        const t = await r.text();
+                        console.error("run draft failed", r.status, t);
+                        alert(`Failed to enqueue draft for ${set}/${name}: ${t}`);
+                    }
+                }).catch((e) => {
+                    console.error("run draft error", e.toString());
+                    alert(`Failed to enqueue draft for ${set}/${name}: ${e}`);
+                });
             }
 
             function onEditLibrary(set, name) {

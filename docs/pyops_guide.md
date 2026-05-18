@@ -56,6 +56,12 @@ Cline outputs full file content; paste/replace in editor, then save via VSIX. It
 - **Enqueue/Monitor**: pyops-monitor right-click jobs; titlebar bulk ops.
 - No auto-sync: Manual control.
 
+Manager view (`/scriptlet/manager.html`) also carries a per-task
+**Run Draft** action (`play_arrow` icon, green) that enqueues a
+`kind=draft` job against the working-tree version of the scriptlet
+with no `param`. Skips the editor entirely; view output in the Jobs
+view or `pyopsctl job view <id>`.
+
 ## Advanced Debugging
 
 **PyOps Server**:
@@ -101,10 +107,16 @@ Two prerequisites (distribution packages, no pip, no venv):
 - `python3` (>= 3.11 for stdlib `tomllib`)
 - `python3-requests`
 
+Optional:
+
+- `python3-argcomplete` — enables zsh tab completion. `install.sh`
+  detects it; without it the install step prints a one-line hint and
+  skips the completion wiring (the CLI still works unchanged).
+
 On Debian/Ubuntu:
 
 ```
-sudo apt install python3 python3-requests
+sudo apt install python3 python3-requests python3-argcomplete
 ```
 
 Then from the repo:
@@ -117,6 +129,13 @@ Symlinks `ctl/bin/pyopsctl` into `$XDG_BIN_HOME` (defaults to
 `~/.local/bin/pyopsctl`). Idempotent — re-run to refresh the symlink.
 Warns when the bin dir isn't on `PATH`. Remove with `./ctl/install.sh
 --uninstall`.
+
+When `python3-argcomplete` is present, `install.sh` also drops
+`~/.local/share/zsh/site-functions/_pyopsctl` (the autoload file
+zsh's `compinit` picks up) and appends a marker-tagged `fpath=(…)`
+entry to `~/.zshrc` so the user-share directory is on `$fpath`. Both
+are idempotent; `--uninstall` removes both. Tab completion is live
+on the next interactive zsh (`exec zsh` or new terminal).
 
 ### Configure
 
