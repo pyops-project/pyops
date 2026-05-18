@@ -172,6 +172,42 @@ def set_factory(e2e_env):
     return _make
 
 
+@pytest.fixture(scope="function")
+def commit_set(e2e_env):
+    """Test-side `git add . && git commit` in a set's repo.
+
+    Pyops's server-side library has no commit/push surface — the only
+    sanctioned commit pathway in production is the internal
+    `set_commit_drafts` task, enqueued from the Sets-view UI button.
+    Tests that need a baseline commit to drive downstream behaviour
+    (e.g. `kind=task` runs which read committed content, or
+    `has_unstaged=False` assertions) use this helper to do the commit
+    directly via subprocess, bypassing the queue.
+
+    Passes `-c user.email` / `-c user.name` overrides on the commit
+    invocation so the helper works in CI environments where the global
+    git identity is unset and the repo (e.g. one created by the
+    `set_create` task) doesn't have a per-repo user.* configured."""
+    def _commit(set_name, msg="setup"):
+        repo = e2e_env["data_dir"] / "git" / set_name
+        env = {"PATH": os.environ["PATH"], "HOME": str(e2e_env["tmp_path"])}
+        subprocess.check_call(
+            ["git", "-C", str(repo), "add", "."],
+            env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        subprocess.check_call(
+            [
+                "git", "-C", str(repo),
+                "-c", "user.email=e2e@example.com",
+                "-c", "user.name=e2e",
+                "commit", "-m", msg,
+            ],
+            env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        return repo
+    return _commit
+
+
 class ServerLog:
     """Wrapper around the server log file for assertions."""
 

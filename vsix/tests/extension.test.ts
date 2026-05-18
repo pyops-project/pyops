@@ -82,7 +82,7 @@ jest.mock('../src/services/RefreshTimerManager', () => ({
 }));
 
 
-jest.mock('../src/services/ScriptletService', () => ({ ScriptletService: jest.fn().mockImplementation(() => ({ resetLocalFromRemote: jest.fn(), writeLocalToRemoteDraft: jest.fn(), saveRemoteDraft: jest.fn(), diffLocalRemote: jest.fn(), deleteScriptlet: jest.fn(), openLocalFile: jest.fn(), })) }));
+jest.mock('../src/services/ScriptletService', () => ({ ScriptletService: jest.fn().mockImplementation(() => ({ resetLocalFromRemote: jest.fn(), writeLocalToRemoteDraft: jest.fn(), diffLocalRemote: jest.fn(), deleteScriptlet: jest.fn(), openLocalFile: jest.fn(), })) }));
 jest.mock('../src/providers/RemoteContentProvider');
 jest.mock('../src/ConnectionStatusManager', () => ({
   ConnectionStatusManager: jest.fn().mockImplementation(function(this: any) {
@@ -186,10 +186,10 @@ describe('Extension', () => {
       expect(require('vscode').window.registerTreeDataProvider).toHaveBeenCalledWith('pyops-manager', expect.any(Object));
       expect(require('vscode').window.registerTreeDataProvider).toHaveBeenCalledWith('pyops-monitor', expect.any(Object));
       expect(require('vscode').debug.registerDebugConfigurationProvider).toHaveBeenCalledWith('python', expect.any(Object));
-      expect(require('vscode').commands.registerCommand).toHaveBeenCalledTimes(21); // Updated for attachDebugJob
-      // 31 from before + 1 for the onDidTerminateDebugSession lease-release hook
+      expect(require('vscode').commands.registerCommand).toHaveBeenCalledTimes(20); // -1 after pyops.saveRemoteDraft removal
+      // 30 from before + 1 for the onDidTerminateDebugSession lease-release hook
       // + 2 for the DebugSessionWatcher (dispose + onDidStartDebugSession)
-      expect(mockContext.subscriptions).toHaveLength(34);
+      expect(mockContext.subscriptions).toHaveLength(33);
       expect(require('vscode').window.createOutputChannel).toHaveBeenCalledWith('PyOps');
     });
 
@@ -534,12 +534,6 @@ describe('Extension', () => {
       const handler = commandHandlers.get('pyops.writeLocalToRemoteDraft');
       await handler!(mockScriptletTreeItem);
       expect(scriptletServiceInstance.writeLocalToRemoteDraft).toHaveBeenCalledWith(mockScriptletTreeItem);
-    });
-
-    it('should save remote draft', async () => {
-      const handler = commandHandlers.get('pyops.saveRemoteDraft');
-      await handler!(mockScriptletTreeItem);
-      expect(scriptletServiceInstance.saveRemoteDraft).toHaveBeenCalledWith(mockScriptletTreeItem);
     });
 
     it('should start debug job', async () => {

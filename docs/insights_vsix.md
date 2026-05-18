@@ -96,7 +96,7 @@ interface ScriptletInfo {
 | Remote, dirty | warning | `pyopsItem-{type}` | sync status |
 
 **Context menu visibility** (from `package.json` `when` clauses):
-- `resetLocalFromRemote`, `saveRemoteDraft`, `diffLocalRemote` — excluded from `-local` items
+- `resetLocalFromRemote`, `diffLocalRemote` — excluded from `-local` items
 - `writeLocalToRemoteDraft`, `deleteScriptlet` — available on all `pyopsItem-*` including `-local`
 - `startDebugJob`, `stopDebugJob` — available on `/^pyopsItem-task(-local)?$/`
 
@@ -189,8 +189,7 @@ Manages local↔remote synchronization for scriptlets.
 | Method | Description |
 |--------|-------------|
 | `resetLocalFromRemote(item)` | `GET /scriptlet/inventory/item` → writes local file |
-| `writeLocalToRemoteDraft(item)` | Reads local file → `PUT /scriptlet/inventory/item` (creates if 404) → `POST /scriptlet/editor/draft` |
-| `saveRemoteDraft(item)` | `POST /scriptlet/inventory/item` (commit draft) |
+| `writeLocalToRemoteDraft(item)` | Reads local file → `PUT /scriptlet/inventory/item` (creates if 404) → `POST /scriptlet/inventory/draft` (working-tree only; no commit) |
 | `diffLocalRemote(item)` | Opens VSCode diff: `pyops-remote://` URI vs local file |
 | `deleteScriptlet(item)` | `DELETE /scriptlet/inventory/item` + removes local file |
 | `openLocalFile(item)` | Opens local file in editor |
@@ -320,7 +319,6 @@ All commands registered in `extension.ts`. 20 total:
 | `pyops.createScriptlet` | Create new scriptlet (type/set/name prompt) |
 | `pyops.resetLocalFromRemote` | Download remote version to local file |
 | `pyops.writeLocalToRemoteDraft` | Upload local file to remote draft (auto-create if missing) |
-| `pyops.saveRemoteDraft` | Commit remote draft to main version |
 | `pyops.diffLocalRemote` | Open VSCode diff: remote vs local |
 | `pyops.deleteScriptlet` | Delete remote + local scriptlet |
 | `pyops.openLocalFile` | Open local scriptlet file in editor |

@@ -30,7 +30,7 @@
             const seen = new Set();
             for (const s of (body.sets || [])) {
                 seen.add(s.name);
-                const html = renderRowContent(s.name, s.branch);
+                const html = renderRowContent(s.name, s.branch, !!s.has_drafts);
                 if (existing[s.name]) {
                     existing[s.name].innerHTML = html;
                 } else {
@@ -48,13 +48,21 @@
         });
     }
 
-    function renderRowContent(setName, branch) {
+    function renderRowContent(setName, branch, hasDrafts) {
+        // The commit-drafts button is enabled only when /list reports
+        // unstaged changes for the set. Without that gate the operator
+        // would open the modal on a clean working tree and "Commit" would
+        // be a no-op — clearer to grey the button out instead.
+        const commitDisabled = hasDrafts ? "" : "disabled";
         return `
             <th scope="row">${setName}</th>
             <th scope="row">${branch}</th>
             <td>
                 <button type="button" onclick="onPull('${setName}')" class="btn btn-primary p-0" data-testid="set-pull-${setName}" title="Git pull">
                     <span class="material-icons-round">sync</span>
+                </button>
+                <button type="button" onclick="onCommitDrafts('${setName}')" class="btn btn-danger p-0" data-testid="set-commit-drafts-${setName}" title="Commit and push all unstaged scriptlets" ${commitDisabled}>
+                    <span class="material-icons-round">save_alt</span>
                 </button>
                 <button type="button" onclick="onUpdateDeps('${setName}')" class="btn btn-info p-0" data-testid="set-update-deps-${setName}" title="Update Dependencies">
                     <span class="material-icons-round">system_update_alt</span>
@@ -124,6 +132,36 @@
 
     function onUpdateDeps(setName) {
         runInternalJob(`/controller/{{SET}}/{{NAME}}/update_deps/${encodeURIComponent(setName)}`, "POST", null, `Update Dependencies — ${setName}`)
+            .then(() => refreshList());
+    }
+
+    function onCommitDrafts(setName) {
+        const modal = document.getElementById("commitDraftsModal");
+        document.getElementById("commitDraftsModal-name").textContent = setName;
+        document.getElementById("commitDraftsModal-message").value = "";
+        document.getElementById("commitDraftsModal-status").textContent = "loading…";
+        modal.dataset.setName = setName;
+        bootstrap.Modal.getOrCreateInstance(modal).show();
+        // Pre-populate the modal with the porcelain output of the set's
+        // working tree so the operator sees exactly what's about to be
+        // committed before they type a message.
+        apiCall("GET", `status/${encodeURIComponent(setName)}`, null, function(ok, body) {
+            const el = document.getElementById("commitDraftsModal-status");
+            if (ok) {
+                el.textContent = (body.status || "").trim() || "(working tree clean)";
+            } else {
+                el.textContent = `error: ${body.error || ""}`;
+            }
+        });
+    }
+
+    function onCommitDraftsSubmit() {
+        const modal = document.getElementById("commitDraftsModal");
+        const setName = modal.dataset.setName;
+        const message = document.getElementById("commitDraftsModal-message").value;
+        bootstrap.Modal.getInstance(modal).hide();
+        const params = message.trim() ? { message: message.trim() } : null;
+        runInternalJob(`/controller/{{SET}}/{{NAME}}/commit_drafts/${encodeURIComponent(setName)}`, "POST", params, `Commit drafts — ${setName}`)
             .then(() => refreshList());
     }
 

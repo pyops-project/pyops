@@ -97,7 +97,7 @@ BODY_CONTENT = (
 # ---------------------------------------------------------------------------
 
 
-def _setup_full_stack(api, set_factory):
+def _setup_full_stack(api, set_factory, commit_set):
     """Create set, service, controller, and three view scriptlets via API.
 
     Uses the anonymous-user session so resources match the browser's owner.
@@ -117,10 +117,12 @@ def _setup_full_stack(api, set_factory):
         )
         assert resp.status_code == 200, f"Create {name} ({type_}) failed: {resp.text}"
         resp = api.post(
-            "/scriptlet/inventory/item",
+            "/scriptlet/inventory/draft",
             json={"set": SET_NAME, "name": name, "code": code},
         )
         assert resp.status_code == 200, f"Save {name} failed: {resp.text}"
+
+    commit_set(SET_NAME, "add full-stack scriptlets")
 
 
 # ---------------------------------------------------------------------------
@@ -458,9 +460,9 @@ def _full_cleanup(e2e_page, job_id=None, sched_id=None, scriptlets=None):
 class TestServiceControllerCreation:
     """Verify that created scriptlets are visible in the Manager UI and sidebar."""
 
-    def test_full_stack_scriptlets_in_manager_ui(self, e2e_page, api_anon, pyops_server, set_factory):
+    def test_full_stack_scriptlets_in_manager_ui(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """All scriptlets (service, controller, views) appear as rows in the Manager."""
-        _setup_full_stack(api_anon, set_factory)
+        _setup_full_stack(api_anon, set_factory, commit_set)
 
         frame = _nav_manager(e2e_page)
         frame.locator('[data-testid="manager-refresh"]').click()
@@ -473,7 +475,7 @@ class TestServiceControllerCreation:
         _full_cleanup(e2e_page)
         pyops_server.assert_no_unexpected_errors()
 
-    def test_controller_appears_in_sidebar_menu(self, e2e_page, api_anon, pyops_server, set_factory):
+    def test_controller_appears_in_sidebar_menu(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """Controller scriptlet creates an entry in the sidebar menu.
 
         User-set sections collapse by default (see `web.expanded_sets`
@@ -481,7 +483,7 @@ class TestServiceControllerCreation:
         collapse target until the operator clicks the section header.
         We check structural presence here (state='attached') — the
         sibling click-through test exercises the expand-then-click path."""
-        _setup_full_stack(api_anon, set_factory)
+        _setup_full_stack(api_anon, set_factory, commit_set)
 
         e2e_page.reload()
         e2e_page.wait_for_load_state("networkidle")
@@ -495,9 +497,9 @@ class TestServiceControllerCreation:
         _full_cleanup(e2e_page)
         pyops_server.assert_no_unexpected_errors()
 
-    def test_delete_scriptlet_via_manager_ui(self, e2e_page, api_anon, pyops_server, set_factory):
+    def test_delete_scriptlet_via_manager_ui(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """Deleting a scriptlet through the Manager UI removes its row."""
-        _setup_full_stack(api_anon, set_factory)
+        _setup_full_stack(api_anon, set_factory, commit_set)
 
         frame = _nav_manager(e2e_page)
         frame.locator('[data-testid="manager-refresh"]').click()
@@ -529,9 +531,9 @@ class TestServiceControllerCreation:
 class TestServiceLifecycle:
     """Verify service start, running state, cancel, and schedule guards through the UI."""
 
-    def test_service_reaches_running_via_scheduler_ui(self, e2e_page, api_anon, pyops_server, set_factory):
+    def test_service_reaches_running_via_scheduler_ui(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """Service started via the Scheduler UI reaches 'running' in the Monitor."""
-        _setup_full_stack(api_anon, set_factory)
+        _setup_full_stack(api_anon, set_factory, commit_set)
         # _start_service_via_ui waits until the monitor shows a running job.
         sched_id, job_id = _start_service_via_ui(e2e_page)
         assert job_id, "No running job found after starting service via UI"
@@ -539,9 +541,9 @@ class TestServiceLifecycle:
         _full_cleanup(e2e_page, job_id=job_id, sched_id=sched_id)
         pyops_server.assert_no_unexpected_errors()
 
-    def test_service_appears_in_monitor(self, e2e_page, api_anon, pyops_server, set_factory):
+    def test_service_appears_in_monitor(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """Running service job has a visible row in the Monitor table."""
-        _setup_full_stack(api_anon, set_factory)
+        _setup_full_stack(api_anon, set_factory, commit_set)
         sched_id, job_id = _start_service_via_ui(e2e_page)
 
         monitor_frame = _nav_monitor(e2e_page)
@@ -551,9 +553,9 @@ class TestServiceLifecycle:
         _full_cleanup(e2e_page, job_id=job_id, sched_id=sched_id)
         pyops_server.assert_no_unexpected_errors()
 
-    def test_cancel_service_via_monitor_ui(self, e2e_page, api_anon, pyops_server, set_factory):
+    def test_cancel_service_via_monitor_ui(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """Clicking Cancel in the Monitor stops the service."""
-        _setup_full_stack(api_anon, set_factory)
+        _setup_full_stack(api_anon, set_factory, commit_set)
         sched_id, job_id = _start_service_via_ui(e2e_page)
         # Schedule is already deactivated by _start_service_via_ui.
 
@@ -584,9 +586,9 @@ class TestServiceLifecycle:
         _cleanup_set(e2e_page)
         pyops_server.assert_no_unexpected_errors()
 
-    def test_schedule_auto_starts_service_in_monitor(self, e2e_page, api_anon, pyops_server, set_factory):
+    def test_schedule_auto_starts_service_in_monitor(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """Active schedule with no cron auto-starts the service (no manual Run click)."""
-        _setup_full_stack(api_anon, set_factory)
+        _setup_full_stack(api_anon, set_factory, commit_set)
 
         sched_id, _sched_frame = _create_service_schedule_via_ui(e2e_page)
 
@@ -596,9 +598,9 @@ class TestServiceLifecycle:
         _full_cleanup(e2e_page, job_id=job_id, sched_id=sched_id)
         pyops_server.assert_no_unexpected_errors()
 
-    def test_deactivated_schedule_does_not_restart(self, e2e_page, api_anon, pyops_server, set_factory):
+    def test_deactivated_schedule_does_not_restart(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """After deactivation, the schedule does not restart a cancelled service."""
-        _setup_full_stack(api_anon, set_factory)
+        _setup_full_stack(api_anon, set_factory, commit_set)
 
         sched_id, _sched_frame = _create_service_schedule_via_ui(e2e_page)
         monitor_frame = _nav_monitor(e2e_page)
@@ -668,9 +670,9 @@ class TestControllerRendering:
         e2e_page.goto(BASE_URL)
         e2e_page.wait_for_load_state("networkidle")
 
-    def test_controller_page_loads_in_browser(self, e2e_page, api_anon, pyops_server, set_factory):
+    def test_controller_page_loads_in_browser(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """Controller page renders valid HTML with the expected heading."""
-        _setup_full_stack(api_anon, set_factory)
+        _setup_full_stack(api_anon, set_factory, commit_set)
         self._go_to_controller(e2e_page)
 
         assert e2e_page.locator("#e2e-heading").is_visible()
@@ -682,9 +684,9 @@ class TestControllerRendering:
         _full_cleanup(e2e_page)
         pyops_server.assert_no_unexpected_errors()
 
-    def test_controller_embeds_view_content(self, e2e_page, api_anon, pyops_server, set_factory):
+    def test_controller_embeds_view_content(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """All three views (head, menu, body) are rendered in the controller page."""
-        _setup_full_stack(api_anon, set_factory)
+        _setup_full_stack(api_anon, set_factory, commit_set)
         self._go_to_controller(e2e_page)
 
         html = e2e_page.content()
@@ -696,9 +698,9 @@ class TestControllerRendering:
         _full_cleanup(e2e_page)
         pyops_server.assert_no_unexpected_errors()
 
-    def test_controller_template_vars_substituted(self, e2e_page, api_anon, pyops_server, set_factory):
+    def test_controller_template_vars_substituted(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """{{SET}} and {{NAME}} placeholders are replaced with actual values."""
-        _setup_full_stack(api_anon, set_factory)
+        _setup_full_stack(api_anon, set_factory, commit_set)
         self._go_to_controller(e2e_page)
 
         html = e2e_page.content()
@@ -710,9 +712,9 @@ class TestControllerRendering:
         _full_cleanup(e2e_page)
         pyops_server.assert_no_unexpected_errors()
 
-    def test_controller_display_name_in_navbar(self, e2e_page, api_anon, pyops_server, set_factory):
+    def test_controller_display_name_in_navbar(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """Controller navbar shows the display name from the controller code."""
-        _setup_full_stack(api_anon, set_factory)
+        _setup_full_stack(api_anon, set_factory, commit_set)
         self._go_to_controller(e2e_page)
 
         navbar = e2e_page.locator("nav.navbar")
@@ -722,9 +724,9 @@ class TestControllerRendering:
         _full_cleanup(e2e_page)
         pyops_server.assert_no_unexpected_errors()
 
-    def test_controller_via_sidebar_menu_click(self, e2e_page, api_anon, pyops_server, set_factory):
+    def test_controller_via_sidebar_menu_click(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """Clicking the controller entry in the sidebar loads the page in the iframe."""
-        _setup_full_stack(api_anon, set_factory)
+        _setup_full_stack(api_anon, set_factory, commit_set)
 
         e2e_page.reload()
         e2e_page.wait_for_load_state("networkidle")
@@ -755,7 +757,7 @@ class TestControllerRendering:
 class TestControllerProxy:
     """HTTP→ZMQ→service forwarding tested via browser fetch() calls."""
 
-    def _setup_running_service(self, e2e_page, api_anon, set_factory):
+    def _setup_running_service(self, e2e_page, api_anon, set_factory, commit_set):
         """Create scriptlets (API) and start service.
 
         Uses the race-free API-then-runnow path because the proxy assertions
@@ -765,12 +767,12 @@ class TestControllerProxy:
         auto-enqueue a second service, leading to non-deterministic
         find-by-id behavior across requests.
         """
-        _setup_full_stack(api_anon, set_factory)
+        _setup_full_stack(api_anon, set_factory, commit_set)
         return _start_service_via_api_then_runnow(e2e_page, api_anon)
 
-    def test_proxy_get_ping(self, e2e_page, api_anon, pyops_server, set_factory):
+    def test_proxy_get_ping(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """GET proxy to /ping returns {pong: true} from the service."""
-        sched_id, job_id = self._setup_running_service(e2e_page, api_anon, set_factory)
+        sched_id, job_id = self._setup_running_service(e2e_page, api_anon, set_factory, commit_set)
 
         result = _proxy_get(e2e_page, "ping")
         assert result["status"] == 200
@@ -779,9 +781,9 @@ class TestControllerProxy:
         _full_cleanup(e2e_page, job_id=job_id, sched_id=sched_id)
         pyops_server.assert_no_unexpected_errors()
 
-    def test_proxy_post_echo(self, e2e_page, api_anon, pyops_server, set_factory):
+    def test_proxy_post_echo(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """POST proxy to /echo echoes the JSON body."""
-        sched_id, job_id = self._setup_running_service(e2e_page, api_anon, set_factory)
+        sched_id, job_id = self._setup_running_service(e2e_page, api_anon, set_factory, commit_set)
 
         payload = {"message": "hello e2e", "value": 42}
         result = _proxy_post(e2e_page, "echo", payload)
@@ -792,9 +794,9 @@ class TestControllerProxy:
         _full_cleanup(e2e_page, job_id=job_id, sched_id=sched_id)
         pyops_server.assert_no_unexpected_errors()
 
-    def test_proxy_stateful_counter(self, e2e_page, api_anon, pyops_server, set_factory):
+    def test_proxy_stateful_counter(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """Service maintains state: /count increments on each request."""
-        sched_id, job_id = self._setup_running_service(e2e_page, api_anon, set_factory)
+        sched_id, job_id = self._setup_running_service(e2e_page, api_anon, set_factory, commit_set)
 
         counts = []
         for _ in range(5):
@@ -807,9 +809,9 @@ class TestControllerProxy:
         _full_cleanup(e2e_page, job_id=job_id, sched_id=sched_id)
         pyops_server.assert_no_unexpected_errors()
 
-    def test_proxy_post_log_then_get_log(self, e2e_page, api_anon, pyops_server, set_factory):
+    def test_proxy_post_log_then_get_log(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """POSTed messages are stored in service state and retrievable via GET."""
-        sched_id, job_id = self._setup_running_service(e2e_page, api_anon, set_factory)
+        sched_id, job_id = self._setup_running_service(e2e_page, api_anon, set_factory, commit_set)
 
         messages = [{"idx": i, "text": f"msg{i}"} for i in range(3)]
         for msg in messages:
@@ -825,9 +827,9 @@ class TestControllerProxy:
         _full_cleanup(e2e_page, job_id=job_id, sched_id=sched_id)
         pyops_server.assert_no_unexpected_errors()
 
-    def test_proxy_unknown_path_returns_error(self, e2e_page, api_anon, pyops_server, set_factory):
+    def test_proxy_unknown_path_returns_error(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """Requests to unmapped paths return 404 from the service."""
-        sched_id, job_id = self._setup_running_service(e2e_page, api_anon, set_factory)
+        sched_id, job_id = self._setup_running_service(e2e_page, api_anon, set_factory, commit_set)
 
         result = _proxy_get(e2e_page, "nonexistent")
         assert result["status"] == 404
@@ -837,13 +839,13 @@ class TestControllerProxy:
         _full_cleanup(e2e_page, job_id=job_id, sched_id=sched_id)
         pyops_server.assert_no_unexpected_errors()
 
-    def test_proxy_without_running_service_returns_error(self, e2e_page, api_anon, pyops_server, set_factory):
+    def test_proxy_without_running_service_returns_error(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """Proxy request with no running service returns HTTP 503 + error dict.
 
         503 is the right status for "service not yet running" (transient,
         client should retry) — the proxy returns it without dumping a
         traceback, since this is expected during warmup."""
-        _setup_full_stack(api_anon, set_factory)
+        _setup_full_stack(api_anon, set_factory, commit_set)
 
         result = _proxy_get(e2e_page, "ping")
         assert result["status"] == 503
@@ -852,7 +854,7 @@ class TestControllerProxy:
         _full_cleanup(e2e_page)
         pyops_server.assert_no_unexpected_errors()
 
-    def test_proxy_with_debug_controller_routes_to_draft_job(self, e2e_page, api_anon, pyops_server, set_factory):
+    def test_proxy_with_debug_controller_routes_to_draft_job(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """Regression: a controller flagged `debug = True` (saved as a
         draft) plus the same scriptlet started as `kind="draft"` from the
         Manager preview flow → the proxy must bind to the draft job.
@@ -861,7 +863,7 @@ class TestControllerProxy:
         `kind="debug"` jobs in debug mode, so a draft started for preview
         was never reachable.
         """
-        _setup_full_stack(api_anon, set_factory)
+        _setup_full_stack(api_anon, set_factory, commit_set)
 
         # Save a controller DRAFT that flips debug=True. The committed
         # controller still has debug=False; the proxy reads draft code on
@@ -926,9 +928,9 @@ class TestControllerProxy:
         _full_cleanup(e2e_page)
         pyops_server.assert_no_unexpected_errors()
 
-    def test_proxy_after_cancel_returns_error(self, e2e_page, api_anon, pyops_server, set_factory):
+    def test_proxy_after_cancel_returns_error(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """After cancelling the service via Monitor UI, proxy returns an error."""
-        sched_id, job_id = self._setup_running_service(e2e_page, api_anon, set_factory)
+        sched_id, job_id = self._setup_running_service(e2e_page, api_anon, set_factory, commit_set)
         # Schedule is already deactivated by _start_service_via_ui.
 
         result = _proxy_get(e2e_page, "ping")
@@ -970,9 +972,9 @@ class TestControllerProxy:
         _cleanup_set(e2e_page)
         pyops_server.assert_no_unexpected_errors(allow=["No running service"])
 
-    def test_multiple_sequential_proxy_requests(self, e2e_page, api_anon, pyops_server, set_factory):
+    def test_multiple_sequential_proxy_requests(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """Ten sequential proxy requests all succeed without errors."""
-        sched_id, job_id = self._setup_running_service(e2e_page, api_anon, set_factory)
+        sched_id, job_id = self._setup_running_service(e2e_page, api_anon, set_factory, commit_set)
 
         for i in range(10):
             result = _proxy_get(e2e_page, "ping")

@@ -356,7 +356,7 @@ Designed for Zabbix/Prometheus polling; see `docs/insights_app.md` § "Monitorin
 - `mock_db`: Temp SQLite
 - `mock_git_dir`: Mock sets/scriptlets
 - `mock_git_ops(mock_git_dir)`: Temp FS ops via `mock_git_dir.tmp_path / repo` (repo="data/git/{set}" → `tmp_path/data/git/{set}/{name}.{ext}`).
-  - Covers `write_content`, `read_content`, `get_controller_code`, `get_view_content`, `delete_file_and_commit`.
+  - Covers `write_content`, `read_content`, `get_controller_code`, `get_view_content`, `delete_file_unstaged`.
   - **Pitfall**: `Path(repo)` creates **real** `./data/git/{set}/` files (e.g., "test_set" tests → pollution; conflicts `testset/test_task.py` pytest collection despite `norecursedirs=data`).
 - `mock_popen`: Subprocess.Popen mock with pid, poll(), terminate(), wait()
 - `mock_zmq`: ZMQ Context/Socket mock for REQ/REP simulation (msgpack-packed messages, 3 retries on ZMQError)

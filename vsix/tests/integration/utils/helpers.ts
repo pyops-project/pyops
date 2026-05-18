@@ -21,8 +21,13 @@ export async function createTestScriptlet(set: string, name: string, type: strin
     throw new Error(`Failed to create test scriptlet: ${createResponse.statusText}`);
   }
 
-  // Then update with the code
-  const updateResponse = await fetch(`${serverUrl}/scriptlet/inventory/item`, {
+  // Then draft the code into the file. Pyops no longer exposes a
+  // per-file commit/push route — the inventory's POST /item is gone,
+  // and POST /draft is the only write path. The integration tests run
+  // against the working-tree content (Manager tree reflects unstaged,
+  // debug-kind reads unstaged), so leaving the file uncommitted is
+  // what every existing assertion already expects.
+  const updateResponse = await fetch(`${serverUrl}/scriptlet/inventory/draft`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

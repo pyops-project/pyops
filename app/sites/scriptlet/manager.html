@@ -97,11 +97,7 @@
                     actions = genViewActions(set, name);
                 else if(type == "markdown")
                     actions = genMdActions(set, name);
-                return actions + `
-                    <button type="button" class="btn btn-danger p-0 save-rev-btn" onclick="saveRevision('${set}', '${name}')" disabled data-testid="scriptlet-save-${set}-${name}">
-                        <span class="material-icons-round">save_alt</span>
-                    </button>
-                `;
+                return actions;
             }
 
             function genScriptletRowContent(set, name, type) {
@@ -165,7 +161,6 @@
                                 if(!newKeys.has(key)) $(this).remove();
                             }
                         });
-                        checkStatuses();
                         window.scrollTo(0, scrollY);
                     } else
                         console.error("GET", "/scriptlet/inventory/list", r.statusText);
@@ -285,67 +280,6 @@
                 }
             }
 
-            async function saveRevision(set, name) {
-                console.debug("saveRevision", set, name);
-                try {
-                    const codeResp = await fetch(`/scriptlet/inventory/code?set=${set}&name=${name}`);
-                    if (!codeResp.ok) {
-                        console.error("Failed to fetch code", codeResp.statusText);
-                        return;
-                    }
-                    const codeData = await codeResp.json();
-                    const data = {
-                        "set": set,
-                        "name": name,
-                        "code": codeData.code
-                    };
-                    const saveResp = await fetch("/scriptlet/inventory/item", {
-                        method: "POST",
-                        headers: {
-                            "Content-Type": "application/json"
-                        },
-                        body: JSON.stringify(data)
-                    });
-                    if (saveResp.ok) {
-                        console.debug("Revision saved");
-                        enqueueRefreshList();
-                    } else {
-                        console.error("Failed to save revision", saveResp.statusText);
-                    }
-                } catch (e) {
-                    console.error("saveRevision error", e.toString());
-                }
-            }
-
-            function checkStatuses() {
-                const rows = $("#scriptlets tr");
-                const promises = [];
-                rows.each(function() {
-                    const set = $(this).find("th").eq(0).text();
-                    const name = $(this).find("th").eq(1).text();
-                    if (set && name) {
-                        promises.push(
-                            fetch(`/scriptlet/inventory/status?set=${set}&name=${name}`).then(async (r) => {
-                                const btn = $(this).find(".save-rev-btn");
-                                if (r.ok) {
-                                    const d = await r.json();
-                                    console.log(`Status for ${set}::${name}:`, d.has_unstaged);
-                                    btn.prop("disabled", !d.has_unstaged);
-                                } else {
-                                    btn.prop("disabled", true);
-                                    console.error("Status fetch failed", r.statusText);
-                                }
-                            }).catch((e) => {
-                                console.error("Status fetch error", e.toString());
-                                $(this).find(".save-rev-btn").prop("disabled", true);
-                            })
-                        );
-                    }
-                });
-                if (promises.length > 0) {
-                    Promise.all(promises).catch((e) => console.error("Batch status error", e));
-                }
-            }
 
             $(document).ready(() => {
                 refreshList();

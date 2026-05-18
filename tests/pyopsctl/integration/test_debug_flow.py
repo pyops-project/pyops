@@ -17,7 +17,7 @@ def _create_scriptlet(run_ctl, pyopsctl_bin, pyops_set, name, code="print('hi')\
     """Create then save so the scriptlet has body content."""
     run_ctl(pyopsctl_bin, "scriptlet", "create", pyops_set, name,
             "--kind", "task")
-    run_ctl(pyopsctl_bin, "scriptlet", "save", pyops_set, name,
+    run_ctl(pyopsctl_bin, "scriptlet", "draft", pyops_set, name,
             "--stdin", input_text=code)
 
 

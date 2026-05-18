@@ -71,7 +71,6 @@ async def item_put(cr: CreateArgument, user: str = Depends(get_current_user)):
         await run_in_executor(
             git.create_scriptlet,
             cr.set, cr.name, cr.type, initial_content,
-            f"Create {cr.name}.{cr.type} by {user}",
         )
 
         return {"set": cr.set, "name": cr.name, "type": cr.type}
@@ -88,34 +87,6 @@ async def item_put(cr: CreateArgument, user: str = Depends(get_current_user)):
         logger.exception("Error in item_put: %s", ex)
         raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail=str(ex))
     
-@router.post("/scriptlet/inventory/item", tags=["scriptlet"])
-async def item_post(sa: SaveArgument, user: str = Depends(get_current_user)):
-    """
-    Updates a Scriptlet's content (with commit/push for explicit save).
-    """
-    try:
-        _reject_if_internal(sa.set)
-        repo = await run_in_executor(git.get_repo_path, sa.set)
-        # Infer type from existing file.
-        files = [f for f in os.listdir(repo) if f.startswith(f"{sa.name}.") and f.endswith(('.py', '.html', '.md', '.js'))]
-        if not files:
-            raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Scriptlet {}::{} not existing".format(sa.set, sa.name))
-        filename = files[0]  # Assume unique.
-        type_ = git.infer_type_from_filename(filename)
-
-        await run_in_executor(git.write_content, repo, sa.name, type_, sa.code)
-        file_path = await run_in_executor(git.get_file_path, repo, sa.name, type_)
-        await run_in_executor(git.perform_git_add_commit_push, repo, file_path, f"Update {sa.name}.{type_} by {user}")
-    except git.GitNotFoundError as ex:
-        raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail=str(ex))
-    except git.GitConflictError as ex:
-        raise HTTPException(status_code=HTTP_409_CONFLICT, detail=str(ex))
-    except HTTPException as ex:
-        raise ex
-    except Exception as ex:
-        logger.exception("Error in item_post: %s", ex)
-        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
-
 @router.post("/scriptlet/inventory/draft", tags=["scriptlet"])
 async def draft_post(sa: SaveArgument):
     """
@@ -145,7 +116,8 @@ async def draft_post(sa: SaveArgument):
 @router.delete("/scriptlet/inventory/item", tags=["scriptlet"])
 async def item_del(set: str, name: str, user: str = Depends(get_current_user)):
     """
-    Deletes a Scriptlet
+    Drafts a Scriptlet deletion (working-tree only; no commit, no push).
+    The deletion is folded into the next set-wide `commit_drafts` batch.
     """
     try:
         _reject_if_internal(set)
@@ -156,7 +128,7 @@ async def item_del(set: str, name: str, user: str = Depends(get_current_user)):
         filename = files[0]
         type_ = git.infer_type_from_filename(filename)
         file_path = await run_in_executor(git.get_file_path, repo, name, type_)
-        await run_in_executor(git.delete_file_and_commit, repo, file_path, f"Delete {name}.{type_} by {user}")
+        await run_in_executor(git.delete_file_unstaged, repo, file_path)
     except git.GitNotFoundError as ex:
         raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail=str(ex))
     except HTTPException as ex:

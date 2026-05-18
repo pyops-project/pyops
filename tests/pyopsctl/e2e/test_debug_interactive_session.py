@@ -20,7 +20,7 @@ _BASIC_SCRIPTLET = "print('hi')\n"
 def _create_scriptlet(run_ctl, pyopsctl_bin, set_name, name, code):
     run_ctl(pyopsctl_bin, "scriptlet", "create", set_name, name,
             "--kind", "task")
-    run_ctl(pyopsctl_bin, "scriptlet", "save", set_name, name,
+    run_ctl(pyopsctl_bin, "scriptlet", "draft", set_name, name,
             "--stdin", input_text=code)
 
 

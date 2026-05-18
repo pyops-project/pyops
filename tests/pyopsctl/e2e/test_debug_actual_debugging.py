@@ -38,7 +38,7 @@ BP_LINE = 3
 def _create(run_ctl, pyopsctl_bin, set_name, name):
     run_ctl(pyopsctl_bin, "scriptlet", "create", set_name, name,
             "--kind", "task")
-    run_ctl(pyopsctl_bin, "scriptlet", "save", set_name, name,
+    run_ctl(pyopsctl_bin, "scriptlet", "draft", set_name, name,
             "--stdin", input_text=SCRIPTLET)
 
 

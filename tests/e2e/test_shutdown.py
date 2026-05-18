@@ -112,6 +112,24 @@ def _setup_set_on_disk(data_dir, name):
     run(["git", "commit", "-q", "-m", "init"])
 
 
+def _commit_drafts_on_disk(data_dir, name, msg="setup"):
+    """`git add . && git commit` in the set's repo, test-side. Pyops's
+    inventory API no longer commits — the only sanctioned commit pathway
+    in production is the `set_commit_drafts` task. For shutdown tests we
+    can't enqueue that task (the runner under test is what we're trying
+    to bring down), so we commit directly via subprocess."""
+    repo = data_dir / "git" / name
+    env = {"PATH": os.environ["PATH"], "HOME": str(data_dir.parent)}
+    subprocess.check_call(
+        ["git", "-C", str(repo), "add", "."],
+        env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    subprocess.check_call(
+        ["git", "-C", str(repo), "commit", "-q", "-m", msg],
+        env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+
+
 def test_shutdown_waits_for_in_flight_pip_install(tmp_path):
     """SIGTERM mid-pip-install: pyops must let pip finish before exiting,
     otherwise the venv ends up missing runtime deps. We trigger a user-set
@@ -129,9 +147,10 @@ def test_shutdown_waits_for_in_flight_pip_install(tmp_path):
             json={"set": set_name, "name": "noop", "type": "task"}, timeout=10,
         ).status_code == 200
         assert requests.post(
-            f"{BASE_URL}/scriptlet/inventory/item",
+            f"{BASE_URL}/scriptlet/inventory/draft",
             json={"set": set_name, "name": "noop", "code": 'print("x")\n'}, timeout=10,
         ).status_code == 200
+        _commit_drafts_on_disk(data_dir, set_name, "add noop")
         # Enqueue the job → runner picks it up, calls ensure_set_environment,
         # pip install starts. We don't wait for the job; we want to SIGTERM
         # while pip is mid-install (cold venv = real pip work on aarch64).
@@ -200,9 +219,10 @@ def test_shutdown_does_not_claim_new_jobs_after_signal(tmp_path):
             json={"set": set_name, "name": "noclaim", "type": "task"}, timeout=10,
         ).status_code == 200
         assert requests.post(
-            f"{BASE_URL}/scriptlet/inventory/item",
+            f"{BASE_URL}/scriptlet/inventory/draft",
             json={"set": set_name, "name": "noclaim", "code": 'print("ran")\n'}, timeout=10,
         ).status_code == 200
+        _commit_drafts_on_disk(data_dir, set_name, "add noclaim")
 
         # Prime the per-set venv via an initial job so the second enqueue
         # (whose claim we're testing) isn't racing pip install with SIGTERM.

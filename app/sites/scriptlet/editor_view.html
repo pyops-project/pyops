@@ -52,33 +52,23 @@
                 });
             }
 
-            function save(draft = true) {
-                if(!draft || !draftLock) {
+            function save() {
+                if(!draftLock) {
                     const data = {
                         "set": set,
                         "name": name,
                         "code": editor.getValue()
                     };
-
-                    let url;
-                    if(draft)
-                        url = "/scriptlet/inventory/draft";
-                    else
-                        url = "/scriptlet/inventory/item";
-
-                    fetch(url, {
+                    fetch("/scriptlet/inventory/draft", {
                         method: "POST",
                         headers: {
                             "Content-Type": "application/json"
                         },
                         body: JSON.stringify(data)
                     }).then(async (r)=>{
-                        if(r.ok) {
-                            if(draft)
-                                console.debug("save", "Draft Stored");
-                            else
-                                console.debug("save", "Stored");
-                        } else
+                        if(r.ok)
+                            console.debug("save", "Draft Stored");
+                        else
                             console.error(r.statusText);
                     }).catch((e)=>console.error("save", e.toString()));
                 }
@@ -88,7 +78,7 @@
                 if(editor_dirty) {
                     save();
                     editor_dirty = false;
-                    $("#btn-save, #btn-revert").prop("disabled", false);
+                    $("#btn-revert").prop("disabled", false);
                 }
                 setTimeout(function() { save_draft(); }, 1000);
             }
@@ -100,14 +90,14 @@
                         const d = await resp.json();
                         console.log(`Status for ${set}::${name}:`, d.has_unstaged);
                         const has = d.has_unstaged;
-                        $("#btn-save, #btn-revert").prop("disabled", !has);
+                        $("#btn-revert").prop("disabled", !has);
                     } else {
-                        $("#btn-save, #btn-revert").prop("disabled", true);
+                        $("#btn-revert").prop("disabled", true);
                         console.error("Status fetch failed", resp.statusText);
                     }
                 } catch (e) {
                     console.error("Status check error", e.toString());
-                    $("#btn-save, #btn-revert").prop("disabled", true);
+                    $("#btn-revert").prop("disabled", true);
                 }
             }
 
@@ -141,7 +131,7 @@
 
                 editor.on("change", ()=>{
                     editor_dirty = true;
-                    $("#btn-save, #btn-revert").prop("disabled", false);
+                    $("#btn-revert").prop("disabled", false);
                 });
 
                 document.addEventListener('keydown', function(e) {
@@ -164,11 +154,6 @@
                     <span class="material-icons-round">description</span>
                     <span>View Editor</span>
                     <span id="scriptlet-id" data-testid="editor-scriptlet-id"></span>
-                </li>
-                <li class="nav-item m-1">
-                    <button id="btn-save" type="button" class="btn btn-danger" onclick="save(false)" disabled="disabled" data-testid="editor-save">
-                        <span class="material-icons-round">save_alt</span>
-                    </button>
                 </li>
                 <li class="nav-item m-1">
                     <button id="btn-revert" type="button" class="btn btn-danger" onclick="rollback()" disabled="disabled" data-testid="editor-revert">

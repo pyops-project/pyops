@@ -22,7 +22,13 @@ BASE_CODE = 'print("base")\n'
 DRAFT_CODE = 'print("draft-unsaved")\n'
 
 
-def _setup_task(api, set_factory, set_name=SET, task_name=TASK, code=BASE_CODE):
+def _setup_task(api, set_factory, commit_set, set_name=SET, task_name=TASK, code=BASE_CODE):
+    """Create a scriptlet, draft the code, then commit via subprocess.
+
+    The server no longer commits via the inventory API — only the
+    internal `set_commit_drafts` task does. For tests that need a
+    "committed baseline" (e.g. `has_unstaged` flipping), the test-side
+    `commit_set` fixture bakes the draft into HEAD directly."""
     set_factory(set_name)
     r = api.put(
         "/scriptlet/inventory/item",
@@ -30,10 +36,11 @@ def _setup_task(api, set_factory, set_name=SET, task_name=TASK, code=BASE_CODE):
     )
     assert r.status_code == 200, f"create failed: {r.text}"
     r = api.post(
-        "/scriptlet/inventory/item",
+        "/scriptlet/inventory/draft",
         json={"set": set_name, "name": task_name, "code": code},
     )
-    assert r.status_code == 200, f"save failed: {r.text}"
+    assert r.status_code == 200, f"draft failed: {r.text}"
+    commit_set(set_name, f"add {task_name}")
 
 
 class TestInventorySets:
@@ -76,17 +83,17 @@ class TestRepoStatus:
 class TestInventoryStatus:
     """GET /scriptlet/inventory/status — has_unstaged flag."""
 
-    def test_committed_scriptlet_has_no_unstaged(self, api, pyops_server, set_factory):
-        """Right after POST /inventory/item (which commits), has_unstaged is False."""
-        _setup_task(api, set_factory)
+    def test_committed_scriptlet_has_no_unstaged(self, api, pyops_server, set_factory, commit_set):
+        """Right after a baseline commit, has_unstaged is False."""
+        _setup_task(api, set_factory, commit_set)
         r = api.get(f"/scriptlet/inventory/status?set={SET}&name={TASK}")
         assert r.status_code == 200
         assert r.json() == {"has_unstaged": False}
         pyops_server.assert_no_unexpected_errors()
 
-    def test_draft_write_sets_unstaged_true(self, api, pyops_server, set_factory):
+    def test_draft_write_sets_unstaged_true(self, api, pyops_server, set_factory, commit_set):
         """After /inventory/draft POST, has_unstaged flips to True."""
-        _setup_task(api, set_factory)
+        _setup_task(api, set_factory, commit_set)
         r = api.post(
             "/scriptlet/inventory/draft",
             json={"set": SET, "name": TASK, "code": DRAFT_CODE},
@@ -108,9 +115,9 @@ class TestInventoryStatus:
 class TestInventoryDraftRoundtrip:
     """POST /inventory/draft saves draft; GET /inventory/code returns it; DELETE rolls back."""
 
-    def test_draft_is_readable_via_code_endpoint(self, api, pyops_server, set_factory):
+    def test_draft_is_readable_via_code_endpoint(self, api, pyops_server, set_factory, commit_set):
         """Draft content is visible via /inventory/code (reads unstaged)."""
-        _setup_task(api, set_factory)
+        _setup_task(api, set_factory, commit_set)
 
         r = api.post(
             "/scriptlet/inventory/draft",
@@ -123,9 +130,9 @@ class TestInventoryDraftRoundtrip:
         assert "draft-unsaved" in r.json()["code"]
         pyops_server.assert_no_unexpected_errors()
 
-    def test_draft_delete_rolls_back_to_committed(self, api, pyops_server, set_factory):
+    def test_draft_delete_rolls_back_to_committed(self, api, pyops_server, set_factory, commit_set):
         """DELETE /inventory/draft discards unstaged write."""
-        _setup_task(api, set_factory)
+        _setup_task(api, set_factory, commit_set)
         api.post(
             "/scriptlet/inventory/draft",
             json={"set": SET, "name": TASK, "code": DRAFT_CODE},
@@ -155,9 +162,9 @@ class TestInventoryDraftRoundtrip:
         assert r.status_code == 404
         pyops_server.assert_no_unexpected_errors()
 
-    def test_draft_delete_wrong_type_returns_400(self, api, pyops_server, set_factory):
+    def test_draft_delete_wrong_type_returns_400(self, api, pyops_server, set_factory, commit_set):
         """Providing type_ that mismatches inferred filetype rejects with 400."""
-        _setup_task(api, set_factory)
+        _setup_task(api, set_factory, commit_set)
         api.post(
             "/scriptlet/inventory/draft",
             json={"set": SET, "name": TASK, "code": DRAFT_CODE},

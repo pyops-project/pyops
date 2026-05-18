@@ -232,7 +232,7 @@ def mock_git_ops(mock_git_dir):
     def mock_get_git_base():
         return str(mock_data_dir)
 
-    def mock_delete_file_and_commit(repo, file_path, msg):
+    def mock_delete_file_unstaged(repo, file_path):
         full_path = mock_git_dir.tmp_path / repo / file_path
         if full_path.exists():
             full_path.unlink()
@@ -240,10 +240,7 @@ def mock_git_ops(mock_git_dir):
     def mock_rollback_committed(set_name, name, type_):
         pass
 
-    def mock_perform_git_add_commit_push(repo, file_path, msg):
-        pass
-
-    def mock_create_scriptlet(set_name, name, type_, content, commit_msg):
+    def mock_create_scriptlet(set_name, name, type_, content):
         repo = f"data/git/{set_name}"
         mock_write_content(repo, name, type_, content)
         return mock_get_file_path(repo, name, type_)
@@ -264,9 +261,8 @@ def mock_git_ops(mock_git_dir):
     mock_infer_type_mock = MagicMock(side_effect=mock_infer_type_from_filename)
     mock_check_name_unique_mock = MagicMock(return_value=True)
     mock_get_file_path_mock = MagicMock(side_effect=mock_get_file_path)
-    mock_perform_git_add_commit_push_mock = MagicMock()
     mock_create_scriptlet_mock = MagicMock(side_effect=mock_create_scriptlet)
-    mock_delete_file_and_commit_mock = MagicMock(side_effect=mock_delete_file_and_commit)
+    mock_delete_file_unstaged_mock = MagicMock(side_effect=mock_delete_file_unstaged)
     mock_rollback_committed_mock = MagicMock(side_effect=mock_rollback_committed)
     mock_get_repo_status_mock = MagicMock(return_value={"branch": "main"})
     mock_subprocess_run = MagicMock(return_value=Mock(returncode=0, stdout="", stderr=""))
@@ -280,9 +276,8 @@ def mock_git_ops(mock_git_dir):
     mock.infer_type_from_filename = mock_infer_type_mock
     mock.check_name_unique = mock_check_name_unique_mock
     mock.get_file_path = mock_get_file_path_mock
-    mock.perform_git_add_commit_push = mock_perform_git_add_commit_push_mock
     mock.create_scriptlet = mock_create_scriptlet_mock
-    mock.delete_file_and_commit = mock_delete_file_and_commit_mock
+    mock.delete_file_unstaged = mock_delete_file_unstaged_mock
     mock.rollback_committed = mock_rollback_committed_mock
     mock.get_repo_status = mock_get_repo_status_mock
 
@@ -294,9 +289,8 @@ def mock_git_ops(mock_git_dir):
         patch("app.lib.git.infer_type_from_filename", mock_infer_type_mock), \
         patch("app.lib.git.check_name_unique", mock_check_name_unique_mock), \
         patch("app.lib.git.get_file_path", mock_get_file_path_mock), \
-        patch("app.lib.git.perform_git_add_commit_push", mock_perform_git_add_commit_push_mock), \
         patch("app.lib.git.create_scriptlet", mock_create_scriptlet_mock), \
-        patch("app.lib.git.delete_file_and_commit", mock_delete_file_and_commit_mock), \
+        patch("app.lib.git.delete_file_unstaged", mock_delete_file_unstaged_mock), \
         patch("app.lib.git.rollback_committed", mock_rollback_committed_mock), \
         patch("app.lib.git.get_repo_status", mock_get_repo_status_mock), \
         patch("subprocess.run", mock_subprocess_run), \

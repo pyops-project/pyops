@@ -170,10 +170,8 @@ Manages scriptlet files as Git repos in `data/git/{set}/`. All mutating operatio
 - `get_repo_path(set)`: resolves `data/git/{set}/`; initializes `.git`, `.gitignore`, `README.md` if missing
 - `read_content(repo, name, type_, committed, strict)`: reads working tree (default) or `git show HEAD:` for committed; `strict=True` raises if no committed version
 - `write_content(repo, name, type_, content)`: writes file under `repo_lock`
-- `create_scriptlet(set_name, name, type_, content, commit_msg)`: atomic unique-name check + file write + commit under a single `repo_lock` span, closing the race where two concurrent same-name creates would each pass `check_name_unique` before either writes; raises `FileExistsError` on duplicate
-- `perform_git_add_commit_push(repo, file_path, msg)`: add + commit + push (skips push if no remote; raises `GitConflictError` on tag)
-- `batch_commit(repo, msg, rel_files)`: add all or specific files + commit + push
-- `delete_file_and_commit(repo, file_path, msg)`: `git rm` + commit + push
+- `create_scriptlet(set_name, name, type_, content)`: atomic unique-name check + working-tree write under one `repo_lock` span (closes the race where two concurrent same-name creates pass `check_name_unique` before either writes); raises `FileExistsError` on duplicate. No commit — the new file shows up as untracked and is folded into the next `set_commit_drafts` batch.
+- `delete_file_unstaged(repo, file_path)`: working-tree-only deletion under `repo_lock`; no `git rm`, no commit, no push. Idempotent on a missing path.
 - `list_scriptlets()`: scans all sets, returns `[{"set", "name", "type"}, ...]` sorted
 - `get_repo_status(set)`: returns `{"branch", "is_tag", "flag"}`
 - `rollback_staged(set, name, type_)`: backs up to `.bck`, then `git checkout HEAD`
@@ -618,7 +616,7 @@ Ulimit check tracks RLIMIT_NOFILE and RLIMIT_NPROC against current usage from `/
 
 - `mock_db`: temp SQLite DB
 - `mock_git_dir`: mock set/scriptlet directory tree
-- `mock_git_ops(mock_git_dir)`: temp FS ops; covers `write_content`, `read_content`, `get_controller_code`, `get_view_content`, `delete_file_and_commit`
+- `mock_git_ops(mock_git_dir)`: temp FS ops; covers `write_content`, `read_content`, `get_controller_code`, `get_view_content`, `delete_file_unstaged`
   - **Pitfall**: `Path(repo)` creates real `./data/git/{set}/` files; can pollute test output and conflict with pytest collection despite `norecursedirs=data`
 - `mock_popen`: `subprocess.Popen` mock with pid, `poll()`, `terminate()`, `wait()`
 - `mock_zmq`: ZMQ Context/Socket mock; `send_completion` sends once and blocks for ACK (no retries)

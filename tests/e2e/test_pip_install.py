@@ -48,17 +48,18 @@ def _wait_for_job(api, job_id, timeout=30):
     )
 
 
-def _create(api, set_name, name, type_, code):
+def _create(api, set_name, name, type_, code, commit_set):
     r = api.put(
         "/scriptlet/inventory/item",
         json={"set": set_name, "name": name, "type": type_},
     )
     assert r.status_code == 200, f"create {name} failed: {r.text}"
     r = api.post(
-        "/scriptlet/inventory/item",
+        "/scriptlet/inventory/draft",
         json={"set": set_name, "name": name, "code": code},
     )
     assert r.status_code == 200, f"save {name} failed: {r.text}"
+    commit_set(set_name, f"add {name}")
 
 
 def _run(api, set_name, task_name, param="", timeout=120):
@@ -85,7 +86,7 @@ def _run(api, set_name, task_name, param="", timeout=120):
 class TestPipInstall:
     """Tasks that install pip packages via #!<package> in code or param."""
 
-    def test_package_installed_and_importable(self, api, pyops_server, set_factory):
+    def test_package_installed_and_importable(self, api, pyops_server, set_factory, commit_set):
         """#!six in task code installs the package and makes it importable.
 
         'six' is chosen because it is tiny (~33 KB) and has no transitive
@@ -99,7 +100,7 @@ class TestPipInstall:
             'print(f"six_version={six.__version__}")\n'
             "print(f\"is_py3={six.PY3}\")\n"
         )
-        _create(api, SET, "pip_task", "task", task_code)
+        _create(api, SET, "pip_task", "task", task_code, commit_set)
 
         job = _run(api, SET, "pip_task")
         assert job["state"] == "done", (
@@ -109,7 +110,7 @@ class TestPipInstall:
         assert "is_py3=True" in job["stdout"]
         pyops_server.assert_no_unexpected_errors()
 
-    def test_pip_install_in_param_available_in_task(self, api, pyops_server, set_factory):
+    def test_pip_install_in_param_available_in_task(self, api, pyops_server, set_factory, commit_set):
         """#!<package> in param is processed before task code executes.
 
         The param runs first; its pip install makes the package available
@@ -119,7 +120,7 @@ class TestPipInstall:
 
         # Main code imports six — no #! directive here.
         task_code = "import six\nprint(f\"param_install={six.__version__}\")\n"
-        _create(api, SET + "_param", "param_task", "task", task_code)
+        _create(api, SET + "_param", "param_task", "task", task_code, commit_set)
 
         # Install directive lives in param.
         job = _run(api, SET + "_param", "param_task", param="#!six")
@@ -129,7 +130,7 @@ class TestPipInstall:
         assert "param_install=" in job["stdout"]
         pyops_server.assert_no_unexpected_errors()
 
-    def test_second_run_reuses_venv_without_reinstall_errors(self, api, pyops_server, set_factory):
+    def test_second_run_reuses_venv_without_reinstall_errors(self, api, pyops_server, set_factory, commit_set):
         """Running the same pip-install task twice succeeds both times.
 
         Per-job (default) runs `pip install <pkg>` without `--upgrade`. The
@@ -139,7 +140,7 @@ class TestPipInstall:
         set_factory(SET + "_reuse")
 
         task_code = "#!six\nimport six\nprint(f\"ok={six.__version__}\")\n"
-        _create(api, SET + "_reuse", "reuse_task", "task", task_code)
+        _create(api, SET + "_reuse", "reuse_task", "task", task_code, commit_set)
 
         for _ in range(2):
             job = _run(api, SET + "_reuse", "reuse_task")
@@ -150,7 +151,7 @@ class TestPipInstall:
 
         pyops_server.assert_no_unexpected_errors()
 
-    def test_nonexistent_package_fails_job(self, api, pyops_server, set_factory):
+    def test_nonexistent_package_fails_job(self, api, pyops_server, set_factory, commit_set):
         """A #! line naming a non-existent package causes the job to fail."""
         set_factory(SET + "_bad")
 
@@ -158,7 +159,7 @@ class TestPipInstall:
             "#!nonexistent-package-xyzzy-e2e-12345\n"
             'print("should not reach here")\n'
         )
-        _create(api, SET + "_bad", "bad_pkg_task", "task", task_code)
+        _create(api, SET + "_bad", "bad_pkg_task", "task", task_code, commit_set)
 
         job = _run(api, SET + "_bad", "bad_pkg_task")
         assert job["state"] == "failed", (
@@ -173,7 +174,7 @@ class TestPipInstall:
             ]
         )
 
-    def test_library_directive_not_treated_as_pip_install(self, api, pyops_server, set_factory):
+    def test_library_directive_not_treated_as_pip_install(self, api, pyops_server, set_factory, commit_set):
         """#!{::libname} lines are skipped by process_install_lines.
 
         process_install_lines skips lines where rest starts with '{',
@@ -182,11 +183,11 @@ class TestPipInstall:
         set_factory(SET + "_skip")
 
         lib_code = "MAGIC = 99\n"
-        _create(api, SET + "_skip", "my_lib", "library", lib_code)
+        _create(api, SET + "_skip", "my_lib", "library", lib_code, commit_set)
 
         # The #!{::my_lib} line is a library directive, not a pip install.
         task_code = "#!{::my_lib}\nprint(f\"magic={MAGIC}\")\n"
-        _create(api, SET + "_skip", "lib_task", "task", task_code)
+        _create(api, SET + "_skip", "lib_task", "task", task_code, commit_set)
 
         # Should succeed via library import, not pip install.
         job = _run(api, SET + "_skip", "lib_task")

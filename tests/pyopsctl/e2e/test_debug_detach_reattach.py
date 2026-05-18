@@ -35,7 +35,7 @@ for _ in range(300):
 def _create(run_ctl, pyopsctl_bin, set_name, name, code=_LONG_SCRIPTLET):
     run_ctl(pyopsctl_bin, "scriptlet", "create", set_name, name,
             "--kind", "task")
-    run_ctl(pyopsctl_bin, "scriptlet", "save", set_name, name,
+    run_ctl(pyopsctl_bin, "scriptlet", "draft", set_name, name,
             "--stdin", input_text=code)
 
 

@@ -9,6 +9,40 @@ from 3.0.0 onward.
 
 ## [Unreleased]
 
+### Added
+- **Sets view: "commit drafts" per-set action.** New `check`-icon button
+  alongside pull / update-deps / switch / remove that stages, commits
+  and pushes every unstaged scriptlet in the set in one batch. The
+  button is enabled only when `git status --porcelain` reports drafts;
+  clicking it opens a modal that previews the porcelain output and
+  accepts an optional commit message (empty → `Commit drafts in <set>
+  by <user>`). Backed by a new `set_commit_drafts` task in the internal
+  set; routes through the data service at
+  `/controller/internal/sets/commit_drafts/<name>`. Refuses on a tag;
+  no-op when nothing is unstaged; skips push when no remote.
+- New data-service endpoint `GET /controller/internal/sets/status/<name>`
+  returning the porcelain status (powers the modal preview), and a new
+  `has_drafts: bool` field on every `/list` row.
+
+### Removed
+- **Per-file commit/push is gone.** The inventory's
+  `POST /scriptlet/inventory/item` route (the only "save and commit"
+  pathway) is deleted; `PUT` (create) and `DELETE` no longer commit —
+  both leave the change as an unstaged working-tree edit that
+  `set_commit_drafts` picks up. The corresponding clients went with it:
+  VSIX's `pyops.saveRemoteDraft` command, the Manager view's per-row
+  save button + `saveRevision`, the editor templates' Save button
+  (drafts still auto-save every 1s), and pyopsctl's `scriptlet save`
+  subcommand.
+- **The whole commit/push surface in `app.lib.git`.** Removed
+  `_add_commit_push_locked`, `perform_git_add_commit_push`,
+  `batch_commit`, and `delete_file_and_commit`. `create_scriptlet` no
+  longer takes a `commit_msg`. New `delete_file_unstaged` replaces the
+  old delete contract (working-tree only). The internal `set_*` tasks
+  drive every commit/push directly via `git` subprocess invocations
+  under `repo_lock` — pyops's FastAPI surface no longer touches the
+  index.
+
 ### Changed
 - **Debugger injection moved from pyops to the client.** `kind=debug` no
   longer imports debugpy, installs it, or starts a listener. The client

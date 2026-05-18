@@ -460,73 +460,28 @@ class TestContentOps:
 
 
 
-class TestCommitOps:
-    def test_perform_git_add_commit_push(self, mock_repo, mock_subprocess, mock_files_conf, mock_fcntl, mock_logging):
-        mock_run, mock_check = mock_subprocess
-        # For perform: direct tag empty (no describe)
-        mock_check.side_effect = [b'', b'origin\n']  # tag, remote
+class TestDeleteFileUnstaged:
+    def test_delete_file_unstaged_removes_from_working_tree(self, mock_repo, mock_files_conf, mock_fcntl, tmp_path):
+        """The new delete contract: working-tree only, no git rm, no commit, no push."""
+        # Create a real file on disk inside the mock repo so the test
+        # can observe the removal.
+        os.makedirs(mock_repo, exist_ok=True)
         file_path = os.path.join(mock_repo, 'test.py')
-        with patch('app.lib.git.pull', return_value=True):
-            git.perform_git_add_commit_push(mock_repo, file_path, 'test commit')
-            # Assert add, commit, push called
-            assert any(call.args[0] == ['git', 'add', 'test.py'] for call in mock_run.call_args_list)
-            assert any(call.args[0] == ['git', 'commit', '-m', 'test commit'] for call in mock_run.call_args_list)
-            assert any(call.args[0] == ['git', 'push'] for call in mock_run.call_args_list)
+        with open(file_path, 'w') as f:
+            f.write("pass\n")
+        assert os.path.exists(file_path)
 
-    def test_perform_git_add_commit_push_on_tag(self, mock_repo, mock_subprocess, mock_files_conf):
-        mock_run, mock_check = mock_subprocess
-        # For perform: direct tag1 non-empty, _check describe2 succeeds
-        mock_check.side_effect = [
-            b'tag123\n',  # tag
-            b'tag123\n',  # describe
-        ]
-        with patch('app.lib.git.pull', return_value=True):
-            file_path = os.path.join(mock_repo, 'test.py')
-            with pytest.raises(git.GitConflictError, match='Cannot commit on a tag.'):
-                git.perform_git_add_commit_push(mock_repo, file_path, 'test')
+        git.delete_file_unstaged(mock_repo, file_path)
 
-    def test_batch_commit(self, mock_repo, mock_subprocess, mock_files_conf, mock_fcntl):
-        mock_run, mock_check = mock_subprocess
-        # For batch: direct tag1 empty
-        mock_check.side_effect = [b'', b'origin\n']  # tag, remote
-        rel_files = ['file1.py', 'file2.html']
-        with patch('app.lib.git.pull', return_value=True):
-            git.batch_commit(mock_repo, 'batch msg', rel_files)
-            assert any(call.args[0] == ['git', 'add', 'file1.py', 'file2.html'] for call in mock_run.call_args_list)
-            assert any(call.args[0] == ['git', 'commit', '-m', 'batch msg'] for call in mock_run.call_args_list)
-            assert any(call.args[0] == ['git', 'push'] for call in mock_run.call_args_list)
+        assert not os.path.exists(file_path)
 
-    def test_batch_commit_multi_files(self, mock_repo, mock_subprocess, mock_files_conf, mock_fcntl):
-        mock_run, mock_check = mock_subprocess
-        mock_check.side_effect = [b'', b'origin\n']  # tag, remote
-        rel_files = ['file1.py', 'file2.html']
-        with patch('app.lib.git.pull', return_value=True):
-            git.batch_commit(mock_repo, 'batch msg', rel_files)
-            # Assert single add call with both files
-            assert any(call.args[0] == ['git', 'add', 'file1.py', 'file2.html'] for call in mock_run.call_args_list)
-            assert any(call.args[0] == ['git', 'commit', '-m', 'batch msg'] for call in mock_run.call_args_list)
-            assert any(call.args[0] == ['git', 'push'] for call in mock_run.call_args_list)
+    def test_delete_file_unstaged_missing_file_is_noop(self, mock_repo, mock_files_conf, mock_fcntl):
+        """Idempotent: deleting an already-missing file does not raise."""
+        os.makedirs(mock_repo, exist_ok=True)
+        file_path = os.path.join(mock_repo, 'ghost.py')
+        assert not os.path.exists(file_path)
+        git.delete_file_unstaged(mock_repo, file_path)
 
-    def test_delete_file_and_commit(self, mock_repo, mock_subprocess, mock_files_conf, mock_fcntl):
-        mock_run, mock_check = mock_subprocess
-        mock_check.side_effect = [b'origin\n']  # remote for push check
-        # No tag check in delete, only pull (patched)
-        file_path = os.path.join(mock_repo, 'test.py')
-        with patch('app.lib.git.pull', return_value=True):
-            git.delete_file_and_commit(mock_repo, file_path, 'delete msg')
-            assert any(call.args[0] == ['git', 'rm', '-f', 'test.py'] for call in mock_run.call_args_list)
-            assert any(call.args[0] == ['git', 'commit', '-m', 'delete msg'] for call in mock_run.call_args_list)
-            assert any(call.args[0] == ['git', 'push'] for call in mock_run.call_args_list)
-
-    def test_delete_file_and_commit_no_remote(self, mock_repo, mock_subprocess, mock_files_conf, mock_fcntl):
-        mock_run, mock_check = mock_subprocess
-        mock_check.side_effect = [b'']  # _check git remote empty
-        file_path = os.path.join(mock_repo, 'test.py')
-        with patch('app.lib.git.pull', return_value=True):
-            git.delete_file_and_commit(mock_repo, file_path, 'delete msg')
-            assert any(call.args[0] == ['git', 'rm', '-f', 'test.py'] for call in mock_run.call_args_list)
-            assert any(call.args[0] == ['git', 'commit', '-m', 'delete msg'] for call in mock_run.call_args_list)
-            assert not any(call.args[0] == ['git', 'push'] for call in mock_run.call_args_list)
 
 class TestStatusAndRollback:
     def test_get_repo_status_not_tag(self, tmp_path, mock_subprocess, mock_files_conf):

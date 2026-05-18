@@ -76,15 +76,8 @@ export async function run(): Promise<void> {
     await helpers.pollTreeItemIcon(managerProvider, 'test', expectedLabel, 'check');
     console.log('✓ Test 5 passed');
 
-    // Test 6: saveRemoteDraft (commit)
-    console.log('Test 6: saveRemoteDraft...');
-    await scriptletService.saveRemoteDraft(scriptletItem);
-    await vscode.commands.executeCommand('pyops.refreshManager');
-    await helpers.pollTreeItemIcon(managerProvider, 'test', expectedLabel, 'check');
-    console.log('✓ Test 6 passed');
-
-    // Test 7: deleteScriptlet
-    console.log('Test 7: deleteScriptlet...');
+    // Test 6: deleteScriptlet
+    console.log('Test 6: deleteScriptlet...');
     await helpers.deleteTestScriptlet('test', testScriptletName!);
     if (fs.existsSync(localPath)) {
       fs.unlinkSync(localPath);
@@ -95,17 +88,17 @@ export async function run(): Promise<void> {
     const newSetChildren = await managerProvider.getChildren(testSetItem);
     const newScriptletItem = newSetChildren.find((item: any) => item.label === expectedLabel);
     assert.ok(!newScriptletItem, 'Scriptlet should be gone from tree');
-    console.log('✓ Test 7 passed');
+    console.log('✓ Test 6 passed');
 
-    // Test 8: Error handling (graceful on invalid item)
-    console.log('Test 8: Error handling...');
+    // Test 7: Error handling (graceful on invalid item)
+    console.log('Test 7: Error handling...');
     const fakeItem = {} as any;
     await scriptletService.resetLocalFromRemote(fakeItem); // no-op
     await scriptletService.deleteScriptlet(fakeItem); // skipped due to confirm undefined
-    console.log('✓ Test 8 passed');
+    console.log('✓ Test 7 passed');
 
-    // Test 9: Local-only scriptlet visibility & debug support
-    console.log('Test 9: Local-only scriptlet...');
+    // Test 8: Local-only scriptlet visibility & debug support
+    console.log('Test 8: Local-only scriptlet...');
     const localName = `localtest-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
     const localTestPath = path.join(wsRoot, localPyopsDir, 'test', 'task', `${localName}.py`);
     fs.mkdirSync(path.dirname(localTestPath), { recursive: true });
@@ -143,11 +136,11 @@ export async function run(): Promise<void> {
     assert.ok(postWriteItem, 'writeLocalToRemoteDraft should succeed and change status');
     assert.notStrictEqual(postWriteItem.contextValue, 'pyopsItem-task-local', 'No longer local-only');
     console.log('✓ writeLocalToRemoteDraft on local-only passed');
-    
-    console.log('✓ Test 9 passed');
 
-    // Test 10: JS Library support
-    console.log('Test 10: JS Library support...');
+    console.log('✓ Test 8 passed');
+
+    // Test 9: JS Library support
+    console.log('Test 9: JS Library support...');
     const jsName = `jslib-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
     const jsTestPath = path.join(wsRoot, localPyopsDir, 'test', 'jslibrary', `${jsName}.js`);
     fs.mkdirSync(path.dirname(jsTestPath), { recursive: true });

@@ -119,7 +119,7 @@ BODY_CODE = """\
 # ---------------------------------------------------------------------------
 
 
-def _setup_basic(api, set_factory):
+def _setup_basic(api, set_factory, commit_set):
     """Create set with a task, view, and jslibrary scriptlet via API."""
     set_factory(SET_NAME)
 
@@ -134,15 +134,16 @@ def _setup_basic(api, set_factory):
         )
         assert resp.status_code == 200, f"Create {name} failed: {resp.text}"
         resp = api.post(
-            "/scriptlet/inventory/item",
+            "/scriptlet/inventory/draft",
             json={"set": SET_NAME, "name": name, "code": code},
         )
-        assert resp.status_code == 200, f"Save {name} failed: {resp.text}"
+        assert resp.status_code == 200, f"Draft {name} failed: {resp.text}"
+    commit_set(SET_NAME, "add basic scriptlets")
 
 
-def _setup_jslib_integration(api, set_factory):
+def _setup_jslib_integration(api, set_factory, commit_set):
     """Create the full controller + views + jslib stack for integration tests."""
-    _setup_basic(api, set_factory)
+    _setup_basic(api, set_factory, commit_set)
 
     for name, type_, code in [
         (CTRL_NAME, "controller", CTRL_CODE),
@@ -156,13 +157,14 @@ def _setup_jslib_integration(api, set_factory):
         )
         assert resp.status_code == 200, f"Create {name} failed: {resp.text}"
         resp = api.post(
-            "/scriptlet/inventory/item",
+            "/scriptlet/inventory/draft",
             json={"set": SET_NAME, "name": name, "code": code},
         )
-        assert resp.status_code == 200, f"Save {name} failed: {resp.text}"
+        assert resp.status_code == 200, f"Draft {name} failed: {resp.text}"
+    commit_set(SET_NAME, "add jslib-integration scriptlets")
 
 
-def _setup_library(api, set_factory):
+def _setup_library(api, set_factory, commit_set):
     """Create set with a library scriptlet."""
     set_factory(SET_NAME)
     resp = api.put(
@@ -171,13 +173,14 @@ def _setup_library(api, set_factory):
     )
     assert resp.status_code == 200, f"Create {LIB_NAME} failed: {resp.text}"
     resp = api.post(
-        "/scriptlet/inventory/item",
+        "/scriptlet/inventory/draft",
         json={"set": SET_NAME, "name": LIB_NAME, "code": LIB_CODE},
     )
-    assert resp.status_code == 200, f"Save {LIB_NAME} failed: {resp.text}"
+    assert resp.status_code == 200, f"Draft {LIB_NAME} failed: {resp.text}"
+    commit_set(SET_NAME, f"add {LIB_NAME}")
 
 
-def _setup_controller(api, set_factory):
+def _setup_controller(api, set_factory, commit_set):
     """Create set with a simple controller scriptlet."""
     set_factory(SET_NAME)
     resp = api.put(
@@ -186,23 +189,25 @@ def _setup_controller(api, set_factory):
     )
     assert resp.status_code == 200, f"Create {CTRL_SIMPLE_NAME} failed: {resp.text}"
     resp = api.post(
-        "/scriptlet/inventory/item",
+        "/scriptlet/inventory/draft",
         json={"set": SET_NAME, "name": CTRL_SIMPLE_NAME, "code": CTRL_CODE_SIMPLE},
     )
-    assert resp.status_code == 200, f"Save {CTRL_SIMPLE_NAME} failed: {resp.text}"
+    assert resp.status_code == 200, f"Draft {CTRL_SIMPLE_NAME} failed: {resp.text}"
+    commit_set(SET_NAME, f"add {CTRL_SIMPLE_NAME}")
 
 
-def _setup_markdown(api, set_factory):
+def _setup_markdown(api, set_factory, commit_set):
     """Create set (README.md is auto-created by get_repo_path) and write initial content.
 
     README.md is always created when a new set is initialised, so a PUT is not needed.
     """
     set_factory(SET_NAME)
     resp = api.post(
-        "/scriptlet/inventory/item",
+        "/scriptlet/inventory/draft",
         json={"set": SET_NAME, "name": MD_NAME, "code": MD_CODE},
     )
-    assert resp.status_code == 200, f"Save README failed: {resp.text}"
+    assert resp.status_code == 200, f"Draft README failed: {resp.text}"
+    commit_set(SET_NAME, "update README")
 
 
 # ---------------------------------------------------------------------------
@@ -252,23 +257,22 @@ def _get_ace_value(editor_page):
 
 
 def _set_ace_value(editor_page, code):
-    """Replace the Ace editor content and wait for the Save button to enable."""
+    """Replace the Ace editor content and wait for the dirty flag to clear.
+
+    The editor no longer has an explicit save button — drafts auto-save
+    every 1s when the dirty flag is set, then the loop clears it. We
+    wait for that clear here so callers can assume the draft has hit
+    the server."""
     editor_page.evaluate("(code) => ace.edit('editor').setValue(code)", code)
-    # The change event enables save/revert buttons.
-    editor_page.locator('[data-testid="editor-save"]').wait_for(state="attached", timeout=5_000)
-    # Wait until the disabled property is removed.
-    editor_page.wait_for_function(
-        "!document.querySelector('[data-testid=\"editor-save\"]').disabled",
-        timeout=5_000,
-    )
+    # editor_dirty is set true on change and false after the autosave loop
+    # fires; this gives us a deterministic handle on "draft persisted".
+    editor_page.wait_for_function("!editor_dirty", timeout=5_000)
 
 
 def _click_save(editor_page):
-    """Click Save and wait for the button to disable (save complete)."""
-    editor_page.locator('[data-testid="editor-save"]').click()
-    # After successful save + status check the buttons may re-enable if unstaged
-    # content still exists; give a small settle window.
-    time.sleep(1)
+    """No-op kept for call-site stability — `_set_ace_value` already
+    waits for the autosave loop to land the draft."""
+    pass
 
 
 # ---------------------------------------------------------------------------
@@ -333,9 +337,9 @@ ALL_NAMES = [TASK_NAME, VIEW_NAME, JSLIB_NAME, CTRL_NAME, HEAD_VIEW, MENU_VIEW, 
 class TestEditorWorkflow:
     """Verify that editors open from Manager, load code, and save changes."""
 
-    def test_task_editor_opens_via_manager(self, e2e_page, api_anon, pyops_server, set_factory):
+    def test_task_editor_opens_via_manager(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """Clicking Edit on a task opens the task editor with correct code."""
-        _setup_basic(api_anon, set_factory)
+        _setup_basic(api_anon, set_factory, commit_set)
         frame = _nav_manager(e2e_page)
         frame.locator('[data-testid="manager-refresh"]').click()
 
@@ -352,9 +356,9 @@ class TestEditorWorkflow:
         _full_cleanup(e2e_page, BASIC_NAMES)
         pyops_server.assert_no_unexpected_errors()
 
-    def test_view_editor_opens_via_manager(self, e2e_page, api_anon, pyops_server, set_factory):
+    def test_view_editor_opens_via_manager(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """Clicking Edit on a view opens the view editor with correct HTML."""
-        _setup_basic(api_anon, set_factory)
+        _setup_basic(api_anon, set_factory, commit_set)
         frame = _nav_manager(e2e_page)
         frame.locator('[data-testid="manager-refresh"]').click()
 
@@ -371,9 +375,9 @@ class TestEditorWorkflow:
         _full_cleanup(e2e_page, BASIC_NAMES)
         pyops_server.assert_no_unexpected_errors()
 
-    def test_jslibrary_editor_opens_directly(self, e2e_page, api_anon, pyops_server, set_factory):
+    def test_jslibrary_editor_opens_directly(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """JS library editor loads via direct URL with correct JavaScript code."""
-        _setup_basic(api_anon, set_factory)
+        _setup_basic(api_anon, set_factory, commit_set)
 
         # jslibrary has no edit button in Manager; navigate directly.
         editor_page = e2e_page.context.new_page()
@@ -394,9 +398,9 @@ class TestEditorWorkflow:
         _full_cleanup(e2e_page, BASIC_NAMES)
         pyops_server.assert_no_unexpected_errors()
 
-    def test_edit_and_save_task_code(self, e2e_page, api_anon, pyops_server, set_factory):
+    def test_edit_and_save_task_code(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """Modify task code in the editor and save; verify updated content."""
-        _setup_basic(api_anon, set_factory)
+        _setup_basic(api_anon, set_factory, commit_set)
         frame = _nav_manager(e2e_page)
         frame.locator('[data-testid="manager-refresh"]').click()
 
@@ -417,9 +421,9 @@ class TestEditorWorkflow:
         _full_cleanup(e2e_page, BASIC_NAMES)
         pyops_server.assert_no_unexpected_errors()
 
-    def test_edit_and_save_view_code(self, e2e_page, api_anon, pyops_server, set_factory):
+    def test_edit_and_save_view_code(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """Modify view HTML in the editor and save; verify updated content."""
-        _setup_basic(api_anon, set_factory)
+        _setup_basic(api_anon, set_factory, commit_set)
         frame = _nav_manager(e2e_page)
         frame.locator('[data-testid="manager-refresh"]').click()
 
@@ -439,9 +443,9 @@ class TestEditorWorkflow:
         _full_cleanup(e2e_page, BASIC_NAMES)
         pyops_server.assert_no_unexpected_errors()
 
-    def test_edit_and_save_jslibrary_code(self, e2e_page, api_anon, pyops_server, set_factory):
+    def test_edit_and_save_jslibrary_code(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """Modify JS library code in the editor and save; verify updated content."""
-        _setup_basic(api_anon, set_factory)
+        _setup_basic(api_anon, set_factory, commit_set)
 
         editor_page = e2e_page.context.new_page()
         editor_page.goto(
@@ -463,9 +467,9 @@ class TestEditorWorkflow:
         _full_cleanup(e2e_page, BASIC_NAMES)
         pyops_server.assert_no_unexpected_errors()
 
-    def test_editor_revert_discards_changes(self, e2e_page, api_anon, pyops_server, set_factory):
+    def test_editor_revert_discards_changes(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """Clicking Revert restores the last saved version."""
-        _setup_basic(api_anon, set_factory)
+        _setup_basic(api_anon, set_factory, commit_set)
         frame = _nav_manager(e2e_page)
         frame.locator('[data-testid="manager-refresh"]').click()
 
@@ -492,9 +496,9 @@ class TestEditorWorkflow:
         _full_cleanup(e2e_page, BASIC_NAMES)
         pyops_server.assert_no_unexpected_errors()
 
-    def test_library_editor_opens_via_manager(self, e2e_page, api_anon, pyops_server, set_factory):
+    def test_library_editor_opens_via_manager(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """Clicking Edit on a library scriptlet opens the library editor with its code."""
-        _setup_library(api_anon, set_factory)
+        _setup_library(api_anon, set_factory, commit_set)
         frame = _nav_manager(e2e_page)
         frame.locator('[data-testid="manager-refresh"]').click()
 
@@ -512,9 +516,9 @@ class TestEditorWorkflow:
         _full_cleanup(e2e_page, [LIB_NAME])
         pyops_server.assert_no_unexpected_errors()
 
-    def test_controller_editor_opens_via_manager(self, e2e_page, api_anon, pyops_server, set_factory):
+    def test_controller_editor_opens_via_manager(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """Clicking Edit on a controller opens the shared library editor with its code."""
-        _setup_controller(api_anon, set_factory)
+        _setup_controller(api_anon, set_factory, commit_set)
         frame = _nav_manager(e2e_page)
         frame.locator('[data-testid="manager-refresh"]').click()
 
@@ -531,9 +535,9 @@ class TestEditorWorkflow:
         _full_cleanup(e2e_page, [CTRL_SIMPLE_NAME])
         pyops_server.assert_no_unexpected_errors()
 
-    def test_edit_and_save_library_code(self, e2e_page, api_anon, pyops_server, set_factory):
+    def test_edit_and_save_library_code(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """Modify library code in the editor and save; verify updated content."""
-        _setup_library(api_anon, set_factory)
+        _setup_library(api_anon, set_factory, commit_set)
         frame = _nav_manager(e2e_page)
         frame.locator('[data-testid="manager-refresh"]').click()
 
@@ -553,9 +557,9 @@ class TestEditorWorkflow:
         _full_cleanup(e2e_page, [LIB_NAME])
         pyops_server.assert_no_unexpected_errors()
 
-    def test_markdown_editor_opens_via_manager(self, e2e_page, api_anon, pyops_server, set_factory):
+    def test_markdown_editor_opens_via_manager(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """Clicking Edit on README opens the markdown editor with its content."""
-        _setup_markdown(api_anon, set_factory)
+        _setup_markdown(api_anon, set_factory, commit_set)
         frame = _nav_manager(e2e_page)
         frame.locator('[data-testid="manager-refresh"]').click()
 
@@ -573,9 +577,9 @@ class TestEditorWorkflow:
         _full_cleanup(e2e_page, [])
         pyops_server.assert_no_unexpected_errors()
 
-    def test_edit_and_save_markdown_code(self, e2e_page, api_anon, pyops_server, set_factory):
+    def test_edit_and_save_markdown_code(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """Modify markdown content in the editor and save; verify updated content."""
-        _setup_markdown(api_anon, set_factory)
+        _setup_markdown(api_anon, set_factory, commit_set)
         frame = _nav_manager(e2e_page)
         frame.locator('[data-testid="manager-refresh"]').click()
 
@@ -604,9 +608,9 @@ class TestEditorWorkflow:
 class TestJsLibEndpoint:
     """Verify the /scriptlet/jslib/{set}/{name} endpoint."""
 
-    def test_jslib_serves_javascript(self, e2e_page, api_anon, pyops_server, set_factory):
+    def test_jslib_serves_javascript(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """JS library endpoint returns JavaScript with correct content-type."""
-        _setup_basic(api_anon, set_factory)
+        _setup_basic(api_anon, set_factory, commit_set)
 
         # Fetch via browser to check response.
         result = e2e_page.evaluate(
@@ -627,9 +631,9 @@ class TestJsLibEndpoint:
         _full_cleanup(e2e_page, BASIC_NAMES)
         pyops_server.assert_no_unexpected_errors()
 
-    def test_jslib_nonexistent_returns_404(self, e2e_page, api_anon, pyops_server, set_factory):
+    def test_jslib_nonexistent_returns_404(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """Requesting a nonexistent JS library returns 404."""
-        _setup_basic(api_anon, set_factory)
+        _setup_basic(api_anon, set_factory, commit_set)
 
         result = e2e_page.evaluate(
             """async (url) => {
@@ -644,9 +648,9 @@ class TestJsLibEndpoint:
         _full_cleanup(e2e_page, BASIC_NAMES)
         pyops_server.assert_no_unexpected_errors()
 
-    def test_jslib_wrong_type_returns_400(self, e2e_page, api_anon, pyops_server, set_factory):
+    def test_jslib_wrong_type_returns_400(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """Requesting a non-JS scriptlet via jslib endpoint returns 400."""
-        _setup_basic(api_anon, set_factory)
+        _setup_basic(api_anon, set_factory, commit_set)
 
         # TASK_NAME is a task, not jslibrary.
         result = e2e_page.evaluate(
@@ -671,9 +675,9 @@ class TestJsLibEndpoint:
 class TestJsLibIntegration:
     """Verify that HTML views can load and execute JS library scriptlets."""
 
-    def test_view_loads_jslib_functions(self, e2e_page, api_anon, pyops_server, set_factory):
+    def test_view_loads_jslib_functions(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """Controller page with <script src="/scriptlet/jslib/..."> executes JS."""
-        _setup_jslib_integration(api_anon, set_factory)
+        _setup_jslib_integration(api_anon, set_factory, commit_set)
 
         e2e_page.goto(f"{BASE_URL}/controller/{SET_NAME}/{CTRL_NAME}")
         e2e_page.wait_for_load_state("networkidle")
@@ -692,9 +696,9 @@ class TestJsLibIntegration:
         _full_cleanup(e2e_page, ALL_NAMES)
         pyops_server.assert_no_unexpected_errors()
 
-    def test_updated_jslib_reflects_in_controller(self, e2e_page, api_anon, pyops_server, set_factory):
+    def test_updated_jslib_reflects_in_controller(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """After editing jslib code, the controller page uses the updated version."""
-        _setup_jslib_integration(api_anon, set_factory)
+        _setup_jslib_integration(api_anon, set_factory, commit_set)
 
         # Verify original.
         e2e_page.goto(f"{BASE_URL}/controller/{SET_NAME}/{CTRL_NAME}")
@@ -713,6 +717,10 @@ class TestJsLibIntegration:
         _set_ace_value(editor_page, new_code)
         _click_save(editor_page)
         editor_page.close()
+        # The editor only drafts now — the jslib route serves committed
+        # content by default. Promote the draft into HEAD so the
+        # controller picks up the updated jslib.
+        commit_set(SET_NAME, "update jslib")
 
         # Reload controller and verify updated output.
         e2e_page.goto(f"{BASE_URL}/controller/{SET_NAME}/{CTRL_NAME}")
@@ -724,9 +732,9 @@ class TestJsLibIntegration:
         _full_cleanup(e2e_page, ALL_NAMES)
         pyops_server.assert_no_unexpected_errors()
 
-    def test_jslib_available_across_multiple_page_loads(self, e2e_page, api_anon, pyops_server, set_factory):
+    def test_jslib_available_across_multiple_page_loads(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """JS library functions work consistently across page reloads."""
-        _setup_jslib_integration(api_anon, set_factory)
+        _setup_jslib_integration(api_anon, set_factory, commit_set)
 
         for _ in range(3):
             e2e_page.goto(f"{BASE_URL}/controller/{SET_NAME}/{CTRL_NAME}")
@@ -758,12 +766,12 @@ def _ace_font_size(editor_page, element_id):
 class TestEditorInteractiveActions:
     """Exercise Run/Cancel/Clear Logs/Font Size in the task editor."""
 
-    def test_editor_run_populates_stdout_panel(self, e2e_page, api_anon, pyops_server, set_factory):
+    def test_editor_run_populates_stdout_panel(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """Clicking Run executes the draft code and shows output in the stdout Ace panel."""
-        _setup_basic(api_anon, set_factory)
+        _setup_basic(api_anon, set_factory, commit_set)
         # Replace default code with something that prints a deterministic string.
         api_anon.post(
-            "/scriptlet/inventory/item",
+            "/scriptlet/inventory/draft",
             json={
                 "set": SET_NAME,
                 "name": TASK_NAME,
@@ -793,11 +801,11 @@ class TestEditorInteractiveActions:
         _full_cleanup(e2e_page, BASIC_NAMES)
         pyops_server.assert_no_unexpected_errors()
 
-    def test_editor_clear_logs_empties_output_panels(self, e2e_page, api_anon, pyops_server, set_factory):
+    def test_editor_clear_logs_empties_output_panels(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """Clear Logs empties both stdout and stderr Ace panels."""
-        _setup_basic(api_anon, set_factory)
+        _setup_basic(api_anon, set_factory, commit_set)
         api_anon.post(
-            "/scriptlet/inventory/item",
+            "/scriptlet/inventory/draft",
             json={
                 "set": SET_NAME,
                 "name": TASK_NAME,
@@ -832,13 +840,13 @@ class TestEditorInteractiveActions:
         _full_cleanup(e2e_page, BASIC_NAMES)
         pyops_server.assert_no_unexpected_errors()
 
-    def test_editor_cancel_stops_running_draft(self, e2e_page, api_anon, pyops_server, set_factory):
+    def test_editor_cancel_stops_running_draft(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """Clicking Cancel on a running draft aborts it and re-enables Run."""
-        _setup_basic(api_anon, set_factory)
+        _setup_basic(api_anon, set_factory, commit_set)
         # Long-running draft — sleeps 60s so Cancel has a clear window.
         long_code = "import time\nfor _ in range(120):\n    time.sleep(0.5)\n"
         api_anon.post(
-            "/scriptlet/inventory/item",
+            "/scriptlet/inventory/draft",
             json={"set": SET_NAME, "name": TASK_NAME, "code": long_code},
         )
         frame = _nav_manager(e2e_page)
@@ -866,9 +874,9 @@ class TestEditorInteractiveActions:
         _full_cleanup(e2e_page, BASIC_NAMES)
         pyops_server.assert_no_unexpected_errors()
 
-    def test_editor_font_size_change_propagates_to_ace(self, e2e_page, api_anon, pyops_server, set_factory):
+    def test_editor_font_size_change_propagates_to_ace(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """Changing the Font Size select updates every Ace panel's fontSize."""
-        _setup_basic(api_anon, set_factory)
+        _setup_basic(api_anon, set_factory, commit_set)
         frame = _nav_manager(e2e_page)
         frame.locator('[data-testid="manager-refresh"]').click()
 

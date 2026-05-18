@@ -22,7 +22,7 @@ PyOps is an execution platform for Python operations scriptlets, licensed under 
 
 VSIX provides pyops-container in sidebar/activitybar:
 - **pyops-manager**: Sets > type folders (task/service/library/controller/view/markdown/jslibrary) > scriptlets; icons: ✓ synced, ⚠ unsynced/draft/local-only; contextValues pyopsItem-{type}(-local).
-  Right-click: Reset Local from Remote, Write Local to Remote Draft, Save Remote Draft, Diff Local Remote, Delete Scriptlet; Start/Stop Debug Job (tasks).
+  Right-click: Reset Local from Remote, Write Local to Remote Draft, Diff Local Remote, Delete Scriptlet; Start/Stop Debug Job (tasks). Per-file commit/push is gone — commit the whole set's draft changeset at once via the Sets view.
   Titlebar: Refresh Manager, Create Scriptlet, Attach to Debug Job.
 - **pyops-monitor**: Jobs by state; right-click: Copy Job Param, Cancel/Download/Delete/View Job.
   Titlebar: Refresh Monitor, Cancel All Jobs, Delete All Done/Canceled, Delete All Failed/Killed.
@@ -49,7 +49,7 @@ Cline outputs full file content; paste/replace in editor, then save via VSIX. It
 
 - **Create Scriptlet**: pyops-manager titlebar > Create Scriptlet (prompts for set/type/name); opens local `pyops/{set}/{type}/{name}.{ext}` (.py for task/service/library/controller, .html for view, .md for markdown, .js for jslibrary).
 - **Edit/Generate**: Use VSCode/Cline to code. Edit local file.
-- **Sync**: Right-click > Reset Local from Remote (download draft), Write Local to Remote Draft (upload), Save Remote Draft (commit/push).
+- **Sync**: Right-click > Reset Local from Remote (download draft), Write Local to Remote Draft (upload — unstaged). To commit + push, open the Sets view and click "Commit drafts" on the set; a modal previews the porcelain status and accepts an optional commit message.
 - **Diff**: Right-click > Diff Local Remote.
 - **Debug**: Right-click task(-local) > Start/Stop Debug Job.
 - **Delete**: Right-click > Delete Scriptlet (remote; local-only ok).
@@ -79,7 +79,7 @@ Controllers: `debug=True` uses unstaged/draft code (preview).
    - Create controller/mycontroller.py (globals: set="myops" service="myservice" ...).
    - Create view/my_head.html, my_menu.html, my_body.html (Bootstrap + apiCall).
 3. **Edit/Generate**: Cline prompts for code/logic refinements.
-4. **Sync**: Right-click > Write Local to Remote Draft > Save Remote Draft (commit).
+4. **Sync**: Right-click > Write Local to Remote Draft for each edited file; then in the Sets view click "Commit drafts" on the set to batch-commit + push.
 5. **Enqueue Service**: Enqueue via web UI (/scriptlet/manager.html POST kind="service", with optional `max_retries` to auto-restart on failure up to N times) or API /scriptlet/job/item.
 6. **Access UI**: http://localhost:8000/controller/myops/mycontroller.
 7. **Debug**: Right-click task > Start Debug Job; titlebar Attach to Debug Job for VSCode debugger.
@@ -187,7 +187,6 @@ Every command accepts the global flags: `--profile NAME`, `--server URL`,
 - `pyopsctl scriptlet get-code SET NAME`
 - `pyopsctl scriptlet create SET NAME --kind {task|service|schedule|controller|view|library|markdown|jslibrary}`
 - `pyopsctl scriptlet draft SET NAME [--file PATH | --stdin]`
-- `pyopsctl scriptlet save  SET NAME [--file PATH | --stdin]`
 - `pyopsctl scriptlet delete SET NAME`
 - `pyopsctl scriptlet diff SET NAME [--local-file PATH]`
 
@@ -309,11 +308,13 @@ pyopsctl scriptlet create myset myscript --kind task          # empty stub
 $EDITOR myscript.task.py
 pyopsctl scriptlet draft myset myscript --file myscript.task.py
 pyopsctl scriptlet diff  myset myscript --local-file myscript.task.py
-pyopsctl scriptlet save  myset myscript                       # commit draft
 ```
 
-`draft` writes the working-tree copy without committing; `save` commits
-the current draft. Use `diff` first to see what's about to change.
+`draft` writes the working-tree copy without committing. Use `diff`
+first to see what's about to change. Commit + push the whole set's
+draft changeset at once via the Sets view's "Commit drafts" button (or
+`pyopsctl job run internal set_commit_drafts --param 'name="myset"; message="..."'`
+if you'd rather drive it from the CLI).
 
 **Run a task and follow it:**
 

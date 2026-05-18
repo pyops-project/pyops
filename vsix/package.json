@@ -68,12 +68,6 @@
         "icon": "$(upload)"
       },
       {
-        "command": "pyops.saveRemoteDraft",
-        "title": "Save Remote Draft",
-        "category": "PyOps",
-        "icon": "$(check)"
-      },
-      {
         "command": "pyops.startDebugJob",
         "title": "Start Debug Job",
         "category": "PyOps",
@@ -208,11 +202,6 @@
           "group": "navigation"
         },
 
-        {
-          "command": "pyops.saveRemoteDraft",
-          "when": "view == 'pyops-manager' && viewItem =~ /^pyopsItem-(task|service|library|controller|view|markdown|jslibrary)$/ && pyops.hasValidConfig",
-          "group": "navigation"
-        },
         {
           "command": "pyops.startDebugJob",
           "when": "view == 'pyops-manager' && viewItem =~ /^pyopsItem-task(-local)?$/ && pyops.hasValidConfig",

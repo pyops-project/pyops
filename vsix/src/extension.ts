@@ -217,10 +217,6 @@ export async function activate(context: vscode.ExtensionContext) {
             await scriptletService.writeLocalToRemoteDraft(treeItem);
         }));
 
-        context.subscriptions.push(vscode.commands.registerCommand('pyops.saveRemoteDraft', async (treeItem?: ScriptletTreeItem) => {
-            await scriptletService.saveRemoteDraft(treeItem);
-        }));
-
         context.subscriptions.push(vscode.commands.registerCommand('pyops.startDebugJob', async (treeItem?: ScriptletTreeItem) => {
             const isValidConfig = ApiClient.hasValidConfigStatic();
             if (!isValidConfig) {

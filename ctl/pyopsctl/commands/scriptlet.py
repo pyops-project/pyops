@@ -1,16 +1,18 @@
-"""`pyopsctl scriptlet` — read / create / draft / save / delete /
-diff / inspect scriptlets.
+"""`pyopsctl scriptlet` — read / create / draft / delete / diff / inspect scriptlets.
 
 Endpoints:
   GET    /scriptlet/inventory/list
   GET    /scriptlet/inventory/sets
   GET    /scriptlet/inventory/status?set=&name=
   GET    /scriptlet/inventory/code?set=&name=
-  PUT    /scriptlet/inventory/item    body: {set, name, type}
-  POST   /scriptlet/inventory/item    body: {set, name, code}   (commits)
+  PUT    /scriptlet/inventory/item    body: {set, name, type}   (creates)
   POST   /scriptlet/inventory/draft   body: {set, name, code}   (no commit)
   DELETE /scriptlet/inventory/item?set=&name=
   GET    /repo/status?set=
+
+The per-scriptlet commit verb is gone — commit drafts set-wide via the
+sets view's "commit drafts" button (or `pyopsctl job run internal
+set_commit_drafts --param 'name="<set>"; message="..."'`).
 """
 import difflib
 import sys
@@ -81,24 +83,6 @@ def _draft(args):
                json_body={"set": args.set, "name": args.name, "code": code})
         emit(args, {"set": args.set, "name": args.name, "bytes": len(code)},
              human=f"draft written for {args.set}::{args.name} ({len(code)} bytes)")
-
-
-def _save(args):
-    # POST /item commits the current draft. The CLI doesn't need to send the code body
-    # if the operator already drafted it; but the endpoint requires `code`, so we fetch
-    # the current unstaged content and pass it through unchanged when no --file/--stdin
-    # was given. With --file/--stdin the new content overrides the unstaged draft.
-    with Client(load(args), timeout=args.timeout) as c:
-        if args.file or args.stdin:
-            code = _read_code_source(args)
-        else:
-            current = c.get("/scriptlet/inventory/code",
-                            params={"set": args.set, "name": args.name})
-            code = (current or {}).get("code", "")
-        c.post("/scriptlet/inventory/item",
-               json_body={"set": args.set, "name": args.name, "code": code})
-        emit(args, {"set": args.set, "name": args.name},
-             human=f"saved {args.set}::{args.name}")
 
 
 def _delete(args):
@@ -183,13 +167,6 @@ def register(subparsers, parents):
     dr.add_argument("--stdin", action="store_true",
                     help="read draft body from stdin")
     dr.set_defaults(func=_draft)
-
-    sv = sub.add_parser("save", help="commit the current draft (optionally from --file/--stdin)",
-                        parents=parents)
-    sv.add_argument("set"); sv.add_argument("name")
-    sv.add_argument("--file", metavar="PATH", default=None)
-    sv.add_argument("--stdin", action="store_true")
-    sv.set_defaults(func=_save)
 
     dl = sub.add_parser("delete", help="delete a scriptlet (remote + commits the deletion)",
                         parents=parents)

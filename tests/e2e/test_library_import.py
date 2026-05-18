@@ -62,17 +62,18 @@ def _wait_for_job(api, job_id, timeout=30):
     )
 
 
-def _create(api, set_name, name, type_, code):
+def _create(api, set_name, name, type_, code, commit_set):
     r = api.put(
         "/scriptlet/inventory/item",
         json={"set": set_name, "name": name, "type": type_},
     )
     assert r.status_code == 200, f"create {name} ({type_}) failed: {r.text}"
     r = api.post(
-        "/scriptlet/inventory/item",
+        "/scriptlet/inventory/draft",
         json={"set": set_name, "name": name, "code": code},
     )
     assert r.status_code == 200, f"save {name} failed: {r.text}"
+    commit_set(set_name, f"add {name}")
 
 
 def _run(api, set_name, task_name, timeout=30):
@@ -99,17 +100,17 @@ def _run(api, set_name, task_name, timeout=30):
 class TestSameSetLibraryImport:
     """Tasks importing library scriptlets from the same set via #!{::name}."""
 
-    def test_task_calls_library_function(self, api, pyops_server, set_factory):
+    def test_task_calls_library_function(self, api, pyops_server, set_factory, commit_set):
         """Task using #!{::greeter} can call greet() and add() in its scope."""
         set_factory(SET)
-        _create(api, SET, "greeter", "library", GREETER_CODE)
+        _create(api, SET, "greeter", "library", GREETER_CODE, commit_set)
 
         task_code = (
             '#!{::greeter}\n'
             'print(greet("e2e"))\n'
             'print(f"sum={add(3, 4)}")\n'
         )
-        _create(api, SET, "consumer", "task", task_code)
+        _create(api, SET, "consumer", "task", task_code, commit_set)
 
         job = _run(api, SET, "consumer")
         assert job["state"] == "done", job.get("detail")
@@ -117,14 +118,14 @@ class TestSameSetLibraryImport:
         assert "sum=7" in job["stdout"]
         pyops_server.assert_no_unexpected_errors()
 
-    def test_library_state_is_isolated_between_jobs(self, api, pyops_server, set_factory):
+    def test_library_state_is_isolated_between_jobs(self, api, pyops_server, set_factory, commit_set):
         """Each job execution gets a fresh global scope — library state does not leak."""
         set_factory(SET + "_iso")
         lib_code = "COUNTER = 0\ndef inc(): global COUNTER; COUNTER += 1; return COUNTER\n"
-        _create(api, SET + "_iso", "counter_lib", "library", lib_code)
+        _create(api, SET + "_iso", "counter_lib", "library", lib_code, commit_set)
 
         task_code = '#!{::counter_lib}\nprint(f"count={inc()}")\n'
-        _create(api, SET + "_iso", "counter_task", "task", task_code)
+        _create(api, SET + "_iso", "counter_task", "task", task_code, commit_set)
 
         # Run twice — each run should start COUNTER from 0, so inc() always returns 1.
         for _ in range(2):
@@ -134,25 +135,25 @@ class TestSameSetLibraryImport:
 
         pyops_server.assert_no_unexpected_errors()
 
-    def test_transitive_library_import(self, api, pyops_server, set_factory):
+    def test_transitive_library_import(self, api, pyops_server, set_factory, commit_set):
         """Library importing another library resolves transitively before execution."""
         set_factory(SET + "_tr")
-        _create(api, SET + "_tr", "base_lib", "library", BASE_LIB_CODE)
-        _create(api, SET + "_tr", "mid_lib", "library", MID_LIB_CODE)
+        _create(api, SET + "_tr", "base_lib", "library", BASE_LIB_CODE, commit_set)
+        _create(api, SET + "_tr", "mid_lib", "library", MID_LIB_CODE, commit_set)
 
         task_code = '#!{::mid_lib}\nprint(f"doubled={doubled()}")\n'
-        _create(api, SET + "_tr", "task_tr", "task", task_code)
+        _create(api, SET + "_tr", "task_tr", "task", task_code, commit_set)
 
         job = _run(api, SET + "_tr", "task_tr")
         assert job["state"] == "done", job.get("detail")
         assert "doubled=84" in job["stdout"]
         pyops_server.assert_no_unexpected_errors()
 
-    def test_missing_library_fails_job(self, api, pyops_server, set_factory):
+    def test_missing_library_fails_job(self, api, pyops_server, set_factory, commit_set):
         """Importing a non-existent library causes the job to reach 'failed' state."""
         set_factory(SET + "_miss")
         task_code = '#!{::no_such_lib}\nprint("unreachable")\n'
-        _create(api, SET + "_miss", "bad_import", "task", task_code)
+        _create(api, SET + "_miss", "bad_import", "task", task_code, commit_set)
 
         job = _run(api, SET + "_miss", "bad_import")
         assert job["state"] == "failed"
@@ -167,25 +168,25 @@ class TestSameSetLibraryImport:
 class TestCrossSetLibraryImport:
     """Tasks importing library scriptlets from a different set via #!{set::name}."""
 
-    def test_task_imports_library_from_other_set(self, api, pyops_server, set_factory):
+    def test_task_imports_library_from_other_set(self, api, pyops_server, set_factory, commit_set):
         """#!{otherset::libname} loads the library from the named set."""
         set_factory(CROSS_SET)
-        _create(api, CROSS_SET, "shared_utils", "library", GREETER_CODE)
+        _create(api, CROSS_SET, "shared_utils", "library", GREETER_CODE, commit_set)
 
         set_factory(SET + "_cross")
         task_code = f'#!{{{CROSS_SET}::shared_utils}}\nprint(greet("cross"))\n'
-        _create(api, SET + "_cross", "cross_task", "task", task_code)
+        _create(api, SET + "_cross", "cross_task", "task", task_code, commit_set)
 
         job = _run(api, SET + "_cross", "cross_task")
         assert job["state"] == "done", job.get("detail")
         assert "hello, cross!" in job["stdout"]
         pyops_server.assert_no_unexpected_errors()
 
-    def test_cross_set_missing_library_fails_job(self, api, pyops_server, set_factory):
+    def test_cross_set_missing_library_fails_job(self, api, pyops_server, set_factory, commit_set):
         """Importing from a non-existent set causes the job to fail."""
         set_factory(SET + "_cross_miss")
         task_code = '#!{nonexistent_set_xyz::some_lib}\nprint("unreachable")\n'
-        _create(api, SET + "_cross_miss", "bad_cross", "task", task_code)
+        _create(api, SET + "_cross_miss", "bad_cross", "task", task_code, commit_set)
 
         job = _run(api, SET + "_cross_miss", "bad_cross")
         assert job["state"] == "failed"
