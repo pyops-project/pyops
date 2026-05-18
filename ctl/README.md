@@ -18,7 +18,29 @@ sudo apt install python3 python3-requests python3-argcomplete
 
 No venv. No pip install of pyopsctl itself.
 
-## Install
+## Install — .deb (Ubuntu 24.04+ / Debian 13+)
+
+Each release publishes `pyopsctl_<version>_all.deb` as a Generic
+Package on the GitLab project. Install it with:
+
+```
+sudo apt install ./pyopsctl_<version>_all.deb
+```
+
+apt pulls `python3-requests` (required) and `python3-argcomplete`
+(recommended) automatically. The deb drops files at apt-managed
+system paths — completion works out of the box, no rc edits.
+
+Build the deb locally (rarely needed; CI handles this for releases):
+
+```
+./build.sh
+```
+
+Produces `ctl/dist/pyopsctl_<version>_all.deb`. Requires `dpkg-dev`
+and `python3-argcomplete` on the build host.
+
+## Install — checkout (development / no apt)
 
 ```
 ./install.sh

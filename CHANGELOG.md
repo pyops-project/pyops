@@ -7,7 +7,25 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 from 3.0.0 onward.
 
-## [Unreleased]
+## [3.1.0] — 2026-05-18
+
+Closes 3.0.0's open ends with three structural moves and one
+shutdown-contract fix:
+
+- **Debugger leaves the runner.** `kind=debug` jobs no longer have
+  pyops inject debugpy; the client (VSIX, pyopsctl, or anything else)
+  writes the debugger bootstrap into `param`.
+- **Commit/push leaves the inventory router.** The whole
+  `app.lib.git` commit surface is gone; the only sanctioned commit
+  pathway is the new sets-view "commit drafts" action.
+- **The operator surface VSIX can't reach is now its own terminal
+  CLI: `pyopsctl`.** Detached debug, arbitrary multi-line `param`,
+  interactive pdb sessions, scripted job/scriptlet ops. Distro
+  python3 + python3-requests, no venv, no pip.
+- **`ServiceListener.async_poll()` honours SIGTERM** (mirrors
+  `listen()`'s "TERM" return). Causal-style services that polled
+  past SIGTERM and got SIGKILL'd after the 15s grace window now exit
+  on the first poll cycle.
 
 ### Added
 - **Sets view: "commit drafts" per-set action.** New `check`-icon button
@@ -56,6 +74,39 @@ from 3.0.0 onward.
 - `python3-argcomplete` added to the `test:e2e` and `test:pyopsctl`
   before_script apt-install lines so the optional completion path is
   exercised under CI.
+- New `build:pyopsctl` stage parallel to `build:` (VSIX). Produces
+  `ctl/dist/pyopsctl_<version>_all.deb` via `ctl/build.sh` (plain
+  `dpkg-deb`, no fpm/Ruby, no debhelper/dh-python). Targets Ubuntu
+  24.04 (noble) and Debian 13 (trixie) as the floor; Depends pins
+  python3 (>= 3.12), python3-requests; Recommends python3-argcomplete.
+  Ships the package source at `/usr/lib/python3/dist-packages/pyopsctl`,
+  launcher at `/usr/bin/pyopsctl`, and pre-generated zsh + bash
+  completion files at the apt-managed system paths
+  (`/usr/share/zsh/vendor-completions/_pyopsctl`,
+  `/usr/share/bash-completion/completions/pyopsctl`) — so an
+  apt-install user gets tab completion with zero rc edits.
+- `release` stage now uploads the deb alongside the VSIX as a Generic
+  Package (`pyops-pyopsctl/<version>/`), tracked as an additional
+  `--assets-link` on the GitLab Release.
+- New `test:pyopsctl:install` stage installs the built deb in a clean
+  apt environment and smoke-tests it: launcher resolves at `/usr/bin`
+  with no `PYTHONPATH`, `pyopsctl version` matches the project VERSION
+  file (proves the baked `_version.py` is the one imported), the
+  argcomplete protocol returns top-level groups, bash + zsh completion
+  files land at the apt-managed system paths, zsh `compinit` registers
+  the completion from `$fpath`, and `apt-get remove` cleanly drops
+  every shipped file.
+
+### Operations
+- **Container-wide pip configuration via compose bind.** Bind a host
+  `pip.conf` to `/etc/pip.conf` in the pyops container to route every
+  pip invocation — bootstrap pip in `ensure_set_environment`, every
+  per-set venv's pip, every user `#!pip <pkg>` directive — through one
+  config file. pip reads `/etc/pip.conf` as its site-wide config
+  automatically, so no pyops code is involved; standard Linux
+  subprocess + system-config mechanic. Documented in `README.md` §
+  Docker Compose. No new pyops feature, just a deployment pattern
+  that's now spelled out.
 
 ### Removed
 - **Per-file commit/push is gone.** The inventory's
@@ -145,16 +196,15 @@ from 3.0.0 onward.
 - `GET /debug/port` HTTP hop (the route is gone server-side anyway).
   pyopsctl resolves the port locally via `ports.find_port_for_job`.
 
-## [3.1.0] — 2026-05-16
+### Added (pyopsctl — operator CLI)
 
-Adds `pyopsctl`, the operator CLI. Designed to be driven from a
-terminal by both a human operator and agents (LLM-driven or otherwise)
-and shell scripts — no venv, no pip-installed Python deps, distribution
-packages only (`python3` + `python3-requests`). Installed via
-`./ctl/install.sh` which symlinks the launcher into
-`$XDG_BIN_HOME` (defaults to `~/.local/bin/`).
-
-### Added
+Designed to be driven from a terminal by both a human operator and
+agents (LLM-driven or otherwise) and shell scripts — no venv, no
+pip-installed Python deps, distribution packages only (`python3` +
+`python3-requests`). Installed via `./ctl/install.sh` (symlinks the
+launcher into `$XDG_BIN_HOME`, defaults to `~/.local/bin/`) or via
+the released `.deb` (`sudo apt install ./pyopsctl_*.deb` — drops at
+apt-managed system paths, completion wired without rc edits).
 
 - **`pyopsctl` CLI** at `/ctl/`, parallel to `app/` and `vsix/`.
   Stdlib `argparse` dispatch, no Click/Typer. Speaks the existing
@@ -230,29 +280,30 @@ packages only (`python3` + `python3-requests`). Installed via
 
 ### Known limitations (planned 3.1.x follow-ups)
 
-- **`debug attach` doesn't auto-land at user line 1.** It reports
-  `state=running`; the operator runs `debug pause` + `break set` +
-  `continue` to reach a known stop. Fixing this needs a runner-side
-  change so the shim sets a fireable breakpoint at user line 1 from
-  the DAP side during attach. See `docs/insights_ctl.md` § "Why
-  attach doesn't auto-land at user line 1".
-- **Re-attach after detach** isn't supported by the runner: pyops
-  calls `debugpy.listen()` + `wait_for_client()` once per debug job;
-  after DAP disconnect there's no re-listen. Recovery is to start a
-  fresh debug job.
-- **`pause` during `time.sleep`** doesn't fire — debugpy can't
-  preempt the C-level sleep call. Pause works between sleeps (lands
-  on the next Python-level statement).
+- **No re-attach after detach.** Once the operator detaches a pdb
+  session the underlying TCP connection is gone; the running job
+  doesn't re-listen. Recovery is to start a fresh debug job.
+- **Manager-started controller previews** still depend on a single
+  `draft`-kind controller service running; concurrent operators all
+  hit the same one (no per-user preview isolation yet).
 
 ### Documentation
 
-- New `docs/pyopsctl.md` — installation, config example, full command
-  reference, worked operator + agent flows.
-- New `docs/insights_ctl.md` — architecture deep-dive: session daemon
-  spawn, control protocol, DAP bootstrap quirks, source-path
-  resolution, race-freedom of step/continue.
-- `ctl/README.md` — prerequisites + `install.sh` usage on the
-  operator's box.
+- `docs/pyops_guide.md` § pyopsctl — installation (checkout +
+  `.deb`), config example, full command reference, worked operator +
+  agent flows. (Supersedes the planned standalone `docs/pyopsctl.md`
+  from the initial pyopsctl drop — content merged into the unified
+  guide.)
+- `docs/insights_ctl.md` — pyopsctl architecture deep-dive: session
+  daemon, control protocol, port-pool leasing, source-path
+  resolution.
+- `docs/insights_app.md` § `ServiceListener` — async_poll's TERM
+  sentinel contract.
+- `docs/pyops_rules.md` § scriptlet service shutdown — operator-facing
+  TERM-handling rule for causal-style services.
+- `ctl/README.md` — prerequisites + install paths (deb + checkout).
+- `README.md` § Docker Compose — pip.conf bind-mount pattern for
+  container-wide pip configuration.
 
 ## [3.0.0] — 2026-05-15
 

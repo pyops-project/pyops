@@ -137,6 +137,26 @@ entry to `~/.zshrc` so the user-share directory is on `$fpath`. Both
 are idempotent; `--uninstall` removes both. Tab completion is live
 on the next interactive zsh (`exec zsh` or new terminal).
 
+### Install via .deb (Ubuntu 24.04+ / Debian 13+)
+
+A Debian binary package ships with every release as a Generic Package
+on the GitLab project (`pyops-pyopsctl/<version>/`). Download the
+`pyopsctl_<version>_all.deb` from the release assets, then:
+
+```
+sudo apt install ./pyopsctl_<version>_all.deb
+```
+
+apt resolves `python3-requests` and recommends `python3-argcomplete`
+automatically. The deb installs to apt-managed system paths
+(`/usr/bin/pyopsctl`, `/usr/lib/python3/dist-packages/pyopsctl/`) and
+drops zsh + bash completion files at the system-wide paths zsh's
+`compinit` and `bash-completion` autoload from — so tab completion
+works out of the box with no rc edit. Use the deb path on operator
+boxes that don't have the pyops checkout cloned. To build the deb
+locally (rare; CI does this for releases): `./ctl/build.sh` (needs
+`dpkg-dev` + `python3-argcomplete`).
+
 ### Configure
 
 `pyopsctl` reads `~/.config/pyops/config.toml`. The file must be mode
