@@ -51,19 +51,19 @@ export class PyOpsPythonDebugConfigProvider implements vscode.DebugConfiguration
         // Build overrides from all local .py files in set
         const { overrides, pathMappings } = DebugService.buildOverrides(set, workspaceRoot);
 
-
-
-        console.log(`[DEBUG PyOpsPythonDebugConfigProvider] Built overrides for ${set}: ${Object.keys(overrides).length} files`);
-        console.log(`[DEBUG PyOpsPythonDebugConfigProvider] Path mappings:`, pathMappings);
-
-        // Enqueue debug job
+        // Enqueue debug job. DebugService leases a port from the
+        // workspace `pyops.debugPorts` pool, composes a debugpy bootstrap
+        // into `param`, and returns the leased port + the server-assigned
+        // job id. The pyops server no longer hands out ports.
         const { jobId, port } = await this._debugService.enqueueDebugJob(set, scriptlet, overrides);
-        if (!jobId) {
+        if (!jobId || !port) {
             vscode.window.showErrorMessage('Failed to enqueue PyOps debug job');
             return undefined;
         }
 
-        // Return attach config
+        // Return attach config pointing at the leased port. VSCode's
+        // built-in python debugger handles the actual DAP wire over the
+        // TCP connection to debugpy inside the job.
         const host = this._debugService.getDebugHost();
         const debugConfig = {
             name: `Attach PyOps ${set}::${scriptlet}`,
@@ -72,9 +72,8 @@ export class PyOpsPythonDebugConfigProvider implements vscode.DebugConfiguration
             connect: { host, port },
             path: uri.fsPath,
             pathMappings,
-            jobId
+            jobId,
         };
-        console.log(`[DEBUG PyOpsPythonDebugConfigProvider] Returning config:`, debugConfig);
         return debugConfig;
     }
 }

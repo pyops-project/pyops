@@ -200,7 +200,7 @@ class TestDropDone:
 
         pyops_server.assert_no_unexpected_errors()
 
-    def test_failed_job_with_drop_done_is_not_removed(self, api, pyops_server, set_factory):
+    def test_failed_job_with_drop_done_is_not_removed(self, api, pyops_server, set_factory, commit_set):
         """drop_done only applies to successful ("done") jobs, not failed ones."""
         set_factory(SET + "_fail")
         api.put(
@@ -208,13 +208,14 @@ class TestDropDone:
             json={"set": SET + "_fail", "name": "bad", "type": "task"},
         )
         api.post(
-            "/scriptlet/inventory/item",
+            "/scriptlet/inventory/draft",
             json={
                 "set": SET + "_fail",
                 "name": "bad",
                 "code": 'raise RuntimeError("intentional")\n',
             },
         )
+        commit_set(SET + "_fail", "add bad")
 
         resp = api.put(
             "/scriptlet/job/item",

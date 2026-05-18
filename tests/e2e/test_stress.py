@@ -68,9 +68,15 @@ def _create_scriptlet(set_name, name, type_="task"):
 
 
 def _save_code(set_name, name, code):
+    # The inventory's per-file commit/push endpoint is gone — `_save_code`
+    # now writes a draft (working-tree-only). For the stress tests that
+    # checked commit-time contention this is a behavioural change: there
+    # is no longer a server-side commit/push pathway to race on. The
+    # concurrency invariants we still verify are draft writes + reads +
+    # job execution against per-test sets.
     api = _api_session()
     resp = api.post(
-        "/scriptlet/inventory/item",
+        "/scriptlet/inventory/draft",
         json={"set": set_name, "name": name, "code": code},
     )
     api.close()
@@ -143,8 +149,7 @@ _GIT_CONTENTION_LOG_ALLOW = [
     r"exit status",
     r"index\.lock",
     r"nothing to commit",
-    r"perform_git_add_commit_push",
-    r"item_put|item_post|item_del",
+    r"item_put|item_del",
     r"CalledProcessError",
 ]
 
@@ -343,14 +348,15 @@ class TestConcurrentScriptletOps:
 class TestConcurrentJobExecution:
     """Run multiple jobs concurrently and verify all complete."""
 
-    def _setup_task(self, api, set_name, task_name, code, set_factory):
+    def _setup_task(self, api, set_name, task_name, code, set_factory, commit_set):
         set_factory(set_name)
         resp = _create_scriptlet(set_name, task_name)
         assert resp.status_code == 200
         resp = _save_code(set_name, task_name, code)
         assert resp.status_code == 200
+        commit_set(set_name, f"add {task_name}")
 
-    def test_concurrent_job_enqueue_and_run(self, api, pyops_server, set_factory):
+    def test_concurrent_job_enqueue_and_run(self, api, pyops_server, set_factory, commit_set):
         """Enqueue multiple tasks at once; most should reach done state."""
         set_name = f"{SET_PREFIX}_jobs"
         self._setup_task(api,
@@ -358,6 +364,7 @@ class TestConcurrentJobExecution:
             "worker",
             'import time; time.sleep(0.2); print("done")\n',
         set_factory,
+        commit_set,
         )
 
         job_count = 6
@@ -381,7 +388,7 @@ class TestConcurrentJobExecution:
 
         pyops_server.assert_no_unexpected_errors()
 
-    def test_concurrent_jobs_and_inventory_ops(self, api, pyops_server, set_factory):
+    def test_concurrent_jobs_and_inventory_ops(self, api, pyops_server, set_factory, commit_set):
         """Run jobs while also doing draft saves in parallel."""
         set_name = f"{SET_PREFIX}_mixed"
         self._setup_task(api,
@@ -389,6 +396,7 @@ class TestConcurrentJobExecution:
             "busy",
             'import time; time.sleep(0.5); print("ok")\n',
         set_factory,
+        commit_set,
         )
         resp = _create_scriptlet(set_name, "editable")
         assert resp.status_code == 200
@@ -425,7 +433,7 @@ class TestConcurrentJobExecution:
 
         pyops_server.assert_no_unexpected_errors()
 
-    def test_rapid_enqueue_same_task(self, api, pyops_server, set_factory):
+    def test_rapid_enqueue_same_task(self, api, pyops_server, set_factory, commit_set):
         """Rapidly enqueue the same task many times; all should complete."""
         set_name = f"{SET_PREFIX}_rapid"
         self._setup_task(api,
@@ -433,6 +441,7 @@ class TestConcurrentJobExecution:
             "quick",
             'print("fast")\n',
         set_factory,
+        commit_set,
         )
 
         job_count = 10

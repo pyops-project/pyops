@@ -88,7 +88,7 @@ def _wait_for_job(api, job_id, timeout=30):
     )
 
 
-def _setup_shared_task(api, set_factory):
+def _setup_shared_task(api, set_factory, commit_set):
     """Create a set + task scriptlet that both users can run."""
     set_factory(SET)
     r = api.put(
@@ -97,10 +97,11 @@ def _setup_shared_task(api, set_factory):
     )
     assert r.status_code == 200
     r = api.post(
-        "/scriptlet/inventory/item",
+        "/scriptlet/inventory/draft",
         json={"set": SET, "name": "shared", "code": 'print("shared task output")\n'},
     )
     assert r.status_code == 200
+    commit_set(SET, "add shared")
 
 
 def _enqueue(api, set_name="multiuser_e2e", task_name="shared"):
@@ -134,9 +135,9 @@ def _job_ids_for(api):
 class TestMultiUserJobVisibility:
     """Job lists are not filtered per user — all users see all jobs."""
 
-    def test_user_a_sees_user_b_jobs(self, api_a, api_b, pyops_server, set_factory):
+    def test_user_a_sees_user_b_jobs(self, api_a, api_b, pyops_server, set_factory, commit_set):
         """Jobs created by User B are visible in User A's job list."""
-        _setup_shared_task(api_a, set_factory)  # sets are shared; created once
+        _setup_shared_task(api_a, set_factory, commit_set)  # sets are shared; created once
 
         job_b = _enqueue(api_b)
         _wait_for_job(api_b, job_b)
@@ -147,9 +148,9 @@ class TestMultiUserJobVisibility:
         )
         pyops_server.assert_no_unexpected_errors()
 
-    def test_user_b_sees_user_a_jobs(self, api_a, api_b, pyops_server, set_factory):
+    def test_user_b_sees_user_a_jobs(self, api_a, api_b, pyops_server, set_factory, commit_set):
         """Jobs created by User A are visible in User B's job list."""
-        _setup_shared_task(api_a, set_factory)
+        _setup_shared_task(api_a, set_factory, commit_set)
 
         job_a = _enqueue(api_a)
         _wait_for_job(api_a, job_a)
@@ -160,9 +161,9 @@ class TestMultiUserJobVisibility:
         )
         pyops_server.assert_no_unexpected_errors()
 
-    def test_both_users_see_same_job_list(self, api_a, api_b, pyops_server, set_factory):
+    def test_both_users_see_same_job_list(self, api_a, api_b, pyops_server, set_factory, commit_set):
         """After both users enqueue jobs, both lists contain both jobs."""
-        _setup_shared_task(api_a, set_factory)
+        _setup_shared_task(api_a, set_factory, commit_set)
 
         job_a = _enqueue(api_a)
         job_b = _enqueue(api_b)
@@ -179,9 +180,9 @@ class TestMultiUserJobVisibility:
 
         pyops_server.assert_no_unexpected_errors()
 
-    def test_job_owner_metadata_is_correct(self, api_a, api_b, pyops_server, set_factory):
+    def test_job_owner_metadata_is_correct(self, api_a, api_b, pyops_server, set_factory, commit_set):
         """The owner field on a job matches the X-User header used to enqueue it."""
-        _setup_shared_task(api_a, set_factory)
+        _setup_shared_task(api_a, set_factory, commit_set)
 
         job_a_id = _enqueue(api_a)
         job_b_id = _enqueue(api_b)
@@ -196,9 +197,9 @@ class TestMultiUserJobVisibility:
 
         pyops_server.assert_no_unexpected_errors()
 
-    def test_multiple_jobs_same_user_all_visible(self, api_a, pyops_server, set_factory):
+    def test_multiple_jobs_same_user_all_visible(self, api_a, pyops_server, set_factory, commit_set):
         """A user who runs the same task multiple times sees all their own jobs."""
-        _setup_shared_task(api_a, set_factory)
+        _setup_shared_task(api_a, set_factory, commit_set)
 
         job_ids = [_enqueue(api_a) for _ in range(3)]
         for jid in job_ids:

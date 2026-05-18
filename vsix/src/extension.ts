@@ -1,9 +1,11 @@
+import * as net from 'net';
 import * as vscode from 'vscode';
 import { StatusBarItem, window as vscodeWindow } from 'vscode';
 import { Job, JobsTreeDataProvider, JobTreeItem } from './jobsTreeProvider';
 import { ManagerTreeDataProvider, ScriptletTreeItem } from './managerTreeProvider';
 import { CreateScriptletCommand } from './commands/CreateScriptletCommand';
 import { DebugService } from './services/DebugService';
+import { DebugSessionWatcher } from './services/DebugSessionWatcher';
 import { DebugOutputMonitor } from './services/DebugOutputMonitor';
 import { PyOpsPythonDebugConfigProvider } from './services/PyOpsPythonDebugConfigProvider';
 import { ConnectionStatusManager } from './ConnectionStatusManager';
@@ -118,8 +120,18 @@ export async function activate(context: vscode.ExtensionContext) {
     jobService = new JobService(apiClient, jobsTreeProvider, jobViewOutputChannel);
     const scriptletService = new ScriptletService(apiClient, managerTreeProvider!, remoteProvider);
 
-    // Create debug service
+    // Create debug service + session watcher. The watcher polls each
+    // pyops debug session's underlying job; when the job ends, it
+    // calls vscode.debug.stopDebugging so the DAP disconnect triggers
+    // debugpy's adapter to shut down on its own protocol path (the
+    // adapter detaches itself from the job's process group via its
+    // own setsid, so a server-side killpg on the job doesn't reach it).
     const debugService = new DebugService(apiClient, outputChannel);
+    const debugSessionWatcher = new DebugSessionWatcher(apiClient, outputChannel);
+    context.subscriptions.push({ dispose: () => debugSessionWatcher.dispose() });
+    context.subscriptions.push(vscode.debug.onDidStartDebugSession((session) => {
+        debugSessionWatcher.watch(session);
+    }));
 
     // Register debug configuration provider for Python
     const debugConfigProvider = new PyOpsPythonDebugConfigProvider(debugService);
@@ -205,10 +217,6 @@ export async function activate(context: vscode.ExtensionContext) {
             await scriptletService.writeLocalToRemoteDraft(treeItem);
         }));
 
-        context.subscriptions.push(vscode.commands.registerCommand('pyops.saveRemoteDraft', async (treeItem?: ScriptletTreeItem) => {
-            await scriptletService.saveRemoteDraft(treeItem);
-        }));
-
         context.subscriptions.push(vscode.commands.registerCommand('pyops.startDebugJob', async (treeItem?: ScriptletTreeItem) => {
             const isValidConfig = ApiClient.hasValidConfigStatic();
             if (!isValidConfig) {
@@ -240,34 +248,43 @@ export async function activate(context: vscode.ExtensionContext) {
                     jobOutputChannel.show(true);
                     await debugOutputMonitor.startMonitoring(key, result.jobId);
 
-                    // Wait for job to be running
-                    const jobTimeoutMs = 15000;
-                    const pollIntervalMs = 1000;
-                    const jobStartTime = Date.now();
-                    let jobRunning = false;
-                    while (Date.now() - jobStartTime < jobTimeoutMs) {
-                        const response = await apiClient.fetch(`/scriptlet/job/item?id=${result.jobId}`);
-                        if (!response.ok) {
-                            if (response.status === 404) {
-                                throw new Error(`Job ${result.jobId} not found`);
+                    // Wait until the debugpy listener is reachable on the
+                    // leased port. This is the readiness signal under the
+                    // new server contract — `state=running` only fires
+                    // AFTER `vscode.debug.startDebugging` lets debugpy
+                    // proceed past `wait_for_client()`, so polling the
+                    // server-side job state here would deadlock. The
+                    // first-time-per-set venv install can be slow; allow
+                    // a generous deadline. While we wait, watch for
+                    // terminal job states so a failed install / spawn
+                    // doesn't hang the operator at the workbench.
+                    const debugHost = debugService.getDebugHost();
+                    const listenDeadlineMs = 180000;
+                    const listenStart = Date.now();
+                    let listenerUp = false;
+                    while (Date.now() - listenStart < listenDeadlineMs) {
+                        const jobResp = await apiClient.fetch(`/scriptlet/job/item?id=${result.jobId}`);
+                        if (jobResp.ok) {
+                            const job = await jobResp.json() as { state: string };
+                            if (['failed', 'killed', 'cancelled', 'removed'].includes(job.state)) {
+                                throw new Error(`Job ${result.jobId} ended before listener came up: state=${job.state}`);
                             }
-                            throw new Error(`Failed to fetch job status: ${response.status}`);
                         }
-                        const job = await response.json() as { state: string };
-                        if (job.state === 'running') {
-                            jobRunning = true;
-                            break;
-                        }
-                        if (['failed', 'killed', 'cancelled', 'removed'].includes(job.state)) {
-                            throw new Error(`Job ${result.jobId} failed with state: ${job.state}`);
-                        }
-                        await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
+                        const reachable = await new Promise<boolean>((resolve) => {
+                            const sock = new net.Socket();
+                            const close = () => { try { sock.destroy(); } catch { /* noop */ } };
+                            sock.setTimeout(1000);
+                            sock.once('connect', () => { close(); resolve(true); });
+                            sock.once('error', () => { close(); resolve(false); });
+                            sock.once('timeout', () => { close(); resolve(false); });
+                            sock.connect(result.port as number, debugHost);
+                        });
+                        if (reachable) { listenerUp = true; break; }
+                        await new Promise(resolve => setTimeout(resolve, 500));
                     }
-                    if (!jobRunning) {
-                        throw new Error(`Timeout waiting for job ${result.jobId} to start running`);
+                    if (!listenerUp) {
+                        throw new Error(`Timeout waiting for debugpy listener on ${debugHost}:${result.port}`);
                     }
-
-
 
                     // Start debug attach
                     const host = debugService.getDebugHost();
@@ -322,11 +339,17 @@ export async function activate(context: vscode.ExtensionContext) {
                 return;
             }
             const debugJob: Job = runningDebugJobs[0];
-            let port: number;
-            try {
-                port = await debugService.getDebugPort();
-            } catch (error: unknown) {
-                vscode.window.showErrorMessage(`Failed to get debug port: ${error instanceof Error ? error.message : String(error)}`);
+            // Port comes from this VSCode session's lease table. If the
+            // operator restarted VSCode between `start debug` and
+            // `attach debug`, the in-memory lease is lost and we can't
+            // recover the port — the operator must restart the job.
+            const port = debugService.findPortForJob(debugJob.id);
+            if (port === undefined) {
+                vscode.window.showErrorMessage(
+                    `No debug-port lease for job ${debugJob.id} in this VSCode session ` +
+                    `(VSCode restarted between start and attach?). Stop the job and ` +
+                    `start a fresh debug session.`,
+                );
                 return;
             }
             outputChannel.appendLine(`Attaching to job ${debugJob.id} (${debugJob.set || '?'}::${debugJob.name || '?'}) at port ${port}`);
@@ -359,6 +382,28 @@ export async function activate(context: vscode.ExtensionContext) {
 
         context.subscriptions.push(vscode.commands.registerCommand('pyops.openLocalFile', async (treeItem?: ScriptletTreeItem) => {
             await scriptletService.openLocalFile(treeItem);
+        }));
+
+        // Auto-release debug-port leases when the corresponding VSCode
+        // debug session ends (clean stop, user-clicks-stop, or crash).
+        // Without this the pool drains to zero as the operator iterates
+        // on a debug session, because nothing else returns ports to it.
+        context.subscriptions.push(vscode.debug.onDidTerminateDebugSession((session) => {
+            // Stop watching the session first (no point polling a job
+            // whose session just went away — VSCode does its own
+            // disconnect handling).
+            debugSessionWatcher.cancel(session.id);
+
+            const config = session.configuration as Record<string, unknown>;
+            const jobId = typeof config?.jobId === 'string' ? config.jobId : undefined;
+            if (!jobId) return;
+            const port = debugService.findPortForJob(jobId);
+            if (port !== undefined) {
+                debugService.releasePort(port);
+                outputChannel.appendLine(
+                    `[DEBUG] released port ${port} on debug-session-end for ${jobId}`,
+                );
+            }
         }));
 
         outputChannel.appendLine('PyOps extension activated successfully');

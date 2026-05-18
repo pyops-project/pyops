@@ -150,10 +150,14 @@ def _create_user_scriptlet(api, set_name, name, type_, code):
 
 
 def _create_scriptlet(api, set_name, name, type_, code):
+    """Create + draft a scriptlet via the inventory API. Leaves the
+    scriptlet UNSTAGED — the server no longer commits via inventory.
+    Tests that need committed content call the `commit_set` fixture
+    after this helper."""
     r = api.put("/scriptlet/inventory/item", json={"set": set_name, "name": name, "type": type_})
     assert r.status_code == 200, f"create {name} failed: {r.text}"
-    r = api.post("/scriptlet/inventory/item", json={"set": set_name, "name": name, "code": code})
-    assert r.status_code == 200, f"save {name} failed: {r.text}"
+    r = api.post("/scriptlet/inventory/draft", json={"set": set_name, "name": name, "code": code})
+    assert r.status_code == 200, f"draft {name} failed: {r.text}"
 
 
 def _nav_sets(e2e_page):
@@ -241,7 +245,7 @@ class TestSetsLifecycleViaController:
         _assert_failed(job, "already exists")
         pyops_server.assert_no_unexpected_errors(allow=["already exists", "set_create"])
 
-    def test_remove_set_cleans_up_after_job_ran(self, api, pyops_server, e2e_env, set_factory):
+    def test_remove_set_cleans_up_after_job_ran(self, api, pyops_server, e2e_env, set_factory, commit_set):
         """A set that has actually executed a user-scriptlet job can still
         be removed cleanly — the runner-side lazy bootstrap leaves a
         populated venv and a workspace under data/jobs/, and the
@@ -251,7 +255,9 @@ class TestSetsLifecycleViaController:
         _assert_done(_run(api, "POST", "/controller/internal/sets/create", {"name": name}))
 
         # Run a real user task in the new set so venv + workspace exist.
+        # kind=task reads committed content, so commit after drafting.
         _create_scriptlet(api, name, "t", "task", 'print("ok")\n')
+        commit_set(name, "add task")
         r = api.put(
             "/scriptlet/job/item",
             json={"set": name, "name": "t", "drop_done": False,
@@ -444,6 +450,165 @@ class TestUpdateDepsViaController:
         )
 
 
+class TestCommitDraftsViaController:
+    """set_commit_drafts stages + commits (+ pushes when a remote exists)
+    every unstaged scriptlet in one batch. The single sanctioned commit
+    pathway in pyops — per-file commit/push is gone from the server."""
+
+    def test_no_drafts_is_noop(self, api, pyops_server, set_factory, e2e_env):
+        _service_ready(api)
+        set_factory("cd_clean")
+        repo = Path(e2e_env["data_dir"]) / "git" / "cd_clean"
+        pre = subprocess.check_output(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True
+        ).strip()
+
+        _assert_done(_run(api, "POST", "/controller/internal/sets/commit_drafts/cd_clean"))
+
+        post = subprocess.check_output(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True
+        ).strip()
+        assert pre == post, "no drafts must not produce a new commit"
+
+    def test_commits_multiple_unstaged_files_in_one_commit(self, api, pyops_server, set_factory, e2e_env):
+        _service_ready(api)
+        set_factory("cd_multi")
+        repo = Path(e2e_env["data_dir"]) / "git" / "cd_multi"
+        (repo / "task").mkdir(parents=True, exist_ok=True)
+        (repo / "task" / "a.task.py").write_text("print('a')\n")
+        (repo / "task" / "b.task.py").write_text("print('b')\n")
+        (repo / "task" / "c.task.py").write_text("print('c')\n")
+
+        pre_count = int(subprocess.check_output(
+            ["git", "-C", str(repo), "rev-list", "--count", "HEAD"], text=True
+        ).strip())
+
+        _assert_done(_run(api, "POST", "/controller/internal/sets/commit_drafts/cd_multi"))
+
+        post_count = int(subprocess.check_output(
+            ["git", "-C", str(repo), "rev-list", "--count", "HEAD"], text=True
+        ).strip())
+        assert post_count == pre_count + 1, "exactly one new commit"
+
+        files_in_head = subprocess.check_output(
+            ["git", "-C", str(repo), "ls-tree", "-r", "--name-only", "HEAD"], text=True
+        ).strip().splitlines()
+        for expected in ("task/a.task.py", "task/b.task.py", "task/c.task.py"):
+            assert expected in files_in_head, f"{expected} missing from HEAD"
+
+        dirty = subprocess.check_output(
+            ["git", "-C", str(repo), "status", "--porcelain"], text=True
+        ).strip()
+        assert dirty == "", f"working tree should be clean; got: {dirty!r}"
+
+    def test_pushes_to_remote_when_configured(self, api, pyops_server, bare_remote, e2e_env, set_factory, tmp_path):
+        _service_ready(api)
+        url = f"file://{bare_remote}"
+        _assert_done(_run(api, "POST", "/controller/internal/sets/clone", {"url": url}))
+
+        local = Path(e2e_env["data_dir"]) / "git" / "remote_repo"
+        (local / "task").mkdir(parents=True, exist_ok=True)
+        (local / "task" / "new.task.py").write_text("print('new')\n")
+
+        _assert_done(_run(api, "POST", "/controller/internal/sets/commit_drafts/remote_repo"))
+
+        scratch = tmp_path / "verify_push"
+        subprocess.check_call(
+            ["git", "clone", bare_remote, str(scratch)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        assert (scratch / "task" / "new.task.py").exists(), (
+            "commit_drafts should have pushed the new file to the bare remote"
+        )
+
+    def test_unknown_set_fails(self, api, pyops_server, set_factory):
+        _service_ready(api)
+        job = _run(api, "POST", "/controller/internal/sets/commit_drafts/never_existed_xyz")
+        _assert_failed(job, "not found")
+        pyops_server.assert_no_unexpected_errors(allow=["not found", "set_commit_drafts"])
+
+    def test_custom_message_is_used(self, api, pyops_server, set_factory, e2e_env):
+        _service_ready(api)
+        set_factory("cd_msg")
+        repo = Path(e2e_env["data_dir"]) / "git" / "cd_msg"
+        (repo / "task").mkdir(parents=True, exist_ok=True)
+        (repo / "task" / "m.task.py").write_text("print('m')\n")
+
+        custom = "ship the m feature"
+        _assert_done(_run(
+            api, "POST", "/controller/internal/sets/commit_drafts/cd_msg",
+            {"message": custom},
+        ))
+        last = subprocess.check_output(
+            ["git", "-C", str(repo), "log", "-1", "--pretty=%s"], text=True
+        ).strip()
+        assert last == custom, f"expected custom message, got {last!r}"
+
+    def test_empty_message_falls_back_to_default(self, api, pyops_server, set_factory, e2e_env):
+        _service_ready(api)
+        set_factory("cd_def")
+        repo = Path(e2e_env["data_dir"]) / "git" / "cd_def"
+        (repo / "task").mkdir(parents=True, exist_ok=True)
+        (repo / "task" / "d.task.py").write_text("print('d')\n")
+
+        _assert_done(_run(
+            api, "POST", "/controller/internal/sets/commit_drafts/cd_def",
+            {"message": "   "},  # whitespace-only → fallback
+        ))
+        last = subprocess.check_output(
+            ["git", "-C", str(repo), "log", "-1", "--pretty=%s"], text=True
+        ).strip()
+        assert last.startswith("Commit drafts in cd_def by ")
+
+
+class TestSetsListReportsHasDrafts:
+    """`GET /controller/internal/sets/list` reports `has_drafts` per set
+    so the UI knows when to enable the commit-drafts button."""
+
+    def test_clean_set_reports_no_drafts(self, api, pyops_server, set_factory):
+        _service_ready(api)
+        set_factory("hd_clean")
+        rows = api.get("/controller/internal/sets/list").json()["sets"]
+        row = next(r for r in rows if r["name"] == "hd_clean")
+        assert row.get("has_drafts") is False
+
+    def test_dirty_set_reports_drafts(self, api, pyops_server, set_factory, e2e_env):
+        _service_ready(api)
+        set_factory("hd_dirty")
+        (Path(e2e_env["data_dir"]) / "git" / "hd_dirty" / "task").mkdir(parents=True, exist_ok=True)
+        (Path(e2e_env["data_dir"]) / "git" / "hd_dirty" / "task" / "x.task.py").write_text("print('x')\n")
+        rows = api.get("/controller/internal/sets/list").json()["sets"]
+        row = next(r for r in rows if r["name"] == "hd_dirty")
+        assert row.get("has_drafts") is True
+
+
+class TestSetsStatusEndpoint:
+    """`GET /controller/internal/sets/status/<name>` returns the porcelain
+    git-status output the commit-drafts modal previews."""
+
+    def test_clean_set_returns_empty_status(self, api, pyops_server, set_factory):
+        _service_ready(api)
+        set_factory("st_clean")
+        r = api.get("/controller/internal/sets/status/st_clean")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["name"] == "st_clean"
+        assert body["status"].strip() == ""
+
+    def test_dirty_set_returns_porcelain_lines(self, api, pyops_server, set_factory, e2e_env):
+        _service_ready(api)
+        set_factory("st_dirty")
+        (Path(e2e_env["data_dir"]) / "git" / "st_dirty" / "task").mkdir(parents=True, exist_ok=True)
+        (Path(e2e_env["data_dir"]) / "git" / "st_dirty" / "task" / "y.task.py").write_text("print('y')\n")
+        body = api.get("/controller/internal/sets/status/st_dirty").json()
+        assert "task/y.task.py" in body["status"]
+
+    def test_unknown_set_404s(self, api, pyops_server):
+        _service_ready(api)
+        r = api.get("/controller/internal/sets/status/never_exists_xyz")
+        assert r.status_code == 404
+
+
 # ---------------------------------------------------------------------------
 # UI tests — driven through the Playwright frame, covering the modal-input
 # pre-step and the live-output dialog the new flow introduces.
@@ -606,6 +771,74 @@ class TestSetActionsUI:
         terminal = _await_modal_done(frame)
         assert terminal == "done", f"pull failed in UI: {terminal}"
         frame.locator('[data-testid="internal-job-close"]').click()
+        pyops_server.assert_no_unexpected_errors()
+
+    def test_commit_drafts_button_disabled_on_clean_set(self, e2e_page, api_anon, pyops_server, set_factory):
+        """A clean set must NOT let the operator open the commit-drafts
+        modal — pressing it would just no-op the task; greying the
+        button out makes that obvious."""
+        _service_ready(api_anon)
+        set_factory("cd_disabled")
+        frame = _nav_sets(e2e_page)
+        frame.locator('[data-testid="sets-refresh"]').click()
+        btn = frame.locator('[data-testid="set-commit-drafts-cd_disabled"]')
+        btn.wait_for(state="visible", timeout=10_000)
+        assert btn.is_disabled(), "commit-drafts button should be disabled when has_drafts=False"
+        pyops_server.assert_no_unexpected_errors()
+
+    def test_commit_drafts_button_opens_modal_with_status_and_commits(self, e2e_page, api_anon, pyops_server, set_factory, e2e_env):
+        _service_ready(api_anon)
+        set_factory("cd_ui")
+        # Drop an unstaged file so the button has something real to commit.
+        repo = Path(e2e_env["data_dir"]) / "git" / "cd_ui"
+        (repo / "task").mkdir(parents=True, exist_ok=True)
+        (repo / "task" / "ui.task.py").write_text("print('ui')\n")
+
+        frame = _nav_sets(e2e_page)
+        frame.locator('[data-testid="sets-refresh"]').click()
+        btn = frame.locator('[data-testid="set-commit-drafts-cd_ui"]')
+        btn.wait_for(state="visible", timeout=10_000)
+        # Wait until the next /list cycle reports has_drafts=true and
+        # the button leaves the disabled state.
+        for _ in range(40):
+            if not btn.is_disabled():
+                break
+            time.sleep(0.5)
+        assert not btn.is_disabled(), "commit-drafts button should be enabled when unstaged content exists"
+        btn.click()
+
+        # Pre-modal: commit-message + status preview.
+        modal = frame.locator('[data-testid="sets-commit-drafts-modal"]')
+        modal.wait_for(state="visible", timeout=10_000)
+        # The porcelain preview should mention the unstaged file.
+        for _ in range(20):
+            status_text = frame.locator('[data-testid="sets-commit-drafts-status"]').inner_text()
+            if "task/ui.task.py" in status_text:
+                break
+            time.sleep(0.25)
+        assert "task/ui.task.py" in status_text, f"status preview missing file: {status_text!r}"
+
+        # Enter a custom commit message and submit.
+        custom_msg = "ui-commit feature first slice"
+        frame.locator('[data-testid="sets-commit-drafts-message"]').fill(custom_msg)
+        frame.locator('[data-testid="sets-commit-drafts-submit"]').click()
+        modal.wait_for(state="hidden", timeout=5_000)
+
+        # Live-output modal opens for the actual job.
+        frame.locator('[data-testid="internal-job-modal"]').wait_for(state="visible", timeout=10_000)
+        terminal = _await_modal_done(frame)
+        assert terminal == "done", f"commit_drafts UI: badge={terminal}"
+        frame.locator('[data-testid="internal-job-close"]').click()
+
+        # Working tree clean + commit message persisted.
+        dirty = subprocess.check_output(
+            ["git", "-C", str(repo), "status", "--porcelain"], text=True
+        ).strip()
+        assert dirty == ""
+        last = subprocess.check_output(
+            ["git", "-C", str(repo), "log", "-1", "--pretty=%s"], text=True
+        ).strip()
+        assert last == custom_msg, f"expected commit message {custom_msg!r}, got {last!r}"
         pyops_server.assert_no_unexpected_errors()
 
     def test_remove_button_streams_and_removes(self, e2e_page, api_anon, pyops_server, set_factory):

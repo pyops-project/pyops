@@ -81,11 +81,10 @@ graph TD
 - Process checks: p.poll() for liveness; psutil for tree-kill (SIGTERM → SIGKILL after 15s).
 - Stale PID handling: After cleanProcesses, sync DB running jobs to 'failed' if !psutil.Process(pid).is_running().
 - Job states: todo, dequeued, loading, running, done, failed, cancel, cancelling, cancelled, remove, removed.
-- Debug mode: Always inject debugpy.listen(('0.0.0.0', port)) from conf_users(); appends wait_for_client() if '#>AWAIT_DEBUG' in param. Validates via /debug/port; terminates prior owner jobs.
+- Debug mode: pyops doesn't inject a debugger. The client's `param` carries the bootstrap (debugpy / gdbserver / cuda-gdbserver / lldb-server / anything that speaks the wire its consumer understands). The runner only flips `running` after `exec(param)` returns. `kind=debug` keeps no timeout, no retry, and materialises sources under `.debug/src/<set>/{task,library}/<name>.py`.
 
 ### Web (`app/web.py`)
 - Serves /controller/{set}/{name}, /menu, and static /files/
-- GET /debug/port: Uses sanitize_owner(X-User default "anonymous") & returns {"port": int(port)} from conf_users()[owner]["debug_port"] or 400 if missing (e.g., for VSIX attach).
 
 ### PyOps (`app/lib/pyops.py`)
 - Provides `Control` for API calls
@@ -101,7 +100,7 @@ graph TD
 - `data`: `{"jobs": "data/jobs", "git": "data/git", "db": "data/app.db"}`
 - `runner`: `{"venv": "data/venv", "pkg": "data/pkg", "git_pull_interval": 60, "drop_done_delay_seconds": 60}`
 - `log`: `{"loglevel": "debug"}`
-- `users`: `{"anonymous": {"debug_port": 45678}}`
+- `users`: per-owner table; pyops itself does not read any keys inside the owner objects.
 
 ### Access Methods
 
@@ -228,7 +227,7 @@ Jobs executed via subprocess.Popen with set-specific venv Python interpreter for
 - **CLI Invocation**: job_runner.py accepts JSON-serialized kwargs via command-line for complex arg passing.
 - **Process Management**: Polling uses p.poll() is None (alive), termination via Popen.terminate() with psutil tree-kill.
 - **ZMQ IPC**: Works across subprocess boundaries.
-- **Debug Handling**: Adapter checks and debugpy injection functional in venv context.
+- **Debug Handling**: `kind=debug` materialises sources under `.debug/src/`; the client's `param` brings the debugger.
 - **Testing**: Mocks use subprocess.Popen; maintains >90% coverage.
 
 
@@ -357,7 +356,7 @@ Designed for Zabbix/Prometheus polling; see `docs/insights_app.md` § "Monitorin
 - `mock_db`: Temp SQLite
 - `mock_git_dir`: Mock sets/scriptlets
 - `mock_git_ops(mock_git_dir)`: Temp FS ops via `mock_git_dir.tmp_path / repo` (repo="data/git/{set}" → `tmp_path/data/git/{set}/{name}.{ext}`).
-  - Covers `write_content`, `read_content`, `get_controller_code`, `get_view_content`, `delete_file_and_commit`.
+  - Covers `write_content`, `read_content`, `get_controller_code`, `get_view_content`, `delete_file_unstaged`.
   - **Pitfall**: `Path(repo)` creates **real** `./data/git/{set}/` files (e.g., "test_set" tests → pollution; conflicts `testset/test_task.py` pytest collection despite `norecursedirs=data`).
 - `mock_popen`: Subprocess.Popen mock with pid, poll(), terminate(), wait()
 - `mock_zmq`: ZMQ Context/Socket mock for REQ/REP simulation (msgpack-packed messages, 3 retries on ZMQError)

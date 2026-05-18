@@ -9,3 +9,6 @@ pyrightconfig.json
 /pyops/
 /htmlcov/
 /.tmp/
+/.claude/
+/ctl/dist/
+/ctl/pyopsctl/_version.py

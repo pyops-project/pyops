@@ -440,52 +440,20 @@ def write_content(repo: str, name: str, type_: str, content: str) -> None:  # Re
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(content)
 
-def _add_commit_push_locked(repo: str, rel_path: str, msg: str) -> None:
-    """Tag check + git add/commit/push. Caller MUST hold repo_lock."""
-    tags_output = subprocess.check_output(["git", "tag", "-l"], cwd=repo).decode().strip()
-    if tags_output:
-        try:
-            _check(["git", "describe", "--tags", "--exact-match", "HEAD"], repo)
-            raise GitConflictError("Cannot commit on a tag.")
-        except subprocess.CalledProcessError:
-            pass  # Not a tag.
+def create_scriptlet(set_name: str, name: str, type_: str, content: str) -> str:
+    """Atomic scriptlet creation: unique-name check + write under one lock.
 
-    _call(["git", "add", rel_path], repo)
-    _call(["git", "commit", "-m", msg], repo)
-    remotes = _check(["git", "remote"], repo)
-    if remotes:
-        _call(["git", "push"], repo)
-
-def perform_git_add_commit_push(repo: str, file_path: str, msg: str) -> None:
-    """Adds file, commits, pushes (checks remote and not tag).
-
-    Args:
-        repo (str): Repo path.
-        file_path (str): Relative file path.
-        msg (str): Commit message.
-
-    Raises:
-        GitConflictError: If on tag.
-        subprocess.CalledProcessError: Git failure.
-    """
-    rel_path = os.path.relpath(file_path, repo)
-    git_base = get_git_base()
-    set_name = os.path.basename(repo)
-    with repo_lock(git_base, set_name):
-        _add_commit_push_locked(repo, rel_path, msg)
-
-def create_scriptlet(set_name: str, name: str, type_: str, content: str, commit_msg: str) -> str:
-    """Atomic scriptlet creation: unique-name check + write + commit under one lock.
-
-    Holding the lock across the whole sequence prevents a same-name race where
-    two concurrent callers both pass check_name_unique before either writes.
+    No commit, no push. The new file shows up as an untracked entry in
+    `git status --porcelain` and is folded into the next set-wide
+    `commit_drafts` batch alongside any subsequent edits. Holding the
+    lock across the whole sequence prevents a same-name race where two
+    concurrent callers both pass `check_name_unique` before either writes.
 
     Args:
         set_name (str): Set.
         name (str): Scriptlet name.
         type_ (str): Scriptlet type.
         content (str): Initial file content.
-        commit_msg (str): Git commit message.
 
     Returns:
         str: Absolute path of the created file.
@@ -493,10 +461,8 @@ def create_scriptlet(set_name: str, name: str, type_: str, content: str, commit_
     Raises:
         GitNotFoundError: Set does not exist.
         FileExistsError: Name already taken in the set.
-        GitConflictError: Repo is on a tag.
-        subprocess.CalledProcessError: Git failure.
     """
-    repo = get_repo_path(set_name)  # ensures .git/.gitignore/README; takes+releases lock
+    repo = get_repo_path(set_name)
     git_base = get_git_base()
     with repo_lock(git_base, set_name):
         if not check_name_unique(repo, name):
@@ -504,68 +470,26 @@ def create_scriptlet(set_name: str, name: str, type_: str, content: str, commit_
         file_path = get_file_path(repo, name, type_)
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(content)
-        rel_path = os.path.relpath(file_path, repo)
-        _add_commit_push_locked(repo, rel_path, commit_msg)
     return file_path
 
-def batch_commit(repo: str, msg: str, rel_files: List[str] = None) -> None:
-    """Batch adds files/all, commits, pushes (checks remote and not tag).
+def delete_file_unstaged(repo: str, file_path: str) -> None:
+    """Remove a tracked scriptlet from the working tree.
+
+    No `git rm`, no commit, no push: the deletion shows up as an
+    unstaged change in `git status --porcelain` and gets folded into
+    the next set-wide `commit_drafts` batch alongside any edits. Same
+    methodology as the inventory's per-file edits (which write to the
+    working tree via `/inventory/draft` without committing).
 
     Args:
         repo (str): Repo path.
-        msg (str): Commit message.
-        rel_files (List[str], optional): Relative file paths to add; None=add all.
-
-    Raises:
-        GitConflictError: If on tag.
-        subprocess.CalledProcessError: Git failure.
+        file_path (str): Absolute path of the file to remove.
     """
-    # Check not on tag.
-    tags_output = subprocess.check_output(["git", "tag", "-l"], cwd=repo).decode().strip()
-    if tags_output:
-        try:
-            _check(["git", "describe", "--tags", "--exact-match", "HEAD"], repo)
-            raise GitConflictError("Cannot commit on a tag.")
-        except subprocess.CalledProcessError:
-            pass  # Not a tag.
-    # No tags, assume not on tag
-    
-    # Add files or all.
     git_base = get_git_base()
     set_name = os.path.basename(repo)
     with repo_lock(git_base, set_name):
-        if rel_files:
-            _call(["git", "add"] + rel_files, repo)
-        else:
-            _call(["git", "add", "."], repo)
-        
-        # Commit, push.
-        _call(["git", "commit", "-m", msg], repo)
-        remotes = _check(["git", "remote"], repo)
-        if remotes:
-            _call(["git", "push"], repo)
-
-def delete_file_and_commit(repo: str, file_path: str, msg: str) -> None:
-    """Removes file, commits, pushes.
-    
-    Args:
-        repo (str): Repo path.
-        file_path (str): Relative file path.
-        msg (str): Commit message.
-    
-    Raises:
-        HTTPException: As in perform_git_add_commit_push.
-        subprocess.CalledProcessError: Git failure.
-    """
-    rel_path = os.path.relpath(file_path, repo)
-    git_base = get_git_base()
-    set_name = os.path.basename(repo)
-    with repo_lock(git_base, set_name):
-        _call(["git", "rm", "-f", rel_path], repo)
-        _call(["git", "commit", "-m", msg], repo)
-        remotes = _check(["git", "remote"], repo)
-        if remotes:
-            _call(["git", "push"], repo)
+        if os.path.exists(file_path):
+            os.remove(file_path)
 
 def get_repo_status(set: str) -> Dict[str, any]:
     """Gets repo branch and tag status.

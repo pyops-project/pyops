@@ -46,7 +46,7 @@ def _wait_for_state(api, job_id, target, timeout=30):
     )
 
 
-def _setup(api, set_name, task_name, code, set_factory):
+def _setup(api, set_name, task_name, code, set_factory, commit_set):
     set_factory(set_name)
     r = api.put(
         "/scriptlet/inventory/item",
@@ -54,10 +54,11 @@ def _setup(api, set_name, task_name, code, set_factory):
     )
     assert r.status_code == 200
     r = api.post(
-        "/scriptlet/inventory/item",
+        "/scriptlet/inventory/draft",
         json={"set": set_name, "name": task_name, "code": code},
     )
     assert r.status_code == 200
+    commit_set(set_name, f"add {task_name}")
 
 
 def _enqueue(api, set_name, task_name):
@@ -79,9 +80,9 @@ def _enqueue(api, set_name, task_name):
 class TestJobCancel:
     """GET /scriptlet/job/cancel terminates a running job."""
 
-    def test_cancel_running_job_reaches_cancelled(self, api, pyops_server, set_factory):
+    def test_cancel_running_job_reaches_cancelled(self, api, pyops_server, set_factory, commit_set):
         """A long-running task can be cancelled while in 'running' state."""
-        _setup(api, SET, "sleeper", LONG_RUNNING_CODE, set_factory)
+        _setup(api, SET, "sleeper", LONG_RUNNING_CODE, set_factory, commit_set)
         job_id = _enqueue(api, SET, "sleeper")
 
         # Wait until the job is actually running before cancelling — the
@@ -113,14 +114,14 @@ class TestJobCancel:
         assert resp.status_code == 404
         pyops_server.assert_no_unexpected_errors()
 
-    def test_cancel_terminal_job_flips_state_to_cancelled(self, api, pyops_server, set_factory):
+    def test_cancel_terminal_job_flips_state_to_cancelled(self, api, pyops_server, set_factory, commit_set):
         """runner.cancel() unconditionally marks state='cancel'; the runner loop
         then finalises it to 'cancelled' regardless of the previous terminal
         state. This is observed behaviour — it loses the original 'done'/'failed'
         information and is surprising, but encoding it as a test locks the
         contract until a deliberate change.
         """
-        _setup(api, SET + "_done", "quick", 'print("done")\n', set_factory)
+        _setup(api, SET + "_done", "quick", 'print("done")\n', set_factory, commit_set)
         job_id = _enqueue(api, SET + "_done", "quick")
 
         done = _wait_for_state(api, job_id, "done", timeout=30)

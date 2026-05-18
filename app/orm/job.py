@@ -14,7 +14,6 @@ class Job(Base):
     max_retries = Column(Integer, default=0, nullable=False)
     param = Column(String)
     pid = Column(Integer, index=True)
-    debugpy_pid = Column(Integer, index=True)
     detail = Column(String)
     overrides = Column(String, default=None)
     start = Column(DateTime, index=True)

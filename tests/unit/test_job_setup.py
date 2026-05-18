@@ -57,7 +57,6 @@ def setup_kwargs(tmp_path):
         "libs": [],
         "overrides": None,
         "max_retries": 0,
-        "port": None,
         "runner_sock_path": "/tmp/pyops/runner.sock",
         "conf_data": {
             "jobs": str(jobs_dir),

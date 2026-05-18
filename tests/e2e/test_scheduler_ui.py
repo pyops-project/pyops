@@ -17,7 +17,7 @@ TASK_NAME = "dummy"
 TASK_CODE = 'print("hi")\n'
 
 
-def _prepare_set_and_task(api, set_factory):
+def _prepare_set_and_task(api, set_factory, commit_set):
     set_factory(SET_NAME)
     resp = api.put(
         "/scriptlet/inventory/item",
@@ -25,10 +25,11 @@ def _prepare_set_and_task(api, set_factory):
     )
     assert resp.status_code == 200, resp.text
     resp = api.post(
-        "/scriptlet/inventory/item",
+        "/scriptlet/inventory/draft",
         json={"set": SET_NAME, "name": TASK_NAME, "code": TASK_CODE},
     )
     assert resp.status_code == 200, resp.text
+    commit_set(SET_NAME, f"add {TASK_NAME}")
 
 
 def _nav_scheduler(e2e_page):
@@ -70,9 +71,9 @@ def _first_schedule_row(frame):
 
 
 class TestSchedulerUI:
-    def test_create_modal_cancel_closes_without_creating(self, e2e_page, api_anon, pyops_server, set_factory):
+    def test_create_modal_cancel_closes_without_creating(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """Clicking Cancel on the create modal closes it and creates nothing."""
-        _prepare_set_and_task(api_anon, set_factory)
+        _prepare_set_and_task(api_anon, set_factory, commit_set)
         frame = _nav_scheduler(e2e_page)
 
         _open_create_modal(frame)
@@ -88,9 +89,9 @@ class TestSchedulerUI:
         assert resp.json() == []
         pyops_server.assert_no_unexpected_errors()
 
-    def test_create_with_all_fields_persists_values(self, e2e_page, api_anon, pyops_server, set_factory):
+    def test_create_with_all_fields_persists_values(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """Every field on the create modal (param, max_retries, drop_done) round-trips."""
-        _prepare_set_and_task(api_anon, set_factory)
+        _prepare_set_and_task(api_anon, set_factory, commit_set)
         frame = _nav_scheduler(e2e_page)
 
         _open_create_modal(frame)
@@ -121,9 +122,9 @@ class TestSchedulerUI:
         api_anon.get(f"/scriptlet/schedule/deactivate?id={s['id']}")
         pyops_server.assert_no_unexpected_errors()
 
-    def test_edit_modal_updates_existing_schedule(self, e2e_page, api_anon, pyops_server, set_factory):
+    def test_edit_modal_updates_existing_schedule(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """Opening Edit, changing fields, and submitting updates the schedule."""
-        _prepare_set_and_task(api_anon, set_factory)
+        _prepare_set_and_task(api_anon, set_factory, commit_set)
         # Create via API — the create flow is already covered above.
         resp = api_anon.put(
             "/scriptlet/schedule/item",
@@ -165,9 +166,9 @@ class TestSchedulerUI:
         assert s["drop_done"] is True
         pyops_server.assert_no_unexpected_errors()
 
-    def test_edit_modal_cancel_preserves_original_values(self, e2e_page, api_anon, pyops_server, set_factory):
+    def test_edit_modal_cancel_preserves_original_values(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """Cancel on the edit modal must not alter the schedule."""
-        _prepare_set_and_task(api_anon, set_factory)
+        _prepare_set_and_task(api_anon, set_factory, commit_set)
         resp = api_anon.put(
             "/scriptlet/schedule/item",
             json={
@@ -201,7 +202,7 @@ class TestSchedulerUI:
         assert s["max_retries"] == 1
         pyops_server.assert_no_unexpected_errors()
 
-    def test_create_with_unknown_scriptlet_shows_error(self, e2e_page, api_anon, pyops_server, set_factory):
+    def test_create_with_unknown_scriptlet_shows_error(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """Submitting create with a non-existent scriptlet surfaces the server error inline."""
         # Set exists, scriptlet does not.
         set_factory(SET_NAME)
@@ -231,9 +232,9 @@ class TestSchedulerUI:
         frame.locator('[data-testid="scheduler-create-cancel"]').click()
         pyops_server.assert_no_unexpected_errors()
 
-    def test_edit_with_invalid_cron_shows_error(self, e2e_page, api_anon, pyops_server, set_factory):
+    def test_edit_with_invalid_cron_shows_error(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """Invalid cron in the edit modal surfaces an error and keeps the modal open."""
-        _prepare_set_and_task(api_anon, set_factory)
+        _prepare_set_and_task(api_anon, set_factory, commit_set)
         resp = api_anon.put(
             "/scriptlet/schedule/item",
             json={
@@ -274,9 +275,9 @@ class TestSchedulerUI:
         frame.locator('[data-testid="scheduler-edit-cancel"]').click()
         pyops_server.assert_no_unexpected_errors()
 
-    def test_delete_schedule_removes_row(self, e2e_page, api_anon, pyops_server, set_factory):
+    def test_delete_schedule_removes_row(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """Delete button plus confirm dialog removes the schedule."""
-        _prepare_set_and_task(api_anon, set_factory)
+        _prepare_set_and_task(api_anon, set_factory, commit_set)
         resp = api_anon.put(
             "/scriptlet/schedule/item",
             json={

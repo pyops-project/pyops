@@ -159,43 +159,6 @@ describe('ScriptletService', () => {
   });
 
 
-  describe('saveRemoteDraft', () => {
-    it('saves remote draft successfully', async () => {
-      const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
-
-      (mockApiClient.fetch as jest.Mock)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: () => Promise.resolve({ has_unstaged: true }),
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: () => Promise.resolve({ code: 'draft code' }),
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: true,
-        } as Response);
-
-      await service.saveRemoteDraft(treeItem);
-
-      expect(mockApiClient.fetch).toHaveBeenCalledTimes(3);
-      expect(mockManagerTreeProvider.refresh).toHaveBeenCalled();
-    });
-
-    it('does nothing if no unstaged changes', async () => {
-      const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
-
-      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({ has_unstaged: false }),
-      } as Response);
-
-      await service.saveRemoteDraft(treeItem);
-
-      expect(mockVscode.window.showInformationMessage).toHaveBeenCalledWith('No remote draft to save for testName; no unstaged changes.');
-    });
-  });
-
   describe('diffLocalRemote', () => {
     it('diffs local and remote successfully', async () => {
       const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
@@ -313,109 +276,6 @@ describe('ScriptletService', () => {
       await service.writeLocalToRemoteDraft(treeItem);
 
       expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith('Failed to write draft: Server Error');
-    });
-  });
-
-  describe('saveRemoteDraft', () => {
-    it('handles status check network errors', async () => {
-      const mockVscode = require('vscode');
-      const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
-
-      (mockApiClient.fetch as jest.Mock).mockRejectedValueOnce(new Error('Network error'));
-
-      await service.saveRemoteDraft(treeItem);
-
-      expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith('Error saving draft: Network error');
-    });
-
-    it('handles status check non-ok responses', async () => {
-      const mockVscode = require('vscode');
-      const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
-
-      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
-        ok: false,
-      } as Response);
-
-      await service.saveRemoteDraft(treeItem);
-
-      expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith('Failed to check draft status');
-    });
-
-    it('handles code fetch network errors', async () => {
-      const mockVscode = require('vscode');
-      const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
-
-      (mockApiClient.fetch as jest.Mock)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: () => Promise.resolve({ has_unstaged: true }),
-        } as Response)
-        .mockRejectedValueOnce(new Error('Network error'));
-
-      await service.saveRemoteDraft(treeItem);
-
-      expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith('Error saving draft: Network error');
-    });
-
-    it('handles code fetch non-ok responses', async () => {
-      const mockVscode = require('vscode');
-      const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
-
-      (mockApiClient.fetch as jest.Mock)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: () => Promise.resolve({ has_unstaged: true }),
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: false,
-        } as Response);
-
-      await service.saveRemoteDraft(treeItem);
-
-      expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith('No remote draft to save');
-    });
-
-    it('handles save network errors', async () => {
-      const mockVscode = require('vscode');
-      const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
-
-      (mockApiClient.fetch as jest.Mock)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: () => Promise.resolve({ has_unstaged: true }),
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: () => Promise.resolve({ code: 'draft code' }),
-        } as Response)
-        .mockRejectedValueOnce(new Error('Network error'));
-
-      await service.saveRemoteDraft(treeItem);
-
-      expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith('Error saving draft: Network error');
-    });
-
-    it('handles save non-ok responses', async () => {
-      const mockVscode = require('vscode');
-      const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
-
-      (mockApiClient.fetch as jest.Mock)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: () => Promise.resolve({ has_unstaged: true }),
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: () => Promise.resolve({ code: 'draft code' }),
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: false,
-          statusText: 'Conflict',
-        } as Response);
-
-      await service.saveRemoteDraft(treeItem);
-
-      expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith('Failed to save: Conflict');
     });
   });
 
@@ -668,35 +528,6 @@ describe('ScriptletService', () => {
       await service.writeLocalToRemoteDraft(treeItem);
 
       expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith('Network error auto-creating remote scriptlet testName: Network error');
-    });
-  });
-
-  describe('saveRemoteDraft edge cases', () => {
-    it('handles status check returning invalid JSON', async () => {
-      const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
-
-      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.reject(new Error('Invalid JSON')),
-      } as Response);
-
-      await service.saveRemoteDraft(treeItem);
-
-      expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith('Error saving draft: Invalid JSON');
-    });
-
-    it('shows warning for invalid config', async () => {
-      mockApiClient.hasValidConfig.mockReturnValue(false);
-      const treeItem = { set: 'testSet', scriptletName: 'testName', scriptletType: 'task' } as ScriptletTreeItem;
-
-      await service.saveRemoteDraft(treeItem);
-
-      expect(mockVscode.window.showWarningMessage).toHaveBeenCalledWith('No valid PyOps configuration set. Please configure in settings.');
-    });
-
-    it('does nothing for invalid treeItem', async () => {
-      await service.saveRemoteDraft(undefined);
-      expect(mockApiClient.fetch).not.toHaveBeenCalled();
     });
   });
 

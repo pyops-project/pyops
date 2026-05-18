@@ -45,19 +45,6 @@ class TestInventoryRouter:
         assert data["name"] == "invalid"
         assert data["type"] == "invalid"
 
-    @pytest.mark.parametrize("item_type", ["task", "view", "markdown"])
-    def test_post_inventory_item_save(self, mock_client, mock_git_ops, item_type, test_temp_dir, patch_tempfile, mock_datetime):
-        set_name = "test_set"
-        name = f"test_{item_type}"
-        code = f"# Sample {item_type} code"
-        save_data = {"set": set_name, "name": name, "code": code}
-        repo_path = "data/git/test_set"
-        expected_ext = ".py" if item_type == "task" else ".html" if item_type == "view" else ".md"
-        
-        with patch("os.listdir", return_value=[f"{name}{expected_ext}"]):
-            response = mock_client.post("/scriptlet/inventory/item", json=save_data, headers={"X-User": "testuser"})
-            assert response.status_code == 200
-
     def test_post_inventory_draft(self, mock_client, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
         save_data = {"set": "test_set", "name": "draft_task", "code": "# Draft code"}
         repo_path = "data/git/test_set"
@@ -138,15 +125,6 @@ class TestInventoryInternalGuard:
         response = mock_client.put(
             "/scriptlet/inventory/item",
             json={"set": "internal", "name": "set_clone", "type": "task"},
-            headers={"X-User": "alice"},
-        )
-        assert response.status_code == 400
-        assert "pyops-managed" in response.json()["detail"]
-
-    def test_post_internal_rejected(self, mock_client, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
-        response = mock_client.post(
-            "/scriptlet/inventory/item",
-            json={"set": "internal", "name": "set_clone", "code": "print('hi')"},
             headers={"X-User": "alice"},
         )
         assert response.status_code == 400

@@ -53,16 +53,6 @@ app.include_router(monitoring.router)
 def get_version():
     return {"version": files.version()}
 
-@app.get("/debug/port")
-def get_debug_port(request: Request):
-    owner = sanitize_owner(request.headers.get("X-User", "anonymous"))
-    users = files.conf_users()
-    user_config = users.get(owner, {})
-    port = user_config.get("debug_port")
-    if port is None:
-        raise HTTPException(status_code=400, detail=f"No debug_port configured for user '{owner}'")
-    return {"port": int(port)}
-
 _BRAND_GLYPH_RE = re.compile(r"^[a-zA-Z0-9_]+$")
 _BRAND_IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico")
 _DEFAULT_BRAND_GLYPH = "miscellaneous_services"

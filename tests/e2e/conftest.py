@@ -24,42 +24,11 @@ import requests
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
-def pytest_addoption(parser):
-    parser.addoption("--e2e", action="store_true", default=False, help="Run E2E tests")
+# `--e2e` option and the auto-skip hook for e2e tests now live in the
+# root `tests/conftest.py` so they cover both `tests/e2e/` and
+# `tests/pyopsctl/e2e/` regardless of which subdir pytest is invoked
+# against. Fixtures specific to the server-side e2e suite stay here.
 
-
-def _is_e2e_item(item):
-    """Check if a test item belongs to the e2e directory."""
-    return "tests/e2e" in str(item.fspath) or "tests\\e2e" in str(item.fspath)
-
-
-def pytest_collection_modifyitems(config, items):
-    """Mark and optionally skip E2E tests.
-
-    All items under tests/e2e/ get the 'e2e' marker applied automatically
-    (avoids module-level pytestmark which triggers PytestUnknownMarkWarning
-    before marker registration with -W error).
-
-    E2E tests are skipped unless --e2e is passed or tests/e2e/ is targeted directly.
-    """
-    import warnings
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", pytest.PytestUnknownMarkWarning)
-        e2e_marker = pytest.mark.e2e
-
-    # Determine if E2E should run
-    run_e2e = config.getoption("--e2e", default=False)
-    if not run_e2e:
-        args = config.invocation_params.args
-        run_e2e = any("e2e" in str(a) for a in args)
-
-    for item in items:
-        if _is_e2e_item(item):
-            item.add_marker(e2e_marker)
-            if not run_e2e:
-                item.add_marker(pytest.mark.skip(
-                    reason="E2E tests require --e2e flag or direct tests/e2e/ path"
-                ))
 E2E_PORT = 18321
 BASE_URL = f"http://127.0.0.1:{E2E_PORT}"
 SERVER_STARTUP_TIMEOUT = int(os.environ.get("E2E_STARTUP_TIMEOUT", 30))
@@ -170,6 +139,42 @@ def set_factory(e2e_env):
         return name
 
     return _make
+
+
+@pytest.fixture(scope="function")
+def commit_set(e2e_env):
+    """Test-side `git add . && git commit` in a set's repo.
+
+    Pyops's server-side library has no commit/push surface — the only
+    sanctioned commit pathway in production is the internal
+    `set_commit_drafts` task, enqueued from the Sets-view UI button.
+    Tests that need a baseline commit to drive downstream behaviour
+    (e.g. `kind=task` runs which read committed content, or
+    `has_unstaged=False` assertions) use this helper to do the commit
+    directly via subprocess, bypassing the queue.
+
+    Passes `-c user.email` / `-c user.name` overrides on the commit
+    invocation so the helper works in CI environments where the global
+    git identity is unset and the repo (e.g. one created by the
+    `set_create` task) doesn't have a per-repo user.* configured."""
+    def _commit(set_name, msg="setup"):
+        repo = e2e_env["data_dir"] / "git" / set_name
+        env = {"PATH": os.environ["PATH"], "HOME": str(e2e_env["tmp_path"])}
+        subprocess.check_call(
+            ["git", "-C", str(repo), "add", "."],
+            env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        subprocess.check_call(
+            [
+                "git", "-C", str(repo),
+                "-c", "user.email=e2e@example.com",
+                "-c", "user.name=e2e",
+                "commit", "-m", msg,
+            ],
+            env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        return repo
+    return _commit
 
 
 class ServerLog:

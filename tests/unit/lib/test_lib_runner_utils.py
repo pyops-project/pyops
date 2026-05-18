@@ -553,69 +553,43 @@ class TestKillProcTree:
 
 
 class TestAssignJob:
-    def test_assign_job_regular(self, mock_db):
+    def test_assign_job_records_pid_and_start(self, mock_db):
+        """assignJob now only sets pid + start. The flip to `running` is
+        driven by the job process's `state=running` ZMQ message (handled
+        by markRunning) after `exec(param)` returns."""
         from app import runner
         from app.orm.database import get_db_engine
         from app.orm.job import Job
-        # Create job first
         with Session(get_db_engine()) as test_session:
-            job = Job(id="123", set="set", name="name", kind="task", param="param", state="dequeued", owner="owner")
+            job = Job(id="123", set="set", name="name", kind="task", param="param", state="loading", owner="owner")
             test_session.add(job)
             test_session.commit()
-        # Mock get_debug_port and get_debugpy_adapter_pid for non-debug job
-        with patch('app.lib.job.get_debug_port', return_value=5678), \
-             patch('app.lib.job.get_debugpy_adapter_pid', return_value=None):
-            runner.assignJob("123", 456)
+        runner.assignJob("123", 456)
         with Session(get_db_engine()) as test_session:
             fetched = test_session.get(Job, "123")
-            assert fetched.state == "running"
+            # State stays at 'loading' — markRunning hasn't fired yet.
+            assert fetched.state == "loading"
             assert fetched.start is not None
             assert fetched.pid == 456
-            assert fetched.debugpy_pid is None
-
-    def test_assign_job_debug(self, mock_db):
-        from app import runner
-        from app.orm.database import get_db_engine
-        from app.orm.job import Job
-        # Create debug job first
-        with Session(get_db_engine()) as test_session:
-            job = Job(id="123", set="set", name="name", kind="debug", param="param", state="dequeued", owner="owner")
-            test_session.add(job)
-            test_session.commit()
-        # Mock get_debug_port and get_debugpy_adapter_pid for debug job
-        with patch('app.lib.job.get_debug_port', return_value=5678), \
-             patch('app.lib.job.get_debugpy_adapter_pid', return_value=789):
-            runner.assignJob("123", 456)
-        with Session(get_db_engine()) as test_session:
-            fetched = test_session.get(Job, "123")
-            assert fetched.state == "running"
-            assert fetched.start is not None
-            assert fetched.pid == 456
-            assert fetched.debugpy_pid == 789
 
     def test_assign_job_preserves_cancel_state(self, mock_db):
-        """If a cancel races in before assignJob commits, state must stay 'cancel'
-        so the runner's term loop can kill the subprocess we just started."""
+        """A cancel that races in before assignJob lands must survive: we
+        only touch pid+start, never state."""
         from app import runner
         from app.orm.database import get_db_engine
         from app.orm.job import Job
         with Session(get_db_engine()) as test_session:
-            # State already flipped to "cancel" by the cancel endpoint.
             job = Job(id="123", set="set", name="name", kind="task", param="param", state="cancel", owner="owner")
             test_session.add(job)
             test_session.commit()
-        with patch('app.lib.job.get_debug_port', return_value=5678), \
-             patch('app.lib.job.get_debugpy_adapter_pid', return_value=None):
-            runner.assignJob("123", 456)
+        runner.assignJob("123", 456)
         with Session(get_db_engine()) as test_session:
             fetched = test_session.get(Job, "123")
-            # pid/start assigned, but state preserved at "cancel".
             assert fetched.state == "cancel"
             assert fetched.pid == 456
             assert fetched.start is not None
 
     def test_assign_job_preserves_cancelling_state(self, mock_db):
-        """Same guard for 'cancelling' — the term loop is already processing this job."""
         from app import runner
         from app.orm.database import get_db_engine
         from app.orm.job import Job
@@ -623,65 +597,80 @@ class TestAssignJob:
             job = Job(id="123", set="set", name="name", kind="task", param="param", state="cancelling", owner="owner")
             test_session.add(job)
             test_session.commit()
-        with patch('app.lib.job.get_debug_port', return_value=5678), \
-             patch('app.lib.job.get_debugpy_adapter_pid', return_value=None):
-            runner.assignJob("123", 456)
+        runner.assignJob("123", 456)
         with Session(get_db_engine()) as test_session:
             fetched = test_session.get(Job, "123")
             assert fetched.state == "cancelling"
             assert fetched.pid == 456
 
+
+class TestMarkRunning:
+    def test_mark_running_flips_loading_to_running(self, mock_db):
+        from app import runner
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        with Session(get_db_engine()) as s:
+            s.add(Job(id="m1", set="s", name="n", kind="task", param="", state="loading", owner="o", pid=42))
+            s.commit()
+        runner.markRunning("m1")
+        with Session(get_db_engine()) as s:
+            fetched = s.get(Job, "m1")
+            assert fetched.state == "running"
+            assert fetched.pid == 42  # pid is untouched
+
+    def test_mark_running_preserves_terminal_state(self, mock_db):
+        """A late `state=running` arriving after the job already finished
+        or was cancelled must not regress the row to running."""
+        from app import runner
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        for terminal in ("cancel", "cancelling", "cancelled", "done", "failed", "remove", "removed"):
+            with Session(get_db_engine()) as s:
+                s.query(Job).filter(Job.id == "m2").delete()
+                s.add(Job(id="m2", set="s", name="n", kind="task", param="", state=terminal, owner="o", pid=42))
+                s.commit()
+            runner.markRunning("m2")
+            with Session(get_db_engine()) as s:
+                fetched = s.get(Job, "m2")
+                assert fetched.state == terminal, f"markRunning regressed {terminal!r}"
+
 class TestTerminateJobProcesses:
     @patch('app.orm.database.conf_data', return_value={"db": "/tmp/test.db"})
     @patch('app.runner.Session')
     @patch('app.runner.postTerm')
-    @patch('app.lib.job.os.kill')
-    @patch('app.lib.job.psutil.Process')
-    def test_terminate_graceful_quick_debug(self, mock_Process, mock_os_kill, mock_postTerm, mock_Session, mock_conf_data):
+    @patch('app.lib.job.os.killpg')
+    def test_terminate_graceful_quick(self, mock_killpg, mock_postTerm, mock_Session, mock_conf_data):
+        """SIGTERM the group; group drains immediately (killpg(0) → ProcessLookupError) → postTerm."""
         from app.runner import terminate_job_processes
         mock_session_instance = Mock()
         mock_job = Mock(state='running', pid=123)
         mock_session_instance.get.return_value = mock_job
         mock_Session.return_value.__enter__.return_value = mock_session_instance
         mock_Session.return_value.__exit__.return_value = False
-        mock_parent = Mock()
-        mock_parent.pid = 123
-        mock_parent.children.return_value = []
-        mock_parent.is_running.return_value = False
-        mock_Process.return_value = mock_parent
-        terminate_job_processes("job_id", 123, True, 'owner')
-        mock_os_kill.assert_called_once_with(123, signal.SIGTERM)
+
+        # First killpg(pid, SIGTERM) succeeds, then killpg(pid, 0) raises
+        # ProcessLookupError to signal the group has drained.
+        call_count = {'n': 0}
+        def killpg_side_effect(pgid, sig):
+            call_count['n'] += 1
+            if sig == 0:
+                raise ProcessLookupError()
+            # SIGTERM succeeds silently
+        mock_killpg.side_effect = killpg_side_effect
+
+        terminate_job_processes("job_id", 123, 'owner')
+        # Sent SIGTERM, then polled with sig=0 and got "group gone".
+        assert mock_killpg.call_args_list[0] == call(123, signal.SIGTERM)
         mock_postTerm.assert_called_once_with("job_id")
 
     @patch('app.orm.database.conf_data', return_value={"db": "/tmp/test.db"})
     @patch('app.runner.Session')
     @patch('app.runner.postTerm')
-    @patch('app.lib.job.os.kill')
-    @patch('app.lib.job.psutil.Process')
-    def test_terminate_graceful_quick_non_debug(self, mock_Process, mock_os_kill, mock_postTerm, mock_Session, mock_conf_data):
-        from app.runner import terminate_job_processes
-        mock_session_instance = Mock()
-        mock_job = Mock(state='running', pid=123)
-        mock_session_instance.get.return_value = mock_job
-        mock_Session.return_value.__enter__.return_value = mock_session_instance
-        mock_Session.return_value.__exit__.return_value = False
-        mock_parent = Mock()
-        mock_parent.pid = 123
-        mock_parent.children.return_value = []
-        mock_parent.is_running.return_value = False
-        mock_Process.return_value = mock_parent
-        terminate_job_processes("job_id", 123, False, 'owner')
-        mock_os_kill.assert_called_once_with(123, signal.SIGTERM)
-        mock_postTerm.assert_called_once_with("job_id")
-
-    @patch('app.orm.database.conf_data', return_value={"db": "/tmp/test.db"})
-    @patch('app.runner.Session')
-    @patch('app.runner.postTerm')
-    @patch('app.lib.job.kill_proc_tree')
+    @patch('app.lib.job.os.killpg')
     @patch('time.sleep')
     @patch('time.time')
-    @patch('app.lib.job.get_process_tree')
-    def test_terminate_timeout_force_kill(self, mock_tree, mock_time, mock_sleep, mock_kill_tree, mock_post, mock_Session, mock_conf_data):
+    def test_terminate_timeout_force_kill(self, mock_time, mock_sleep, mock_killpg, mock_post, mock_Session, mock_conf_data):
+        """Group never drains → SIGKILL the group → postTerm(killed=True)."""
         from app.runner import terminate_job_processes
         mock_session_instance = Mock()
         mock_job = Mock(state='running', pid=123)
@@ -689,15 +678,17 @@ class TestTerminateJobProcesses:
         mock_Session.return_value.__enter__.return_value = mock_session_instance
         mock_Session.return_value.__exit__.return_value = False
         mock_time.side_effect = iter(range(32))
-        mock_sleep.return_value = None  # No-op sleep
-        mock_alive = Mock()
-        mock_alive.is_running.return_value = True
-        mock_tree.return_value = [mock_alive]
-        terminate_job_processes("job_id", 123, True, 'owner', graceful_timeout=15.0)
-        mock_kill_tree.assert_has_calls([
-            call(ANY, signal.SIGTERM),
-            call(ANY, signal.SIGKILL)
-        ], any_order=False)
+        mock_sleep.return_value = None
+        # killpg always succeeds — pretend the group's still alive
+        # throughout the graceful window so we fall through to SIGKILL.
+        mock_killpg.return_value = None
+
+        terminate_job_processes("job_id", 123, 'owner', graceful_timeout=15.0)
+        # SIGTERM first, then SIGKILL after timeout.
+        sigterm_calls = [c for c in mock_killpg.call_args_list if c == call(123, signal.SIGTERM)]
+        sigkill_calls = [c for c in mock_killpg.call_args_list if c == call(123, signal.SIGKILL)]
+        assert len(sigterm_calls) == 1
+        assert len(sigkill_calls) == 1
         mock_post.assert_called_once_with("job_id", killed=True)
 
     @patch('app.lib.job.psutil.Process')
@@ -711,6 +702,51 @@ class TestTerminateJobProcesses:
         assert len(tree) == 2
         assert tree[0].pid == 123
         assert tree[1].pid == 456
+
+
+class TestKillProcGroup:
+    @patch('app.lib.job.os.killpg')
+    def test_kill_proc_group_sends_signal(self, mock_killpg):
+        from app.lib.job import kill_proc_group
+        kill_proc_group(123, signal.SIGTERM)
+        mock_killpg.assert_called_once_with(123, signal.SIGTERM)
+
+    @patch('app.lib.job.os.killpg', side_effect=ProcessLookupError())
+    def test_kill_proc_group_swallows_process_lookup(self, mock_killpg):
+        from app.lib.job import kill_proc_group
+        # Group already gone — no exception.
+        kill_proc_group(123, signal.SIGKILL)
+        mock_killpg.assert_called_once()
+
+    @patch('app.lib.job.os.killpg', side_effect=PermissionError())
+    def test_kill_proc_group_swallows_permission(self, mock_killpg):
+        from app.lib.job import kill_proc_group
+        kill_proc_group(123, signal.SIGKILL)
+
+    @patch('app.lib.job.os.killpg', side_effect=OSError())
+    def test_kill_proc_group_propagates_other_oserror(self, mock_killpg):
+        from app.lib.job import kill_proc_group
+        with pytest.raises(OSError):
+            kill_proc_group(123, signal.SIGKILL)
+
+
+class TestProcGroupAlive:
+    @patch('app.lib.job.os.killpg')
+    def test_proc_group_alive_true_when_killpg_succeeds(self, mock_killpg):
+        from app.lib.job import proc_group_alive
+        # killpg(pgid, 0) succeeds → group has at least one process.
+        assert proc_group_alive(123) is True
+        mock_killpg.assert_called_once_with(123, 0)
+
+    @patch('app.lib.job.os.killpg', side_effect=ProcessLookupError())
+    def test_proc_group_alive_false_when_group_gone(self, mock_killpg):
+        from app.lib.job import proc_group_alive
+        assert proc_group_alive(123) is False
+
+    @patch('app.lib.job.os.killpg', side_effect=PermissionError())
+    def test_proc_group_alive_false_when_permission_denied(self, mock_killpg):
+        from app.lib.job import proc_group_alive
+        assert proc_group_alive(123) is False
 
     def test_get_process_tree_pid_gone(self):
         from app.lib.job import get_process_tree
@@ -784,60 +820,6 @@ class TestPostTerm:
         mock_drop.assert_called_once_with("testid", "set")
         with Session(get_db_engine()) as session:
             assert session.get(Job, "testid") is None
-
-class TestDebugAdapterUtils:
-    @patch('app.lib.job.os.kill')
-    @patch('app.lib.job.psutil.process_iter')
-    def test_terminate_debugpy_adapter_with_port_match_kill(self, mock_iter, mock_kill):
-        from app.lib.job import terminate_debugpy_adapter
-        mock_pinfo = Mock()
-        mock_pinfo.info = {'pid': 999, 'cmdline': ['python', '-m', 'debugpy.adapter', '--port', '5678']}
-        mock_iter.return_value = iter([mock_pinfo])
-        terminate_debugpy_adapter("owner", port=5678)
-        mock_kill.assert_called_once_with(999, signal.SIGKILL)
-
-    @patch('app.lib.job.psutil.process_iter')
-    def test_terminate_debugpy_adapter_with_port_no_match(self, mock_iter):
-        from app.lib.job import terminate_debugpy_adapter
-        mock_iter.return_value = iter([])
-        with patch('app.lib.job.logger.warning') as mock_warn:
-            terminate_debugpy_adapter("owner", port=5678)
-            mock_warn.assert_called()
-
-    def test_terminate_debugpy_adapter_no_port_provided(self):
-        from app.lib.job import terminate_debugpy_adapter
-        with patch('app.lib.job.logger.error') as mock_error:
-            terminate_debugpy_adapter("owner", port=None)
-            mock_error.assert_called_with("No port provided, cannot terminate debugpy adapter for owner %s", "owner")
-
-    # Legacy tests removed - port is now required, no fallback to config
-
-    def test_get_debugpy_adapter_pid_match(self):
-        from app.lib.job import get_debugpy_adapter_pid
-        mock_pinfo = Mock()
-        mock_pinfo.info = {'pid': 999, 'cmdline': ['python', '-m', 'debugpy.adapter', '--port', '5678']}
-        with patch('app.lib.job.psutil.process_iter', return_value=iter([mock_pinfo])):
-            pid = get_debugpy_adapter_pid(5678)
-            assert pid == 999
-
-    def test_get_debugpy_adapter_pid_no_match(self):
-        from app.lib.job import get_debugpy_adapter_pid
-        with patch('app.lib.job.psutil.process_iter', return_value=iter([])):
-            pid = get_debugpy_adapter_pid(5678)
-            assert pid is None
-
-    @patch('app.lib.files.conf_users', return_value={"owner": {"debug_port": 5678}})
-    def test_validate_debug_prerequisites_valid(self, mock_conf):
-        from app.lib.job import validate_debug_prerequisites
-        port = validate_debug_prerequisites("owner")
-        assert port == 5678
-
-    @patch('app.lib.files.conf_users', return_value={"owner": {"debug_port": "invalid"}})
-    def test_validate_debug_prerequisites_invalid(self, mock_conf):
-        from app.lib.job import validate_debug_prerequisites
-        with pytest.raises(Exception, match="Invalid or missing debug_port"):
-            validate_debug_prerequisites("owner")
-
 
 class TestProcessInstallLines:
     @patch('app.lib.job.subprocess.run')

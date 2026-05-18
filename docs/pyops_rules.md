@@ -107,6 +107,14 @@ Request: `listener.listen()` returns dict with:
 
 Asynchronous handling: `listener.async_poll()` returns list of (identity, message) tuples for all pending requests. Respond to each with `listener.async_response(identity, result_dict)` for concurrent processing.
 
+**Shutdown contract** — when SIGTERM lands, the listener's signal
+handler flips `kill_now`. `async_poll()` then returns a single
+`[(b"", "TERM")]` sentinel on the next call, matching `listen()`'s
+`"TERM"` return. Causal-style tick loops must check for `msg == "TERM"`
+in their poll result and exit promptly; otherwise the runner SIGKILLs
+the process after the 15s `_shutdown_job_processes` grace window and
+the row is marked `failed` with `"did not respond to shutdown SIGTERM"`.
+
 Template (`service/{name}.py`):
 
 #### Blocking Example (listen() - Simple Loops)

@@ -71,6 +71,32 @@
     </div>
 </div>
 
+<!-- Commit drafts modal -->
+<div class="modal fade" data-bs-backdrop="static" id="commitDraftsModal" tabindex="-1" aria-hidden="true" data-testid="sets-commit-drafts-modal">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Commit Drafts</h5>
+                <p id="commitDraftsModal-name" class="text-muted m-0" data-testid="sets-commit-drafts-name"></p>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label class="col-form-label">Unstaged files:</label>
+                    <pre id="commitDraftsModal-status" class="form-control bg-secondary text-light small mb-0" style="height: 10em; overflow-y: auto; white-space: pre-wrap;" data-testid="sets-commit-drafts-status"></pre>
+                </div>
+                <div class="mb-3">
+                    <label for="commitDraftsModal-message" class="col-form-label">Commit message (optional):</label>
+                    <input id="commitDraftsModal-message" type="text" class="form-control" placeholder="Commit drafts in <set> by <user>" data-testid="sets-commit-drafts-message">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-danger" data-bs-dismiss="modal" data-testid="sets-commit-drafts-cancel">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="onCommitDraftsSubmit()" data-testid="sets-commit-drafts-submit">Commit</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- Switch branch modal -->
 <div class="modal fade" data-bs-backdrop="static" id="switchModal" tabindex="-1" aria-hidden="true" data-testid="sets-switch-modal">
     <div class="modal-dialog">

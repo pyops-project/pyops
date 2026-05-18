@@ -13,6 +13,48 @@ from sqlalchemy import create_engine, text
 from fastapi.testclient import TestClient
 from pathlib import Path
 
+
+# --- E2E test auto-skip --------------------------------------------------
+#
+# E2E suites under `tests/e2e/` and `tests/pyopsctl/e2e/` spawn real
+# pyops servers and take minutes to run; they don't belong in the
+# default `pytest tests/` invocation that the `test` CI stage runs.
+# Auto-mark and skip them unless --e2e is passed or the e2e path is
+# targeted directly. The matching test:e2e CI stage covers both
+# directories explicitly.
+
+def pytest_addoption(parser):
+    parser.addoption("--e2e", action="store_true", default=False, help="Run E2E tests")
+
+
+def _is_e2e_item(item):
+    p = str(item.fspath)
+    return (
+        "tests/e2e" in p or "tests\\e2e" in p
+        or "tests/pyopsctl/e2e" in p or "tests\\pyopsctl\\e2e" in p
+    )
+
+
+def pytest_collection_modifyitems(config, items):
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", pytest.PytestUnknownMarkWarning)
+        e2e_marker = pytest.mark.e2e
+
+    run_e2e = config.getoption("--e2e", default=False)
+    if not run_e2e:
+        args = config.invocation_params.args
+        run_e2e = any("e2e" in str(a) for a in args)
+
+    for item in items:
+        if _is_e2e_item(item):
+            item.add_marker(e2e_marker)
+            if not run_e2e:
+                item.add_marker(pytest.mark.skip(
+                    reason="E2E tests require --e2e flag or direct tests/<>/e2e/ path"
+                ))
+# -------------------------------------------------------------------------
+
 """Common mock config fixture for tests."""
 @pytest.fixture(scope="function")
 def mock_conf(tmp_path):
@@ -232,7 +274,7 @@ def mock_git_ops(mock_git_dir):
     def mock_get_git_base():
         return str(mock_data_dir)
 
-    def mock_delete_file_and_commit(repo, file_path, msg):
+    def mock_delete_file_unstaged(repo, file_path):
         full_path = mock_git_dir.tmp_path / repo / file_path
         if full_path.exists():
             full_path.unlink()
@@ -240,10 +282,7 @@ def mock_git_ops(mock_git_dir):
     def mock_rollback_committed(set_name, name, type_):
         pass
 
-    def mock_perform_git_add_commit_push(repo, file_path, msg):
-        pass
-
-    def mock_create_scriptlet(set_name, name, type_, content, commit_msg):
+    def mock_create_scriptlet(set_name, name, type_, content):
         repo = f"data/git/{set_name}"
         mock_write_content(repo, name, type_, content)
         return mock_get_file_path(repo, name, type_)
@@ -264,9 +303,8 @@ def mock_git_ops(mock_git_dir):
     mock_infer_type_mock = MagicMock(side_effect=mock_infer_type_from_filename)
     mock_check_name_unique_mock = MagicMock(return_value=True)
     mock_get_file_path_mock = MagicMock(side_effect=mock_get_file_path)
-    mock_perform_git_add_commit_push_mock = MagicMock()
     mock_create_scriptlet_mock = MagicMock(side_effect=mock_create_scriptlet)
-    mock_delete_file_and_commit_mock = MagicMock(side_effect=mock_delete_file_and_commit)
+    mock_delete_file_unstaged_mock = MagicMock(side_effect=mock_delete_file_unstaged)
     mock_rollback_committed_mock = MagicMock(side_effect=mock_rollback_committed)
     mock_get_repo_status_mock = MagicMock(return_value={"branch": "main"})
     mock_subprocess_run = MagicMock(return_value=Mock(returncode=0, stdout="", stderr=""))
@@ -280,9 +318,8 @@ def mock_git_ops(mock_git_dir):
     mock.infer_type_from_filename = mock_infer_type_mock
     mock.check_name_unique = mock_check_name_unique_mock
     mock.get_file_path = mock_get_file_path_mock
-    mock.perform_git_add_commit_push = mock_perform_git_add_commit_push_mock
     mock.create_scriptlet = mock_create_scriptlet_mock
-    mock.delete_file_and_commit = mock_delete_file_and_commit_mock
+    mock.delete_file_unstaged = mock_delete_file_unstaged_mock
     mock.rollback_committed = mock_rollback_committed_mock
     mock.get_repo_status = mock_get_repo_status_mock
 
@@ -294,9 +331,8 @@ def mock_git_ops(mock_git_dir):
         patch("app.lib.git.infer_type_from_filename", mock_infer_type_mock), \
         patch("app.lib.git.check_name_unique", mock_check_name_unique_mock), \
         patch("app.lib.git.get_file_path", mock_get_file_path_mock), \
-        patch("app.lib.git.perform_git_add_commit_push", mock_perform_git_add_commit_push_mock), \
         patch("app.lib.git.create_scriptlet", mock_create_scriptlet_mock), \
-        patch("app.lib.git.delete_file_and_commit", mock_delete_file_and_commit_mock), \
+        patch("app.lib.git.delete_file_unstaged", mock_delete_file_unstaged_mock), \
         patch("app.lib.git.rollback_committed", mock_rollback_committed_mock), \
         patch("app.lib.git.get_repo_status", mock_get_repo_status_mock), \
         patch("subprocess.run", mock_subprocess_run), \

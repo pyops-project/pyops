@@ -46,9 +46,9 @@ class TestExecution:
         mock_run.return_value = Mock(returncode=0)  # Bootstrap and installs succeed
         env = job_env
 
-        run("id", "owner", "set", "name", "task", "print('param executed')", "print('code executed')", [], "/tmp/pyops/runner.sock", 0, None, None, env["conf_data"], env["conf_runner"], env["conf_users"], env["conf_web"])
+        run("id", "owner", "set", "name", "task", "print('param executed')", "print('code executed')", [], "/tmp/pyops/runner.sock", 0, None, env["conf_data"], env["conf_runner"], env["conf_users"], env["conf_web"])
 
-        mock_send.assert_called_once_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
+        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
 
     @patch('app.job_runner.job_lib.send_completion')
     @patch('app.job_runner.subprocess.run')
@@ -66,7 +66,7 @@ class TestExecution:
         # Mock exec to fail first 2 attempts, succeed on 3rd
         exec_mock = Mock()
         with patch('builtins.exec', side_effect=[Exception("fail1"), Exception("fail2"), None]):
-            run("id", "owner", "set", "name", "task", "", "print('success')", [], "/tmp/pyops/runner.sock", 3, None, None, env["conf_data"], env["conf_runner"], env["conf_users"], env["conf_web"])
+            run("id", "owner", "set", "name", "task", "", "print('success')", [], "/tmp/pyops/runner.sock", 3, None, env["conf_data"], env["conf_runner"], env["conf_users"], env["conf_web"])
 
         assert mock_sleep.call_count == 2  # Sleeps after first two fails
         # Check the final send is done
@@ -87,7 +87,7 @@ class TestExecution:
 
         # Mock exec to always fail
         with patch('builtins.exec', side_effect=Exception("fail")):
-            run("id", "owner", "set", "name", "task", "", "raise Exception", [], "/tmp/pyops/runner.sock", 3, None, None, env["conf_data"], env["conf_runner"], env["conf_users"], env["conf_web"])
+            run("id", "owner", "set", "name", "task", "", "raise Exception", [], "/tmp/pyops/runner.sock", 3, None, env["conf_data"], env["conf_runner"], env["conf_users"], env["conf_web"])
 
         assert mock_sleep.call_count == 3  # Sleeps after each of 3 fails
         call_args = mock_send.call_args[0][1]
@@ -106,10 +106,10 @@ class TestExecution:
         mock_run.return_value = Mock(returncode=0)
         env = job_env
 
-        run("id", "owner", "set", "name", "service", "", "print('code executed')", [], "/tmp/pyops/runner.sock", 0, None, None, env["conf_data"], env["conf_runner"], env["conf_users"], env["conf_web"])
+        run("id", "owner", "set", "name", "service", "", "print('code executed')", [], "/tmp/pyops/runner.sock", 0, None, env["conf_data"], env["conf_runner"], env["conf_users"], env["conf_web"])
 
         mock_listener.assert_called_once_with("owner", "id")
-        mock_send.assert_called_once_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
+        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
 
     @patch('app.job_runner.job_lib.send_completion')
     @patch('app.job_runner.subprocess.run')
@@ -125,18 +125,19 @@ class TestExecution:
         mock_sleep.return_value = None
 
         with patch('builtins.exec', side_effect=Exception("service fail")):
-            run("id", "owner", "set", "name", "service", "", "raise Exception", [], "/tmp/pyops/runner.sock", 0, None, None, env["conf_data"], env["conf_runner"], env["conf_users"], env["conf_web"])
+            run("id", "owner", "set", "name", "service", "", "raise Exception", [], "/tmp/pyops/runner.sock", 0, None, env["conf_data"], env["conf_runner"], env["conf_users"], env["conf_web"])
 
         assert mock_sleep.call_count == 0  # No retries for service
-        mock_send.assert_called_once_with("/tmp/pyops/runner.sock", {"id": "id", "state": "failed", "detail": ANY})
+        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "failed", "detail": ANY})
 
-    @patch.dict('sys.modules', {'debugpy': Mock()})
     @patch('app.job_runner.job_lib.send_completion')
     @patch('app.lib.sets.subprocess.check_call')
     @patch('subprocess.run')
     @patch('app.lib.pyops.ServiceListener')
     @patch('time.sleep')
-    def test_run_debug_no_retry(self, mock_run, mock_sleep, mock_listener, mock_check_call, mock_send, tmp_path, mock_conf):
+    def test_run_debug_no_retry(self, mock_sleep, mock_listener, mock_run, mock_check_call, mock_send, tmp_path, mock_conf):
+        """kind=debug fails once and terminates — no retry loop. (mock-arg
+        order matches the bottom-up @patch stack.)"""
         mock_run.return_value = Mock(returncode=0, stdout="pip==24.2\n")
         mock_check_call.return_value = None
         from app.job_runner import main as run
@@ -147,10 +148,10 @@ class TestExecution:
         mock_sleep.return_value = None
 
         with patch('builtins.exec', side_effect=Exception("debug fail")):
-            run("id", "owner", "set", "name", "debug", "", "raise Exception", [], "/tmp/pyops/runner.sock", 0, None, 5678, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "bind"})
+            run("id", "owner", "set", "name", "debug", "", "raise Exception", [], "/tmp/pyops/runner.sock", 0, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {}}, {"bind": "bind"})
 
         assert mock_sleep.call_count == 0  # No retries for debug
-        mock_send.assert_called_once_with("/tmp/pyops/runner.sock", {"id": "id", "state": "failed", "detail": ANY})
+        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "failed", "detail": ANY})
 
     @patch('app.job_runner.job_lib.send_completion')
     @patch('app.job_runner.subprocess.run')
@@ -165,9 +166,9 @@ class TestExecution:
         venv_path = os.path.join(tmp_path, "venv")
         pkg_path = os.path.join(tmp_path, "pkg")
 
-        run("id", "owner", "set", "name", "draft", "print('param executed')", "print('code executed')", [], "/tmp/pyops/runner.sock", 0, None, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
+        run("id", "owner", "set", "name", "draft", "print('param executed')", "print('code executed')", [], "/tmp/pyops/runner.sock", 0, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
 
-        mock_send.assert_called_once_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
+        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
 
     @patch('app.job_runner.job_lib.send_completion')
     @patch('app.job_runner.subprocess.run')
@@ -184,10 +185,10 @@ class TestExecution:
         pkg_path = os.path.join(tmp_path, "pkg")
         code = "assert listener is not None, 'listener must exist for draft jobs'"
 
-        run("id", "owner", "set", "name", "draft", "", code, [], "/tmp/pyops/runner.sock", 0, None, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
+        run("id", "owner", "set", "name", "draft", "", code, [], "/tmp/pyops/runner.sock", 0, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
 
         mock_listener.assert_called_once_with("owner", "id")
-        mock_send.assert_called_once_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
+        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
 
     def test_draft_jobs_allow_concurrent_execution(self, mock_conf, mock_db):
         """Test that multiple draft jobs can run concurrently (unlike debug jobs)."""
@@ -223,7 +224,7 @@ class TestExecution:
         pkg_path = os.path.join(tmp_path, "pkg")
         mock_sleep.return_value = None
 
-        run("id", "owner", "set", "name", "task", "", "raise Exception('exec error')", [], "/tmp/pyops/runner.sock", 3, None, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
+        run("id", "owner", "set", "name", "task", "", "raise Exception('exec error')", [], "/tmp/pyops/runner.sock", 3, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
 
         assert mock_sleep.call_count == 3
         call_args = mock_send.call_args[0][1]
@@ -586,7 +587,7 @@ logging.error('ERROR message')
         venv_path = os.path.join(tmp_path, "venv")
         pkg_path = os.path.join(tmp_path, "pkg")
 
-        run(job_id, owner, set_name, "name", "task", "", sample_logging_code, [], "/tmp/pyops/runner.sock", 0, None, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
+        run(job_id, owner, set_name, "name", "task", "", sample_logging_code, [], "/tmp/pyops/runner.sock", 0, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
 
         stdout_content, stderr_content = self.get_log_contents(data_base, owner, set_name, job_id)
 
@@ -594,7 +595,7 @@ logging.error('ERROR message')
         assert "INFO message" in stdout_content
         assert "WARNING message" in stderr_content
         assert "ERROR message" in stderr_content
-        mock_send.assert_called_once_with("/tmp/pyops/runner.sock", {"id": job_id, "state": "done", "detail": None})
+        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": job_id, "state": "done", "detail": None})
 
     @patch('app.job_runner.job_lib.send_completion')
     @patch('app.job_runner.subprocess.run')
@@ -612,7 +613,7 @@ logging.error('ERROR message')
 
         venv_path = os.path.join(tmp_path, "venv")
         pkg_path = os.path.join(tmp_path, "pkg")
-        run(job_id, owner, set_name, "name", "service", "", sample_logging_code, [], "/tmp/pyops/runner.sock", 0, None, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
+        run(job_id, owner, set_name, "name", "service", "", sample_logging_code, [], "/tmp/pyops/runner.sock", 0, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
 
         stdout_content, stderr_content = self.get_log_contents(data_base, owner, set_name, job_id)
 
@@ -620,7 +621,7 @@ logging.error('ERROR message')
         assert "INFO message" in stdout_content
         assert "WARNING message" in stderr_content
         assert "ERROR message" in stderr_content
-        mock_send.assert_called_once_with("/tmp/pyops/runner.sock", {"id": job_id, "state": "done", "detail": None})
+        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": job_id, "state": "done", "detail": None})
 
     @patch('app.job_runner.job_lib.send_completion')
     @patch('app.job_runner.subprocess.run')
@@ -639,7 +640,7 @@ logging.error('ERROR message')
 
         venv_path = os.path.join(tmp_path, "venv")
         pkg_path = os.path.join(tmp_path, "pkg")
-        run(job_id, owner, set_name, "name", "service", "", "pass", [], "/tmp/pyops/runner.sock", 0, None, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
+        run(job_id, owner, set_name, "name", "service", "", "pass", [], "/tmp/pyops/runner.sock", 0, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
 
         mock_listener.assert_called_once_with("owner", "id")
         mock_listener_instance.close.assert_called_once()
@@ -662,109 +663,54 @@ logging.error('ERROR message')
         venv_path = os.path.join(tmp_path, "venv")
         pkg_path = os.path.join(tmp_path, "pkg")
         with patch('builtins.exec', side_effect=Exception("error")):
-            run(job_id, owner, set_name, "name", "service", "", "raise Exception", [], "/tmp/pyops/runner.sock", 0, None, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
+            run(job_id, owner, set_name, "name", "service", "", "raise Exception", [], "/tmp/pyops/runner.sock", 0, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
 
         mock_listener.assert_called_once_with("owner", "id")
         mock_listener_instance.close.assert_called_once()
-        mock_check_call.assert_called_once_with("/tmp/pyops/runner.sock", {"id": "id", "state": "failed", "detail": ANY})
+        mock_check_call.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "failed", "detail": ANY})
 
-    @patch('app.lib.files.conf_users', return_value={'owner': {'debug_port': 5678}})
     @patch('app.lib.sets.subprocess.check_call')
-    @patch('app.lib.job.send_completion')
     @patch('subprocess.check_call')
-    @patch('builtins.compile')
-    @patch('app.lib.job.terminate_debugpy_adapter')
     @patch('app.lib.pyops.ServiceListener')
-    @patch('debugpy.listen')
-    @patch('debugpy.wait_for_client')
-    @patch('debugpy.breakpoint')
     @patch('subprocess.run')
-    def test_run_debug_inject(self, mock_run, mock_breakpoint, mock_wait, mock_listen, mock_listener, mock_terminate, mock_compile, mock_check_call, mock_sets_check_call, mock_send, mock_conf_users, mock_conf, tmp_path):
-        debugpy_mock = Mock()
-        with patch.dict('sys.modules', {'debugpy': debugpy_mock}):
-            with patch.object(debugpy_mock, 'listen', mock_listen), \
-                 patch.object(debugpy_mock, 'wait_for_client', mock_wait), \
-                 patch.object(debugpy_mock, 'breakpoint', mock_breakpoint), \
-                 patch.object(debugpy_mock, 'log_to', Mock()):
-                mock_run.side_effect = [Mock(returncode=0, stdout=""), Mock(returncode=0)]
-                mock_sets_check_call.return_value = None
-                from app.job_runner import main as run
-                mock_listener.return_value = Mock()  # For debug
-                mock_listen.return_value = None
-                mock_wait.return_value = None  # Don't block
-                mock_compile.return_value = compile("pass", "dummy", "exec")  # Mock code object
-                data_base = os.path.join(tmp_path, "data")
-                owner = "owner"
-                set_name = "set"
-                job_id = "id"
-                code = "print('test')"
-
-                venv_path = os.path.join(tmp_path, "venv")
-                pkg_path = os.path.join(tmp_path, "pkg")
-                run(job_id, owner, set_name, "name", "debug", "#>AWAIT_DEBUG", code, [], "/tmp/pyops/runner.sock", 0, None, 5678, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
-
-                # Check compile called for code and libs
-                assert mock_compile.call_count >= 1
-                # Verify terminate_debugpy_adapter was called for debug job
-                mock_terminate.assert_called_once_with("owner", 5678)
-
-                # Assert debugpy injection calls
-                assert mock_listen.call_count == 1
-                mock_listen.assert_called_with(('0.0.0.0', 5678))
-                assert mock_wait.call_count == 1
-                mock_breakpoint.assert_called_once()  # Called since #>AWAIT_DEBUG
-
-    @pytest.mark.parametrize("param, expect_wait", [
-        ("#>AWAIT_DEBUG", True),
-        ("", False),
-    ])
-    @patch('app.lib.files.conf_users', return_value={'owner': {'debug_port': 5678}})
-    @patch.dict('sys.modules', {'debugpy': Mock()})
-    @patch('subprocess.check_call')
     @patch('app.lib.job.send_completion')
-    @patch('subprocess.run')
-    @patch('app.lib.pyops.ServiceListener')
-    @patch('app.lib.job.terminate_debugpy_adapter')
-    @patch('debugpy.breakpoint')
-    @patch('debugpy.wait_for_client')
-    @patch('debugpy.listen')
-    @patch('builtins.compile')
-    def test_run_debug_await_directive(self, mock_compile, mock_listen, mock_wait, mock_breakpoint, mock_terminate, mock_listener, mock_run, mock_check_call, mock_send, mock_conf_users, param, expect_wait, tmp_path):
-        mock_compile.return_value = compile("pass", "dummy", "exec")
+    def test_run_debug_no_debugger_injection(self, mock_send, mock_run, mock_listener, mock_check_call, mock_sets_check_call, mock_conf, tmp_path):
+        """Regression: pyops no longer imports or starts a debugger.
+        run_debug_job materialises sources, runs the user's param + libs +
+        code, sends `state=running` after param, and `state=done` at the
+        end — same code path as task/service/draft minus retries."""
         mock_run.side_effect = [Mock(returncode=0, stdout=""), Mock(returncode=0)]
-        mock_listener.return_value = Mock()
+        mock_sets_check_call.return_value = None
         from app.job_runner import main as run
+        mock_listener.return_value = Mock()
         data_base = os.path.join(tmp_path, "data")
         owner = "owner"
         set_name = "set"
         job_id = "id"
         code = "print('test')"
+
         venv_path = os.path.join(tmp_path, "venv")
         pkg_path = os.path.join(tmp_path, "pkg")
-        run(job_id, owner, set_name, "name", "debug", param, code, [], "/tmp/pyops/runner.sock", 0, None, 5678, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
-        mock_terminate.assert_called_once_with("owner", 5678)
+        run(job_id, owner, set_name, "name", "debug", "", code, [],
+            "/tmp/pyops/runner.sock", 0, None,
+            {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}},
+            {"venv": venv_path, "pkg": pkg_path},
+            {"owner": {}},
+            {"bind": "127.0.0.1:8000"})
 
-        # Assert debugpy injection calls
-        mock_listen.assert_called_once()
-        if expect_wait:
-            mock_wait.assert_called_once()
-            mock_breakpoint.assert_called_once()
-        else:
-            mock_wait.assert_not_called()
-            mock_breakpoint.assert_not_called()
+        # state=running fires after exec(param), state=done at the end.
+        sent_states = [c.args[1]["state"] for c in mock_send.call_args_list]
+        assert "running" in sent_states
+        assert sent_states[-1] == "done"
 
     @patch('app.job_runner.job_lib.send_completion')
-    @patch.dict('sys.modules', {'debugpy': Mock()})
-    @patch('app.lib.job.terminate_debugpy_adapter')
     @patch('app.lib.pyops.ServiceListener')
-    @patch('debugpy.listen')
-    @patch('debugpy.wait_for_client')
     @patch('subprocess.check_call')
     @patch('subprocess.run')
-    def test_run_debug_logging(self, mock_run, mock_check_call, mock_wait, mock_listen, mock_listener, mock_terminate, mock_send, tmp_path, sample_logging_code, mock_conf):
+    def test_run_debug_logging(self, mock_run, mock_check_call, mock_listener, mock_send, tmp_path, sample_logging_code, mock_conf):
         mock_run.side_effect = [Mock(returncode=0, stdout=""), Mock(returncode=0)]
         from app.job_runner import main as run
-        mock_listener.return_value = Mock()  # For debug
+        mock_listener.return_value = Mock()
         data_base = os.path.join(tmp_path, "data")
         owner = "owner"
         set_name = "set"
@@ -772,7 +718,12 @@ logging.error('ERROR message')
 
         venv_path = os.path.join(tmp_path, "venv")
         pkg_path = os.path.join(tmp_path, "pkg")
-        run(job_id, owner, set_name, "name", "debug", "", sample_logging_code, [], "/tmp/pyops/runner.sock", 0, None, 5678, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
+        run(job_id, owner, set_name, "name", "debug", "", sample_logging_code, [],
+            "/tmp/pyops/runner.sock", 0, None,
+            {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}},
+            {"venv": venv_path, "pkg": pkg_path},
+            {"owner": {}},
+            {"bind": "127.0.0.1:8000"})
 
         stdout_content, stderr_content = self.get_log_contents(data_base, owner, set_name, job_id)
 
@@ -780,7 +731,9 @@ logging.error('ERROR message')
         assert "INFO message" in stdout_content
         assert "WARNING message" in stderr_content
         assert "ERROR message" in stderr_content
-        mock_send.assert_called_once_with("/tmp/pyops/runner.sock", {"id": job_id, "state": "done", "detail": None})
+        # The very last send_completion is "done" (a "running" precedes it).
+        last_call = mock_send.call_args_list[-1]
+        assert last_call.args[1] == {"id": job_id, "state": "done", "detail": None}
 
     @patch('app.job_runner.job_lib.send_completion')
     @patch('app.job_runner.subprocess.run')
@@ -800,7 +753,7 @@ logging.error('ERROR message')
 
         venv_path = os.path.join(tmp_path, "venv")
         pkg_path = os.path.join(tmp_path, "pkg")
-        run(job_id, owner, set_name, "name", "task", "", sample_fail_code, [], "/tmp/pyops/runner.sock", 3, None, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
+        run(job_id, owner, set_name, "name", "task", "", sample_fail_code, [], "/tmp/pyops/runner.sock", 3, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
 
         stdout_content, stderr_content = self.get_log_contents(data_base, owner, set_name, job_id)
 
@@ -828,13 +781,13 @@ logging.error('ERROR message')
 
         venv_path = os.path.join(tmp_path, "venv")
         pkg_path = os.path.join(tmp_path, "pkg")
-        run(job_id, owner, set_name, "name", "task", "", sample_empty_code, [], "/tmp/pyops/runner.sock", 0, None, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
+        run(job_id, owner, set_name, "name", "task", "", sample_empty_code, [], "/tmp/pyops/runner.sock", 0, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
 
         stdout_content, stderr_content = self.get_log_contents(data_base, owner, set_name, job_id)
 
         assert stdout_content == ""
         assert stderr_content == ""
-        mock_send.assert_called_once_with("/tmp/pyops/runner.sock", {"id": job_id, "state": "done", "detail": None})
+        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": job_id, "state": "done", "detail": None})
 
 
     @patch('app.job_runner.job_lib.send_completion')
@@ -855,10 +808,10 @@ logging.error('ERROR message')
 
         venv_path = os.path.join(tmp_path, "venv")
         pkg_path = os.path.join(tmp_path, "pkg")
-        run(job_id, owner, set_name, "name", "task", "", "print('code')", [], "/tmp/pyops/runner.sock", 0, None, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
+        run(job_id, owner, set_name, "name", "task", "", "print('code')", [], "/tmp/pyops/runner.sock", 0, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
 
         mock_chdir.assert_called_once_with(workspace)
-        mock_send.assert_called_once_with("/tmp/pyops/runner.sock", {"id": job_id, "state": "done", "detail": None})
+        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": job_id, "state": "done", "detail": None})
 
 
     @patch('app.lib.pyops.Control', return_value=Mock())
@@ -899,7 +852,7 @@ print("jobsspace: " + globals()['jobsspace'])
 """
             venv_path = os.path.join(tmp_path, "venv")
             pkg_path = os.path.join(tmp_path, "pkg")
-            run(job_id, owner, set_name, "name", "task", "", code, [], "/tmp/pyops/runner.sock", 0, None, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
+            run(job_id, owner, set_name, "name", "task", "", code, [], "/tmp/pyops/runner.sock", 0, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
 
             # Read stdout
             stdout_content, _ = self.get_log_contents(data_base, owner, set_name, job_id)
@@ -907,7 +860,7 @@ print("jobsspace: " + globals()['jobsspace'])
             assert expected_gitspace in stdout_content
             assert expected_pkgspace in stdout_content
             assert expected_jobsspace in stdout_content
-            mock_send.assert_called_once_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
+            mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
 
     @patch('app.job_runner.job_lib.send_completion')
     @patch('app.job_runner.subprocess.run')
@@ -926,7 +879,7 @@ print("jobsspace: " + globals()['jobsspace'])
         param = "raise ValueError('param err')"
         venv_path = os.path.join(tmp_path, "venv")
         pkg_path = os.path.join(tmp_path, "pkg")
-        run("id", "owner", set_, name, "task", param, "pass", [], "/tmp/pyops/runner.sock", 3, None, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
+        run("id", "owner", set_, name, "task", param, "pass", [], "/tmp/pyops/runner.sock", 3, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
         call_args = mock_send.call_args[0][1]
         assert call_args["state"] == "failed"
         assert "param err" in call_args["detail"]
@@ -949,7 +902,7 @@ print("jobsspace: " + globals()['jobsspace'])
         code = "raise ValueError('code err')"
         venv_path = os.path.join(tmp_path, "venv")
         pkg_path = os.path.join(tmp_path, "pkg")
-        run("id", "owner", set_, name, "task", "", code, [], "/tmp/pyops/runner.sock", 3, None, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
+        run("id", "owner", set_, name, "task", "", code, [], "/tmp/pyops/runner.sock", 3, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
         call_args = mock_send.call_args[0][1]
         assert call_args["state"] == "failed"
         assert "code err" in call_args["detail"]
@@ -975,7 +928,7 @@ print("jobsspace: " + globals()['jobsspace'])
         libs = [{"code": lib_code, "filename": lib_filename}]
         venv_path = os.path.join(tmp_path, "venv")
         pkg_path = os.path.join(tmp_path, "pkg")
-        run("id", "owner", set_, name, "task", "", "pass", libs, "/tmp/pyops/runner.sock", 3, None, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
+        run("id", "owner", set_, name, "task", "", "pass", libs, "/tmp/pyops/runner.sock", 3, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
         call_args = mock_send.call_args[0][1]
         assert call_args["state"] == "failed"
         assert "lib err" in call_args["detail"]
@@ -999,7 +952,7 @@ print("jobsspace: " + globals()['jobsspace'])
         code = "def foo("  # syntax error
         venv_path = os.path.join(tmp_path, "venv")
         pkg_path = os.path.join(tmp_path, "pkg")
-        run("id", "owner", set_, name, "task", "", code, [], "/tmp/pyops/runner.sock", 3, None, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
+        run("id", "owner", set_, name, "task", "", code, [], "/tmp/pyops/runner.sock", 3, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
         call_args = mock_send.call_args[0][1]
         assert call_args["state"] == "failed"
         assert "SyntaxError" in call_args["detail"]
@@ -1023,28 +976,20 @@ print("jobsspace: " + globals()['jobsspace'])
         libs = [{"code": lib_code, "filename": lib_filename}]
         venv_path = os.path.join(tmp_path, "venv")
         pkg_path = os.path.join(tmp_path, "pkg")
-        run("id", "owner", set_, name, "service", "", "pass", libs, "/tmp/pyops/runner.sock", 0, None, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
+        run("id", "owner", set_, name, "service", "", "pass", libs, "/tmp/pyops/runner.sock", 0, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
         call_args = mock_send.call_args[0][1]
         assert call_args["state"] == "failed"
         assert "lib err service" in call_args["detail"]
         assert f"{set_}/library/mylib.py" in call_args["detail"]
 
     @patch('app.job_runner.job_lib.send_completion')
-    @patch.dict('sys.modules', {'debugpy': Mock()})
     @patch('app.lib.job.process_code_installs', side_effect=lambda p, c, l, v, pk, s, j, so, se: (p, c, l))
-    @patch('app.lib.job.terminate_debugpy_adapter')
     @patch('subprocess.check_call')
     @patch('subprocess.run')
-    @patch('debugpy.wait_for_client')
-    @patch('debugpy.listen')
     @patch('app.lib.pyops.ServiceListener')
-    @patch('app.lib.files.conf_users')
-    def test_run_debug_creates_files(self, mock_conf_users, mock_listener, mock_listen, mock_wait, mock_run, mock_check_call, mock_terminate, mock_process_installs, mock_send, tmp_path, mock_conf):
+    def test_run_debug_creates_files(self, mock_listener, mock_run, mock_check_call, mock_process_installs, mock_send, tmp_path, mock_conf):
         from app.job_runner import main as run
         mock_listener.return_value = Mock()
-        mock_conf_users.return_value = {"owner": {"debug_port": 5678}}
-        mock_listen.return_value = None
-        mock_wait.return_value = None
         mock_run.return_value = Mock(returncode=0, stdout="")
         data_base = os.path.join(tmp_path, "data")
         owner = "owner"
@@ -1056,9 +1001,10 @@ print("jobsspace: " + globals()['jobsspace'])
 
         venv_path = os.path.join(tmp_path, "venv")
         pkg_path = os.path.join(tmp_path, "pkg")
-        run(job_id, owner, set_name, "name", "debug", param, code, libs, "/tmp/pyops/runner.sock", 0, None, 5678, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
+        run(job_id, owner, set_name, "name", "debug", param, code, libs, "/tmp/pyops/runner.sock", 0, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {}}, {"bind": "127.0.0.1:8000"})
 
-        mock_send.assert_called_once_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
+        last_call = mock_send.call_args_list[-1]
+        assert last_call.args[1] == {"id": "id", "state": "done", "detail": None}
 
         # Check that files were created in .debug/src/ subdirectories
         workspace = os.path.join(data_base, set_name, job_id)
@@ -1082,63 +1028,49 @@ print("jobsspace: " + globals()['jobsspace'])
         with open(lib_file, 'r') as f:
             assert "print('lib code')" in f.read()
 
-    @patch.dict('sys.modules', {'debugpy': Mock()})
-    @patch('app.lib.job.terminate_debugpy_adapter')
-    @patch('subprocess.check_call')
     @patch('app.lib.job.send_completion')
+    @patch('subprocess.check_call')
     @patch('subprocess.run')
-    @patch('debugpy.wait_for_client')
-    @patch('debugpy.listen')
     @patch('app.lib.pyops.ServiceListener')
-    @patch('app.lib.files.conf_users')
-    def test_run_debug_overrides_with_pip_install(self, mock_conf_users, mock_listener, mock_listen, mock_wait, mock_run, mock_send, mock_check_call, mock_terminate, tmp_path, mock_conf):
-        """Regression test: Ensure !pip directives in override code are processed."""
+    def test_run_debug_overrides_with_pip_install(self, mock_listener, mock_run, mock_check_call, mock_send, tmp_path, mock_conf):
+        """Regression test: !pip directives inside override code are still
+        processed by job_setup.py before this runner phase. The override
+        body itself runs through the regular exec()."""
         from app.job_runner import main as run
 
         mock_run.return_value = Mock(returncode=0, stdout="")
         mock_listener.return_value = Mock()
-        mock_conf_users.return_value = {"owner": {"debug_port": 5678}}
-        mock_listen.return_value = None
-        mock_wait.return_value = None
 
         data_base = os.path.join(tmp_path, "data")
         owner = "owner"
         set_name = "set"
         job_id = "id"
 
-        # Override code contains #!pip directive
         overrides = {"set::name": "#!pip install requests\nprint('overridden code')"}
         overrides_json = json.dumps(overrides)
 
         venv_path = os.path.join(tmp_path, "venv")
         pkg_path = os.path.join(tmp_path, "pkg")
-        run(job_id, owner, set_name, "name", "debug", "", "print('original code')", [], "/tmp/pyops/runner.sock", 0, overrides_json, 5678, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
+        run(job_id, owner, set_name, "name", "debug", "", "print('original code')", [],
+            "/tmp/pyops/runner.sock", 0, overrides_json,
+            {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}},
+            {"venv": venv_path, "pkg": pkg_path},
+            {"owner": {}},
+            {"bind": "127.0.0.1:8000"})
 
-        mock_send.assert_called_once_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
+        last_call = mock_send.call_args_list[-1]
+        assert last_call.args[1] == {"id": "id", "state": "done", "detail": None}
 
-        # Verify pip install was called (mock_run was called at least once)
-        assert mock_run.call_count > 0
-
-
-
-    @patch.dict('sys.modules', {'debugpy': Mock()})
-    @patch('app.lib.job.terminate_debugpy_adapter')
     @patch('app.lib.job.send_completion')
     @patch('subprocess.check_call')
     @patch('subprocess.run')
-    @patch('debugpy.wait_for_client')
-    @patch('debugpy.listen')
     @patch('app.lib.pyops.ServiceListener')
-    @patch('app.lib.files.conf_users')
-    def test_debug_overrides_ignore_unreferenced(self, mock_conf_users, mock_listener, mock_listen, mock_wait, mock_run, mock_check_call, mock_send, mock_terminate, tmp_path, mock_conf):
-        """Post-fix regression: Unreferenced overrides ignored (no exec/file)."""
+    def test_debug_overrides_ignore_unreferenced(self, mock_listener, mock_run, mock_check_call, mock_send, tmp_path, mock_conf):
+        """Unreferenced override entries don't produce extra files in .debug/src/."""
         from app.job_runner import main as run
 
         mock_run.return_value = Mock(returncode=0, stdout="")
         mock_listener.return_value = Mock()
-        mock_conf_users.return_value = {"owner": {"debug_port": 5678}}
-        mock_listen.return_value = None
-        mock_wait.return_value = None
 
         data_base = os.path.join(tmp_path, "data")
         owner = "owner"
@@ -1147,20 +1079,26 @@ print("jobsspace: " + globals()['jobsspace'])
 
         overrides = {
             "set::name": "print('overridden code')",
-            "set::newlib": "print('unused new lib')"  # Unreferenced
+            "set::newlib": "print('unused new lib')",
         }
         overrides_json = json.dumps(overrides)
 
         venv_path = os.path.join(tmp_path, "venv")
         pkg_path = os.path.join(tmp_path, "pkg")
-        run(job_id, owner, set_name, "name", "debug", "", "print('task')", [], "/tmp/pyops/runner.sock", 0, overrides_json, 5678, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
+        run(job_id, owner, set_name, "name", "debug", "", "print('task')", [],
+            "/tmp/pyops/runner.sock", 0, overrides_json,
+            {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}},
+            {"venv": venv_path, "pkg": pkg_path},
+            {"owner": {}},
+            {"bind": "127.0.0.1:8000"})
 
-        mock_send.assert_called_once_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
+        last_call = mock_send.call_args_list[-1]
+        assert last_call.args[1] == {"id": "id", "state": "done", "detail": None}
 
         workspace = os.path.join(data_base, set_name, job_id)
         debug_src_dir = os.path.join(workspace, ".debug", "src")
         new_lib_file = os.path.join(debug_src_dir, set_name, "library", "newlib.py")
-        assert not os.path.exists(new_lib_file)  # Ignored!
+        assert not os.path.exists(new_lib_file)
 
         code_file = os.path.join(debug_src_dir, set_name, "task", "name.py")
         with open(code_file, 'r') as f:
@@ -1182,247 +1120,17 @@ print("jobsspace: " + globals()['jobsspace'])
             session.commit()
 
         # Call terminate (should guard and skip postTerm)
-        terminate_job_processes("test_id", 12345, False, "test_owner")
+        terminate_job_processes("test_id", 12345, "test_owner")
 
         # Assert postTerm not called (guard prevents transition)
         mock_postTerm.assert_not_called()
 
 
 class TestMainLoopDebugIntegration:
-    """Integration tests for main loop debug job adapter waiting functionality."""
-
-    @patch('app.runner.main')  # Patch the main function itself
-    @patch('app.runner.getNextToDo')
-    @patch('app.runner.loadJob')
-    @patch('app.runner.assignJob')
-    @patch('app.runner.finishJob')
-    @patch('app.lib.job.has_debugpy_adapter')
-    @patch('app.runner.terminate_job_processes', return_value=None)
-    @patch('app.runner.time.sleep')
-    @patch('subprocess.check_output')
-    @patch('subprocess.Popen')
-    def test_main_loop_debug_adapter_success(self, mock_process_class, mock_check_output, mock_sleep, mock_terminate, mock_has_adapter,
-                                           mock_finish_job, mock_assign_job, mock_load_job, mock_get_next,
-                                           mock_main, mock_conf, mock_db):
-        """Test debug job assignment after adapter appears within timeout."""
-        from app.runner import main
-
-        # Setup mocks
-        mock_check_output.return_value = b'64-bit'
-        mock_get_next.return_value = "debug_job_id"
-        mock_load_job.return_value = ("owner", "set", "name", "debug", "param", "code", "overrides")
-        mock_process = Mock()
-        mock_process.poll.return_value = None
-        mock_process.pid = 12345
-        mock_process_class.return_value = mock_process
-
-        # Adapter appears on 3rd check (after 0.2s)
-        mock_has_adapter.side_effect = [False, False, True]
-        mock_sleep.return_value = None
-
-        # Mock the main function to simulate one iteration
-        def mock_main_impl(data_base, web_bind, venv_path, pkg_path, env):
-            # Simulate one iteration of the main loop
-            job_id = mock_get_next()
-            if job_id is not None:
-                owner, set, name, kind, param, code, overrides = mock_load_job()
-                port = 5678  # Mock port
-                libs = []
-                p = mock_process_class()
-
-                if kind == "debug":
-                    adapter_up = False
-                    for attempt in range(50):  # 5 seconds max
-                        if p.poll() is not None:
-                            break
-                        if mock_has_adapter(port):
-                            adapter_up = True
-                            break
-                        mock_sleep(0.1)
-
-                    if not adapter_up:
-                        if p.is_alive():
-                            mock_terminate(p.pid, True, owner)
-                            mock_finish_job(job_id, "failed", "Debug adapter failed to start within timeout")
-                            return
-                        else:
-                            return
-
-                # Adapter is up or not a debug job - proceed normally
-                mock_assign_job(job_id, p.pid)
-
-        mock_main.side_effect = mock_main_impl
-
-        # Run main - it should process one job and exit
-        main("data", "bind", "/venv", "/pkg", {})
-
-        # Verify adapter was checked
-        assert mock_has_adapter.call_count == 3
-        # Verify assignJob was called after adapter appeared
-        mock_assign_job.assert_called_once_with("debug_job_id", 12345)
-        # Verify no termination for timeout
-        mock_terminate.assert_not_called()
-        mock_finish_job.assert_not_called()
-
-    @patch('app.runner.main')  # Patch the main function itself
-    @patch('app.runner.getNextToDo')
-    @patch('app.runner.loadJob')
-    @patch('app.runner.assignJob')
-    @patch('app.runner.finishJob')
-    @patch('app.lib.job.has_debugpy_adapter')
-    @patch('app.runner.terminate_job_processes')
-    @patch('app.runner.time.sleep')
-    @patch('subprocess.check_output')
-    @patch('subprocess.Popen')
-    def test_main_loop_debug_adapter_timeout(self, mock_process_class, mock_check_output, mock_sleep, mock_terminate, mock_has_adapter,
-                                           mock_finish_job, mock_assign_job, mock_load_job, mock_get_next,
-                                           mock_main, mock_conf, mock_db):
-        """Test debug job termination when adapter doesn't appear within timeout."""
-        from app.runner import main
-
-        # Setup mocks
-        mock_check_output.return_value = b'64-bit'
-        mock_get_next.return_value = "debug_job_id"
-        mock_load_job.return_value = ("owner", "set", "name", "debug", "param", "code", "overrides")
-        mock_process = Mock()
-        mock_process.poll.return_value = None  # Alive during checks and after
-        mock_process.pid = 12345
-        mock_process_class.return_value = mock_process
-
-        # Adapter never appears
-        mock_has_adapter.return_value = False
-        mock_sleep.return_value = None
-        mock_terminate.return_value = None
-
-        # Mock the main function to simulate one iteration
-        def mock_main_impl(data_base, web_bind, venv_path, pkg_path, env):
-            # Simulate one iteration of the main loop
-            job_id = mock_get_next()
-            if job_id is not None:
-                owner, set, name, kind, param, code, overrides = mock_load_job()
-                port = 5678  # Mock port
-                libs = []
-                p = mock_process_class()
-
-                if kind == "debug":
-                    adapter_up = False
-                    for attempt in range(50):  # 5 seconds max
-                        if p.poll() is not None:
-                            break
-                        if mock_has_adapter(port):
-                            adapter_up = True
-                            break
-                        mock_sleep(0.1)
-
-                    if not adapter_up:
-                        if p.poll() is None:
-                            mock_terminate(p.pid, True, owner)
-                            mock_finish_job(job_id, "failed", "Debug adapter failed to start within timeout")
-                            return
-                        else:
-                            return
-
-                # Adapter is up or not a debug job - proceed normally
-                mock_assign_job(job_id, p.pid)
-
-        mock_main.side_effect = mock_main_impl
-
-        # Run main - it should process one job and exit
-        main("data", "bind", "/venv", "/pkg", {})
-
-        # Verify adapter was checked 50 times (5 seconds)
-        assert mock_has_adapter.call_count == 50
-        # Verify process was terminated
-        mock_terminate.assert_called_once_with(12345, True, "owner")
-        # Verify job marked as failed
-        mock_finish_job.assert_called_once_with("debug_job_id", "failed", "Debug adapter failed to start within timeout")
-        # Verify assignJob was NOT called
-        mock_assign_job.assert_not_called()
-
-    @patch('app.runner.main')  # Patch the main function itself
-    @patch('app.runner.getNextToDo')
-    @patch('app.runner.loadJob')
-    @patch('app.runner.assignJob')
-    @patch('app.runner.finishJob')
-    @patch('app.lib.job.has_debugpy_adapter')
-    @patch('app.runner.terminate_job_processes')
-    @patch('app.runner.time.sleep')
-    @patch('subprocess.check_output')
-    @patch('subprocess.Popen')
-    def test_main_loop_debug_process_dies_before_adapter(self, mock_process_class, mock_check_output, mock_sleep, mock_terminate, mock_has_adapter,
-                                                       mock_finish_job, mock_assign_job, mock_load_job, mock_get_next,
-                                                       mock_main, mock_conf, mock_db):
-        """Test debug job handling when process dies before adapter appears."""
-        mock_check_output.return_value = b'64-bit'
-
-        from app.runner import main
-
-        # Setup mocks
-        def get_next_side_effect():
-            if not hasattr(get_next_side_effect, 'called'):
-                get_next_side_effect.called = True
-                return "debug_job_id"
-            return None
-        mock_get_next.side_effect = get_next_side_effect
-        mock_load_job.return_value = ("owner", "set", "name", "debug", "param", "code", "overrides")
-        mock_process = Mock()
-        def poll_side_effect():
-            if not hasattr(poll_side_effect, 'calls'):
-                poll_side_effect.calls = 0
-            poll_side_effect.calls += 1
-            return None if poll_side_effect.calls <= 2 else 1  # None for first 2 calls, 1 after (dead)
-        mock_process.poll.side_effect = poll_side_effect
-        mock_process.pid = 12345
-        mock_process_class.return_value = mock_process
-
-        # Adapter never appears
-        mock_has_adapter.return_value = False
-        mock_sleep.return_value = None
-
-        # Mock the main function to simulate one iteration
-        def mock_main_impl(data_base, web_bind, venv_path, pkg_path, env):
-            # Simulate one iteration of the main loop
-            job_id = mock_get_next()
-            if job_id is not None:
-                owner, set, name, kind, param, code, overrides = mock_load_job()
-                port = 5678  # Mock port
-                libs = []
-                p = mock_process_class()
-
-                if kind == "debug":
-                    adapter_up = False
-                    for attempt in range(50):  # 5 seconds max
-                        if p.poll() is not None:
-                            break
-                        if mock_has_adapter(port):
-                            adapter_up = True
-                            break
-                        mock_sleep(0.1)
-
-                    if not adapter_up:
-                        if p.poll() is None:
-                            mock_terminate(p.pid, True, owner)
-                            mock_finish_job(job_id, "failed", "Debug adapter failed to start within timeout")
-                            return
-                        else:
-                            return
-
-                # Adapter is up or not a debug job - proceed normally
-                mock_assign_job(job_id, p.pid)
-
-        mock_main.side_effect = mock_main_impl
-
-        # Run main - it should process one job and exit
-        main("data", "bind", "/venv", "/pkg", {})
-
-        # Verify adapter was checked at least once
-        assert mock_has_adapter.call_count >= 1
-        # Verify no termination (process already dead)
-        mock_terminate.assert_not_called()
-        # Verify no job finish (let normal cleanup handle)
-        mock_finish_job.assert_not_called()
-        # Verify assignJob was NOT called
-        mock_assign_job.assert_not_called()
+    """Integration tests for main loop spawn path. The has_debugpy_adapter
+    polling, the 5-second adapter timeout, and the kind=debug-specific
+    branch in the main loop are all gone — debug jobs spawn exactly like
+    task/service/draft. The remaining test verifies the universal path."""
 
     @patch('app.runner.main')  # Patch the main function itself
     @patch('app.runner.getNextToDo')
@@ -1449,30 +1157,8 @@ class TestMainLoopDebugIntegration:
             # Simulate one iteration of the main loop
             job_id = mock_get_next()
             if job_id is not None:
-                owner, set, name, kind, param, code, overrides = mock_load_job()
-                port = 5678  # Mock port
-                libs = []
+                mock_load_job()
                 p = mock_process_class()
-
-                if kind == "debug":
-                    adapter_up = False
-                    for attempt in range(50):  # 5 seconds max
-                        if not p.is_alive():
-                            break
-                        if mock_has_adapter(port):
-                            adapter_up = True
-                            break
-                        mock_sleep(0.1)
-
-                    if not adapter_up:
-                        if p.is_alive():
-                            mock_terminate(p.pid, True, owner)
-                            mock_finish_job(job_id, "failed", "Debug adapter failed to start within timeout")
-                            return
-                        else:
-                            return
-
-                # Adapter is up or not a debug job - proceed normally
                 mock_assign_job(job_id, p.pid)
 
         mock_main.side_effect = mock_main_impl
@@ -1549,7 +1235,7 @@ class TestDebugOverridesResolution(TestLoggingCapture):
         venv_path = os.path.join(tmp_path, "venv")
         pkg_path = os.path.join(tmp_path, "pkg")
 
-        run(job_id, owner, set_name, "name", "task", "", sample_logging_code, [], "/tmp/pyops/runner.sock", 0, None, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
+        run(job_id, owner, set_name, "name", "task", "", sample_logging_code, [], "/tmp/pyops/runner.sock", 0, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
 
         stdout_content, stderr_content = self.get_log_contents(data_base, owner, set_name, job_id)
 
@@ -1557,7 +1243,7 @@ class TestDebugOverridesResolution(TestLoggingCapture):
         assert "INFO message" in stdout_content
         assert "WARNING message" in stderr_content
         assert "ERROR message" in stderr_content
-        mock_send.assert_called_once_with("/tmp/pyops/runner.sock", {"id": job_id, "state": "done", "detail": None})
+        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": job_id, "state": "done", "detail": None})
 
     @patch('app.job_runner.job_lib.send_completion')
     @patch('app.job_runner.subprocess.run')
@@ -1575,7 +1261,7 @@ class TestDebugOverridesResolution(TestLoggingCapture):
 
         venv_path = os.path.join(tmp_path, "venv")
         pkg_path = os.path.join(tmp_path, "pkg")
-        run(job_id, owner, set_name, "name", "service", "", sample_logging_code, [], "/tmp/pyops/runner.sock", 0, None, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
+        run(job_id, owner, set_name, "name", "service", "", sample_logging_code, [], "/tmp/pyops/runner.sock", 0, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
 
         stdout_content, stderr_content = self.get_log_contents(data_base, owner, set_name, job_id)
 
@@ -1583,24 +1269,19 @@ class TestDebugOverridesResolution(TestLoggingCapture):
         assert "INFO message" in stdout_content
         assert "WARNING message" in stderr_content
         assert "ERROR message" in stderr_content
-        mock_send.assert_called_once_with("/tmp/pyops/runner.sock", {"id": job_id, "state": "done", "detail": None})
+        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": job_id, "state": "done", "detail": None})
 
     @patch('app.lib.job.send_completion')
-    @patch.dict('sys.modules', {'debugpy': Mock()})
     @patch('subprocess.check_call')
     @patch('subprocess.run')
-    @patch('debugpy.wait_for_client')
-    @patch('debugpy.listen')
     @patch('app.lib.pyops.ServiceListener')
-    @patch('app.lib.files.conf_users')
     @patch('app.lib.job.loadLib', side_effect=Exception("git not found"))
-    def test_debug_directive_new_override(self, mock_loadLib, mock_conf_users, mock_listener, mock_listen, mock_wait, mock_run, mock_check_call, mock_send, tmp_path, mock_conf):
+    def test_debug_directive_new_override(self, mock_loadLib, mock_listener, mock_run, mock_check_call, mock_send, tmp_path, mock_conf):
         """Directive references new override lib (no git)."""
         from app.job_runner import main as run
         from app.lib.job import process_imports
 
         mock_run.return_value = Mock(returncode=0, stdout="")
-        mock_conf_users.return_value = {"owner": {"debug_port": 5678}}
 
         data_base = os.path.join(tmp_path, "data")
         owner = "owner"
@@ -1617,9 +1298,10 @@ class TestDebugOverridesResolution(TestLoggingCapture):
 
         venv_path = os.path.join(tmp_path, "venv")
         pkg_path = os.path.join(tmp_path, "pkg")
-        run(job_id, owner, set_name, "task", "debug", "", code, libs, "/tmp/pyops/runner.sock", 0, overrides_json, 5678, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
+        run(job_id, owner, set_name, "task", "debug", "", code, libs, "/tmp/pyops/runner.sock", 0, overrides_json, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {}}, {"bind": "127.0.0.1:8000"})
 
-        mock_send.assert_called_once_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
+        last_call = mock_send.call_args_list[-1]
+        assert last_call.args[1] == {"id": "id", "state": "done", "detail": None}
 
         # Check stdout has newlib
         stdout_path = os.path.join(data_base, set_name, job_id, "stdout.log")
@@ -1636,20 +1318,15 @@ class TestDebugOverridesResolution(TestLoggingCapture):
         with open(new_lib_file, 'r') as f:
             assert "print('overridden newlib')" in f.read()
 
-    @patch.dict('sys.modules', {'debugpy': Mock()})
     @patch('app.lib.job.send_completion')
     @patch('subprocess.run')
-    @patch('debugpy.wait_for_client')
-    @patch('debugpy.listen')
     @patch('app.lib.pyops.ServiceListener')
-    @patch('app.lib.files.conf_users')
-    def test_debug_recursive_directive(self, mock_conf_users, mock_listener, mock_listen, mock_wait, mock_run, mock_send, tmp_path, mock_conf):
+    def test_debug_recursive_directive(self, mock_listener, mock_run, mock_send, tmp_path, mock_conf):
         """Lib directive resolves sub-lib."""
         from app.job_runner import main as run
         from app.lib.job import process_imports
 
         mock_run.return_value = Mock(returncode=0, stdout="")
-        mock_conf_users.return_value = {"owner": {"debug_port": 5678}}
 
         data_base = os.path.join(tmp_path, "data")
         owner = "owner"
@@ -1669,9 +1346,10 @@ class TestDebugOverridesResolution(TestLoggingCapture):
 
         venv_path = os.path.join(tmp_path, "venv")
         pkg_path = os.path.join(tmp_path, "pkg")
-        run(job_id, owner, set_name, "task", "debug", "", code, libs, "/tmp/pyops/runner.sock", 0, overrides_json, 5678, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
+        run(job_id, owner, set_name, "task", "debug", "", code, libs, "/tmp/pyops/runner.sock", 0, overrides_json, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {}}, {"bind": "127.0.0.1:8000"})
 
-        mock_send.assert_called_once_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
+        last_call = mock_send.call_args_list[-1]
+        assert last_call.args[1] == {"id": "id", "state": "done", "detail": None}
 
         stdout_path = os.path.join(data_base, set_name, job_id, "stdout.log")
         with open(stdout_path, 'r') as f:
@@ -1710,9 +1388,9 @@ class TestDebugOverridesResolution(TestLoggingCapture):
         venv_path = os.path.join(tmp_path, "venv")
         pkg_path = os.path.join(tmp_path, "pkg")
 
-        run(job_id, owner, set_name, "name", "task", param, code, [], "/tmp/pyops/runner.sock", 0, None, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
+        run(job_id, owner, set_name, "name", "task", param, code, [], "/tmp/pyops/runner.sock", 0, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
 
-        mock_send.assert_called_once_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
+        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
 
     @patch('app.job_runner.zmq.Context')
     def test_send_completion_zmq_retry_on_error(self, mock_context_class):
@@ -1889,9 +1567,9 @@ class TestDebugOverridesResolution(TestLoggingCapture):
         mock_run.return_value = Mock(returncode=0)  # Bootstrap and installs succeed
         env = job_env
 
-        run("id", "owner", "set", "name", "draft", "print('param executed')", "print('code executed')", [], "/tmp/pyops/runner.sock", 0, None, None, env["conf_data"], env["conf_runner"], env["conf_users"], env["conf_web"])
+        run("id", "owner", "set", "name", "draft", "print('param executed')", "print('code executed')", [], "/tmp/pyops/runner.sock", 0, None, env["conf_data"], env["conf_runner"], env["conf_users"], env["conf_web"])
 
-        mock_send.assert_called_once_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
+        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
 
     def test_subprocess_popen_uses_direct_output_redirect(self):
         """Test that subprocess.Popen is called with sys.stdout/sys.stderr for direct output."""

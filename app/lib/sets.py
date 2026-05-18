@@ -29,7 +29,7 @@ from .files import conf_runner, project_root
 logger = logging.getLogger(__name__)
 
 
-CORE_DEPS = ('pyzmq', 'msgpack', 'psutil', 'debugpy', 'requests')
+CORE_DEPS = ('pyzmq', 'msgpack', 'psutil', 'requests')
 
 
 def _set_paths(name):

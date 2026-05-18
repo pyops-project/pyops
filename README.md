@@ -30,12 +30,11 @@ Stored in `etc/pyops.json` (override path via `PYOPS_CONFIG` env var):
 - `data`: `{"jobs": "data/jobs", "git": "data/git", "db": "data/app.db"}`
 - `runner`: `{"venv": "data/venv", "pkg": "data/pkg", "git_pull_interval": 60, "drop_done_delay_seconds": 60}`
 - `log`: `{"loglevel": "debug"}`
-- `users`: `{"anonymous": {"debug_port": 45678}}`
 
 ## Features
 PyOps supports various scriptlet types: task, service, schedule, controller, view, library, markdown, jslibrary.
 
-In addition to WebUI it also includes a VSCode extension for direct use from VSCode and derivatives.
+In addition to WebUI it also includes a VSCode extension for direct use from VSCode and derivatives, plus `pyopsctl` — a terminal-driven operator CLI for remote admin (no venv, no pip, distro packages only). See [`docs/pyops_guide.md`](docs/pyops_guide.md) § pyopsctl.
 
 - **Task**: One-time executed scriptlets for debugging or batch operations
 - **Service**: Persistent services that run continuously
@@ -105,6 +104,15 @@ services:
       - './volumes/app/data:/opt/pyops/data'
       - './volumes/app/etc:/opt/pyops/etc'
       - './volumes/app/venv:/opt/pyops/venv'
+      # Optional: route every pip invocation inside the container
+      # (bootstrap pip in ensure_set_environment + every #!pip
+      # directive in every per-set venv) through a single host-managed
+      # pip.conf. pip reads /etc/pip.conf as its site-wide config
+      # automatically — no pyops code involvement; standard Linux
+      # subprocess + system-config mechanic. Drop the next line and the
+      # file at ./volumes/app/etc/pip.conf to use a private index, set
+      # a global timeout, pin trusted-host, etc.
+      - './volumes/app/etc/pip.conf:/etc/pip.conf:ro'
   nginx:
     container_name: pyops.SOMEDOMAIN
     image: 'nginx:1.25'
@@ -143,12 +151,26 @@ services:
     },
     "log": {
         "loglevel": "debug"
-    },
-    "users": {
-        "anonymous": {"debug_port": 45678}
     }
 }
 ```
+
+- `./volumes/app/etc/pip.conf` *(optional — only when the compose
+  bind above is enabled)*
+```ini
+[global]
+index-url = https://your-private-index.example.com/simple/
+trusted-host = your-private-index.example.com
+timeout = 60
+```
+
+Applies to **every** pip invocation inside the container without any
+pyops awareness: the bootstrap pip in `ensure_set_environment`, every
+per-set venv's pip, and every user `#!pip <pkg>` directive in a
+scriptlet. pip reads `/etc/pip.conf` as its site-wide config, so the
+single bind covers the whole container. Authenticated indices: either
+embed credentials in the URL or also bind a `~/.netrc` into the
+container for the pyops user.
 
 - `./volumes/nginx/conf.d/app.conf`
 ```

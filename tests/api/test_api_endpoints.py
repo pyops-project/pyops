@@ -52,26 +52,6 @@ def test_put_inventory_item_create_conflict(mock_client, mock_git_ops, test_temp
         response = mock_client.put("/scriptlet/inventory/item", json=create_data, headers={"X-User": "testuser"})
         assert response.status_code == 409
 
-@pytest.mark.parametrize("item_type", ["task", "view", "markdown"])
-def test_post_inventory_item_save(mock_client, mock_git_ops, item_type, test_temp_dir, patch_tempfile, mock_datetime):
-    # Test POST /scriptlet/inventory/item with JSON body
-    name = f"save_{item_type}"
-    create_data = {"set": "testset", "name": name, "type": item_type}
-    save_data = {"set": "testset", "name": name, "code": f"# Saved {item_type} code"}
-    expected_ext = ".py" if item_type == "task" else ".html" if item_type == "view" else ".md"
-    
-    # First create
-    with patch("os.path.exists", return_value=True), \
-         patch("app.lib.git.check_name_unique", return_value=True), \
-         patch("os.makedirs"):
-        mock_client.put("/scriptlet/inventory/item", json=create_data, headers={"X-User": "testuser"})
-    
-    # Then save
-    with patch("os.listdir", return_value=[f"{name}{expected_ext}"]), \
-         patch("os.path.exists", return_value=True):
-        response = mock_client.post("/scriptlet/inventory/item", json=save_data, headers={"X-User": "testuser"})
-        assert response.status_code == 200
-
 def test_delete_inventory_item(mock_client, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
     # Create then delete
     create_data = {"set": "testset", "name": "delete", "type": "task"}
@@ -86,19 +66,20 @@ def test_delete_inventory_item(mock_client, mock_git_ops, test_temp_dir, patch_t
         assert response.status_code == 200
 
 def test_get_inventory_code(mock_client, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
-    # Create then get code
+    # Create + draft + get code (the draft endpoint is the only way to
+    # write content; pyops no longer commits via the inventory API).
     create_data = {"set": "testset", "name": "code", "type": "task"}
-    save_data = {"set": "testset", "name": "code", "code": "# Sample code"}
-    
+    draft_data = {"set": "testset", "name": "code", "code": "# Sample code"}
+
     with patch("os.path.exists", return_value=True), \
          patch("app.lib.git.check_name_unique", return_value=True), \
          patch("os.makedirs"):
         mock_client.put("/scriptlet/inventory/item", json=create_data, headers={"X-User": "testuser"})
-    
+
     with patch("os.path.exists", return_value=True), \
          patch("os.listdir", return_value=["code.task.py"]):
-        mock_client.post("/scriptlet/inventory/item", json=save_data, headers={"X-User": "testuser"})
-    
+        mock_client.post("/scriptlet/inventory/draft", json=draft_data, headers={"X-User": "testuser"})
+
     with patch("os.listdir", return_value=["code.task.py"]):
         response = mock_client.get("/scriptlet/inventory/code?set=testset&name=code", headers={"X-User": "testuser"})
         assert response.status_code == 200
@@ -390,23 +371,6 @@ def test_inventory_item_put_exception(mock_client, mock_git_ops, test_temp_dir, 
         assert response.status_code == 500
         assert "git base error" in response.json()["detail"]
 
-def test_inventory_item_post_no_files(mock_client, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
-    # Test item_post with no files
-    save_data = {"set": "testset", "name": "nofile", "code": "pass"}
-    with patch("os.listdir", return_value=[]):
-        response = mock_client.post("/scriptlet/inventory/item", json=save_data, headers={"X-User": "testuser"})
-        assert response.status_code == 404
-        assert "not existing" in response.json()["detail"]
-
-def test_inventory_item_post_exception(mock_client, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
-    # Test item_post exception
-    save_data = {"set": "testset", "name": "exception", "code": "pass"}
-    with patch("os.listdir", return_value=["exception.task.py"]), \
-         patch("app.lib.git.write_content", side_effect=Exception("write error")):
-        response = mock_client.post("/scriptlet/inventory/item", json=save_data, headers={"X-User": "testuser"})
-        assert response.status_code == 500
-        assert "write error" in response.json()["detail"]
-
 def test_inventory_draft_post_no_files(mock_client, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
     # Test draft_post with no files
     save_data = {"set": "testset", "name": "nofile", "code": "pass"}
@@ -432,9 +396,10 @@ def test_inventory_item_del_no_files(mock_client, mock_git_ops, test_temp_dir, p
         assert "not existing" in response.json()["detail"]
 
 def test_inventory_item_del_exception(mock_client, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
-    # Test item_del exception
+    # Test item_del exception (DELETE now uses delete_file_unstaged —
+    # no commit, no push; just removes from working tree).
     with patch("os.listdir", return_value=["exception.task.py"]), \
-         patch("app.lib.git.delete_file_and_commit", side_effect=Exception("delete error")):
+         patch("app.lib.git.delete_file_unstaged", side_effect=Exception("delete error")):
         response = mock_client.delete("/scriptlet/inventory/item?set=testset&name=exception", headers={"X-User": "testuser"})
         assert response.status_code == 500
         assert "delete error" in response.json()["detail"]
@@ -505,25 +470,6 @@ def test_version_endpoint(mock_client):
         assert resp.status_code == 200
         assert resp.json() == {"version": "9.9.9"}
 
-
-def test_debug_port(mock_client):
-    with patch("app.lib.files.conf_users") as mock_conf_users:
-        mock_conf_users.return_value = {
-            "anonymous": {"debug_port": 5678},
-            "testuser": {"debug_port": 9999}
-        }
-        # anonymous
-        resp = mock_client.get("/debug/port")
-        assert resp.status_code == 200
-        assert resp.json() == {"port": 5678}
-        # testuser
-        resp = mock_client.get("/debug/port", headers={"X-User": "testuser"})
-        assert resp.status_code == 200
-        assert resp.json() == {"port": 9999}
-        # missing user port
-        resp = mock_client.get("/debug/port", headers={"X-User": "missing"})
-        assert resp.status_code == 400
-        assert resp.json()["detail"] == "No debug_port configured for user 'missing'"
 
 def test_controller_path_forwarding(mock_client, mock_controller_glob):
     # Test that additional path is forwarded in ZMQ msg

@@ -132,51 +132,6 @@ export class ScriptletService {
 
     }
 
-    async saveRemoteDraft(treeItem?: ScriptletTreeItem): Promise<void> {
-        if (!this.apiClient.hasValidConfig()) {
-            vscode.window.showWarningMessage('No valid PyOps configuration set. Please configure in settings.');
-            return;
-        }
-        if (!treeItem || !treeItem.set || !treeItem.scriptletName || !treeItem.scriptletType) return;
-        const set = treeItem.set!;
-        const name = treeItem.scriptletName!;
-        try {
-            const statusResponse = await this.apiClient.fetch(`/scriptlet/inventory/status?set=${set}&name=${name}`);
-            if (!statusResponse.ok) {
-                vscode.window.showErrorMessage('Failed to check draft status');
-                return;
-            }
-            const statusData = await statusResponse.json();
-            const hasUnstaged = (statusData as { has_unstaged: boolean }).has_unstaged;
-            if (!hasUnstaged) {
-                vscode.window.showInformationMessage(`No remote draft to save for ${name}; no unstaged changes.`);
-                return;
-            }
-            const codeResponse = await this.apiClient.fetch(`/scriptlet/inventory/code?set=${set}&name=${name}`);
-            if (!codeResponse.ok) {
-                vscode.window.showErrorMessage('No remote draft to save');
-                return;
-            }
-            const codeResponseData = await codeResponse.json();
-            const draftCode = (codeResponseData as { code: string }).code;
-            const data = { set, name, code: draftCode };
-            const saveResponse = await this.apiClient.fetch('/scriptlet/inventory/item', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(data)
-            });
-            if (saveResponse.ok) {
-                this.managerTreeProvider.refresh();
-                vscode.window.showInformationMessage(`Saved remote draft for ${name}`);
-            } else {
-                vscode.window.showErrorMessage(`Failed to save: ${saveResponse.statusText}`);
-            }
-        } catch (error: unknown) {
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            vscode.window.showErrorMessage(`Error saving draft: ${errorMessage}`);
-        }
-    }
-
     async diffLocalRemote(treeItem?: ScriptletTreeItem): Promise<void> {
         if (!this.apiClient.hasValidConfig()) {
             vscode.window.showWarningMessage('No valid PyOps configuration set. Please configure in settings.');

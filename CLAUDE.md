@@ -78,7 +78,7 @@ Both `job_setup.py` and `job_runner.py` receive config as the same JSON-serializ
 
 ### Debug mode
 
-Runner injects `debugpy.listen(('0.0.0.0', port))` — intentionally binds all interfaces for Docker remote debugging. If `#>AWAIT_DEBUG` is in `job.param`, appends `wait_for_client()`. VSIX sends `param='#>AWAIT_DEBUG'` for the attach workflow. The `/debug/port` endpoint returns the port for the requesting user from `conf_users()[owner]["debug_port"]`.
+Runner no longer injects a debugger. The client (VSIX, pyopsctl, anything else) composes the debugger bootstrap into `job.param` — VSIX emits a debugpy `listen(..., in_process_debug_adapter=True) + wait_for_client() + breakpoint()` block; pyopsctl emits a `RemotePdb(...).set_trace()` block. Pyops's debug-kind contribution is (a) source materialisation under `.debug/src/<set>/{task,library}/<name>.py` so path-mapping debuggers can resolve `{set}::{name}`, (b) no timeout, no retry. The `running` transition fires when `exec(param)` returns — universal across task/service/draft/debug. Port allocation is a client-side concern (`pyops.debugPorts` in VSIX settings, `debug_ports = [...]` in pyopsctl's profile); the server has no `/debug/port` route.
 
 ### VSIX (vsix/)
 

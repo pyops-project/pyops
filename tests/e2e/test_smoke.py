@@ -73,12 +73,13 @@ class TestTaskWorkflow:
         assert resp.status_code == 200
         return resp.json()
 
-    def _save_task_code(self, api, set_name, task_name, code):
+    def _save_task_code(self, api, set_name, task_name, code, commit_set):
         resp = api.post(
-            "/scriptlet/inventory/item",
+            "/scriptlet/inventory/draft",
             json={"set": set_name, "name": task_name, "code": code},
         )
         assert resp.status_code == 200
+        commit_set(set_name, f"add {task_name}")
 
     def _enqueue_task(self, api, set_name, task_name, param=""):
         resp = api.put(
@@ -111,10 +112,10 @@ class TestTaskWorkflow:
             time.sleep(0.5)
         pytest.fail(f"Job {job_id} did not reach terminal state within {timeout}s (last state: {job['state']})")
 
-    def test_create_and_run_simple_task(self, api, pyops_server, set_factory):
+    def test_create_and_run_simple_task(self, api, pyops_server, set_factory, commit_set):
         """Create a task that prints output, run it, verify it completes with stdout."""
         self._create_set_and_task(api, set_factory, "wf_test", "hello")
-        self._save_task_code(api, "wf_test", "hello", 'print("Hello from E2E test!")\n')
+        self._save_task_code(api, "wf_test", "hello", 'print("Hello from E2E test!")\n', commit_set)
 
         job_id = self._enqueue_task(api, "wf_test", "hello")
 
@@ -124,10 +125,10 @@ class TestTaskWorkflow:
         assert "Hello from E2E test!" in job["stdout"]
         pyops_server.assert_no_unexpected_errors()
 
-    def test_failing_task(self, api, pyops_server, set_factory):
+    def test_failing_task(self, api, pyops_server, set_factory, commit_set):
         """A task that raises an exception should end in 'failed' state."""
         self._create_set_and_task(api, set_factory, "wf_fail", "bad_task")
-        self._save_task_code(api, "wf_fail", "bad_task", 'raise RuntimeError("intentional failure")\n')
+        self._save_task_code(api, "wf_fail", "bad_task", 'raise RuntimeError("intentional failure")\n', commit_set)
 
         job_id = self._enqueue_task(api, "wf_fail", "bad_task")
 
@@ -138,11 +139,11 @@ class TestTaskWorkflow:
         # The intentional failure traceback is expected in server logs
         pyops_server.assert_no_unexpected_errors(allow=["intentional failure"])
 
-    def test_task_with_param(self, api, pyops_server, set_factory):
+    def test_task_with_param(self, api, pyops_server, set_factory, commit_set):
         """Task receives param (executed as code before main) and uses it."""
         self._create_set_and_task(api, set_factory, "wf_param", "echo")
         code = 'print(f"greeting={msg}")\n'
-        self._save_task_code(api, "wf_param", "echo", code)
+        self._save_task_code(api, "wf_param", "echo", code, commit_set)
 
         # param is exec'd as Python code before the main task code
         job_id = self._enqueue_task(api, "wf_param", "echo", param='msg = "hello_e2e"')
@@ -151,10 +152,10 @@ class TestTaskWorkflow:
         assert "greeting=hello_e2e" in job["stdout"]
         pyops_server.assert_no_unexpected_errors()
 
-    def test_task_lifecycle_in_job_list(self, api, pyops_server, set_factory):
+    def test_task_lifecycle_in_job_list(self, api, pyops_server, set_factory, commit_set):
         """After running a task, it appears in the job list with correct metadata."""
         self._create_set_and_task(api, set_factory, "wf_list", "listed")
-        self._save_task_code(api, "wf_list", "listed", 'print("listed")\n')
+        self._save_task_code(api, "wf_list", "listed", 'print("listed")\n', commit_set)
         job_id = self._enqueue_task(api, "wf_list", "listed")
 
         self._wait_for_job(api, job_id)
@@ -167,10 +168,10 @@ class TestTaskWorkflow:
         assert matching[0]["state"] == "done"
         pyops_server.assert_no_unexpected_errors()
 
-    def test_delete_completed_job(self, api, pyops_server, set_factory):
+    def test_delete_completed_job(self, api, pyops_server, set_factory, commit_set):
         """A completed job can be deleted."""
         self._create_set_and_task(api, set_factory, "wf_del", "deleteme")
-        self._save_task_code(api, "wf_del", "deleteme", 'print("bye")\n')
+        self._save_task_code(api, "wf_del", "deleteme", 'print("bye")\n', commit_set)
         job_id = self._enqueue_task(api, "wf_del", "deleteme")
         self._wait_for_job(api, job_id)
 
@@ -188,7 +189,7 @@ class TestTaskWorkflow:
 class TestScriptletCRUD:
     """Verify scriptlet create, read, update, delete via API."""
 
-    def test_create_read_update_delete(self, api, pyops_server, set_factory):
+    def test_create_read_update_delete(self, api, pyops_server, set_factory, commit_set):
         set_factory("crud_test")
 
         # Create
@@ -203,12 +204,13 @@ class TestScriptletCRUD:
         assert resp.status_code == 200
         assert "code" in resp.json()
 
-        # Update
+        # Update (draft only — pyops has no server-side commit pathway).
         resp = api.post(
-            "/scriptlet/inventory/item",
+            "/scriptlet/inventory/draft",
             json={"set": "crud_test", "name": "my_task", "code": 'print("updated")\n'},
         )
         assert resp.status_code == 200
+        commit_set("crud_test", "update my_task")
 
         # Read updated
         resp = api.get("/scriptlet/inventory/code?set=crud_test&name=my_task")

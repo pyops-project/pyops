@@ -7,6 +7,304 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 from 3.0.0 onward.
 
+## [3.1.0] — 2026-05-18
+
+Closes 3.0.0's open ends with three structural moves and one
+shutdown-contract fix:
+
+- **Debugger leaves the runner.** `kind=debug` jobs no longer have
+  pyops inject debugpy; the client (VSIX, pyopsctl, or anything else)
+  writes the debugger bootstrap into `param`.
+- **Commit/push leaves the inventory router.** The whole
+  `app.lib.git` commit surface is gone; the only sanctioned commit
+  pathway is the new sets-view "commit drafts" action.
+- **The operator surface VSIX can't reach is now its own terminal
+  CLI: `pyopsctl`.** Detached debug, arbitrary multi-line `param`,
+  interactive pdb sessions, scripted job/scriptlet ops. Distro
+  python3 + python3-requests, no venv, no pip.
+- **`ServiceListener.async_poll()` honours SIGTERM** (mirrors
+  `listen()`'s "TERM" return). Causal-style services that polled
+  past SIGTERM and got SIGKILL'd after the 15s grace window now exit
+  on the first poll cycle.
+
+### Added
+- **Sets view: "commit drafts" per-set action.** New `check`-icon button
+  alongside pull / update-deps / switch / remove that stages, commits
+  and pushes every unstaged scriptlet in the set in one batch. The
+  button is enabled only when `git status --porcelain` reports drafts;
+  clicking it opens a modal that previews the porcelain output and
+  accepts an optional commit message (empty → `Commit drafts in <set>
+  by <user>`). Backed by a new `set_commit_drafts` task in the internal
+  set; routes through the data service at
+  `/controller/internal/sets/commit_drafts/<name>`. Refuses on a tag;
+  no-op when nothing is unstaged; skips push when no remote.
+- New data-service endpoint `GET /controller/internal/sets/status/<name>`
+  returning the porcelain status (powers the modal preview), and a new
+  `has_drafts: bool` field on every `/list` row.
+- **Manager view: "Run Draft" per-task action.** A new `play_arrow`-icon
+  button next to delete/edit on every task row enqueues a `kind=draft`
+  job (empty `param`, `drop_done=false`) via `PUT /scriptlet/job/item`.
+  Lets the operator iterate-run without opening the editor; output is
+  inspected from the Jobs view.
+- **Zsh tab completion for `pyopsctl`.** `ctl/install.sh` now generates
+  `~/.local/share/zsh/site-functions/_pyopsctl` via
+  `register-python-argcomplete` and appends a marker-tagged
+  `fpath=(…)` line to `~/.zshrc` (idempotent; uninstall removes both).
+  Requires the optional `python3-argcomplete` distro package; absent it
+  the install step is a no-op with a one-line hint. `pyopsctl.__main__`
+  gained `argcomplete.autocomplete(parser)` wrapped in `try/except
+  ImportError`, so the CLI runs unchanged on hosts without the package.
+
+### Fixed
+- **`ServiceListener.async_poll()` honours SIGTERM.** Pre-fix, the
+  non-blocking poll never checked `kill_now`, so causal-style services
+  (e.g. `system::os_service`) kept polling past SIGTERM until the
+  runner's 15s SIGKILL escalation marked the row `failed`. `async_poll`
+  now returns `[(b"", "TERM")]` once the signal handler has flipped
+  `kill_now`, mirroring `listen()`'s `"TERM"` return. Regression tests
+  at all three layers (`tests/unit/lib/test_lib_pyops.py`,
+  `tests/integration/lib/test_zmq_integration.py`,
+  `tests/e2e/test_shutdown.py::test_async_poll_service_acks_term_within_grace_window`).
+
+### CI
+- `test:e2e` step now also runs `tests/pyopsctl/e2e/`; `test:pyopsctl`
+  step is scoped to `tests/pyopsctl/unit tests/pyopsctl/integration`
+  only. Root-level `tests/conftest.py` carries the `--e2e` flag and the
+  auto-skip for both e2e dirs.
+- `python3-argcomplete` added to the `test:e2e` and `test:pyopsctl`
+  before_script apt-install lines so the optional completion path is
+  exercised under CI.
+- New `build:pyopsctl` stage parallel to `build:` (VSIX). Produces
+  `ctl/dist/pyopsctl_<version>_all.deb` via `ctl/build.sh` (plain
+  `dpkg-deb`, no fpm/Ruby, no debhelper/dh-python). Targets Ubuntu
+  24.04 (noble) and Debian 13 (trixie) as the floor; Depends pins
+  python3 (>= 3.12), python3-requests; Recommends python3-argcomplete.
+  Ships the package source at `/usr/lib/python3/dist-packages/pyopsctl`,
+  launcher at `/usr/bin/pyopsctl`, and pre-generated zsh + bash
+  completion files at the apt-managed system paths
+  (`/usr/share/zsh/vendor-completions/_pyopsctl`,
+  `/usr/share/bash-completion/completions/pyopsctl`) — so an
+  apt-install user gets tab completion with zero rc edits.
+- `release` stage now uploads the deb alongside the VSIX as a Generic
+  Package (`pyops-pyopsctl/<version>/`), tracked as an additional
+  `--assets-link` on the GitLab Release.
+- New `test:pyopsctl:install` stage installs the built deb in a clean
+  apt environment and smoke-tests it: launcher resolves at `/usr/bin`
+  with no `PYTHONPATH`, `pyopsctl version` matches the project VERSION
+  file (proves the baked `_version.py` is the one imported), the
+  argcomplete protocol returns top-level groups, bash + zsh completion
+  files land at the apt-managed system paths, zsh `compinit` registers
+  the completion from `$fpath`, and `apt-get remove` cleanly drops
+  every shipped file.
+
+### Operations
+- **Container-wide pip configuration via compose bind.** Bind a host
+  `pip.conf` to `/etc/pip.conf` in the pyops container to route every
+  pip invocation — bootstrap pip in `ensure_set_environment`, every
+  per-set venv's pip, every user `#!pip <pkg>` directive — through one
+  config file. pip reads `/etc/pip.conf` as its site-wide config
+  automatically, so no pyops code is involved; standard Linux
+  subprocess + system-config mechanic. Documented in `README.md` §
+  Docker Compose. No new pyops feature, just a deployment pattern
+  that's now spelled out.
+
+### Removed
+- **Per-file commit/push is gone.** The inventory's
+  `POST /scriptlet/inventory/item` route (the only "save and commit"
+  pathway) is deleted; `PUT` (create) and `DELETE` no longer commit —
+  both leave the change as an unstaged working-tree edit that
+  `set_commit_drafts` picks up. The corresponding clients went with it:
+  VSIX's `pyops.saveRemoteDraft` command, the Manager view's per-row
+  save button + `saveRevision`, the editor templates' Save button
+  (drafts still auto-save every 1s), and pyopsctl's `scriptlet save`
+  subcommand.
+- **The whole commit/push surface in `app.lib.git`.** Removed
+  `_add_commit_push_locked`, `perform_git_add_commit_push`,
+  `batch_commit`, and `delete_file_and_commit`. `create_scriptlet` no
+  longer takes a `commit_msg`. New `delete_file_unstaged` replaces the
+  old delete contract (working-tree only). The internal `set_*` tasks
+  drive every commit/push directly via `git` subprocess invocations
+  under `repo_lock` — pyops's FastAPI surface no longer touches the
+  index.
+
+### Changed
+- **Debugger injection moved from pyops to the client.** `kind=debug` no
+  longer imports debugpy, installs it, or starts a listener. The client
+  (VSIX, pyopsctl, or any other operator surface) writes the debugger
+  bootstrap into `param` — typically a `debugpy.listen() / wait_for_client()
+  / breakpoint()` block, but also `gdbserver --attach $$ :<port>`,
+  `cuda-gdbserver`, `lldb-server`, or anything else that speaks a wire
+  the consumer understands. pyops's role shrinks to:
+  - `kind=debug` lifecycle: no timeout, no retry.
+  - Source-on-disk materialisation under `.debug/src/<set>/{task,library}/<name>.py`
+    so any source-path-mapping debugger works without per-debugger plumbing.
+  - The `running` state transition: now fires on a `state=running` ZMQ
+    completion sent by the job process the moment `exec(param)` returns,
+    rather than on a `has_debugpy_adapter(port)` poll. Universal — task,
+    service, draft, and debug all flip `loading` → `running` via the
+    same mechanism.
+
+### Removed
+- `GET /debug/port` HTTP route and the `users.<owner>.debug_port` config
+  field. Port allocation is a client-side concern — each operator runs
+  with their own port pool, configured in the client.
+- `app/lib/job.py`: `get_debug_port`, `has_debugpy_adapter`,
+  `get_debugpy_adapter_pid`, `terminate_debugpy_adapter`,
+  `validate_debug_prerequisites`.
+- `Job.debugpy_pid` ORM column (still present in existing SQLite files;
+  inert, not read).
+- `debugpy` from `CORE_DEPS` in `app/lib/sets.py` and
+  `app/internal/set_update_deps.task.py`. Debug-kind clients pull
+  debugpy via a `#!pip debugpy` directive in `param` when they need it.
+- The `#>AWAIT_DEBUG` substring check in the runner. The directive is now
+  meaningless to pyops; clients that still emit it (current pyopsctl,
+  current VSIX) get it carried verbatim through the job's `param`,
+  ignored by the runtime.
+- `has_debugpy_adapter` 5-second readiness poll in the main loop.
+  Debug jobs spawn exactly like task/service/draft.
+
+### Changed (pyopsctl)
+- **pyopsctl debug now drives stdlib pdb instead of DAP.** The CLI
+  composes a remote-pdb bootstrap into the job's `param`, leases a TCP
+  port from the profile's `debug_ports` pool, and on `attach` spawns
+  a session daemon that holds the TCP connection to remote-pdb for
+  the lifetime of the session. Rationale: pyopsctl is terminal/agent-
+  shaped; pdb's text REPL maps 1:1 to the CLI verbs and has zero
+  external client-library dependency. The DAP path that VSIX uses
+  (debugpy + VSCode's internal client) is unaffected — that pathway
+  rewrite ships separately.
+- New profile field `debug_ports = [...]` in
+  `~/.config/pyops/config.toml`. Lease store at
+  `$XDG_RUNTIME_DIR/pyops/debug-ports/<profile>/<port>.lease`
+  (operator-only, mode 0600), concurrent-safe via `O_CREAT|O_EXCL`,
+  stale-lease reclaim via server job-state check.
+
+### Removed (pyopsctl)
+- `ctl/pyopsctl/dap/` (DapClient + wire) — replaced by
+  `ctl/pyopsctl/pdb/client.py` (PdbClient).
+- `ctl/pyopsctl/session/resolve.py` — friendly-name ↔ DAP frame path
+  resolver. No longer needed: pdb sees real `.debug/src/...` paths
+  directly; reverse-mapping is a single regex in the daemon.
+- `pyopsctl debug` verbs `pause`, `var`, `threads`. Pause needs a
+  server-side signal channel that doesn't exist yet; `var` (DAP
+  variablesReferences) has no pdb equivalent — operator drills with
+  `evaluate 'obj.attr'`; `threads` would need a multi-thread pdb
+  fork, not in scope.
+- `commands/debug._merge_debug_param` and the `#>AWAIT_DEBUG`
+  directive: param is now composed as the pdb bootstrap + (optional)
+  user preamble appended below it.
+- `GET /debug/port` HTTP hop (the route is gone server-side anyway).
+  pyopsctl resolves the port locally via `ports.find_port_for_job`.
+
+### Added (pyopsctl — operator CLI)
+
+Designed to be driven from a terminal by both a human operator and
+agents (LLM-driven or otherwise) and shell scripts — no venv, no
+pip-installed Python deps, distribution packages only (`python3` +
+`python3-requests`). Installed via `./ctl/install.sh` (symlinks the
+launcher into `$XDG_BIN_HOME`, defaults to `~/.local/bin/`) or via
+the released `.deb` (`sudo apt install ./pyopsctl_*.deb` — drops at
+apt-managed system paths, completion wired without rc edits).
+
+- **`pyopsctl` CLI** at `/ctl/`, parallel to `app/` and `vsix/`.
+  Stdlib `argparse` dispatch, no Click/Typer. Speaks the existing
+  pyops HTTP API; no new server endpoints introduced.
+- **Per-profile credentials** in `~/.config/pyops/config.toml` (mode
+  0600, refused on broader perms). Each profile carries `url`, `user`,
+  and optional `api_key`. The auth pathway is implicit: `api_key`
+  present → `Authorization: Basic base64(user:api_key)` (nginx in
+  front of pyops decodes and injects `X-User`); `api_key` absent → no
+  `Authorization`, `X-User` falls through to `profile.user` or
+  `"pyopsctl"`. Useful for unproxied dev and bootstrap before
+  credentials exist.
+- **Detached debug jobs**, the load-bearing feature VSIX can't reach.
+  `pyopsctl debug start SET NAME` defaults to a detached debug job —
+  debugpy listens, the runner does not `wait_for_client()`. `--await`
+  injects `#>AWAIT_DEBUG`. `--param TEXT` / `--param-file PATH` carry
+  an arbitrary multi-line parameter (treated as Python script that may
+  itself include `#`-prefixed directives like `#!pip foo`). When both
+  flags are given the merge prepends `#>AWAIT_DEBUG\n` so the user's
+  body stays a valid script with its own directives intact.
+- **Command groups** covering: `scriptlet` (list/sets/status/repo-status/
+  get-code/create/draft/save/delete/diff); `job`
+  (list/view/run/cancel/delete/download/cancel-all/clean); `debug`
+  (start/attach/port/stop); `health` / `metrics` / `version`; `config`
+  (show/check).
+- **Three output modes** — default (human, aligned columns), `--json`
+  (server payloads passed through verbatim; multi-call composites
+  wrapped as `{"data": …, "meta": …}`), and `--quiet` (IDs only, one
+  per line; designed for shell pipelines).
+- **Exit codes** — `0` ok, `2` usage, `3` config/auth, `4` HTTP 4xx,
+  `5` HTTP 5xx, `6` timeout, `7` server-unreachable.
+- **Test coverage**: 42 unit tests (config, client, output, the merge
+  truth-table, argparse-to-request-body wiring) + 10 integration tests
+  (pyopsctl ↔ pyops contract against a real server) + 3 e2e tests
+  (pyopsctl + pyops + debugger TCP client interplay; verifies the
+  runner actually opens debugpy's listener on the reported port and
+  tears it down on `debug stop`). New CI stage `test:pyopsctl` runs
+  all three suites. The existing `test:`, `test:e2e`, `test:vsix*`,
+  `build:`, `build:image:`, and `release:` stages are untouched.
+
+- **Interactive debugger control** layered on top of `debug attach`:
+  the CLI spawns a long-lived **session daemon** that holds the DAP
+  TCP connection to debugpy on the pyops runner. State dir under
+  `$XDG_RUNTIME_DIR/pyops/sessions/<job_id>/` (or `~/.cache/...`);
+  per-job Unix domain socket carries newline-delimited JSON ops.
+  Subsequent CLI verbs run against that daemon:
+  - `state` / `stack` / `locals` / `globals` / `var --ref N` /
+    `evaluate "EXPR"` for inspection
+  - `break set/list/remove` for breakpoints (line + optional condition)
+  - `step` / `step-in` / `step-out` / `continue` / `pause` for control
+  - `threads` / `source <set>::<name>` for context
+  - `detach` / `terminate` for tearing down
+  - `session list` / `session info` for daemon-state visibility
+
+  Inline DAP client under `ctl/pyopsctl/dap/` (~300 LOC, stdlib socket
+  + json) handles the `Content-Length`-framed wire and the debugpy
+  bootstrap quirk where the `attach` response is held until
+  `configurationDone` arrives.
+
+  The resolver learns `<set>::<name>` ↔ absolute-path mappings from
+  stack frames as stops arrive (debugpy's `loadedSources` isn't
+  reliable). `break set` against a not-yet-known friendly ref stores
+  a pending breakpoint and applies it when a future stop brings the
+  path in.
+
+- **Vertical state-dump output** (default human mode) for every
+  callstack-changing verb: four sections separated by 60-hyphen
+  rules — `globals`, `locals`, `code (set::name)` with `→` on the
+  current line, `callstack` (frame 0 first). 20-line code window
+  centered on the current line; a separate `debug source <set>::<name>`
+  prints the full file. `--json` and `--quiet` remain available for
+  tooling.
+
+### Known limitations (planned 3.1.x follow-ups)
+
+- **No re-attach after detach.** Once the operator detaches a pdb
+  session the underlying TCP connection is gone; the running job
+  doesn't re-listen. Recovery is to start a fresh debug job.
+- **Manager-started controller previews** still depend on a single
+  `draft`-kind controller service running; concurrent operators all
+  hit the same one (no per-user preview isolation yet).
+
+### Documentation
+
+- `docs/pyops_guide.md` § pyopsctl — installation (checkout +
+  `.deb`), config example, full command reference, worked operator +
+  agent flows. (Supersedes the planned standalone `docs/pyopsctl.md`
+  from the initial pyopsctl drop — content merged into the unified
+  guide.)
+- `docs/insights_ctl.md` — pyopsctl architecture deep-dive: session
+  daemon, control protocol, port-pool leasing, source-path
+  resolution.
+- `docs/insights_app.md` § `ServiceListener` — async_poll's TERM
+  sentinel contract.
+- `docs/pyops_rules.md` § scriptlet service shutdown — operator-facing
+  TERM-handling rule for causal-style services.
+- `ctl/README.md` — prerequisites + install paths (deb + checkout).
+- `README.md` § Docker Compose — pip.conf bind-mount pattern for
+  container-wide pip configuration.
+
 ## [3.0.0] — 2026-05-15
 
 First stable release. Highlights below; full technical detail in

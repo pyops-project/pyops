@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
+import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
 
@@ -20,8 +21,13 @@ export async function createTestScriptlet(set: string, name: string, type: strin
     throw new Error(`Failed to create test scriptlet: ${createResponse.statusText}`);
   }
 
-  // Then update with the code
-  const updateResponse = await fetch(`${serverUrl}/scriptlet/inventory/item`, {
+  // Then draft the code into the file. Pyops no longer exposes a
+  // per-file commit/push route — the inventory's POST /item is gone,
+  // and POST /draft is the only write path. The integration tests run
+  // against the working-tree content (Manager tree reflects unstaged,
+  // debug-kind reads unstaged), so leaving the file uncommitted is
+  // what every existing assertion already expects.
+  const updateResponse = await fetch(`${serverUrl}/scriptlet/inventory/draft`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -168,12 +174,61 @@ export async function pollTreeItemIcon(provider: any, parentLabel: string | unde
   throw new Error(`Item ${expectedLabel} did not show ${expectedIconId} icon within ${timeoutMs}ms`);
 }
 
-// Cleanup all test jobs (anonymous_test_*) across states for clean test env
+// Poll TCP connect to host:port until accept(), or throw on timeout.
+// Used as the "debug job is ready to attach" signal: under the new
+// server contract, state=running for kind=debug fires only AFTER the
+// client attaches + continues (because `exec(param)` blocks at
+// `debugpy.wait_for_client()` until then). The right readiness check
+// for "may I attach now?" is "is the TCP listener bound?".
+export async function waitForTcpListen(host: string, port: number, timeoutMs: number = 60000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const reachable = await new Promise<boolean>((resolve) => {
+      const sock = new net.Socket();
+      const cleanup = () => { try { sock.destroy(); } catch (_) { /* noop */ } };
+      sock.setTimeout(2000);
+      sock.once('connect', () => { cleanup(); resolve(true); });
+      sock.once('error', () => { cleanup(); resolve(false); });
+      sock.once('timeout', () => { cleanup(); resolve(false); });
+      sock.connect(port, host);
+    });
+    if (reachable) return;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  throw new Error(`TCP listener at ${host}:${port} not reachable within ${timeoutMs}ms`);
+}
+
+// Wait for vscode.debug.activeDebugSession to become non-undefined.
+// Returns the session, or throws on timeout. Use right after a
+// `vscode.debug.startDebugging` call to assert the session actually
+// came up — `startDebugging` returns a boolean for "intent accepted",
+// not "session up".
+export async function waitForActiveDebugSession(timeoutMs: number = 10000): Promise<vscode.DebugSession> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (vscode.debug.activeDebugSession) return vscode.debug.activeDebugSession;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new Error(`No active debug session within ${timeoutMs}ms`);
+}
+
+// Cleanup all test jobs (anonymous_test_*) across states for clean test env.
+//
+// Note on the 45s timeout: under the new server contract, unattached
+// debug jobs (the typical state mid-test) block in
+// `debugpy.wait_for_client()` and only respond to the runner's SIGKILL
+// after the SIGTERM grace period (~15s server-side, set by
+// `terminate_job_processes`'s `graceful_timeout`). The earlier 15s
+// timeout here raced that exactly. 45s comfortably covers grace +
+// SIGKILL + DB write + REST list refresh.
 export async function cleanupJobs(waitForPortRelease: boolean = false): Promise<void> {
   const serverUrl = process.env.PYOPS_SERVER_URL || 'http://localhost:8000';
-  const timeoutMs = 15000;
+  const timeoutMs = 45000;
   const pollIntervalMs = 500;
-  const activeStates = ['todo', 'dequeued', 'running'];
+  // `loading` belongs here under the new server contract: debug jobs
+  // sit in loading until a debugger attaches (because exec(param)
+  // blocks at debugpy.wait_for_client). Cancellable just like running.
+  const activeStates = ['todo', 'dequeued', 'loading', 'running'];
   const terminalStates = ['done', 'failed', 'cancelled', 'killed', 'remove', 'removed'];
 
   // Cancel test jobs (todo/dequeued/running)

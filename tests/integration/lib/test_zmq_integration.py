@@ -163,3 +163,69 @@ class TestZMQIntegration:
             listener.close()
             if hasattr(client, 'close'):
                 client.close()
+
+    def test_async_poll_surfaces_term_to_nonblocking_loop(self):
+        """Regression: a non-blocking causal-style loop driven by
+        async_poll() must see the TERM sentinel when SIGTERM lands, exit
+        promptly, and not race against the runner's 15s SIGKILL.
+
+        Pre-fix, async_poll() ignored kill_now → the loop never saw TERM
+        → in production the runner SIGKILL'd at 15s and the row was
+        marked `failed`. This integration test drives the real signal
+        handler (exit_gracefully → kill_now=True) so the path between
+        signal arrival and TERM delivery is exercised end-to-end.
+        """
+        import signal as _signal
+
+        listener = ServiceListener("test_user", "test_async_term")
+        stop_event = threading.Event()
+        observed = {"saw_term": False, "exit_at": None, "iterations": 0}
+
+        def causal_style_loop():
+            # Mirror the production pattern in
+            # system::causal.library.py / PyOpsListenerVortex.poll().
+            while not stop_event.is_set():
+                observed["iterations"] += 1
+                for _identity, msg in listener.async_poll():
+                    if msg == "TERM":
+                        observed["saw_term"] = True
+                        observed["exit_at"] = time.monotonic()
+                        return
+                time.sleep(0.05)
+
+        thread = threading.Thread(target=causal_style_loop, daemon=True)
+        thread.start()
+        try:
+            # Let the loop run for a few iterations so we know it's
+            # genuinely sitting in the async_poll path, not exiting on
+            # initialisation.
+            time.sleep(0.2)
+            assert observed["iterations"] > 1, "loop never started polling"
+
+            # Drive the real SIGTERM handler. ServiceListener installed
+            # signal.signal(signal.SIGTERM, self.exit_gracefully) at
+            # __init__, so this is the same code path production hits.
+            sent_at = time.monotonic()
+            os.kill(os.getpid(), _signal.SIGTERM)
+
+            # The loop should observe TERM and return within a couple of
+            # poll cycles (each 50ms). 2s is a generous ceiling that is
+            # nonetheless an order of magnitude below the 15s SIGKILL
+            # window the regression burned through.
+            thread.join(timeout=2.0)
+            assert not thread.is_alive(), (
+                "loop did not exit within 2s of SIGTERM — async_poll "
+                "is not surfacing kill_now as the (b'', 'TERM') sentinel"
+            )
+            assert observed["saw_term"], "loop returned without seeing TERM"
+
+            elapsed = observed["exit_at"] - sent_at
+            assert elapsed < 1.0, (
+                f"loop took {elapsed:.3f}s to see TERM — should be ~one poll cycle"
+            )
+
+        finally:
+            stop_event.set()
+            if thread.is_alive():
+                thread.join(timeout=1.0)
+            listener.close()

@@ -72,7 +72,7 @@ graph TD
 | `app/lib/files.py` | Config access (`etc/pyops.json`) |
 | `app/lib/git.py` | Scriptlet storage in Git repos |
 | `app/lib/runner.py` | DB-level job utilities: `enqueue`, `query`, `find`, `cancel`, `remove`, `drop` |
-| `app/lib/job.py` | Execution utilities: `send_completion`, `terminate_debugpy_adapter`, `process_imports`, `process_install_lines`, `process_code_installs` (acquires `sets.set_install_lock`), `kill_proc_tree`, `get_process_tree`, `get_debug_port`, `get_debugpy_adapter_pid`, `has_debugpy_adapter`, `validate_debug_prerequisites`, `loadLib`, `install_git_repo` |
+| `app/lib/job.py` | Execution utilities: `send_completion`, `process_imports`, `process_install_lines`, `process_code_installs` (acquires `sets.set_install_lock`), `kill_proc_tree`, `get_process_tree`, `loadLib`, `install_git_repo` |
 | `app/lib/pyops.py` | `Control` (API proxy), `ServiceListener`, `ServiceClient` |
 | `app/lib/sets.py` | Runner-side per-set venv primitives only: `ensure_set_environment`, `set_install_lock`, bootstrap-lock helpers, `CORE_DEPS`. The user-facing clone/create/pull/switch/remove/list/update-deps operations live as scriptlets under `app/internal/` and are reached via `/controller/internal/sets`. |
 | `app/internal/` | Pyops-internal scriptlet bundle: sets controller, data service, six `set_*` sub-tasks, shared library, jslibrary modal. Self-hosted admin operations — the runtime running these is the same one user code uses. |
@@ -96,7 +96,7 @@ graph TD
 - `data`: `{"jobs": "data/jobs", "git": "data/git", "db": "data/app.db"}`
 - `runner`: `{"venv": "data/venv", "pkg": "data/pkg", "git_pull_interval": 60, "drop_done_delay_seconds": 60}`
 - `log`: `{"loglevel": "debug"}`
-- `users`: `{"anonymous": {"debug_port": 45678}}`
+- `users`: per-owner table; pyops itself reads nothing more than the keys to identify owners. Any client-side debug-port pool, credentials, etc. live in client configs (VSIX workspace settings, pyopsctl profile TOML), not here.
 
 ### Access Methods
 
@@ -104,7 +104,7 @@ graph TD
 - `conf_runner()`: runner section (venv, pkg, git_pull_interval, drop_done_delay_seconds)
 - `conf_web()`: web section (bind)
 - `conf_log()`: log section (loglevel)
-- `conf_users()`: users section (per-user debug_port)
+- `conf_users()`: users section (per-owner table; pyops reads owners only)
 - `get(path)`: serves static files from `app/files/`
 
 ---
@@ -125,8 +125,7 @@ SQLite file-based DB in `data/app.db`, thread-safe WAL mode.
 | drop_done | Boolean | auto-remove on completion |
 | max_retries | Integer | default=0 |
 | param | String | job parameter/code snippet |
-| pid | Integer | set when running |
-| debugpy_pid | Integer | debug jobs only |
+| pid | Integer | set on spawn; stays set across `loading`→`running`→terminal |
 | detail | String | error message or traceback |
 | overrides | String | JSON dict for debug/VSIX local code |
 | start, end | DateTime | timestamps |
@@ -171,10 +170,8 @@ Manages scriptlet files as Git repos in `data/git/{set}/`. All mutating operatio
 - `get_repo_path(set)`: resolves `data/git/{set}/`; initializes `.git`, `.gitignore`, `README.md` if missing
 - `read_content(repo, name, type_, committed, strict)`: reads working tree (default) or `git show HEAD:` for committed; `strict=True` raises if no committed version
 - `write_content(repo, name, type_, content)`: writes file under `repo_lock`
-- `create_scriptlet(set_name, name, type_, content, commit_msg)`: atomic unique-name check + file write + commit under a single `repo_lock` span, closing the race where two concurrent same-name creates would each pass `check_name_unique` before either writes; raises `FileExistsError` on duplicate
-- `perform_git_add_commit_push(repo, file_path, msg)`: add + commit + push (skips push if no remote; raises `GitConflictError` on tag)
-- `batch_commit(repo, msg, rel_files)`: add all or specific files + commit + push
-- `delete_file_and_commit(repo, file_path, msg)`: `git rm` + commit + push
+- `create_scriptlet(set_name, name, type_, content)`: atomic unique-name check + working-tree write under one `repo_lock` span (closes the race where two concurrent same-name creates pass `check_name_unique` before either writes); raises `FileExistsError` on duplicate. No commit — the new file shows up as untracked and is folded into the next `set_commit_drafts` batch.
+- `delete_file_unstaged(repo, file_path)`: working-tree-only deletion under `repo_lock`; no `git rm`, no commit, no push. Idempotent on a missing path.
 - `list_scriptlets()`: scans all sets, returns `[{"set", "name", "type"}, ...]` sorted
 - `get_repo_status(set)`: returns `{"branch", "is_tag", "flag"}`
 - `rollback_staged(set, name, type_)`: backs up to `.bck`, then `git checkout HEAD`
@@ -209,7 +206,7 @@ The `internal` set is a fixed bundle: the git lib resolves the set name `"intern
 
 Runner-side primitives in `app/lib/sets.py` (still used directly by the runner and by `set_install_lock` callers):
 
-- `ensure_set_environment(name)`: idempotent — creates `data/venv/{name}` and pip-installs `CORE_DEPS` (pyzmq, msgpack, psutil, debugpy, requests) under `_bootstrap_lock`. Skipped entirely for `name == "internal"` — those scriptlets run in pyops's own host venv via `sys.executable`.
+- `ensure_set_environment(name)`: idempotent — creates `data/venv/{name}` and pip-installs `CORE_DEPS` (pyzmq, msgpack, psutil, requests) under `_bootstrap_lock`. Skipped entirely for `name == "internal"` — those scriptlets run in pyops's own host venv via `sys.executable`. Debug-kind jobs whose client bootstrap needs an extra package (e.g. `debugpy`, `gdbserver` companion libs) pull it via a `#!pip ...` directive in `param`, not from CORE_DEPS.
 - `set_install_lock(name)`: `fcntl.flock` context manager on `data/git/{name}/.install.lock`, used both by `process_code_installs` and by the `set_*` tasks.
 
 ### Status Detection
@@ -278,7 +275,8 @@ graph TD
 ```
 
 - `loadJob(job_id)`: fetches from DB, sets state `loading`, returns owner, set, name, kind, param, code, overrides, max_retries
-- `assignJob(job_id, pid)`: sets state `running`, start timestamp, pid; for debug also resolves and stores `debugpy_pid`
+- `assignJob(job_id, pid)`: sets pid + start timestamp on the row. **Does not** change state — the job process flips `loading` → `running` itself, via a `state=running` ZMQ completion message after its `exec(param)` returns. See `markRunning`.
+- `markRunning(job_id)`: flips `loading` → `running` on the param-done signal from the job process. Honours the same terminal-state CASE protection as `finishJob`, so a cancel that committed before the signal arrived survives.
 - `finishJob(job_id, state, detail)`: atomic UPDATE with CAS — preserves any committed `cancel`/`cancelling` state, otherwise applies the supplied state; service jobs with drop_done and state "done" immediately get re-targeted to "remove"; if `old_pid` is set, spawns a daemon `terminate_job_processes` thread to clean up the process tree
 - `postTerm(job_id, killed=False)`: if state "remove" → delete job + workspace; else → set state "cancelled" with end/pid cleared
 - `terminate_job_processes(job_id, pid, ...)`: HTTP-cancel path — SIGTERM the process tree, poll up to 15s, SIGKILL if still alive, then `postTerm`. Not used in the shutdown path (see Shutdown section below); the daemon-thread escalation is fine while the runner is otherwise idle, but it gets killed when `main()` returns, which is why shutdown needs its own synchronous variant.
@@ -315,10 +313,7 @@ After `_shutdown_job_processes` returns, the runner drains any final ZMQ events,
 
 #### Debug Spawn
 
-1. `validate_debug_prerequisites(owner)` — resolves port from `conf_users`
-2. Spawn subprocess
-3. Poll `has_debugpy_adapter(port)` up to 50×0.1s (5s); if adapter absent and process alive → `finishJob("failed", ...)`
-4. `assignJob` only called after adapter confirmed up
+Debug jobs spawn exactly like every other kind — no special readiness probe, no port allocation, no debugger-specific cleanup. The runner doesn't import or know about any debugger. The only debug-specific behaviour lives in `run_debug_job` (file materialisation under `.debug/src/`, `kind=debug` overrides) and in the job lifecycle (no retry, no execution timeout). The client's `param` block is what brings a debugger up (`debugpy.listen()`, `gdbserver --attach $$ :<port>`, ...); the `state=running` ZMQ completion that flips `loading` → `running` fires after that param block returns, so consumers polling job state observe ready := "debugger bootstrap finished".
 
 ### Job Setup (`app/job_setup.py`)
 
@@ -433,7 +428,7 @@ Installs run inside `job_setup.py` — before `os.execv` into `job_runner.py`. B
 UI button → `POST /controller/internal/sets/update_deps` (via the jslib modal) → `internal::data` service routes to → `set_update_deps.task.py` enqueued with `drop_done=True`. The modal polls `/scriptlet/job/item?id=<id>` and tails the live stdout/stderr while the task runs.
 
 1. Acquires `set_install_lock(name)` for the full duration; running jobs in the same set queue behind, other sets are unaffected.
-2. Upgrades pyops core deps: `pip install --upgrade pip setuptools wheel` then `pip install --upgrade pyzmq msgpack psutil debugpy requests`. Two calls because pip cannot upgrade itself in the same invocation that installs other packages (certifi vendor path issue).
+2. Upgrades pyops core deps: `pip install --upgrade pip setuptools wheel` then `pip install --upgrade pyzmq msgpack psutil requests`. Two calls because pip cannot upgrade itself in the same invocation that installs other packages (certifi vendor path issue).
 3. Walks `data/git/{name}/*.py` for `#!`-prefixed install directives. Each directive is annotated with `source` (file basename) and `mtime` (filesystem mtime, so unstaged edits count — git commit time would miss them).
 4. **Conflict resolution**: aggregate by canonical pip package name (PEP 503 normalized) and git URL.
    - All scriptlets agree on the spec/branch → use the unified spec.
@@ -447,30 +442,53 @@ UI button → `POST /controller/internal/sets/update_deps` (via the jslib modal)
 
 ### Debug Mode
 
-Debug jobs are launched by the runner with `kind="debug"`.
+Debug jobs are launched by the runner with `kind="debug"`. **pyops does not import, install, or start any debugger** — the client (VSIX, pyopsctl, or any other operator surface) writes the debugger bootstrap into `param`. The server-side contribution is the lifecycle shape and the file materialisation that makes source-path-mapping debuggers work.
 
-#### Runner-Side (before spawn)
+#### Runner-side (before spawn)
 
-1. `validate_debug_prerequisites(owner)` resolves port from `conf_users()[owner]["debug_port"]` (must be int 1025–65535)
-2. `enqueue()` (in `lib/runner.py`): marks any existing dequeued/running debug job for the owner as `state="cancel"` before creating the new todo job
-3. After spawn: polls `has_debugpy_adapter(port)` for up to 5s; fails job if adapter doesn't appear
+1. `enqueue()` (in `lib/runner.py`): marks any existing dequeued/running debug job for the same `{owner, set, name}` as `state="cancel"` before creating the new todo job, so a re-issued debug session supersedes the prior one.
+2. Spawn `job_setup.py` → `os.execv` → `job_runner.py` — same path as every other kind. No readiness probe, no port allocation, no debugger-specific cleanup. If the param's bootstrap fails to bind, the job process raises and `state=failed` propagates back the normal way.
 
-#### job_runner-Side (inside subprocess)
+#### job_runner-side (inside subprocess)
 
-1. `terminate_debugpy_adapter(owner, port)`: kills any existing debugpy adapter process on the port
-2. `pip install debugpy` in the set venv
-3. Execs: `debugpy.log_to('.debug/adapter'); debugpy.listen(('0.0.0.0', port))`
-   - If `#>AWAIT_DEBUG` in param: also execs `debugpy.wait_for_client(); debugpy.breakpoint()`
-4. Creates `.debug/src/{set}/task/{name}.py` and `.debug/src/{set}/library/{lib}.py` from code; compiles objects from these files for accurate breakpoint line mapping
-5. Applies overrides: VSIX `buildOverrides()` walks local `pyops/{set}/*.py`; runner applies override code if `{set}::{name}` matches
+1. Apply overrides: if `{set}::{name}` is present in the `overrides` dict, swap its body; same for any library entry that matches. Overrides are the "operator is iterating on local code that may not be committed yet" mechanism and stay with `kind=debug`.
+2. Materialise `.debug/src/{set}/task/{name}.py`, `.debug/src/{set}/task/param.py` (if param present), and `.debug/src/{set}/library/{lib}.py` for each lib. Standards-compliant directory layout, no `__init__.py` required — debugpy/gdb-python/lldb do path lookup, not import. The layout is also the audit trail for "which source produced this output".
+3. Compile from the on-disk files (not from in-memory strings) so frame `source.path` reports `.debug/src/...` and debuggers can map line numbers cleanly.
+4. `execute_job_code(...)` runs `exec(param, glob)` → sends `state=running` (the `loading → running` flip) → `exec(libs)` → `exec(code)` → `state=done` / `failed`.
 
-**`debugpy.listen` binds `('0.0.0.0', port)` intentionally** — required for Docker remote debugging (VSCode on host connects to container via port-forward). Never change this binding without explicit instruction.
+The param block is where debug-kind diverges from the other kinds in behaviour: for `kind=debug`, clients put their debugger bootstrap there. Typical shapes:
 
-#### Retry Behavior
+```python
+# debugpy
+#!pip debugpy
+import debugpy
+debugpy.listen(("0.0.0.0", 45679))
+debugpy.wait_for_client()
+debugpy.breakpoint()
+```
+
+```python
+# gdbserver / cuda-gdbserver — out-of-process; PR_SET_PDEATHSIG
+# ensures the kernel kills it when the job process exits
+import os, subprocess, ctypes
+libc = ctypes.CDLL("libc.so.6")
+def _preexec():
+    libc.prctl(1, 15)  # PR_SET_PDEATHSIG, SIGTERM
+subprocess.Popen(["gdbserver", "--attach", ":2345", str(os.getpid())],
+                 preexec_fn=_preexec)
+```
+
+The param author is responsible for picking a port (client-side per-user pool) and for ensuring any spawned debugger-server process dies with the job process. pyops's only invariant is: when `exec(param)` returns, the job is "running" — whatever that means for the chosen debugger.
+
+#### Retry behaviour
 
 `execute_job_code()` in `app/job_runner.py`:
 - **task**: loops `max_retries + 1` times; on exception sleeps 60s and retries; final failure → `send_completion failed`
 - **service/debug/draft**: no retry; single failure → `send_completion failed`
+
+#### `state=running` for all kinds
+
+The `state=running` ZMQ completion fires the first time `exec(param)` returns successfully, before libs/code start. `assignJob` no longer flips the row to running on spawn; the job process owns that transition. This makes `running` mean the same thing across kinds — for task/service/draft it's "param executed, real work starting"; for debug it's "debugger bootstrap finished, attach window open" — without pyops having to probe anything debugger-specific.
 
 ---
 
@@ -511,7 +529,7 @@ sequenceDiagram
 - `listen()`: blocks until message received or SIGTERM (returns `"TERM"`); polls with 1000ms timeout
 - `poll()`: non-blocking (timeout=0); returns message dict, `None`, or `"TERM"`
 - `response(msg, status=200)`: sends reply to last received identity
-- `async_poll()`: returns list of all pending `(identity, message)` tuples
+- `async_poll()`: returns list of all pending `(identity, message)` tuples; when `kill_now` is set, returns the single sentinel `[(b"", "TERM")]` instead — same shutdown contract as `listen()`'s `"TERM"` return, so non-blocking callers (causal tick loops) honour SIGTERM within one poll cycle instead of falling through to the runner's 15s SIGKILL escalation
 - `async_response(identity, msg, status=200)`: sends reply to specific client identity
 
 ### Control API (scriptlet-side)
@@ -534,7 +552,6 @@ FastAPI application; mounts all routers; serves static files.
 - `GET /favicon.ico`
 - `GET /files/{path}` → static files
 - `GET /version` → `{"version": str}` from `app/lib/files.py::version()` which reads the project-root `VERSION` file (single source of truth shared with the VSIX build)
-- `GET /debug/port` → `{"port": int}` from `conf_users()[owner]["debug_port"]`; 400 if missing; owner from `X-User` header (default `anonymous`)
 - `GET /controller/{set}/{name}` → executes controller.py draft, renders head/menu/body views with `{{SET}}`/`{{NAME}}` injection; wraps the menu fragment in a `navbar-expand-md` collapse with a toggler so user menus fold behind a hamburger below 768px without any author effort
 - `ANY /controller/{set}/{name}/{rest:path}` → `controller_proxy`: executes controller to find running service/debug job, forwards via `ServiceClient.request()`
 - `GET /menu` → `{"menu": [...], "failures": [...]}` — hardcoded Scriptlet group (Manager, Scheduler, Monitor, Sets — the Sets entry now points at `/controller/internal/sets`) + dynamic per-set controller groups from Git; exec failures collected rather than raised
@@ -599,7 +616,7 @@ Ulimit check tracks RLIMIT_NOFILE and RLIMIT_NPROC against current usage from `/
 
 - `mock_db`: temp SQLite DB
 - `mock_git_dir`: mock set/scriptlet directory tree
-- `mock_git_ops(mock_git_dir)`: temp FS ops; covers `write_content`, `read_content`, `get_controller_code`, `get_view_content`, `delete_file_and_commit`
+- `mock_git_ops(mock_git_dir)`: temp FS ops; covers `write_content`, `read_content`, `get_controller_code`, `get_view_content`, `delete_file_unstaged`
   - **Pitfall**: `Path(repo)` creates real `./data/git/{set}/` files; can pollute test output and conflict with pytest collection despite `norecursedirs=data`
 - `mock_popen`: `subprocess.Popen` mock with pid, `poll()`, `terminate()`, `wait()`
 - `mock_zmq`: ZMQ Context/Socket mock; `send_completion` sends once and blocks for ACK (no retries)

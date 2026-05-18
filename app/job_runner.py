@@ -108,7 +108,26 @@ def setup_logging(log_level: int, stdout_file, stderr_file):
     return info_handler, warn_handler
 
 def execute_job_code(param: str, compiled_code, compiled_libs, glob: dict, job_type: str, job_id: str, runner_sock_path: str, max_retries: int = 0):
-    """Execute code with appropriate retry/error handling based on job_type"""
+    """Execute code with appropriate retry/error handling based on job_type.
+
+    The transition to state `running` fires the first time `exec(param)`
+    returns successfully — the param block is the only client-controlled
+    setup the runner performs verbatim, so it is the meaningful "ready"
+    boundary across all kinds. For kind=debug the param carries the
+    debugger bootstrap (e.g. debugpy.listen + wait_for_client +
+    breakpoint), so `running` corresponds to "debugger attached and
+    paused at first stop" without the runner needing to know which
+    debugger was used.
+    """
+    running_sent = False
+
+    def _signal_running():
+        nonlocal running_sent
+        if not running_sent:
+            job_lib.send_completion(runner_sock_path,
+                                    {"id": job_id, "state": "running", "detail": None})
+            running_sent = True
+
     try:
         if job_type == "task":
             # Task jobs have retry logic
@@ -117,6 +136,7 @@ def execute_job_code(param: str, compiled_code, compiled_libs, glob: dict, job_t
                     # Execute param before each attempt
                     if param:
                         exec(param, glob)
+                    _signal_running()
                     for cl in compiled_libs:
                         exec(cl, glob)
                     exec(compiled_code, glob)
@@ -136,6 +156,7 @@ def execute_job_code(param: str, compiled_code, compiled_libs, glob: dict, job_t
             # Execute param once before execution
             if param:
                 exec(param, glob)
+            _signal_running()
             for cl in compiled_libs:
                 exec(cl, glob)
             exec(compiled_code, glob)
@@ -148,8 +169,22 @@ def execute_job_code(param: str, compiled_code, compiled_libs, glob: dict, job_t
         if 'listener' in glob and glob['listener']:
             glob['listener'].close()
 
-def run_debug_job(job_id: str, owner: str, setname: str, name: str, param: str, code: str, libs: list[dict[str, str]], runner_sock_path: str, overrides: str | None = None, port: int | None = None):
-    """Executes debug job in isolated workspace with file-based compilation."""
+def run_debug_job(job_id: str, owner: str, setname: str, name: str, param: str, code: str, libs: list[dict[str, str]], runner_sock_path: str, overrides: str | None = None):
+    """Executes debug job in isolated workspace with file-based compilation.
+
+    pyops itself no longer injects a debugger. The client (VSIX,
+    pyopsctl, or any other operator surface) writes the debugger
+    bootstrap into `param` — debugpy.listen / gdbserver / cuda-gdbserver
+    / anything that speaks a wire its consumer understands. The
+    debug-kind contribution from pyops is:
+      • no execution timeout, no retry
+      • scriptlet bodies materialised on disk under .debug/src/<set>/
+        {task,library}/<name>.py so a source-path-mapping debugger can
+        reach them
+      • the `running` transition fires after `exec(param)` returns, so
+        consumers polling job state see ready := "debugger bootstrap
+        finished" without pyops knowing which debugger is in play.
+    """
     data_jobs = os.path.join(_project_root, _conf_data["jobs"])
     venv_path = os.path.join(_project_root, _conf_runner["venv"])
     pkg_path = os.path.join(_project_root, _conf_runner["pkg"])
@@ -167,31 +202,10 @@ def run_debug_job(job_id: str, owner: str, setname: str, name: str, param: str, 
 
         logger.debug(f"{os.getpid():<10}start debug job({job_id})")
 
-        # Step 2.5: Framework setup BEFORE redirect (errors go to main stderr)
-        # Terminate any existing debugpy adapter for the owner before starting new debug job
-        job_lib.terminate_debugpy_adapter(owner, port)
-
         # Step 3: Main execution with redirected output
         with redirect_stdout(stdout_file):
             with redirect_stderr(stderr_file):
                 try:
-                    # Ensure debugpy is installed early
-                    pip_path = os.path.join(venv_path, setname, 'bin', 'pip')
-                    subprocess.run([pip_path, 'install', 'debugpy'], check=True, stdout=stdout_file, stderr=stderr_file)
-
-                    # Start debugpy adapter immediately
-                    await_debug = '#>AWAIT_DEBUG' in param
-                    debug_code = f"""import debugpy
-debugpy.log_to('.debug/adapter')
-debugpy.listen(('0.0.0.0', {port}))
-"""
-                    if await_debug:
-                        debug_code += """
-debugpy.wait_for_client()
-debugpy.breakpoint()
-"""
-                    exec(debug_code)
-
                     # Apply overrides for debug kind
                     if overrides:
                         override_dict = json.loads(overrides)
@@ -206,26 +220,27 @@ debugpy.breakpoint()
                     # picked up any new .pth files at startup, so editable
                     # installs are importable from here on.
 
-                    # Create scriptlet files for debug jobs to enable breakpoint verification in .debug/src/ subdirectories
+                    # Materialise scriptlet bodies under .debug/src/ as a
+                    # standards-compliant Python module layout so any
+                    # source-path-mapping debugger (debugpy / gdb's python-
+                    # gdb.py / lldb / ...) can map {set}::{name} ↔ file
+                    # without per-debugger plumbing. Also serves as the
+                    # audit trail for "which source produced this output".
                     debug_src_dir = os.path.join(workspace, ".debug", "src")
                     os.makedirs(debug_src_dir, exist_ok=True)
 
-                    # Create task directory for main set
                     main_task_dir = os.path.join(debug_src_dir, setname, "task")
                     os.makedirs(main_task_dir, exist_ok=True)
 
-                    # Write param if present
                     if param:
                         param_file = os.path.join(main_task_dir, "param.py")
                         with open(param_file, 'w') as f:
                             f.write(param)
 
-                    # Write main code
                     code_file = os.path.join(main_task_dir, f"{name}.py")
                     with open(code_file, 'w') as f:
                         f.write(code)
 
-                    # Write libs
                     lib_files = []
                     for lib in libs:
                         lib_set, lib_name = lib["filename"].split("::")
@@ -236,11 +251,9 @@ debugpy.breakpoint()
                             f.write(lib["code"])
                         lib_files.append(lib_file)
 
-                    # Compile code objects from files for accurate breakpoint mapping
                     with open(code_file, 'r') as f:
                         compiled_code = compile(f.read(), code_file, 'exec')
 
-                    # Compile libs from files for debugger mapping
                     compiled_libs = []
                     for lib_file in lib_files:
                         with open(lib_file, 'r') as f:
@@ -259,12 +272,6 @@ debugpy.breakpoint()
                         root.removeHandler(info_handler)
                     if warn_handler:
                         root.removeHandler(warn_handler)
-
-    except subprocess.CalledProcessError as e:
-        # Handle pip install failures (debugpy installation)
-        error_msg = f"Install processing failed for debug job {job_id}: {e}\n{traceback.format_exc()}"
-        logger.error(error_msg)
-        job_lib.send_completion(runner_sock_path, {"id": job_id, "state": "failed", "detail": error_msg})
 
     except json.JSONDecodeError as e:
         # Handle JSON parsing errors (overrides parsing)
@@ -339,9 +346,9 @@ def run_draft_job(job_id: str, owner: str, setname: str, name: str, param: str, 
                         root.removeHandler(warn_handler)
 
     except subprocess.CalledProcessError as e:
-        # Defensive: directive installs run in job_setup.py, but the debugpy
-        # install for debug kind and any unexpected subprocess calls in this
-        # process can still raise CalledProcessError.
+        # Defensive: directive installs run in job_setup.py, but any
+        # unexpected subprocess call in this process can still raise
+        # CalledProcessError.
         error_msg = f"Install processing failed for draft job {job_id}: {e}\n{traceback.format_exc()}"
         logger.error(error_msg)
         job_lib.send_completion(runner_sock_path, {"id": job_id, "state": "failed", "detail": error_msg})
@@ -413,9 +420,9 @@ def run_task_job(job_id: str, owner: str, setname: str, name: str, param: str, c
                         root.removeHandler(warn_handler)
 
     except subprocess.CalledProcessError as e:
-        # Defensive: directive installs run in job_setup.py, but the debugpy
-        # install for debug kind and any unexpected subprocess calls in this
-        # process can still raise CalledProcessError.
+        # Defensive: directive installs run in job_setup.py, but any
+        # unexpected subprocess call in this process can still raise
+        # CalledProcessError.
         error_msg = f"Install processing failed for task job {job_id}: {e}\n{traceback.format_exc()}"
         logger.error(error_msg)
         job_lib.send_completion(runner_sock_path, {"id": job_id, "state": "failed", "detail": error_msg})
@@ -487,9 +494,9 @@ def run_service_job(job_id: str, owner: str, setname: str, name: str, param: str
                         root.removeHandler(warn_handler)
 
     except subprocess.CalledProcessError as e:
-        # Defensive: directive installs run in job_setup.py, but the debugpy
-        # install for debug kind and any unexpected subprocess calls in this
-        # process can still raise CalledProcessError.
+        # Defensive: directive installs run in job_setup.py, but any
+        # unexpected subprocess call in this process can still raise
+        # CalledProcessError.
         error_msg = f"Install processing failed for service job {job_id}: {e}\n{traceback.format_exc()}"
         logger.error(error_msg)
         job_lib.send_completion(runner_sock_path, {"id": job_id, "state": "failed", "detail": error_msg})
@@ -510,7 +517,7 @@ def run_service_job(job_id: str, owner: str, setname: str, name: str, param: str
             stderr_file.close()
         logger.debug(f"{os.getpid():<10}end service job({job_id})")
 
-def main(job_id: str, owner: str, setname: str, name: str, kind: str, param: str, code: str, libs: list[dict[str, str]], runner_sock_path: str, max_retries: int, overrides: str | None, port: int | None, conf_data: dict, conf_runner: dict, conf_users: dict, conf_web: dict, conf_log: dict | None = None):
+def main(job_id: str, owner: str, setname: str, name: str, kind: str, param: str, code: str, libs: list[dict[str, str]], runner_sock_path: str, max_retries: int, overrides: str | None, conf_data: dict, conf_runner: dict, conf_users: dict, conf_web: dict, conf_log: dict | None = None):
     """Executes job in isolated workspace by dispatching to appropriate handler based on kind."""
 
     global _conf_data, _conf_runner, _conf_users, _conf_web, _conf_log
@@ -536,9 +543,7 @@ def main(job_id: str, owner: str, setname: str, name: str, kind: str, param: str
     files_lib.Config.init_from_dict(raw)
 
     if kind == "debug":
-        if port is None:
-            raise ValueError("Port must be provided for debug jobs")
-        run_debug_job(job_id, owner, setname, name, param, code, libs, runner_sock_path, overrides, port)
+        run_debug_job(job_id, owner, setname, name, param, code, libs, runner_sock_path, overrides)
     elif kind == "draft":
         run_draft_job(job_id, owner, setname, name, param, code, libs, runner_sock_path)
     elif kind == "task":

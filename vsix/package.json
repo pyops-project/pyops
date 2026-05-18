@@ -2,7 +2,7 @@
   "name": "pyops",
   "displayName": "PyOps",
   "description": "VSCodium extension for integrating with PyOps server",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "publisher": "pyops-team",
   "license": "AGPL-3.0-only",
   "repository": {
@@ -66,12 +66,6 @@
         "title": "Write Local to Remote Draft",
         "category": "PyOps",
         "icon": "$(upload)"
-      },
-      {
-        "command": "pyops.saveRemoteDraft",
-        "title": "Save Remote Draft",
-        "category": "PyOps",
-        "icon": "$(check)"
       },
       {
         "command": "pyops.startDebugJob",
@@ -209,11 +203,6 @@
         },
 
         {
-          "command": "pyops.saveRemoteDraft",
-          "when": "view == 'pyops-manager' && viewItem =~ /^pyopsItem-(task|service|library|controller|view|markdown|jslibrary)$/ && pyops.hasValidConfig",
-          "group": "navigation"
-        },
-        {
           "command": "pyops.startDebugJob",
           "when": "view == 'pyops-manager' && viewItem =~ /^pyopsItem-task(-local)?$/ && pyops.hasValidConfig",
           "group": "navigation"
@@ -301,10 +290,15 @@
           "default": [],
           "description": "List of set names to exclude from the Manager tree view"
         },
-        "pyops.debugPort": {
-          "type": "number",
-          "default": 5678,
-          "description": "Port for PyOps remote debug attach"
+        "pyops.debugPorts": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "minimum": 1025,
+            "maximum": 65535
+          },
+          "default": [5678],
+          "description": "Pool of TCP ports VSIX may use when starting a PyOps debug job. The extension leases one per active debug session and composes a `debugpy.listen(<port>)` call into the job's `param`. The pyops server no longer hands out ports."
         }
       }
     }

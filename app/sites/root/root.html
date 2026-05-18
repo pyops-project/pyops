@@ -54,14 +54,16 @@
             }
 
             /* Section toggle — looks like a section label, collapses
-               the nav-pills below it. Chevron rotates with state. */
+               the nav-pills below it. Chevron rotates with state.
+               Built-in "Scriptlet" section is a btn-primary; user-set
+               (hosted) sections are btn-secondary. */
             .pyops-section-toggle {
                 display: flex;
                 align-items: center;
                 width: 100%;
-                background: transparent;
                 border: 0;
-                color: rgba(255,255,255,0.6);
+                background-color: var(--bs-secondary);
+                color: #fff;
                 font-size: 0.72rem;
                 font-weight: 600;
                 letter-spacing: 0.04em;
@@ -70,9 +72,12 @@
                 text-align: left;
                 border-radius: 0.25rem;
             }
+            [data-testid="menu-toggle-scriptlet"].pyops-section-toggle {
+                background-color: var(--bs-primary);
+            }
             .pyops-section-toggle:hover,
             .pyops-section-toggle:focus {
-                background-color: rgba(255,255,255,0.06);
+                filter: brightness(1.15);
                 color: #fff;
                 outline: none;
             }
@@ -99,8 +104,8 @@
                 background-color: rgba(255,255,255,0.08);
             }
             #menu .nav-link.active {
-                color: #fff;
-                background-color: var(--bs-primary);
+                color: #000;
+                background-color: var(--bs-warning);
             }
 
             /* Failures block — shown below the nav when /menu returns any. */

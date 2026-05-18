@@ -41,8 +41,31 @@ def _list_sets():
             ).strip()
         except subprocess.CalledProcessError:
             branch = "unknown"
-        out.append({"name": entry, "branch": branch})
+        try:
+            dirty = subprocess.check_output(
+                ["git", "status", "--porcelain", "--untracked-files=all"],
+                cwd=full, text=True,
+            ).strip()
+        except subprocess.CalledProcessError:
+            dirty = ""
+        out.append({"name": entry, "branch": branch, "has_drafts": bool(dirty)})
     return out
+
+
+def _status_of(set_name):
+    """Return raw `git status --porcelain` for a set; empty string = clean."""
+    base = _git_base()
+    target = os.path.join(base, set_name)
+    if not os.path.isdir(os.path.join(target, ".git")):
+        return None
+    try:
+        return subprocess.check_output(
+            ["git", "status", "--porcelain", "--untracked-files=all"],
+            cwd=target, text=True,
+        )
+    except subprocess.CalledProcessError as ex:
+        logger.warning("git status failed for %s: %s", set_name, ex)
+        return ""
 
 
 def _format_param(kwargs):
@@ -81,6 +104,15 @@ def handle_request(msg):
 
     if path == "/list" and type_ == "GET":
         return {"sets": _list_sets()}, 200
+
+    if path.startswith("/status/") and type_ == "GET":
+        name = path[len("/status/"):]
+        if not name:
+            return {"error": "name is required in path"}, 400
+        status = _status_of(name)
+        if status is None:
+            return {"error": f"set '{name}' not found"}, 404
+        return {"name": name, "status": status}, 200
 
     if path == "/clone" and type_ == "POST":
         url = body.get("url")
@@ -124,6 +156,16 @@ def handle_request(msg):
         if not name:
             return {"error": "name is required in path"}, 400
         return _enqueue("set_update_deps", {"name": name}, user)
+
+    if path.startswith("/commit_drafts/") and type_ == "POST":
+        name = path[len("/commit_drafts/"):]
+        if not name:
+            return {"error": "name is required in path"}, 400
+        return _enqueue("set_commit_drafts", {
+            "name": name,
+            "user": user,
+            "message": body.get("message", ""),
+        }, user)
 
     return {"error": f"Not found: {type_} {path}"}, 404
 

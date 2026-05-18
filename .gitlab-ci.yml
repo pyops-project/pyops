@@ -37,7 +37,7 @@ test:
 test:e2e:
   stage: test
   before_script:
-    - apt-get update && apt-get install -y python3 python3-pip python3-venv git sqlite3 nodejs npm procps
+    - apt-get update && apt-get install -y python3 python3-pip python3-venv python3-argcomplete git sqlite3 nodejs npm procps
     - git config --global user.email "ci@pyops.local"
     - git config --global user.name "PyOps CI"
     - python3 -m venv .venv
@@ -47,7 +47,7 @@ test:e2e:
     - playwright install --with-deps chromium
   script:
     - source .venv/bin/activate
-    - pytest tests/e2e/ -v
+    - pytest tests/e2e/ tests/pyopsctl/e2e/ -v
   variables:
     E2E_STARTUP_TIMEOUT: "60"
   rules:
@@ -113,6 +113,31 @@ test:vsix:
       when: always
     - when: manual
 
+# pyopsctl unit + integration tests. pyopsctl runs without a venv on the
+# operator's host, so this stage mirrors that: distribution python3 +
+# distribution python3-requests, no pip-installed extras for the CLI
+# itself. The integration tests still need pytest (plus the pyops server
+# deps), so we install those into the test venv as before.
+test:pyopsctl:
+  stage: test
+  before_script:
+    - apt-get update && apt-get install -y python3 python3-pip python3-venv python3-requests python3-argcomplete git sqlite3 procps
+    - git config --global user.email "ci@pyops.local"
+    - git config --global user.name "PyOps CI"
+    - python3 -m venv .venv --system-site-packages
+    - source .venv/bin/activate
+    - pip install --upgrade pip
+    - pip install psutil fastapi uvicorn sqlalchemy pyzmq msgpack croniter jedi requests zipstream-ng gunicorn pytest httpx pytest-cov debugpy
+  script:
+    - source .venv/bin/activate
+    # E2E pyopsctl tests run in `test:e2e`. This stage covers
+    # unit + integration only.
+    - pytest tests/pyopsctl/unit tests/pyopsctl/integration -v
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"'
+      when: always
+    - when: manual
+
 # Test that the Dockerfile still builds on the runner's native arch. NOT
 # a real build: `build_dev.sh` keeps `:dev` local and doesn't push. The
 # point is to fail CI fast when a Dockerfile change breaks the image
@@ -147,6 +172,83 @@ build:
     paths:
       - vsix/*.vsix
     expire_in: 1 week
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"'
+      when: always
+    - when: manual
+
+# pyopsctl Debian binary package. Built with plain `dpkg-deb` — no
+# debhelper, no fpm — so the only build-host deps are dpkg-dev and
+# python3-argcomplete (for the bundled zsh/bash completion files).
+# Targets Ubuntu 24.04 (noble) and Debian 13 (trixie) as the floor;
+# the Depends line pins python3 (>= 3.12) accordingly.
+build:pyopsctl:
+  stage: build
+  needs: [test:pyopsctl]
+  before_script:
+    - apt-get update
+    - apt-get install -y dpkg-dev python3-argcomplete python3-requests
+  script:
+    - ./ctl/build.sh
+  artifacts:
+    when: on_success
+    paths:
+      - ctl/dist/*.deb
+    expire_in: 1 week
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"'
+      when: always
+    - when: manual
+
+# Install the .deb produced by build:pyopsctl in a clean apt
+# environment and smoke-test the result. Catches breakage that
+# `dpkg-deb -x` extraction misses: Depends resolution, dpkg triggers
+# (py3compile, bash-completion hook), the launcher running without
+# PYTHONPATH overrides, and zsh's compinit picking up the system
+# completion file from the apt-managed $fpath path.
+test:pyopsctl:install:
+  stage: build
+  needs: [build:pyopsctl]
+  before_script:
+    - apt-get update
+    - apt-get install -y zsh
+  script:
+    # apt resolves Depends + Recommends from the deb (python3,
+    # python3-requests, python3-argcomplete).
+    - apt-get install -y ./ctl/dist/pyopsctl_*.deb
+    # Launcher must be at /usr/bin and run without any sys.path tricks.
+    - test "$(command -v pyopsctl)" = /usr/bin/pyopsctl
+    - pyopsctl --help > /dev/null
+    # The argparse-level --version flag prints the cli version and
+    # exits before config resolution, so it works without a profile
+    # (CI has none). Proves the baked _version.py is the one being
+    # imported — a "0.0.0+unknown" fallback would fail the match.
+    # The `pyopsctl version` SUBCOMMAND queries the server too and
+    # needs a profile, so it's the wrong probe for a build-artifact
+    # smoke test.
+    - VERSION=$(tr -d '[:space:]' < VERSION)
+    - "pyopsctl --version | grep -Fx \"pyopsctl ${VERSION}\""
+    # argcomplete protocol: with the env vars set the launcher should
+    # emit the top-level group names on fd 8. If the marker comment is
+    # missing or the autocomplete call regresses, this is silent.
+    - >
+      _ARGCOMPLETE=1 _ARGCOMPLETE_SHELL=bash _ARGCOMPLETE_IFS=$'\n'
+      COMP_TYPE=9 COMP_LINE='pyopsctl ' COMP_POINT=9
+      pyopsctl 8>&1 9>&2 1>/dev/null 2>&1 | grep -q '^scriptlet$'
+    # Both completion files must land at the apt-managed system paths
+    # so apt-installed users get tab completion without any rc edit.
+    - test -f /usr/share/bash-completion/completions/pyopsctl
+    - test -f /usr/share/zsh/vendor-completions/_pyopsctl
+    # zsh compinit must register the pyopsctl completion from $fpath
+    # (i.e. the file is named correctly and starts with #compdef).
+    - >
+      zsh -c 'autoload -Uz compinit; compinit -u 2>/dev/null;
+      (( ${+_comps[pyopsctl]} )) || { echo "compinit did not register pyopsctl"; exit 1; }'
+    # Clean uninstall: every shipped file gone afterwards.
+    - apt-get remove -y pyopsctl
+    - test ! -e /usr/bin/pyopsctl
+    - test ! -e /usr/share/bash-completion/completions/pyopsctl
+    - test ! -e /usr/share/zsh/vendor-completions/_pyopsctl
   rules:
     - if: '$CI_COMMIT_BRANCH == "main" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"'
       when: always
@@ -188,7 +290,7 @@ build:image:
 # write_repository scope. Without it the git push of the tag fails.
 release:
   stage: release
-  needs: [build, build:image]
+  needs: [build, build:image, build:pyopsctl]
   image: registry.gitlab.com/gitlab-org/release-cli:latest
   before_script:
     - apk add --no-cache bash git curl
@@ -196,9 +298,13 @@ release:
     - VERSION=$(tr -d '[:space:]' < VERSION)
     - VSIX_FILE=$(ls vsix/*.vsix | head -1)
     - VSIX_NAME=$(basename "$VSIX_FILE")
-    - PACKAGE_URL="$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/pyops-vsix/$VERSION/$VSIX_NAME"
-    # Upload VSIX to project Generic Packages
-    - 'curl --fail --header "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file "$VSIX_FILE" "$PACKAGE_URL"'
+    - VSIX_URL="$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/pyops-vsix/$VERSION/$VSIX_NAME"
+    - DEB_FILE=$(ls ctl/dist/pyopsctl_*.deb | head -1)
+    - DEB_NAME=$(basename "$DEB_FILE")
+    - DEB_URL="$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/pyops-pyopsctl/$VERSION/$DEB_NAME"
+    # Upload both binary artifacts to project Generic Packages
+    - 'curl --fail --header "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file "$VSIX_FILE" "$VSIX_URL"'
+    - 'curl --fail --header "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file "$DEB_FILE" "$DEB_URL"'
     # Tag main HEAD with vVERSION and push back to GitLab
     - git config user.email "ci@pyops.local"
     - git config user.name "PyOps CI"
@@ -209,7 +315,8 @@ release:
       release-cli create \
         --tag-name "v$VERSION" \
         --description "Docker Image: registry.ralph.or.at/pyops/pyops:$VERSION" \
-        --assets-link "{\"name\":\"PyOps VSCode Extension\",\"url\":\"$PACKAGE_URL\",\"link_type\":\"package\"}"
+        --assets-link "{\"name\":\"PyOps VSCode Extension\",\"url\":\"$VSIX_URL\",\"link_type\":\"package\"}" \
+        --assets-link "{\"name\":\"pyopsctl Debian package\",\"url\":\"$DEB_URL\",\"link_type\":\"package\"}"
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'
       when: manual
