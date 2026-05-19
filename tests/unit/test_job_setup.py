@@ -108,7 +108,7 @@ class TestJobSetupExecution:
 
     @patch("app.job_setup.os.execv")
     @patch("app.job_setup.job_lib.process_code_installs")
-    def test_runs_installs_then_execv(self, mock_installs, mock_execv, setup_kwargs):
+    def test_runs_installs_then_execv(self, mock_installs, mock_execv, setup_kwargs, tmp_path):
         """Happy path: install, then hand off via execv."""
         from app import job_setup
 
@@ -122,8 +122,16 @@ class TestJobSetupExecution:
         # execv must target job_runner.py
         execv_args = mock_execv.call_args[0]
         assert execv_args[1][1].endswith("job_runner.py")
-        # kwargs are passed through verbatim
-        assert execv_args[1][2] == setup_kwargs
+        # Third argv is the path to the kwargs file in the workspace
+        # (NOT the kwargs JSON itself — that would re-introduce the
+        # ARG_MAX overflow we just fixed). The file content must be the
+        # unmodified kwargs string.
+        kwargs_path = execv_args[1][2]
+        workspace = tmp_path / "jobs" / "myset" / "j1"
+        assert kwargs_path == str(workspace / ".kwargs.json")
+        assert os.path.isfile(kwargs_path)
+        with open(kwargs_path) as f:
+            assert f.read() == setup_kwargs
 
     @patch("app.job_setup.sys.exit")
     @patch("app.job_setup.os.execv")

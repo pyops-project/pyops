@@ -920,12 +920,33 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
                             # Without the new session, those grandchildren
                             # re-parent to PID 1 the instant the job dies
                             # and keep holding their listening ports.
+                            #
+                            # kwargs go in via stdin, not argv: the
+                            # serialised job context can be hundreds of KB
+                            # when libs + VSIX overrides are large (one
+                            # i-doit::checker scriptlet was already 84 KB),
+                            # and Linux execve(2) refuses combined argv+env
+                            # beyond ARG_MAX (~128 KiB default) with
+                            # E2BIG. job_setup.py reads sys.stdin.read()
+                            # and then hands the same payload off to
+                            # job_runner.py through a file in the
+                            # workspace (see _exec_runner there).
                             p = subprocess.Popen(
-                                [venv_python, os.path.abspath('app/job_setup.py'), json_kwargs],
+                                [venv_python, os.path.abspath('app/job_setup.py')],
                                 cwd=files.project_root,
+                                stdin=subprocess.PIPE,
                                 stdout=sys.stdout, stderr=sys.stderr, text=True,
                                 preexec_fn=os.setsid,
                             )
+                            try:
+                                p.stdin.write(json_kwargs)
+                                p.stdin.close()
+                            except BrokenPipeError:
+                                # Child died before reading stdin (rare:
+                                # interpreter import error etc.). The job
+                                # will be reaped via the normal stale-PID
+                                # path; no extra cleanup here.
+                                pass
                         except Exception as e:
                             finishJob(job_id, "failed", f"Launch failed: {e}")
                             continue

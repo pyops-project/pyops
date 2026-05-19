@@ -556,14 +556,21 @@ def main(job_id: str, owner: str, setname: str, name: str, kind: str, param: str
 if __name__ == "__main__":
     import json
     import sys
-    
+
     # Top-level error handling for any uncaught exceptions
     try:
         if len(sys.argv) != 2:
-            print("Usage: job_runner.py <json_kwargs>", file=sys.stderr)
+            print("Usage: job_runner.py <kwargs_path>", file=sys.stderr)
             sys.exit(1)
-        
-        kwargs = json.loads(sys.argv[1])
+
+        # kwargs come from a file in the job workspace, not argv. The
+        # serialised job context (param + code + libs + VSIX overrides)
+        # can exceed Linux ARG_MAX (~128 KiB) for sets with large
+        # scriptlets — passing it on argv to execve(2) fails with E2BIG
+        # before this interpreter ever starts. job_setup.py writes the
+        # file at `<workspace>/.kwargs.json` right before os.execv.
+        with open(sys.argv[1], 'r') as f:
+            kwargs = json.loads(f.read())
         main(**kwargs)
     except ValueError as e:
         # Handle JSON parsing errors or invalid port values

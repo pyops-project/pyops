@@ -116,10 +116,16 @@ def test_per_call_overrides_take_precedence(config_file):
     assert profile.api_key == "aaa"
 
 
-def test_server_flag_without_profile_match_works_with_explicit_creds(monkeypatch):
+def test_server_flag_without_profile_match_works_with_explicit_creds(monkeypatch, tmp_path):
     from pyopsctl import config
 
-    monkeypatch.delenv("PYOPSCTL_CONFIG", raising=False)
+    # Point PYOPSCTL_CONFIG at a non-existent file so the loader's
+    # `os.path.isfile(cfg_path)` branch is skipped. Just delenv'ing
+    # PYOPSCTL_CONFIG leaves _config_path() returning the operator's
+    # real ~/.config/pyops/config.toml, which (on dev machines) usually
+    # holds a default_profile and would break the "no profile match"
+    # premise of this test.
+    monkeypatch.setenv("PYOPSCTL_CONFIG", str(tmp_path / "does-not-exist.toml"))
     monkeypatch.delenv("PYOPSCTL_PROFILE", raising=False)
     profile = config.load(_args(server="http://localhost:9999"))
     # No config file, no profile, just --server URL — falls through with empty creds.
