@@ -55,14 +55,24 @@ def _setup_workspace(data_base: str, setname: str, job_id: str) -> str:
     return workspace
 
 
-def _exec_runner(json_kwargs: str) -> None:
+def _exec_runner(json_kwargs: str, workspace: str) -> None:
     """Replace this process with job_runner.py in the same venv. The fresh
     interpreter reads `site.py` at startup, picking up every `.pth` written
     above. Returns only on failure to exec (in which case the caller should
-    report and exit non-zero)."""
+    report and exit non-zero).
+
+    Kwargs go via a file in the workspace, not argv: the serialised job
+    context (param + code + libs + VSIX overrides) can be hundreds of KB
+    and Linux execve(2) refuses combined argv+env beyond ARG_MAX. Same
+    reason `runner.py` pipes kwargs into our stdin instead of putting
+    them in our argv. The file lives at `<workspace>/.kwargs.json` and
+    gets removed with the rest of the workspace on drop_done."""
     venv_python = sys.executable
     runner_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'job_runner.py'))
-    os.execv(venv_python, [venv_python, runner_path, json_kwargs])
+    kwargs_path = os.path.join(workspace, '.kwargs.json')
+    with open(kwargs_path, 'w') as f:
+        f.write(json_kwargs)
+    os.execv(venv_python, [venv_python, runner_path, kwargs_path])
 
 
 def main(json_kwargs: str) -> None:
@@ -123,15 +133,15 @@ def main(json_kwargs: str) -> None:
     stderr_file.close()
 
     # Hand off to job_runner.py with the unmodified kwargs string.
-    _exec_runner(json_kwargs)
+    _exec_runner(json_kwargs, workspace)
 
 
 if __name__ == "__main__":
     try:
-        if len(sys.argv) != 2:
-            print("Usage: job_setup.py <json_kwargs>", file=sys.stderr)
-            sys.exit(1)
-        main(sys.argv[1])
+        # kwargs come in via stdin, not argv — the runner pipes them in
+        # because the serialised job context can exceed ARG_MAX. See
+        # `runner.py`'s Popen block for the matching writer.
+        main(sys.stdin.read())
     except Exception as exc:
         print(f"Unhandled error in job_setup.py: {exc}\n{traceback.format_exc()}", file=sys.stderr)
         sys.exit(1)

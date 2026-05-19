@@ -255,6 +255,63 @@ test:pyopsctl:install:
     - when: manual
 
 
+# Block merges that forgot to bump VERSION. Runs only for MRs targeting
+# main — on main itself the merged commit's VERSION is the new release
+# line and the check would self-defeat. Sits in the build stage so it
+# runs after the test stage is green; nothing useful comes of telling
+# the author "bump the version" while tests are red anyway.
+#
+# Asserts four things:
+#   1. VERSION isn't already a released tag (the actual "forgot to bump"
+#      symptom).
+#   2. vsix/package.json version == VERSION.
+#   3. vsix/package-lock.json top-level + ""-entry versions == VERSION
+#      (npm rewrites both on `npm version`; manual bumps tend to miss
+#      one).
+#   4. CHANGELOG.md has a `## [<VERSION>]` heading so the release notes
+#      are written before merge, not afterwards.
+verify:version_bumped:
+  stage: build
+  needs: []
+  image: alpine/git
+  before_script:
+    - apk add --no-cache grep
+  script:
+    - VERSION=$(tr -d '[:space:]' < VERSION)
+    - echo "VERSION = $VERSION"
+    - git fetch --tags --quiet
+    - |
+      if git rev-parse "v$VERSION" >/dev/null 2>&1; then
+        echo "ERROR: VERSION ($VERSION) matches existing tag v$VERSION."
+        echo "Bump VERSION (and vsix/package.json + vsix/package-lock.json)"
+        echo "and add a '## [$VERSION] — YYYY-MM-DD' section to CHANGELOG.md"
+        echo "before merging."
+        exit 1
+      fi
+    - |
+      VSIX_PKG=$(grep -m1 '"version"' vsix/package.json | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')
+      if [ "$VSIX_PKG" != "$VERSION" ]; then
+        echo "ERROR: vsix/package.json version ($VSIX_PKG) does not match VERSION ($VERSION)"
+        exit 1
+      fi
+    - |
+      VSIX_LOCK_TOP=$(grep -m1 '"version"' vsix/package-lock.json | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')
+      VSIX_LOCK_PKG=$(grep -m2 '"version"' vsix/package-lock.json | tail -1 | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')
+      if [ "$VSIX_LOCK_TOP" != "$VERSION" ] || [ "$VSIX_LOCK_PKG" != "$VERSION" ]; then
+        echo "ERROR: vsix/package-lock.json versions (top=$VSIX_LOCK_TOP, pkg=$VSIX_LOCK_PKG) do not match VERSION ($VERSION)"
+        exit 1
+      fi
+    - |
+      if ! grep -qE "^## \[$VERSION\]" CHANGELOG.md; then
+        echo "ERROR: CHANGELOG.md has no '## [$VERSION]' heading."
+        echo "Add a release section for $VERSION before merging."
+        exit 1
+      fi
+    - 'echo "OK: VERSION $VERSION is bumped, vsix files agree, CHANGELOG has a $VERSION section."'
+  rules:
+    - if: '$CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"'
+      when: on_success
+
 # Multi-arch container image build. Runs `./build.sh` which reads VERSION
 # and pushes :VERSION + :MAJOR + :MINOR + :latest + tagless to
 # registry.ralph.or.at/pyops/pyops. Manual trigger only — the operator goes

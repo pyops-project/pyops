@@ -606,6 +606,43 @@ describe('Extension', () => {
       expect(debugOutputMonitorInstance.startMonitoring).not.toHaveBeenCalled();
     });
 
+    it('should release the leased port and surface job detail when the job ends before the listener comes up', async () => {
+      // Job poll returns state=failed with a traceback in `detail` —
+      // simulates "debugpy install failed" / "exec(param) raised" /
+      // any other early-failure path.
+      mockApiClientInstance.fetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({
+          state: 'failed',
+          detail: 'Traceback (most recent call last):\n  ModuleNotFoundError: No module named \'debugpy\'',
+        }),
+      });
+
+      const handler = commandHandlers.get('pyops.startDebugJob');
+      await handler!(mockScriptletTreeItem);
+
+      // Bug-fix 1: the port leased by enqueueDebugJob must be released
+      // here, otherwise the next debug attempt sees "pool fully leased"
+      // because onDidTerminateDebugSession never fires for a job that
+      // died before its debugger session ever started.
+      expect(debugServiceInstance.releasePort).toHaveBeenCalledWith(5678);
+
+      // Bug-fix 2: the server-side detail (traceback) must be in the
+      // user-visible error so the operator sees the actual cause
+      // (debugpy install, runner crash, etc.), not just the symptom
+      // "state=failed".
+      expect(require('vscode').window.showErrorMessage).toHaveBeenCalledWith(
+        expect.stringContaining('state=failed'),
+      );
+      expect(require('vscode').window.showErrorMessage).toHaveBeenCalledWith(
+        expect.stringContaining("No module named 'debugpy'"),
+      );
+
+      // We did not reach vscode.debug.startDebugging — the early exit
+      // skipped the happy path.
+      expect(require('vscode').debug.startDebugging).not.toHaveBeenCalled();
+    });
+
 
 
 

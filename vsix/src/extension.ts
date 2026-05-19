@@ -265,9 +265,10 @@ export async function activate(context: vscode.ExtensionContext) {
                     while (Date.now() - listenStart < listenDeadlineMs) {
                         const jobResp = await apiClient.fetch(`/scriptlet/job/item?id=${result.jobId}`);
                         if (jobResp.ok) {
-                            const job = await jobResp.json() as { state: string };
+                            const job = await jobResp.json() as { state: string; detail?: string };
                             if (['failed', 'killed', 'cancelled', 'removed'].includes(job.state)) {
-                                throw new Error(`Job ${result.jobId} ended before listener came up: state=${job.state}`);
+                                const detail = job.detail ? `\n${job.detail}` : '';
+                                throw new Error(`Job ${result.jobId} ended before listener came up: state=${job.state}${detail}`);
                             }
                         }
                         const reachable = await new Promise<boolean>((resolve) => {
@@ -301,6 +302,20 @@ export async function activate(context: vscode.ExtensionContext) {
 
                     vscode.window.showInformationMessage(`Started debug job ${result.jobId} for ${name} with local overrides`);
                 } catch (error: unknown) {
+                    // The port was leased in enqueueDebugJob; if we never
+                    // get to vscode.debug.startDebugging (job died early,
+                    // listener never opened, etc.), onDidTerminateDebugSession
+                    // will never fire to release it. Release here so the
+                    // pool isn't poisoned for the next attempt.
+                    // (The DebugOutputMonitor poll loop self-terminates
+                    // when it sees a terminal state, so the local monitor
+                    // entry is cleaned up by the next poll without us
+                    // having to call stopMonitoring — which would send a
+                    // cancel API call and show a misleading "Stopped"
+                    // toast for an already-dead job.)
+                    if (result.port !== undefined) {
+                        debugService.releasePort(result.port);
+                    }
                     const errorMessage = error instanceof Error ? error.message : String(error);
                     vscode.window.showErrorMessage(`Failed to start debug: ${errorMessage}`);
                 }

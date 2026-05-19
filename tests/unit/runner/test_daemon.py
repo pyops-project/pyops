@@ -1,3 +1,5 @@
+import subprocess
+
 import pytest
 from unittest.mock import Mock, patch, call
 from datetime import datetime
@@ -1103,6 +1105,90 @@ class TestShutdownContract:
         # so no claim/spawn happened.
         mock_get_next.assert_not_called()
         mock_popen.assert_not_called()
+
+    def test_main_loop_pipes_kwargs_via_stdin_not_argv(self, mock_db):
+        """Regression for `Launch failed: [Errno 7] Argument list too long`.
+
+        The serialised job context (param + code + libs + VSIX overrides)
+        can comfortably exceed Linux ARG_MAX (~128 KiB) — i-doit
+        scriptlets alone hit 84 KB each. The earlier implementation
+        passed `json_kwargs` as a third argv element to
+        `subprocess.Popen([venv_python, 'app/job_setup.py', json_kwargs])`,
+        which made `execve(2)` reject the call with E2BIG before the
+        child even started. No workspace, no stderr.log, no traceback in
+        the runner logs — just the short "Launch failed" detail caught
+        at the spawn-block's local `except`.
+
+        The fix: argv carries only the script path, and `json_kwargs`
+        goes in via stdin (no ARG_MAX limit).
+        """
+        from app import runner
+
+        # 1 MiB of payload — well past ARG_MAX, would E2BIG on argv.
+        huge_code = "x" * (1024 * 1024)
+
+        class _OneShotKiller:
+            kill_now = False
+            def __init__(self): pass
+            def exit_gracefully(self, *a, **kw): self.kill_now = True
+
+        killer_instance = _OneShotKiller()
+
+        # Trip kill_now after the first iteration so main() returns.
+        call_count = {"n": 0}
+        def _get_next_then_kill():
+            call_count["n"] += 1
+            killer_instance.kill_now = True
+            return "huge_job_id" if call_count["n"] == 1 else None
+
+        mock_proc = Mock()
+        mock_proc.pid = 99001
+        mock_proc.stdin = Mock()
+
+        with patch('app.runner.GracefulKiller', return_value=killer_instance), \
+             patch('app.runner.setup_runner_socket', return_value=(Mock(), Mock(), Mock(**{'poll.return_value': []}))), \
+             patch('app.runner.ensure_set_environment'), \
+             patch('app.runner.handleOddJobs'), \
+             patch('app.runner.purgeLeftoverServiceJobs'), \
+             patch('app.runner.cleanup_drop_done_jobs'), \
+             patch('app.runner.getNextToDo', side_effect=_get_next_then_kill), \
+             patch('app.runner.loadJob', return_value=("owner", "i-doit", "checker-service", "debug", "", huge_code, None, 0)), \
+             patch('app.runner.assignJob'), \
+             patch('app.runner.finishJob') as mock_finish, \
+             patch('app.runner.subprocess.Popen', return_value=mock_proc) as mock_popen, \
+             patch('app.runner.time.sleep'), \
+             patch('app.runner.os.environ'), \
+             patch('app.runner.logging.basicConfig'), \
+             patch('app.runner.files.Config.init'):
+            runner.main("data", "127.0.0.1:0", "/venv", "/pkg", {})
+
+        # Spawn must have happened (no Launch failed).
+        mock_popen.assert_called_once()
+        mock_finish.assert_not_called()
+
+        # argv: exactly [venv_python, 'app/job_setup.py'] — no third
+        # element carrying the kwargs JSON. If a third element appears,
+        # the ARG_MAX regression is back.
+        call_args, call_kwargs = mock_popen.call_args
+        argv = call_args[0]
+        assert len(argv) == 2, (
+            "subprocess.Popen argv must be exactly [venv_python, "
+            f"job_setup.py] for the ARG_MAX fix, got {len(argv)} elements: "
+            f"{[a[:60] + '...' if len(a) > 60 else a for a in argv]}"
+        )
+        assert argv[1].endswith("job_setup.py")
+
+        # stdin must be a pipe so kwargs can be written to it.
+        assert call_kwargs.get("stdin") is subprocess.PIPE
+
+        # The big payload must have been written to the child's stdin,
+        # not stashed in argv.
+        write_calls = mock_proc.stdin.write.call_args_list
+        assert len(write_calls) == 1
+        written = write_calls[0][0][0]
+        assert len(written) > 1024 * 1024  # the 1 MiB code is in there
+        assert huge_code in written
+        mock_proc.stdin.close.assert_called_once()
 
 
 class TestInternalEssentialServices:

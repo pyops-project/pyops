@@ -7,6 +7,60 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 from 3.0.0 onward.
 
+## [3.2.0] — 2026-05-19
+
+Three debug-flow bugs and a vendored JS lib refresh:
+
+- **Debug jobs no longer die with `Launch failed: [Errno 7] Argument
+  list too long`.** `runner.py` used to pass the serialised job
+  context (param + code + libs + VSIX overrides) as a single argv
+  element to `Popen([venv_python, 'app/job_setup.py', json_kwargs])`.
+  Sets with large overrides (one i-doit scriptlet alone is 84 KB) blew
+  past Linux `ARG_MAX` and `execve(2)` returned `E2BIG` before the
+  child started — no workspace, no logs, only a short `detail` from
+  the local `except`. Kwargs now flow via stdin into `job_setup.py`
+  and via `<workspace>/.kwargs.json` into `job_runner.py`.
+- **VSIX no longer leaks debug ports on early failure.** When a polled
+  job hit `state=failed` before the debugpy listener came up, the wait
+  loop threw but never called `releasePort()` — `onDidTerminateDebugSession`
+  is the only release path, and it never fires for a session that was
+  never started. One failure permanently consumed a port; after the
+  pool drained, every retry reported "fully leased". The catch block
+  now releases on every early-exit path.
+- **VSIX surfaces the server-side `detail` in the failure toast.** The
+  wait loop was reading only `job.state`, so operators saw a bare
+  `state=failed` with no cause. It now appends `job.detail` (the
+  traceback `send_completion` already writes), so the same workflow
+  would show `Launch failed: [Errno 7] Argument list too long` inline.
+
+### Changed
+- Vendored JS libs refreshed to current upstream stable: bootstrap
+  5.2.3 → **5.3.8**, jQuery 3.6.4 → **3.7.1**, js-cookie 3.0.5 →
+  **3.0.7**, ace-builds 1.5.0 → **1.44.0** (full `src-min-noconflict`
+  tree, 36 new modes/themes, none removed). Material Icons font
+  unchanged.
+
+### Fixed
+- Dead `completer:` option dropped from the Ace `ace.edit()` calls in
+  `editor_task.html` / `editor_library.html`. Ace 1.44 warns on unknown
+  constructor options; the custom Python completer is already
+  registered via `langTools.addCompleter(pylintCompleter)`, so the
+  constructor key was a no-op in 1.5.0 and is silently ignored in 1.44
+   — the warning is just the new version surfacing always-dead code.
+- `tests/pyopsctl/unit/test_config.py::test_server_flag_without_profile_match_works_with_explicit_creds`
+  no longer flakes on dev machines that have a real
+  `~/.config/pyops/config.toml`. The test now points `PYOPSCTL_CONFIG`
+  at a non-existent path instead of just deleting the env var, so the
+  loader's file branch is unconditionally skipped.
+
+### CI
+- New `verify:version_bumped` job (MR-only, last in the build stage)
+  fails the pipeline when `VERSION` still matches an already-released
+  tag, when `vsix/package.json` / `vsix/package-lock.json` disagree
+  with `VERSION`, or when `CHANGELOG.md` has no `## [<VERSION>]`
+  heading. Catches "forgot to bump VERSION" before the merge instead
+  of after.
+
 ## [3.1.0] — 2026-05-18
 
 Closes 3.0.0's open ends with three structural moves and one
