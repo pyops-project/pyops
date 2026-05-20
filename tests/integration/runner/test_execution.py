@@ -485,7 +485,7 @@ class TestExecution:
             assert result.end == now
             assert result.pid is None
 
-    @patch('app.runner.INTERNAL_ESSENTIAL_SERVICES', [])
+    @patch('app.runner.PYOPS_ESSENTIAL_SERVICES', [])
     @patch('app.runner.lib_runner.enqueue')
     @patch('app.runner.lib_runner.find')
     def test_schedule_reenqueues_service_excluding_cancelled(self, mock_find, mock_enqueue, mock_conf, mock_db, mock_croniter):

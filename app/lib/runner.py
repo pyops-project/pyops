@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 # Cross-process shutdown gate. Once SIGTERM lands on the runner, its signal
 # handler creates this file; every enqueue() — including the ones gunicorn
-# workers and the internal data service make over HTTP — must refuse new
+# workers and the pyops data service make over HTTP — must refuse new
 # work, so already-running jobs can drain without us piling more on. The
 # file lives under /tmp/pyops/ which the runner socket already provisions.
 SHUTDOWN_FLAG_PATH = "/tmp/pyops/shutdown.flag"

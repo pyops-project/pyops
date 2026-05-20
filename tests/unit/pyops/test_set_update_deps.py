@@ -1,9 +1,9 @@
-"""Unit tests for app/internal/set_update_deps.task.py — directive parsing,
+"""Unit tests for app/pyops/set_update_deps.task.py — directive parsing,
 conflict resolution, and the per-set filesystem scan.
 
 The task script normally runs inside the pyops runner with `appspace` and
 `config` injected as job globals (see job_runner.setup_job_globals for the
-`setname == "internal"` branch) and with set.library.py's symbols added
+`setname == "pyops"` branch) and with set.library.py's symbols added
 via the `#!{::set}` directive. The fixture below mirrors that setup by
 exec'ing both files into one shared namespace, so each pure function
 (`_parse_directives`, `_resolve`, `_scan`) is callable directly without
@@ -19,8 +19,8 @@ import os
 import pytest
 
 
-INTERNAL_DIR = os.path.normpath(os.path.join(
-    os.path.dirname(__file__), "..", "..", "..", "app", "internal"
+PYOPS_SET_DIR = os.path.normpath(os.path.join(
+    os.path.dirname(__file__), "..", "..", "..", "app", "pyops"
 ))
 
 
@@ -41,7 +41,7 @@ def task(tmp_path):
     (tmp_path / "app").mkdir(exist_ok=True)
     (tmp_path / "data" / "git").mkdir(parents=True, exist_ok=True)
     for fname in ("set.library.py", "set_update_deps.task.py"):
-        path = os.path.join(INTERNAL_DIR, fname)
+        path = os.path.join(PYOPS_SET_DIR, fname)
         with open(path) as f:
             src = f.read()
         # Don't fire main() at module-load time.

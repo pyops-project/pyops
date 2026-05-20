@@ -73,14 +73,14 @@ def setup_job_globals(owner: str, setspace: str, workspace: str, web_bind: str, 
         "__name__": "__main__",
         "__builtins__": __builtins__
     }
-    # Pyops-managed internal-set scriptlets get two extra globals so they
-    # can introspect the running pyops installation without importing from
-    # `app.*` (which is forbidden — scriptlets must stay self-contained,
+    # Pyops-set scriptlets get two extra globals so they can introspect
+    # the running pyops installation without importing from `app.*`
+    # (which is forbidden — scriptlets must stay self-contained,
     # interfacing with pyops only via `control` / `listener` / globals).
     # `appspace` exposes the app source tree (e.g. for reading bundled
     # files like default templates); `config` is the full pyops.json so
     # the scriptlet can resolve git_base / venv_base / loglevel etc.
-    if setname == "internal":
+    if setname == "pyops":
         glob["appspace"] = os.path.join(_project_root, "app")
         glob["config"] = {
             "data": _conf_data,

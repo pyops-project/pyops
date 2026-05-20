@@ -187,7 +187,7 @@ def process_install_lines(lines, venv_path: str, pkg_path: str, set: str, job_id
             arg1 = parts[0].strip()
             arg2 = parts[1].strip() if len(parts) > 1 else None
             if '://' in arg1 or arg1.startswith('git@'):
-                # Mirrors app/internal/set_update_deps.task.py::_install_git
+                # Mirrors app/pyops/set_update_deps.task.py::_install_git
                 # so both paths land in the same directory. Strip a trailing
                 # `.git` only — the package is reached via `pip install -e`
                 # which resolves the name from setup.py/pyproject.toml, so

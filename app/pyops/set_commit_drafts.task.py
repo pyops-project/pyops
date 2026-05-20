@@ -16,7 +16,7 @@
 #            we fall back to "Commit drafts in <set> by <user>".
 #
 # Behaviour:
-#   - refuse on the internal set (write-protected)
+#   - refuse on the pyops set (write-protected)
 #   - refuse when HEAD is on a tag (mirrors batch_commit's invariant)
 #   - no-op cleanly when nothing is unstaged (print + return)
 #   - one `git add .` + `git commit` + `git push` (when a remote exists)
@@ -35,8 +35,8 @@ def _check(cmd, cwd):
 def main():
     if not name:
         raise ValueError("name is required")
-    if name == "internal":
-        raise ValueError("'internal' is write-protected")
+    if name == "pyops":
+        raise ValueError("'pyops' is write-protected")
 
     target = _set_dir(name)
     if not os.path.exists(target):

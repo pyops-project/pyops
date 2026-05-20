@@ -22,7 +22,7 @@ def integration_repo(tmp_path, monkeypatch):
     monkeypatch.setattr(files, 'conf_runner', lambda: {'git_pull_interval': 0, 'venv': str(test_venv), 'pkg': str(test_pkg)})
 
     # Create local repo. After the sets-management migration, set CRUD
-    # lives in app/internal/ scriptlets — for this fixture we just need
+    # lives in app/pyops/ scriptlets — for this fixture we just need
     # an empty dir; get_repo_path runs `git init` and writes the standard
     # .gitignore + README on first access.
     set_name = 'test_set'

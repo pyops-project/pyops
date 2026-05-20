@@ -6,7 +6,7 @@ The lock is the contract that lets us promise:
     concurrently — without it the venv would be torn apart by overlapping
     `python -m venv` / `pip install --upgrade pip` (pip can't replace itself
     while another invocation is reading the same files).
-  - The set_remove task (app/internal/set_remove.task.py) waits for any
+  - The set_remove task (app/pyops/set_remove.task.py) waits for any
     in-flight bootstrap before rmtree by taking the same fcntl flock on
     the same lock file — coverage for that lives end-to-end against the
     real controller path.

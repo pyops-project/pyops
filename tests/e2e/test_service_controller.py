@@ -211,8 +211,8 @@ def _run_schedule_once_via_ui(frame, e2e_page, sched_id):
 def _wait_for_running_job_in_monitor(frame, timeout=30):
     """Poll the monitor until a USER job with 'running' state appears.
 
-    Skips the always-running `internal::data` essential service (its
-    job-id starts with "system_internal_data_") — every fresh pyops
+    Skips the always-running `pyops::data` essential service (its
+    job-id starts with "system_pyops_data_") — every fresh pyops
     instance has one, and grabbing it would misroute the test's
     assertions to a job it didn't enqueue.
 
@@ -227,7 +227,7 @@ def _wait_for_running_job_in_monitor(frame, timeout=30):
         for i in range(rows.count()):
             row = rows.nth(i)
             job_id = row.get_attribute("data-id") or ""
-            if job_id.startswith("system_internal_data_"):
+            if job_id.startswith("system_pyops_data_"):
                 continue
             if "running" in row.inner_text().lower():
                 return job_id
@@ -939,7 +939,7 @@ class TestControllerProxy:
         # Cancel every service job that is still live in the monitor —
         # the scheduler may have auto-enqueued a second instance during the
         # active→inactive transition in _start_service_via_ui. Skip the
-        # always-running pyops-internal data service — cancelling it just
+        # always-running pyops::data service — cancelling it just
         # gets re-enqueued by the essential-services iteration, making this
         # loop never terminate.
         monitor_frame = _nav_monitor(e2e_page)
@@ -951,7 +951,7 @@ class TestControllerProxy:
             user_cancel_idx = []
             for i in range(cancel_btns.count()):
                 tid = cancel_btns.nth(i).get_attribute("data-testid") or ""
-                if tid.startswith("job-cancel-system_internal_data_"):
+                if tid.startswith("job-cancel-system_pyops_data_"):
                     continue
                 user_cancel_idx.append(i)
             if not user_cancel_idx:

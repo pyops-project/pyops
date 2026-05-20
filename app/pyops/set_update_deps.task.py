@@ -158,8 +158,8 @@ def _install_git(pip_bin, directive, name):
 def main():
     if not name:
         raise ValueError("name is required")
-    if name == "internal":
-        raise ValueError("'internal' is pyops-managed; updates flow via pyops deployment, not this task")
+    if name == "pyops":
+        raise ValueError("'pyops' is pyops-managed; updates flow via pyops deployment, not this task")
 
     set_dir = _set_dir(name)
     if not os.path.exists(set_dir):

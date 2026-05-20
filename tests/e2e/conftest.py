@@ -114,11 +114,11 @@ def e2e_env(tmp_path):
 def set_factory(e2e_env):
     """Create a user set on disk for tests that need one as a prerequisite.
 
-    Mirrors what `app/internal/set_create.task.py` does (mkdir + git init +
+    Mirrors what `app/pyops/set_create.task.py` does (mkdir + git init +
     minimal initial commit) but talks straight to the filesystem so e2e
     fixtures don't pay the data-service spawn cost on every test. Use only
     when set creation is *not* the subject under test — for that, drive
-    the controller path (`POST /controller/internal/sets/create`) directly.
+    the controller path (`POST /controller/pyops/sets/create`) directly.
     """
     def _make(name):
         repo = e2e_env["data_dir"] / "git" / name
@@ -146,8 +146,8 @@ def commit_set(e2e_env):
     """Test-side `git add . && git commit` in a set's repo.
 
     Pyops's server-side library has no commit/push surface — the only
-    sanctioned commit pathway in production is the internal
-    `set_commit_drafts` task, enqueued from the Sets-view UI button.
+    sanctioned commit pathway in production is the `pyops::set_commit_drafts`
+    task, enqueued from the Sets-view UI button.
     Tests that need a baseline commit to drive downstream behaviour
     (e.g. `kind=task` runs which read committed content, or
     `has_unstaged=False` assertions) use this helper to do the commit

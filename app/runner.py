@@ -48,8 +48,8 @@ from app.lib import job as job_lib
 # same `<3 failed` rule used for service-with-empty-schedule. The operator
 # unblocks a stuck essential service by deleting its failed records from
 # the Monitor (which removes them from `find(..., "service", ["failed"])`).
-INTERNAL_ESSENTIAL_SERVICES = [
-    {"set": "internal", "name": "data", "owner": "system"},
+PYOPS_ESSENTIAL_SERVICES = [
+    {"set": "pyops", "name": "data", "owner": "system"},
 ]
 
 import logging
@@ -65,7 +65,7 @@ class GracefulKiller:
 
     def exit_gracefully(self, signum, frame):
         # Drop the shutdown flag immediately so any enqueue() call from a
-        # gunicorn worker (HTTP) or the internal data service (HTTP back-
+        # gunicorn worker (HTTP) or the pyops data service (HTTP back-
         # channel) gets refused from this point on. Created here, removed in
         # main()'s exit path.
         try:
@@ -723,7 +723,7 @@ def schedule():
     # has deliberately taken the service down and must remove the row
     # before it comes back. Three failures in a row is also a stop until
     # the operator clears them.
-    for essential in INTERNAL_ESSENTIAL_SERVICES:
+    for essential in PYOPS_ESSENTIAL_SERVICES:
         owner = essential["owner"]
         set_ = essential["set"]
         name_ = essential["name"]
@@ -893,12 +893,12 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
                         code = job_lib.process_imports(code, setname, kind, libs, override_dict)
 
                         logger.debug(f"Run job {job_id}")
-                        # Internal-set scriptlets are pyops-native code and
+                        # Pyops-set scriptlets are pyops-native code and
                         # run in the pyops process's own Python — pyzmq /
                         # msgpack / psutil / requests are already there
                         # (pyops itself uses them). User sets get their
                         # own venv via the standard ensure_set_environment.
-                        if setname == "internal":
+                        if setname == files.PYOPS_SET_NAME:
                             venv_python = sys.executable
                         else:
                             ensure_set_environment(setname)

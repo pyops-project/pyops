@@ -574,49 +574,49 @@ class TestStatusAndRollback:
         assert result is True
 
 
-class TestInternalSetResolver:
+class TestPyopsSetResolver:
     """get_repo_path / read_content special-case for the pyops-managed
-    internal set: resolves to <project_root>/app/internal/ (not data/git/),
+    `pyops` set: resolves to <project_root>/app/pyops/ (not data/git/),
     no .git init, direct FS reads."""
 
-    def test_get_repo_path_internal_returns_app_internal(self, tmp_path):
-        fake_internal = tmp_path / "app" / "internal"
-        fake_internal.mkdir(parents=True)
-        with patch.object(files, "internal_set_path", str(fake_internal)):
-            result = git.get_repo_path("internal")
-        assert result == str(fake_internal)
+    def test_get_repo_path_pyops_returns_app_pyops(self, tmp_path):
+        fake_pyops = tmp_path / "app" / "pyops"
+        fake_pyops.mkdir(parents=True)
+        with patch.object(files, "pyops_set_path", str(fake_pyops)):
+            result = git.get_repo_path("pyops")
+        assert result == str(fake_pyops)
 
-    def test_get_repo_path_internal_raises_if_missing(self, tmp_path):
-        missing = tmp_path / "app" / "internal_missing"
-        with patch.object(files, "internal_set_path", str(missing)):
+    def test_get_repo_path_pyops_raises_if_missing(self, tmp_path):
+        missing = tmp_path / "app" / "pyops_missing"
+        with patch.object(files, "pyops_set_path", str(missing)):
             with pytest.raises(git.GitNotFoundError):
-                git.get_repo_path("internal")
+                git.get_repo_path("pyops")
 
-    def test_get_repo_path_internal_skips_git_init(self, tmp_path):
-        fake_internal = tmp_path / "app" / "internal"
-        fake_internal.mkdir(parents=True)
-        with patch.object(files, "internal_set_path", str(fake_internal)), \
+    def test_get_repo_path_pyops_skips_git_init(self, tmp_path):
+        fake_pyops = tmp_path / "app" / "pyops"
+        fake_pyops.mkdir(parents=True)
+        with patch.object(files, "pyops_set_path", str(fake_pyops)), \
              patch("app.lib.git._call") as mock_call:
-            git.get_repo_path("internal")
-        # Internal never gets `git init` / commit dance
+            git.get_repo_path("pyops")
+        # Pyops set never gets `git init` / commit dance
         mock_call.assert_not_called()
-        assert not (fake_internal / ".git").exists()
+        assert not (fake_pyops / ".git").exists()
 
-    def test_read_content_internal_direct_fs_read(self, tmp_path):
-        fake_internal = tmp_path / "app" / "internal"
-        fake_internal.mkdir(parents=True)
-        (fake_internal / "set_clone.task.py").write_text("print('hi')\n")
-        with patch.object(files, "internal_set_path", str(fake_internal)):
-            # committed=True/strict=True are intentionally ignored for internal
-            content = git.read_content(str(fake_internal), "set_clone", "task", committed=True, strict=True)
+    def test_read_content_pyops_direct_fs_read(self, tmp_path):
+        fake_pyops = tmp_path / "app" / "pyops"
+        fake_pyops.mkdir(parents=True)
+        (fake_pyops / "set_clone.task.py").write_text("print('hi')\n")
+        with patch.object(files, "pyops_set_path", str(fake_pyops)):
+            # committed=True/strict=True are intentionally ignored for the pyops set
+            content = git.read_content(str(fake_pyops), "set_clone", "task", committed=True, strict=True)
         assert content == "print('hi')\n"
 
-    def test_read_content_internal_missing_raises_filenotfound(self, tmp_path):
-        fake_internal = tmp_path / "app" / "internal"
-        fake_internal.mkdir(parents=True)
-        with patch.object(files, "internal_set_path", str(fake_internal)):
+    def test_read_content_pyops_missing_raises_filenotfound(self, tmp_path):
+        fake_pyops = tmp_path / "app" / "pyops"
+        fake_pyops.mkdir(parents=True)
+        with patch.object(files, "pyops_set_path", str(fake_pyops)):
             with pytest.raises(FileNotFoundError):
-                git.read_content(str(fake_internal), "no_such", "task", committed=False)
+                git.read_content(str(fake_pyops), "no_such", "task", committed=False)
 
 
 # Additional edge cases can be added as needed

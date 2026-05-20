@@ -10,8 +10,8 @@ import os
 def main():
     if not name:
         raise ValueError("name is required")
-    if name == "internal":
-        raise ValueError("'internal' is reserved for pyops-managed scriptlets")
+    if name == "pyops":
+        raise ValueError("'pyops' is reserved for pyops-managed scriptlets")
 
     git_base = _git_base()
     target = os.path.join(git_base, name)

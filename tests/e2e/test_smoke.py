@@ -45,13 +45,13 @@ class TestServerStartup:
     def test_empty_job_list(self, api, pyops_server):
         """Fresh instance has no USER jobs.
 
-        The pyops-internal essential service `internal::data` is always
+        The pyops-managed essential service `pyops::data` is always
         enqueued by the runner schedule loop on every boot — its job id
-        follows the `system_internal_data_<timestamp>` pattern, so filter
+        follows the `system_pyops_data_<timestamp>` pattern, so filter
         on the id prefix (the list endpoint does not return `set`/`name`)."""
         resp = api.get("/scriptlet/job/list")
         assert resp.status_code == 200
-        user_jobs = [j for j in resp.json() if not j["id"].startswith("system_internal_data_")]
+        user_jobs = [j for j in resp.json() if not j["id"].startswith("system_pyops_data_")]
         assert user_jobs == []
         pyops_server.assert_no_unexpected_errors()
 
@@ -257,7 +257,7 @@ class TestWebUIWorkflow:
 
     def test_navigate_to_sets(self, e2e_page, pyops_server):
         """Click the Sets menu item and verify the sets controller page loads.
-        Sets now lives as `/controller/internal/sets` — the controller wrapper
+        Sets now lives as `/controller/pyops/sets` — the controller wrapper
         injects the navbar built from the Sets controller's menu view, which
         carries the clone/create/refresh buttons."""
         e2e_page.locator('[data-testid="menu-link-scriptlet_sets"]').click()

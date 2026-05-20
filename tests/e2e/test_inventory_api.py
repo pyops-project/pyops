@@ -26,7 +26,7 @@ def _setup_task(api, set_factory, commit_set, set_name=SET, task_name=TASK, code
     """Create a scriptlet, draft the code, then commit via subprocess.
 
     The server no longer commits via the inventory API — only the
-    internal `set_commit_drafts` task does. For tests that need a
+    `pyops::set_commit_drafts` task does. For tests that need a
     "committed baseline" (e.g. `has_unstaged` flipping), the test-side
     `commit_set` fixture bakes the draft into HEAD directly."""
     set_factory(set_name)

@@ -74,8 +74,8 @@ graph TD
 | `app/lib/runner.py` | DB-level job utilities: `enqueue`, `query`, `find`, `cancel`, `remove`, `drop` |
 | `app/lib/job.py` | Execution utilities: `send_completion`, `process_imports`, `process_install_lines`, `process_code_installs` (acquires `sets.set_install_lock`), `kill_proc_tree`, `get_process_tree`, `loadLib`, `install_git_repo` |
 | `app/lib/pyops.py` | `Control` (API proxy), `ServiceListener`, `ServiceClient` |
-| `app/lib/sets.py` | Runner-side per-set venv primitives only: `ensure_set_environment`, `set_install_lock`, bootstrap-lock helpers, `CORE_DEPS`. The user-facing clone/create/pull/switch/remove/list/update-deps operations live as scriptlets under `app/internal/` and are reached via `/controller/internal/sets`. |
-| `app/internal/` | Pyops-internal scriptlet bundle: sets controller, data service, six `set_*` sub-tasks, shared library, jslibrary modal. Self-hosted admin operations — the runtime running these is the same one user code uses. |
+| `app/lib/sets.py` | Runner-side per-set venv primitives only: `ensure_set_environment`, `set_install_lock`, bootstrap-lock helpers, `CORE_DEPS`. The user-facing clone/create/pull/switch/remove/list/update-deps operations live as scriptlets under `app/pyops/` and are reached via `/controller/pyops/sets`. |
+| `app/pyops/` | Pyops-managed scriptlet bundle: sets controller, data service, `set_*` sub-tasks, shared library, jslibrary modal, reusable libraries (e.g. `pyops::pytest`). Self-hosted admin operations plus the public library namespace user scriptlets import from via `#!{pyops::name}`. |
 | `app/lib/sites.py` | Site rendering utilities |
 | `app/lib/async_utils.py` | Async helper utilities |
 | `app/lib/auth.py` | `sanitize_owner()` for `X-User` header normalization |
@@ -179,9 +179,9 @@ Manages scriptlet files as Git repos in `data/git/{set}/`. All mutating operatio
 - `check_name_unique(repo, name)`: prevents duplicate scriptlet names
 - `pull(repo)`: soft-reset to `origin/{branch}` if clean; skips if dirty or on tag; adds new `.py/.html/.js/README` files from HEAD if missing in working directory; retries fetch on `CalledProcessError`
 
-### Sets Management (`app/internal/`)
+### Sets Management and the `pyops` set (`app/pyops/`)
 
-Groups of scriptlets each live in their own Git repo under `data/git/{name}/`. The user-facing list/clone/create/pull/switch/remove/update-deps operations are not hardcoded routers — they are pyops scriptlets in the bundled `internal` set, reached at `/controller/internal/sets`.
+Groups of scriptlets each live in their own Git repo under `data/git/{name}/`. The user-facing list/clone/create/pull/switch/remove/update-deps operations are not hardcoded routers — they are pyops scriptlets in the bundled `pyops` set, reached at `/controller/pyops/sets`. The same set is also the **public library namespace** user scriptlets import from via `#!{pyops::name}` (e.g. `#!{pyops::pytest}`).
 
 Structure of the bundle:
 
@@ -189,24 +189,25 @@ Structure of the bundle:
 |------|------|
 | `sets.controller.py` | Controller; binds the proxy to `service="data"`, sets the head/menu/body views |
 | `sets_head.html`, `sets_menu.html`, `sets_body.html` | The Sets UI fragments |
-| `data.task.py` | Service (`kind=service`); `ServiceListener` loop that routes incoming `controller/internal/sets/{...}` requests |
+| `data.task.py` | Service (`kind=service`); `ServiceListener` loop that routes incoming `controller/pyops/sets/{...}` requests |
 | `set.library.py` | Shared helpers used by the `set_*` tasks (lock paths, run_cmd, status) |
-| `set_clone.task.py`, `set_create.task.py`, `set_pull.task.py`, `set_switch.task.py`, `set_remove.task.py`, `set_update_deps.task.py` | One task per mutating operation, each held against the same `set_install_lock` the runner-side spawn path uses |
-| `internal_job.js` | Jslibrary modal: fires the controller POST, polls `/scriptlet/job/item` until terminal, tails stdout/stderr live |
+| `set_clone.task.py`, `set_create.task.py`, `set_pull.task.py`, `set_switch.task.py`, `set_remove.task.py`, `set_update_deps.task.py`, `set_commit_drafts.task.py` | One task per mutating operation, each held against the same `set_install_lock` the runner-side spawn path uses |
+| `set_job.js` | Jslibrary modal (loaded as `pyops::set_job`): fires the controller POST, polls `/scriptlet/job/item` until terminal, tails stdout/stderr live |
+| `pytest.library.py` | Reusable library imported from test-kind tasks via `#!{pyops::pytest}` — programmatic pytest invocation against named test classes, conditional coverage (see "Test Jobs") |
 
 Request flow for a mutating action (e.g. clone):
 
-1. UI calls `POST /controller/internal/sets/clone` (jslib modal opens).
+1. UI calls `POST /controller/pyops/sets/clone` (jslib modal opens).
 2. FastAPI's `controller_proxy` finds the running `data` service and forwards the request via ZMQ.
 3. `data.task.py` enqueues a `set_clone` task with `drop_done=True` via `control.job.create(...)`, returns the job id.
 4. The modal polls `/scriptlet/job/item?id=<id>` and tails the job's stdout/stderr.
 5. The `set_clone.task.py` task runs in the runner, acquires `set_install_lock(name)`, performs the git operation, exits — runner finishes the job, drop_done auto-removes the row.
 
-The `internal` set is a fixed bundle: the git lib resolves the set name `"internal"` to `<project_root>/app/internal/` with direct filesystem reads, no `.git` initialised in there. `list_sets()` (filesystem walk done by `data.task.py`) hides `internal`; the inventory router and the `set_remove` task refuse to touch it.
+The `pyops` set is a fixed bundle: the git lib resolves the set name `"pyops"` to `<project_root>/app/pyops/` with direct filesystem reads, no `.git` initialised in there. `list_sets()` (filesystem walk done by `data.task.py`) hides `pyops`; the inventory router and the `set_remove` task refuse to touch it. The `pyops::*` library namespace is reachable from any user scriptlet via the `#!{pyops::name}` directive — the library code is exec'd into the importing job's globals exactly like a same-set library, but the source lives with the pyops application.
 
 Runner-side primitives in `app/lib/sets.py` (still used directly by the runner and by `set_install_lock` callers):
 
-- `ensure_set_environment(name)`: idempotent — creates `data/venv/{name}` and pip-installs `CORE_DEPS` (pyzmq, msgpack, psutil, requests) under `_bootstrap_lock`. Skipped entirely for `name == "internal"` — those scriptlets run in pyops's own host venv via `sys.executable`. Debug-kind jobs whose client bootstrap needs an extra package (e.g. `debugpy`, `gdbserver` companion libs) pull it via a `#!pip ...` directive in `param`, not from CORE_DEPS.
+- `ensure_set_environment(name)`: idempotent — creates `data/venv/{name}` and pip-installs `CORE_DEPS` (pyzmq, msgpack, psutil, requests) under `_bootstrap_lock`. Skipped entirely for `name == "pyops"` — those scriptlets run in pyops's own host venv via `sys.executable`. Debug-kind jobs whose client bootstrap needs an extra package (e.g. `debugpy`, `gdbserver` companion libs) pull it via a `#!<pkg>` directive in `param`, not from CORE_DEPS.
 - `set_install_lock(name)`: `fcntl.flock` context manager on `data/git/{name}/.install.lock`, used both by `process_code_installs` and by the `set_*` tasks.
 
 ### Status Detection
@@ -286,7 +287,7 @@ graph TD
 `schedule()` is called each main loop iteration when no job is queued:
 - **Cron tasks** (non-empty `schedule` string): enqueues `task` job when `next_run ≤ now`; skips if one already running.
 - **Persistent services** (empty `schedule` string): enqueues `service` job if none active and failed count < 3.
-- **Essential services** (`INTERNAL_ESSENTIAL_SERVICES`, currently `[{"set":"internal","name":"data","owner":"system"}]`): same `<3-failed` gating as services-with-empty-schedule, but no `Schedule` row required — the runner keeps the listed services up unconditionally. The `internal::data` service is what backs `/controller/internal/sets`.
+- **Essential services** (`PYOPS_ESSENTIAL_SERVICES`, currently `[{"set":"pyops","name":"data","owner":"system"}]`): same `<3-failed` gating as services-with-empty-schedule, but no `Schedule` row required — the runner keeps the listed services up unconditionally. The `pyops::data` service is what backs `/controller/pyops/sets`.
 
 Every `lib_runner.enqueue` inside `schedule()` is wrapped in `try/except ShutdownPending → return` so a SIGTERM landing mid-iteration terminates the call cleanly rather than escaping as an exception.
 
@@ -309,7 +310,7 @@ The main loop's `while not killer.kill_now` exits at the next iteration boundary
 
 After `_shutdown_job_processes` returns, the runner drains any final ZMQ events, runs `disposeJobs()` for `remove`-state rows, removes the shutdown flag on its way out.
 
-**Cross-process shutdown flag.** `lib_runner.SHUTDOWN_FLAG_PATH = "/tmp/pyops/shutdown.flag"`. Every `lib_runner.enqueue(...)` call checks `is_shutdown_pending()` first and raises `ShutdownPending` if the flag is present. The flag is also visible to other processes — gunicorn workers handling in-flight `PUT /scriptlet/job/item` or `/scriptlet/schedule/run/{id}` requests refuse new enqueues the moment the runner has been signalled, and so does the `internal::data` service when its HTTP-back-channel `control.job.create(...)` runs during the shutdown window.
+**Cross-process shutdown flag.** `lib_runner.SHUTDOWN_FLAG_PATH = "/tmp/pyops/shutdown.flag"`. Every `lib_runner.enqueue(...)` call checks `is_shutdown_pending()` first and raises `ShutdownPending` if the flag is present. The flag is also visible to other processes — gunicorn workers handling in-flight `PUT /scriptlet/job/item` or `/scriptlet/schedule/run/{id}` requests refuse new enqueues the moment the runner has been signalled, and so does the `pyops::data` service when its HTTP-back-channel `control.job.create(...)` runs during the shutdown window.
 
 #### Debug Spawn
 
@@ -403,12 +404,12 @@ Directives in scriptlet code control installs and library imports.
 
 #### Library Imports: `process_imports()`
 
-Pattern: `#!{[set::]name}` at line start. Recursively loads library code (committed unless debug/draft), appends to `libs` list in topological order. Cycle-safe via `seen_libs` set and `depth` limit (10).
+Pattern: `#!{set::name}` at line start. The `::` is **mandatory**; an empty `set` means "current set", so `#!{::lib}` imports library `lib` from the same set as the calling scriptlet, and `#!{otherset::lib}` imports from a different set. Cross-set imports include the `pyops::*` namespace shipped with the application (e.g. `#!{pyops::pytest}`). Recursively loads library code (committed unless debug/draft), appends to `libs` list in topological order. Cycle-safe via `seen_libs` set and `depth` limit (10).
 
 Directive type detection:
 - **git**: arg contains `://` or starts with `git@`
-- **library**: starts with `{` or contains `::`
-- **pip**: anything else
+- **library**: starts with `{` and contains `::`
+- **pip**: anything else (`#!pytest` → `pip install pytest`)
 
 #### Install Processing: `process_install_lines()` / `process_code_installs()`
 
@@ -425,7 +426,7 @@ Installs run inside `job_setup.py` — before `os.execv` into `job_runner.py`. B
 
 #### "Update Dependencies" — set-level operator action
 
-UI button → `POST /controller/internal/sets/update_deps` (via the jslib modal) → `internal::data` service routes to → `set_update_deps.task.py` enqueued with `drop_done=True`. The modal polls `/scriptlet/job/item?id=<id>` and tails the live stdout/stderr while the task runs.
+UI button → `POST /controller/pyops/sets/update_deps` (via the jslib modal) → `pyops::data` service routes to → `set_update_deps.task.py` enqueued with `drop_done=True`. The modal polls `/scriptlet/job/item?id=<id>` and tails the live stdout/stderr while the task runs.
 
 1. Acquires `set_install_lock(name)` for the full duration; running jobs in the same set queue behind, other sets are unaffected.
 2. Upgrades pyops core deps: `pip install --upgrade pip setuptools wheel` then `pip install --upgrade pyzmq msgpack psutil requests`. Two calls because pip cannot upgrade itself in the same invocation that installs other packages (certifi vendor path issue).
@@ -554,7 +555,7 @@ FastAPI application; mounts all routers; serves static files.
 - `GET /version` → `{"version": str}` from `app/lib/files.py::version()` which reads the project-root `VERSION` file (single source of truth shared with the VSIX build)
 - `GET /controller/{set}/{name}` → executes controller.py draft, renders head/menu/body views with `{{SET}}`/`{{NAME}}` injection; wraps the menu fragment in a `navbar-expand-md` collapse with a toggler so user menus fold behind a hamburger below 768px without any author effort
 - `ANY /controller/{set}/{name}/{rest:path}` → `controller_proxy`: executes controller to find running service/debug job, forwards via `ServiceClient.request()`
-- `GET /menu` → `{"menu": [...], "failures": [...]}` — hardcoded Scriptlet group (Manager, Scheduler, Monitor, Sets — the Sets entry now points at `/controller/internal/sets`) + dynamic per-set controller groups from Git; exec failures collected rather than raised
+- `GET /menu` → `{"menu": [...], "failures": [...]}` — hardcoded Scriptlet group (Manager, Scheduler, Monitor, Sets — the Sets entry now points at `/controller/pyops/sets`) + dynamic per-set controller groups from Git; exec failures collected rather than raised
 
 ### Controller Proxy Detail
 
@@ -580,7 +581,7 @@ All routers mount under `/scriptlet/`. Owner resolved from `X-User` header (defa
 | `monitor.py` | `/scriptlet/monitor/` | Job/schedule state listing UI |
 | `jslib.py` | `/scriptlet/jslib/{set}/{name}` | Serve JS libraries |
 
-There is no `sets` router under `/scriptlet/`. Sets management (list/clone/create/pull/switch/remove/update_deps) lives at `/controller/internal/sets/*` — see "Sets Management (`app/internal/`)" above.
+There is no `sets` router under `/scriptlet/`. Sets management (list/clone/create/pull/switch/remove/update_deps) lives at `/controller/pyops/sets/*` — see "Sets Management and the `pyops` set (`app/pyops/`)" above.
 
 ### Monitoring Router (`app/routers/monitoring.py`)
 
@@ -606,9 +607,9 @@ Ulimit check tracks RLIMIT_NOFILE and RLIMIT_NPROC against current usage from `/
 
 - `conftest.py`: shared fixtures
 - `tests/unit/lib/`: lib_files, lib_git, lib_pyops, lib_runner_utils, lib_sites
-- `tests/unit/runner/`: test_daemon (covers `_shutdown_job_processes`, `TestShutdownFlag`, `TestHandleOddJobsCancelStates`, essential-services, internal-set host-venv contract)
+- `tests/unit/runner/`: test_daemon (covers `_shutdown_job_processes`, `TestShutdownFlag`, `TestHandleOddJobsCancelStates`, essential-services, pyops-set host-venv contract)
 - `tests/unit/orm/`: job, schedule
-- `tests/integration/`: git, orm, routers, runner execution, zmq_integration, error_logging, `test_internal_set` (rendering + scriptlet parse + controller-proxy reach)
+- `tests/integration/`: git, orm, routers, runner execution, zmq_integration, error_logging, `test_pyops_set` (rendering + scriptlet parse + controller-proxy reach)
 - `tests/api/`: api_editor, api_endpoints, api_job, api_schedule
 - `tests/e2e/`: Playwright E2E tests against a real server instance — includes `test_sets_via_controller.py` covering the controller-mediated sets-management path end-to-end (REST and UI modal)
 

@@ -352,11 +352,11 @@ def test_runsh_propagates_sigterm_through_bash_to_gunicorn(tmp_path):
                 f"Log tail:\n{content[-2000:]}"
             )
 
-        internal_jobs_dir = data_dir / "jobs" / "internal"
+        pyops_jobs_dir = data_dir / "jobs" / "pyops"
         deadline = time.monotonic() + 60
         data_job_dir = None
         while time.monotonic() < deadline:
-            candidates = sorted(internal_jobs_dir.glob("system_internal_data_*")) if internal_jobs_dir.exists() else []
+            candidates = sorted(pyops_jobs_dir.glob("system_pyops_data_*")) if pyops_jobs_dir.exists() else []
             if candidates:
                 latest = candidates[-1]
                 stdout_log = latest / "stdout.log"
@@ -426,7 +426,7 @@ def _poll_in_background(stop_event):
 
 
 @pytest.mark.parametrize("worker_count", [1, 2, 4])
-def test_shutdown_signals_internal_data_service_cleanly(worker_count, tmp_path):
+def test_shutdown_signals_pyops_data_service_cleanly(worker_count, tmp_path):
     """Verifies the gunicorn → runner → service shutdown-signal cascade.
 
     Container-level chain: docker SIGTERM → gunicorn master → on_exit(server)
@@ -440,7 +440,7 @@ def test_shutdown_signals_internal_data_service_cleanly(worker_count, tmp_path):
     docker SIGKILLs the container at stop_grace_period, and the next
     startup's `handleOddJobs` flips a left-behind `running` row to
     `failed` — visible in production as accumulating
-    `system_internal_data_*` `failed` rows with detail
+    `system_pyops_data_*` `failed` rows with detail
     `"incomplete execution detected on startup"`.
 
     Regression: this test catches the cascade breaking. Parametrised over
@@ -452,14 +452,14 @@ def test_shutdown_signals_internal_data_service_cleanly(worker_count, tmp_path):
     stop_polling = threading.Event()
     poll_thread = None
     try:
-        # Wait for the internal data service to spawn and log its startup
+        # Wait for the pyops::data service to spawn and log its startup
         # line. The runner's schedule loop enqueues it; the runner picks
-        # it up; the script logs to data/jobs/internal/<id>/stdout.log.
-        internal_jobs_dir = data_dir / "jobs" / "internal"
+        # it up; the script logs to data/jobs/pyops/<id>/stdout.log.
+        pyops_jobs_dir = data_dir / "jobs" / "pyops"
         deadline = time.monotonic() + 60
         data_job_dir = None
         while time.monotonic() < deadline:
-            candidates = sorted(internal_jobs_dir.glob("system_internal_data_*")) if internal_jobs_dir.exists() else []
+            candidates = sorted(pyops_jobs_dir.glob("system_pyops_data_*")) if pyops_jobs_dir.exists() else []
             if candidates:
                 latest = candidates[-1]
                 stdout_log = latest / "stdout.log"
@@ -469,7 +469,7 @@ def test_shutdown_signals_internal_data_service_cleanly(worker_count, tmp_path):
             time.sleep(0.5)
         if data_job_dir is None:
             pytest.fail(
-                "internal data service did not log 'data service started' within 60s.\n"
+                "pyops::data service did not log 'data service started' within 60s.\n"
                 f"Server log tail:\n{log_path.read_text()[-2000:]}"
             )
 
@@ -569,9 +569,9 @@ def test_async_poll_service_acks_term_within_grace_window(tmp_path):
     handler has flipped `kill_now`, the caller sees the sentinel, and the
     service exits cleanly well before the grace window expires.
 
-    Sister test of `test_shutdown_signals_internal_data_service_cleanly`
+    Sister test of `test_shutdown_signals_pyops_data_service_cleanly`
     above, which covers the blocking-`listen()` codepath via the
-    always-running internal data service.
+    always-running pyops::data service.
     """
     proc, data_dir, log_file, log_path = _start_server(tmp_path)
     try:

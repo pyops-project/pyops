@@ -2,7 +2,7 @@
   "name": "pyops",
   "displayName": "PyOps",
   "description": "VSCodium extension for integrating with PyOps server",
-  "version": "3.2.0",
+  "version": "3.3.0",
   "publisher": "pyops-team",
   "license": "AGPL-3.0-only",
   "repository": {

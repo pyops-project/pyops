@@ -213,11 +213,11 @@ Distinguishes types by argument:
 #### Shutdown Gate
 
 - `lib_runner.SHUTDOWN_FLAG_PATH` (`/tmp/pyops/shutdown.flag`): created by `GracefulKiller.exit_gracefully`, removed on clean startup and exit
-- `lib_runner.enqueue()` raises `ShutdownPending` when the flag is present — gunicorn-worker HTTP enqueues and `internal::data` service callbacks refuse new work as soon as the runner has been signalled
+- `lib_runner.enqueue()` raises `ShutdownPending` when the flag is present — gunicorn-worker HTTP enqueues and `pyops::data` service callbacks refuse new work as soon as the runner has been signalled
 
 #### Scheduling
 
-- `schedule()`: enqueues from cron Schedules via croniter; also re-enqueues `INTERNAL_ESSENTIAL_SERVICES` (currently the `internal::data` service that backs `/controller/internal/sets`) under the same `<3-failed` gating as services without a Schedule row
+- `schedule()`: enqueues from cron Schedules via croniter; also re-enqueues `PYOPS_ESSENTIAL_SERVICES` (currently the `pyops::data` service that backs `/controller/pyops/sets`) under the same `<3-failed` gating as services without a Schedule row
 
 #### Subprocess Execution Isolation
 

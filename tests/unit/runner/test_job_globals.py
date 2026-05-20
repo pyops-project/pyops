@@ -39,8 +39,8 @@ class TestSetupJobGlobals:
         assert glob["listener"] is not None
 
 
-class TestInternalSetExtraGlobals:
-    """Scriptlets in the pyops-managed `internal` set get two extra globals
+class TestPyopsSetExtraGlobals:
+    """Scriptlets in the pyops-managed `pyops` set get two extra globals
     so they can introspect the running pyops install without importing from
     `app.*` (forbidden — scriptlets stay self-contained, interfacing with
     pyops only via control/listener/globals)."""
@@ -69,13 +69,13 @@ class TestInternalSetExtraGlobals:
         assert "appspace" not in glob
         assert "config" not in glob
 
-    def test_internal_set_exposes_appspace(self):
-        glob = self._call("internal")
+    def test_pyops_set_exposes_appspace(self):
+        glob = self._call("pyops")
         assert "appspace" in glob
         assert glob["appspace"].endswith("app")
 
-    def test_internal_set_exposes_full_config(self):
-        glob = self._call("internal")
+    def test_pyops_set_exposes_full_config(self):
+        glob = self._call("pyops")
         assert "config" in glob
         assert set(glob["config"].keys()) == {"data", "runner", "users", "web", "log"}
         assert glob["config"]["data"] == {"git": "data/git", "jobs": "data/jobs"}

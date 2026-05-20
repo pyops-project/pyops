@@ -20,8 +20,8 @@ def _check(cmd, cwd):
 def main():
     if not name:
         raise ValueError("name is required")
-    if name == "internal":
-        raise ValueError("'internal' is not pullable")
+    if name == "pyops":
+        raise ValueError("'pyops' is not pullable")
 
     target = _set_dir(name)
     if not os.path.exists(target):

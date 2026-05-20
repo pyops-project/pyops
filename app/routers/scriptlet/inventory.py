@@ -15,11 +15,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _reject_if_internal(set_name: str) -> None:
-    """Block write operations against the pyops-managed internal set —
+def _reject_if_pyops(set_name: str) -> None:
+    """Block write operations against the pyops-managed set —
     its scriptlets ship with the application source and are versioned
     via the pyops repo, not via the inventory API."""
-    if files.is_internal_set(set_name):
+    if files.is_pyops_set(set_name):
         raise HTTPException(
             status_code=HTTP_400_BAD_REQUEST,
             detail=f"Set '{set_name}' is pyops-managed and not editable via the API.",
@@ -52,7 +52,7 @@ async def item_put(cr: CreateArgument, user: str = Depends(get_current_user)):
     Creates a new Scriptlet
     """
     try:
-        _reject_if_internal(cr.set)
+        _reject_if_pyops(cr.set)
         git_base = git.get_git_base()
         potential_repo = os.path.join(git_base, cr.set)
         if not os.path.exists(os.path.join(potential_repo, '.git')):
@@ -94,7 +94,7 @@ async def draft_post(sa: SaveArgument):
     Use for auto-save; follow with /item POST for explicit save.
     """
     try:
-        _reject_if_internal(sa.set)
+        _reject_if_pyops(sa.set)
         repo = await run_in_executor(git.get_repo_path, sa.set)
         # Infer type from existing file.
         files = [f for f in os.listdir(repo) if f.startswith(f"{sa.name}.") and f.endswith(('.py', '.html', '.md', '.js'))]
@@ -120,7 +120,7 @@ async def item_del(set: str, name: str, user: str = Depends(get_current_user)):
     The deletion is folded into the next set-wide `commit_drafts` batch.
     """
     try:
-        _reject_if_internal(set)
+        _reject_if_pyops(set)
         repo = await run_in_executor(git.get_repo_path, set)
         files = [f for f in os.listdir(repo) if f.startswith(f"{name}.") and f.endswith(('.py', '.html', '.md', '.js'))]
         if not files:
@@ -145,7 +145,7 @@ async def draft_del(set: str = Query(..., description="Set"), name: str = Query(
     Returns 204 on full success (content match); raises on fail.
     """
     try:
-        _reject_if_internal(set)
+        _reject_if_pyops(set)
         repo = await run_in_executor(git.get_repo_path, set)
         files = [f for f in os.listdir(repo) if f.startswith(f"{name}.") and f.endswith(('.py', '.html', '.md', '.js'))]
         if not files:

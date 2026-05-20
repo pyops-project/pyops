@@ -274,7 +274,7 @@ The 3.1.0 scope hits these pyops endpoints:
 `PUT /scriptlet/inventory/item` (create, working-tree only),
 `POST /scriptlet/inventory/draft` (draft write, no commit),
 `DELETE /scriptlet/inventory/item` (working-tree only). Commit + push
-is exclusively the internal `set_commit_drafts` task — invoked via the
+is exclusively the `pyops::set_commit_drafts` task — invoked via the
 Sets view's "Commit drafts" button or by enqueuing the task directly.
 
 **job** — `GET /scriptlet/job/list`, `GET /scriptlet/job/item`,

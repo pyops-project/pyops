@@ -179,13 +179,13 @@ def get_repo_path(set: str) -> str:
     Raises:
         HTTPException: 404 if set directory does not exist.
     """
-    # The internal set ships with the application source — it's checked
-    # into the pyops repo under app/internal/. No per-set .git, no init,
+    # The pyops set ships with the application source — it's checked
+    # into the pyops repo under app/pyops/. No per-set .git, no init,
     # no commit dance: scriptlets there are versioned with pyops itself.
-    if set == files.INTERNAL_SET_NAME:
-        if not os.path.isdir(files.internal_set_path):
+    if set == files.PYOPS_SET_NAME:
+        if not os.path.isdir(files.pyops_set_path):
             raise GitNotFoundError(f"Set '{set}' does not exist")
-        return files.internal_set_path
+        return files.pyops_set_path
 
     git_base = get_git_base()
     repo = os.path.abspath(os.path.join(git_base, set))
@@ -392,9 +392,9 @@ def read_content(repo: str, name: str, type_: str, committed: bool = False, stri
     file_path = get_file_path(repo, name, type_)
     rel_path = os.path.relpath(file_path, repo)
 
-    # Internal set has no per-set .git — read directly from disk, ignore
+    # Pyops set has no per-set .git — read directly from disk, ignore
     # the committed/strict flags (they don't apply to pyops-shipped code).
-    if os.path.abspath(repo) == files.internal_set_path:
+    if os.path.abspath(repo) == files.pyops_set_path:
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"File not found: {file_path}")
         with open(file_path, "r", encoding="utf-8") as f:

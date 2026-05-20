@@ -1,13 +1,13 @@
-"""End-to-end coverage for sets management through the internal controller.
+"""End-to-end coverage for sets management through the pyops-set controller.
 
 Restores what the deleted test_set_lifecycle / test_sets_git / test_sets_ui /
 test_update_deps modules covered against the old `/scriptlet/sets/*` endpoints,
-plus the new live-output dialog (internal_job.js / runInternalJob) the
+plus the new live-output dialog (set_job.js / runSetJob) the
 controller-mediated flow introduces.
 
 Every mutating operation now travels:
-    browser → /controller/internal/sets/<op> → data.task.py (service)
-           → control.job.create(internal, set_<op>, drop_done=true, …)
+    browser → /controller/pyops/sets/<op> → data.task.py (service)
+           → control.job.create(pyops, set_<op>, drop_done=true, …)
            → set_<op>.task.py job → subprocess git/pip → workspace logs
 
 The dialog the operator sees stays open during the task, tails the
@@ -32,15 +32,15 @@ JOB_TIMEOUT = 180
 # ---------------------------------------------------------------------------
 
 def _service_ready(api, timeout=SERVICE_READY_TIMEOUT):
-    """Block until the internal::data service answers /list with a real
-    payload. Until the runner has bootstrapped the internal venv and the
+    """Block until the pyops::data service answers /list with a real
+    payload. Until the runner has bootstrapped the pyops set and the
     schedule loop has enqueued + started the service, the controller proxy
     returns HTTP 503 with `{"error": "No running service…"}`."""
     deadline = time.time() + timeout
     last_err = None
     while time.time() < deadline:
         try:
-            r = api.get("/controller/internal/sets/list")
+            r = api.get("/controller/pyops/sets/list")
             if r.status_code == 200:
                 body = r.json()
                 if isinstance(body.get("sets"), list):
@@ -49,7 +49,7 @@ def _service_ready(api, timeout=SERVICE_READY_TIMEOUT):
         except Exception as e:
             last_err = str(e)
         time.sleep(1)
-    pytest.fail(f"internal::data service not ready within {timeout}s; last: {last_err}")
+    pytest.fail(f"pyops::data service not ready within {timeout}s; last: {last_err}")
 
 
 def _poll_job(api, job_id, timeout=JOB_TIMEOUT):
@@ -170,10 +170,10 @@ def _nav_sets(e2e_page):
 
 
 def _await_modal_done(frame, timeout=60_000):
-    """Wait until the internal-job modal's state badge reads done / failed
+    """Wait until the set-job modal's state badge reads done / failed
     / cancelled / removed AND the Close button is enabled — i.e. the
     sub-task has finished from the operator's perspective."""
-    badge = frame.locator('[data-testid="internal-job-state"]')
+    badge = frame.locator('[data-testid="set-job-state"]')
     badge.wait_for(state="visible", timeout=10_000)
     deadline = time.time() + timeout / 1000
     while time.time() < deadline:
@@ -182,11 +182,11 @@ def _await_modal_done(frame, timeout=60_000):
         except Exception:
             text = ""
         if text in {"done", "failed", "cancelled", "removed"}:
-            close_btn = frame.locator('[data-testid="internal-job-close"]')
+            close_btn = frame.locator('[data-testid="set-job-close"]')
             if not close_btn.is_disabled():
                 return text
         time.sleep(0.2)
-    raise AssertionError(f"internal-job modal did not reach terminal state within {timeout}ms (last badge: {text!r})")
+    raise AssertionError(f"set-job modal did not reach terminal state within {timeout}ms (last badge: {text!r})")
 
 
 # ---------------------------------------------------------------------------
@@ -200,7 +200,7 @@ class TestSetsLifecycleViaController:
 
     def test_create_makes_all_three_dirs(self, api, pyops_server, e2e_env, set_factory):
         _service_ready(api)
-        job = _run(api, "POST", "/controller/internal/sets/create", {"name": "lc_create"})
+        job = _run(api, "POST", "/controller/pyops/sets/create", {"name": "lc_create"})
         _assert_done(job)
         d = _dirs(e2e_env, "lc_create")
         assert d["git"].is_dir()
@@ -209,14 +209,14 @@ class TestSetsLifecycleViaController:
 
     def test_remove_deletes_all_three_dirs(self, api, pyops_server, e2e_env, set_factory):
         _service_ready(api)
-        _assert_done(_run(api, "POST", "/controller/internal/sets/create", {"name": "lc_remove"}))
+        _assert_done(_run(api, "POST", "/controller/pyops/sets/create", {"name": "lc_remove"}))
         # Force venv/pkg into existence so the remove task has all three to
         # tear down (the runner-side lazy bootstrap also does this but only
         # when a real user-scriptlet job spawns in the set).
         (Path(e2e_env["data_dir"]) / "venv" / "lc_remove").mkdir(parents=True, exist_ok=True)
         (Path(e2e_env["data_dir"]) / "pkg" / "lc_remove").mkdir(parents=True, exist_ok=True)
 
-        _assert_done(_run(api, "DELETE", "/controller/internal/sets/remove/lc_remove"))
+        _assert_done(_run(api, "DELETE", "/controller/pyops/sets/remove/lc_remove"))
         d = _dirs(e2e_env, "lc_remove")
         assert not d["git"].exists()
         assert not d["venv"].exists()
@@ -224,15 +224,15 @@ class TestSetsLifecycleViaController:
 
     def test_remove_unknown_set_fails(self, api, pyops_server, set_factory):
         _service_ready(api)
-        job = _run(api, "DELETE", "/controller/internal/sets/remove/does-not-exist-xyzzy")
+        job = _run(api, "DELETE", "/controller/pyops/sets/remove/does-not-exist-xyzzy")
         _assert_failed(job, "not found")
         pyops_server.assert_no_unexpected_errors(allow=["not found", "set_remove"])
 
     def test_recreate_after_remove_succeeds(self, api, pyops_server, e2e_env, set_factory):
         _service_ready(api)
-        _run(api, "POST", "/controller/internal/sets/create", {"name": "lc_recycle"})
-        _run(api, "DELETE", "/controller/internal/sets/remove/lc_recycle")
-        job = _run(api, "POST", "/controller/internal/sets/create", {"name": "lc_recycle"})
+        _run(api, "POST", "/controller/pyops/sets/create", {"name": "lc_recycle"})
+        _run(api, "DELETE", "/controller/pyops/sets/remove/lc_recycle")
+        job = _run(api, "POST", "/controller/pyops/sets/create", {"name": "lc_recycle"})
         _assert_done(job)
         assert _dirs(e2e_env, "lc_recycle")["git"].is_dir()
 
@@ -240,8 +240,8 @@ class TestSetsLifecycleViaController:
         """Creating a set with a name that already exists on disk fails;
         the set_create task refuses to overwrite a populated directory."""
         _service_ready(api)
-        _assert_done(_run(api, "POST", "/controller/internal/sets/create", {"name": "lc_dup"}))
-        job = _run(api, "POST", "/controller/internal/sets/create", {"name": "lc_dup"})
+        _assert_done(_run(api, "POST", "/controller/pyops/sets/create", {"name": "lc_dup"}))
+        job = _run(api, "POST", "/controller/pyops/sets/create", {"name": "lc_dup"})
         _assert_failed(job, "already exists")
         pyops_server.assert_no_unexpected_errors(allow=["already exists", "set_create"])
 
@@ -252,7 +252,7 @@ class TestSetsLifecycleViaController:
         set_remove task tears all three down."""
         _service_ready(api)
         name = "lc_used"
-        _assert_done(_run(api, "POST", "/controller/internal/sets/create", {"name": name}))
+        _assert_done(_run(api, "POST", "/controller/pyops/sets/create", {"name": name}))
 
         # Run a real user task in the new set so venv + workspace exist.
         # kind=task reads committed content, so commit after drafting.
@@ -276,7 +276,7 @@ class TestSetsLifecycleViaController:
         else:
             pytest.fail(f"prime job {job_id} did not reach terminal state")
 
-        _assert_done(_run(api, "DELETE", f"/controller/internal/sets/remove/{name}"))
+        _assert_done(_run(api, "DELETE", f"/controller/pyops/sets/remove/{name}"))
         d = _dirs(e2e_env, name)
         assert not d["git"].exists()
 
@@ -285,7 +285,7 @@ class TestSetsCloneViaController:
     def test_clone_from_file_url_creates_set(self, api, pyops_server, bare_remote, e2e_env, set_factory):
         _service_ready(api)
         url = f"file://{bare_remote}"
-        job = _run(api, "POST", "/controller/internal/sets/clone", {"url": url})
+        job = _run(api, "POST", "/controller/pyops/sets/clone", {"url": url})
         _assert_done(job)
         # Name inferred from URL basename
         assert (Path(e2e_env["data_dir"]) / "git" / "remote_repo" / ".git").is_dir()
@@ -295,7 +295,7 @@ class TestSetsCloneViaController:
         # Empty URL — service rejects synchronously with 400 before any job
         # spawns; controller_proxy re-raises that as an HTTPException, so the
         # client sees a real 400 status (not a 200 with an error payload).
-        r = api.post("/controller/internal/sets/clone", json={"url": ""})
+        r = api.post("/controller/pyops/sets/clone", json={"url": ""})
         assert r.status_code == 400, r.text
         # FastAPI wraps HTTPException.detail under {"detail": ...}; the
         # detail here carries the service's {"error": "url is required"} dict.
@@ -308,8 +308,8 @@ class TestSetsCloneViaController:
     def test_clone_duplicate_name_fails(self, api, pyops_server, bare_remote, set_factory):
         _service_ready(api)
         url = f"file://{bare_remote}"
-        _assert_done(_run(api, "POST", "/controller/internal/sets/clone", {"url": url}))
-        job = _run(api, "POST", "/controller/internal/sets/clone", {"url": url})
+        _assert_done(_run(api, "POST", "/controller/pyops/sets/clone", {"url": url}))
+        job = _run(api, "POST", "/controller/pyops/sets/clone", {"url": url})
         _assert_failed(job, "already exists")
         pyops_server.assert_no_unexpected_errors(allow=["already exists", "set_clone"])
 
@@ -318,7 +318,7 @@ class TestSetsSwitchViaController:
     def test_switch_to_new_branch_creates_it(self, api, pyops_server, set_factory, e2e_env):
         _service_ready(api)
         set_factory("br_new")
-        _assert_done(_run(api, "POST", "/controller/internal/sets/switch", {"name": "br_new", "branch": "feature-x"}))
+        _assert_done(_run(api, "POST", "/controller/pyops/sets/switch", {"name": "br_new", "branch": "feature-x"}))
         repo = Path(e2e_env["data_dir"]) / "git" / "br_new"
         head = subprocess.check_output(
             ["git", "-C", str(repo), "rev-parse", "--abbrev-ref", "HEAD"], text=True
@@ -333,8 +333,8 @@ class TestSetsSwitchViaController:
         set_factory("br_back")
         repo = Path(e2e_env["data_dir"]) / "git" / "br_back"
         initial = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "--abbrev-ref", "HEAD"], text=True).strip()
-        _assert_done(_run(api, "POST", "/controller/internal/sets/switch", {"name": "br_back", "branch": "temp"}))
-        _assert_done(_run(api, "POST", "/controller/internal/sets/switch", {"name": "br_back", "branch": initial}))
+        _assert_done(_run(api, "POST", "/controller/pyops/sets/switch", {"name": "br_back", "branch": "temp"}))
+        _assert_done(_run(api, "POST", "/controller/pyops/sets/switch", {"name": "br_back", "branch": initial}))
         head = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "--abbrev-ref", "HEAD"], text=True).strip()
         assert head == initial
         pyops_server.assert_no_unexpected_errors(
@@ -343,7 +343,7 @@ class TestSetsSwitchViaController:
 
     def test_switch_unknown_set_fails(self, api, pyops_server, set_factory):
         _service_ready(api)
-        job = _run(api, "POST", "/controller/internal/sets/switch", {"name": "does-not-exist-xyzzy", "branch": "any"})
+        job = _run(api, "POST", "/controller/pyops/sets/switch", {"name": "does-not-exist-xyzzy", "branch": "any"})
         _assert_failed(job, "not found")
         pyops_server.assert_no_unexpected_errors(allow=["not found", "set_switch"])
 
@@ -351,14 +351,14 @@ class TestSetsSwitchViaController:
 class TestSetsPullViaController:
     def test_pull_unknown_set_fails(self, api, pyops_server, set_factory):
         _service_ready(api)
-        job = _run(api, "POST", "/controller/internal/sets/pull/does-not-exist-xyzzy")
+        job = _run(api, "POST", "/controller/pyops/sets/pull/does-not-exist-xyzzy")
         _assert_failed(job, "not found")
         pyops_server.assert_no_unexpected_errors(allow=["not found", "set_pull"])
 
     def test_pull_cloned_set_picks_up_remote_changes(self, api, pyops_server, bare_remote, e2e_env, tmp_path, set_factory):
         _service_ready(api)
         url = f"file://{bare_remote}"
-        _assert_done(_run(api, "POST", "/controller/internal/sets/clone", {"url": url}))
+        _assert_done(_run(api, "POST", "/controller/pyops/sets/clone", {"url": url}))
 
         # Push a new commit to the bare remote.
         upstream = tmp_path / "upstream_work"
@@ -370,7 +370,7 @@ class TestSetsPullViaController:
         subprocess.run(["git", "-C", str(upstream), "commit", "-m", "new commit"], check=True, capture_output=True)
         subprocess.run(["git", "-C", str(upstream), "push", "origin", "HEAD"], check=True, capture_output=True)
 
-        _assert_done(_run(api, "POST", "/controller/internal/sets/pull/remote_repo"))
+        _assert_done(_run(api, "POST", "/controller/pyops/sets/pull/remote_repo"))
         local_file = Path(e2e_env["data_dir"]) / "git" / "remote_repo" / "new_scriptlet.py"
         assert local_file.exists(), "set_pull should have fetched the new commit"
         assert "upstream" in local_file.read_text()
@@ -386,7 +386,7 @@ class TestUpdateDepsViaController:
         set_factory("up_clean")
         _create_scriptlet(api, "up_clean", "uses_six", "task", "#!six==1.16.0\nimport six\n")
 
-        _assert_done(_run(api, "POST", "/controller/internal/sets/update_deps/up_clean", timeout=300))
+        _assert_done(_run(api, "POST", "/controller/pyops/sets/update_deps/up_clean", timeout=300))
 
         warnings = Path(e2e_env["data_dir"]) / "venv" / "up_clean" / ".update_warnings.json"
         assert warnings.exists()
@@ -404,7 +404,7 @@ class TestUpdateDepsViaController:
         time.sleep(0.1)  # ensure mtime differs
         _create_scriptlet(api, "up_conf", "new_pin", "task", "#!six==1.16.0\nimport six\n")
 
-        _assert_done(_run(api, "POST", "/controller/internal/sets/update_deps/up_conf", timeout=300))
+        _assert_done(_run(api, "POST", "/controller/pyops/sets/update_deps/up_conf", timeout=300))
 
         import json as _json
         warnings_file = Path(e2e_env["data_dir"]) / "venv" / "up_conf" / ".update_warnings.json"
@@ -427,7 +427,7 @@ class TestUpdateDepsViaController:
 
     def test_update_deps_unknown_set_fails(self, api, pyops_server, set_factory):
         _service_ready(api)
-        job = _run(api, "POST", "/controller/internal/sets/update_deps/never_existed_e2e")
+        job = _run(api, "POST", "/controller/pyops/sets/update_deps/never_existed_e2e")
         _assert_failed(job, "not found")
         pyops_server.assert_no_unexpected_errors(allow=["not found", "set_update_deps"])
 
@@ -441,7 +441,7 @@ class TestUpdateDepsViaController:
         _create_scriptlet(api, "up_fail", "broken", "task",
                           "#!definitely-no-such-pkg-xyzzy-pyops-e2e==9.9.9\n")
 
-        job = _run(api, "POST", "/controller/internal/sets/update_deps/up_fail", timeout=300)
+        job = _run(api, "POST", "/controller/pyops/sets/update_deps/up_fail", timeout=300)
         _assert_failed(job, "definitely-no-such-pkg-xyzzy-pyops-e2e")
         pyops_server.assert_no_unexpected_errors(
             allow=["definitely-no-such-pkg", "set_update_deps",
@@ -463,7 +463,7 @@ class TestCommitDraftsViaController:
             ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True
         ).strip()
 
-        _assert_done(_run(api, "POST", "/controller/internal/sets/commit_drafts/cd_clean"))
+        _assert_done(_run(api, "POST", "/controller/pyops/sets/commit_drafts/cd_clean"))
 
         post = subprocess.check_output(
             ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True
@@ -483,7 +483,7 @@ class TestCommitDraftsViaController:
             ["git", "-C", str(repo), "rev-list", "--count", "HEAD"], text=True
         ).strip())
 
-        _assert_done(_run(api, "POST", "/controller/internal/sets/commit_drafts/cd_multi"))
+        _assert_done(_run(api, "POST", "/controller/pyops/sets/commit_drafts/cd_multi"))
 
         post_count = int(subprocess.check_output(
             ["git", "-C", str(repo), "rev-list", "--count", "HEAD"], text=True
@@ -504,13 +504,13 @@ class TestCommitDraftsViaController:
     def test_pushes_to_remote_when_configured(self, api, pyops_server, bare_remote, e2e_env, set_factory, tmp_path):
         _service_ready(api)
         url = f"file://{bare_remote}"
-        _assert_done(_run(api, "POST", "/controller/internal/sets/clone", {"url": url}))
+        _assert_done(_run(api, "POST", "/controller/pyops/sets/clone", {"url": url}))
 
         local = Path(e2e_env["data_dir"]) / "git" / "remote_repo"
         (local / "task").mkdir(parents=True, exist_ok=True)
         (local / "task" / "new.task.py").write_text("print('new')\n")
 
-        _assert_done(_run(api, "POST", "/controller/internal/sets/commit_drafts/remote_repo"))
+        _assert_done(_run(api, "POST", "/controller/pyops/sets/commit_drafts/remote_repo"))
 
         scratch = tmp_path / "verify_push"
         subprocess.check_call(
@@ -523,7 +523,7 @@ class TestCommitDraftsViaController:
 
     def test_unknown_set_fails(self, api, pyops_server, set_factory):
         _service_ready(api)
-        job = _run(api, "POST", "/controller/internal/sets/commit_drafts/never_existed_xyz")
+        job = _run(api, "POST", "/controller/pyops/sets/commit_drafts/never_existed_xyz")
         _assert_failed(job, "not found")
         pyops_server.assert_no_unexpected_errors(allow=["not found", "set_commit_drafts"])
 
@@ -536,7 +536,7 @@ class TestCommitDraftsViaController:
 
         custom = "ship the m feature"
         _assert_done(_run(
-            api, "POST", "/controller/internal/sets/commit_drafts/cd_msg",
+            api, "POST", "/controller/pyops/sets/commit_drafts/cd_msg",
             {"message": custom},
         ))
         last = subprocess.check_output(
@@ -552,7 +552,7 @@ class TestCommitDraftsViaController:
         (repo / "task" / "d.task.py").write_text("print('d')\n")
 
         _assert_done(_run(
-            api, "POST", "/controller/internal/sets/commit_drafts/cd_def",
+            api, "POST", "/controller/pyops/sets/commit_drafts/cd_def",
             {"message": "   "},  # whitespace-only → fallback
         ))
         last = subprocess.check_output(
@@ -562,13 +562,13 @@ class TestCommitDraftsViaController:
 
 
 class TestSetsListReportsHasDrafts:
-    """`GET /controller/internal/sets/list` reports `has_drafts` per set
+    """`GET /controller/pyops/sets/list` reports `has_drafts` per set
     so the UI knows when to enable the commit-drafts button."""
 
     def test_clean_set_reports_no_drafts(self, api, pyops_server, set_factory):
         _service_ready(api)
         set_factory("hd_clean")
-        rows = api.get("/controller/internal/sets/list").json()["sets"]
+        rows = api.get("/controller/pyops/sets/list").json()["sets"]
         row = next(r for r in rows if r["name"] == "hd_clean")
         assert row.get("has_drafts") is False
 
@@ -577,19 +577,19 @@ class TestSetsListReportsHasDrafts:
         set_factory("hd_dirty")
         (Path(e2e_env["data_dir"]) / "git" / "hd_dirty" / "task").mkdir(parents=True, exist_ok=True)
         (Path(e2e_env["data_dir"]) / "git" / "hd_dirty" / "task" / "x.task.py").write_text("print('x')\n")
-        rows = api.get("/controller/internal/sets/list").json()["sets"]
+        rows = api.get("/controller/pyops/sets/list").json()["sets"]
         row = next(r for r in rows if r["name"] == "hd_dirty")
         assert row.get("has_drafts") is True
 
 
 class TestSetsStatusEndpoint:
-    """`GET /controller/internal/sets/status/<name>` returns the porcelain
+    """`GET /controller/pyops/sets/status/<name>` returns the porcelain
     git-status output the commit-drafts modal previews."""
 
     def test_clean_set_returns_empty_status(self, api, pyops_server, set_factory):
         _service_ready(api)
         set_factory("st_clean")
-        r = api.get("/controller/internal/sets/status/st_clean")
+        r = api.get("/controller/pyops/sets/status/st_clean")
         assert r.status_code == 200, r.text
         body = r.json()
         assert body["name"] == "st_clean"
@@ -600,12 +600,12 @@ class TestSetsStatusEndpoint:
         set_factory("st_dirty")
         (Path(e2e_env["data_dir"]) / "git" / "st_dirty" / "task").mkdir(parents=True, exist_ok=True)
         (Path(e2e_env["data_dir"]) / "git" / "st_dirty" / "task" / "y.task.py").write_text("print('y')\n")
-        body = api.get("/controller/internal/sets/status/st_dirty").json()
+        body = api.get("/controller/pyops/sets/status/st_dirty").json()
         assert "task/y.task.py" in body["status"]
 
     def test_unknown_set_404s(self, api, pyops_server):
         _service_ready(api)
-        r = api.get("/controller/internal/sets/status/never_exists_xyz")
+        r = api.get("/controller/pyops/sets/status/never_exists_xyz")
         assert r.status_code == 404
 
 
@@ -628,15 +628,15 @@ class TestSetsCloneUI:
 
         # Input modal closes; live-output modal opens.
         frame.locator('[data-testid="sets-clone-modal"]').wait_for(state="hidden", timeout=5_000)
-        frame.locator('[data-testid="internal-job-modal"]').wait_for(state="visible", timeout=10_000)
+        frame.locator('[data-testid="set-job-modal"]').wait_for(state="visible", timeout=10_000)
         terminal = _await_modal_done(frame)
         assert terminal == "done", f"clone did not succeed: badge={terminal}"
 
-        frame.locator('[data-testid="internal-job-close"]').click()
-        frame.locator('[data-testid="internal-job-modal"]').wait_for(state="hidden", timeout=5_000)
+        frame.locator('[data-testid="set-job-close"]').click()
+        frame.locator('[data-testid="set-job-modal"]').wait_for(state="hidden", timeout=5_000)
 
         frame.locator('[data-testid="set-row-remote_repo"]').wait_for(state="visible", timeout=10_000)
-        sets = api_anon.get("/controller/internal/sets/list").json()["sets"]
+        sets = api_anon.get("/controller/pyops/sets/list").json()["sets"]
         assert any(s["name"] == "remote_repo" for s in sets)
         pyops_server.assert_no_unexpected_errors()
 
@@ -651,8 +651,8 @@ class TestSetsCloneUI:
         assert "URL" in err
         assert frame.locator('[data-testid="sets-clone-modal"]').is_visible()
         # No job modal opened.
-        assert frame.locator('[data-testid="internal-job-modal"]').count() == 0 or \
-               not frame.locator('[data-testid="internal-job-modal"]').is_visible()
+        assert frame.locator('[data-testid="set-job-modal"]').count() == 0 or \
+               not frame.locator('[data-testid="set-job-modal"]').is_visible()
         frame.locator('[data-testid="sets-clone-cancel"]').click()
         pyops_server.assert_no_unexpected_errors()
 
@@ -664,7 +664,7 @@ class TestSetsCloneUI:
         frame.locator('[data-testid="sets-clone-url"]').fill("file:///nowhere/at/all.git")
         frame.locator('[data-testid="sets-clone-cancel"]').click()
         frame.locator('[data-testid="sets-clone-modal"]').wait_for(state="hidden", timeout=5_000)
-        sets = api_anon.get("/controller/internal/sets/list").json()["sets"]
+        sets = api_anon.get("/controller/pyops/sets/list").json()["sets"]
         assert not any(s["name"] == "at" or s["name"] == "all" for s in sets)
         pyops_server.assert_no_unexpected_errors()
 
@@ -678,7 +678,7 @@ class TestSetsCreateUI:
         frame.locator('[data-testid="sets-create-name"]').fill("never_created")
         frame.locator('[data-testid="sets-create-cancel"]').click()
         frame.locator('[data-testid="sets-create-modal"]').wait_for(state="hidden", timeout=5_000)
-        sets = api_anon.get("/controller/internal/sets/list").json()["sets"]
+        sets = api_anon.get("/controller/pyops/sets/list").json()["sets"]
         assert not any(s["name"] == "never_created" for s in sets)
         pyops_server.assert_no_unexpected_errors()
 
@@ -703,10 +703,10 @@ class TestSetsCreateUI:
         frame.locator('[data-testid="sets-create-submit"]').click()
 
         frame.locator('[data-testid="sets-create-modal"]').wait_for(state="hidden", timeout=5_000)
-        frame.locator('[data-testid="internal-job-modal"]').wait_for(state="visible", timeout=10_000)
+        frame.locator('[data-testid="set-job-modal"]').wait_for(state="visible", timeout=10_000)
         terminal = _await_modal_done(frame)
         assert terminal == "done"
-        frame.locator('[data-testid="internal-job-close"]').click()
+        frame.locator('[data-testid="set-job-close"]').click()
 
         frame.locator('[data-testid="set-row-ui_create"]').wait_for(state="visible", timeout=10_000)
         pyops_server.assert_no_unexpected_errors()
@@ -725,10 +725,10 @@ class TestSetsSwitchUI:
         frame.locator('[data-testid="sets-switch-submit"]').click()
 
         frame.locator('[data-testid="sets-switch-modal"]').wait_for(state="hidden", timeout=5_000)
-        frame.locator('[data-testid="internal-job-modal"]').wait_for(state="visible", timeout=10_000)
+        frame.locator('[data-testid="set-job-modal"]').wait_for(state="visible", timeout=10_000)
         terminal = _await_modal_done(frame)
         assert terminal == "done"
-        frame.locator('[data-testid="internal-job-close"]').click()
+        frame.locator('[data-testid="set-job-close"]').click()
 
         repo = Path(e2e_env["data_dir"]) / "git" / "switch_ui"
         head = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "--abbrev-ref", "HEAD"], text=True).strip()
@@ -755,22 +755,22 @@ class TestSetsSwitchUI:
 
 class TestSetActionsUI:
     """Direct-action buttons (pull / update-deps / remove) open the
-    internal-job dialog without a pre-modal."""
+    set-job dialog without a pre-modal."""
 
     def test_pull_button_streams_output(self, e2e_page, api_anon, pyops_server, bare_remote, set_factory):
         _service_ready(api_anon)
         url = f"file://{bare_remote}"
-        _assert_done(_run(api_anon, "POST", "/controller/internal/sets/clone", {"url": url}))
+        _assert_done(_run(api_anon, "POST", "/controller/pyops/sets/clone", {"url": url}))
 
         frame = _nav_sets(e2e_page)
         frame.locator('[data-testid="sets-refresh"]').click()
         frame.locator('[data-testid="set-pull-remote_repo"]').wait_for(state="visible", timeout=10_000)
         frame.locator('[data-testid="set-pull-remote_repo"]').click()
 
-        frame.locator('[data-testid="internal-job-modal"]').wait_for(state="visible", timeout=10_000)
+        frame.locator('[data-testid="set-job-modal"]').wait_for(state="visible", timeout=10_000)
         terminal = _await_modal_done(frame)
         assert terminal == "done", f"pull failed in UI: {terminal}"
-        frame.locator('[data-testid="internal-job-close"]').click()
+        frame.locator('[data-testid="set-job-close"]').click()
         pyops_server.assert_no_unexpected_errors()
 
     def test_commit_drafts_button_disabled_on_clean_set(self, e2e_page, api_anon, pyops_server, set_factory):
@@ -825,10 +825,10 @@ class TestSetActionsUI:
         modal.wait_for(state="hidden", timeout=5_000)
 
         # Live-output modal opens for the actual job.
-        frame.locator('[data-testid="internal-job-modal"]').wait_for(state="visible", timeout=10_000)
+        frame.locator('[data-testid="set-job-modal"]').wait_for(state="visible", timeout=10_000)
         terminal = _await_modal_done(frame)
         assert terminal == "done", f"commit_drafts UI: badge={terminal}"
-        frame.locator('[data-testid="internal-job-close"]').click()
+        frame.locator('[data-testid="set-job-close"]').click()
 
         # Working tree clean + commit message persisted.
         dirty = subprocess.check_output(
@@ -852,10 +852,10 @@ class TestSetActionsUI:
         e2e_page.once("dialog", lambda d: d.accept())
         frame.locator('[data-testid="set-remove-rm_ui"]').click()
 
-        frame.locator('[data-testid="internal-job-modal"]').wait_for(state="visible", timeout=10_000)
+        frame.locator('[data-testid="set-job-modal"]').wait_for(state="visible", timeout=10_000)
         terminal = _await_modal_done(frame)
         assert terminal == "done"
-        frame.locator('[data-testid="internal-job-close"]').click()
+        frame.locator('[data-testid="set-job-close"]').click()
 
         # Row disappears after refresh.
         frame.locator('[data-testid="set-row-rm_ui"]').wait_for(state="hidden", timeout=15_000)

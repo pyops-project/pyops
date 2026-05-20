@@ -32,8 +32,8 @@ def main():
         name = name[:-4]
     if not name:
         raise ValueError(f"Empty repo name inferred from URL: {url}")
-    if name == "internal":
-        raise ValueError("'internal' is reserved for pyops-managed scriptlets")
+    if name == "pyops":
+        raise ValueError("'pyops' is reserved for pyops-managed scriptlets")
 
     git_base = _git_base()
     target = os.path.join(git_base, name)

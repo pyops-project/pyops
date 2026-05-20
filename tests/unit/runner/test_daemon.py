@@ -395,7 +395,7 @@ class TestDaemon:
             # overwrite it with the candidate 'done'.
             assert fetched.state == "cancel"
 
-    @patch('app.runner.INTERNAL_ESSENTIAL_SERVICES', [])
+    @patch('app.runner.PYOPS_ESSENTIAL_SERVICES', [])
     @patch('app.runner.lib_runner.find')
     @patch('app.runner.lib_runner.enqueue')
     @patch('croniter.croniter')
@@ -423,7 +423,7 @@ class TestDaemon:
             test_session.refresh(sched)
             assert sched.last == datetime(2023, 1, 1, 12, 0)
 
-    @patch('app.runner.INTERNAL_ESSENTIAL_SERVICES', [])
+    @patch('app.runner.PYOPS_ESSENTIAL_SERVICES', [])
     @patch('app.runner.lib_runner.find')
     @patch('app.runner.lib_runner.enqueue')
     @patch('croniter.croniter')
@@ -446,7 +446,7 @@ class TestDaemon:
         schedule()
         mock_enqueue.assert_not_called()  # Should not enqueue future runs
 
-    @patch('app.runner.INTERNAL_ESSENTIAL_SERVICES', [])
+    @patch('app.runner.PYOPS_ESSENTIAL_SERVICES', [])
     @patch('app.runner.lib_runner.find')
     @patch('app.runner.lib_runner.enqueue')
     @patch('croniter.croniter')
@@ -469,7 +469,7 @@ class TestDaemon:
         schedule()
         mock_enqueue.assert_not_called()
 
-    @patch('app.runner.INTERNAL_ESSENTIAL_SERVICES', [])
+    @patch('app.runner.PYOPS_ESSENTIAL_SERVICES', [])
     @patch('app.runner.lib_runner.find')
     @patch('app.runner.lib_runner.enqueue')
     @patch('croniter.croniter')
@@ -497,7 +497,7 @@ class TestDaemon:
             test_session.refresh(sched)
             assert sched.last == datetime(2023, 1, 1, 12, 2)
 
-    @patch('app.runner.INTERNAL_ESSENTIAL_SERVICES', [])
+    @patch('app.runner.PYOPS_ESSENTIAL_SERVICES', [])
     @patch('app.runner.lib_runner.enqueue')
     @patch('app.runner.lib_runner.find')
     @patch('app.runner.datetime')
@@ -520,7 +520,7 @@ class TestDaemon:
             test_session.refresh(sched)
             assert sched.last == mock_dt.now.return_value
 
-    @patch('app.runner.INTERNAL_ESSENTIAL_SERVICES', [])
+    @patch('app.runner.PYOPS_ESSENTIAL_SERVICES', [])
     @patch('app.runner.lib_runner.find')
     @patch('app.runner.datetime')
     def test_schedule_no_enqueue_existing(self, mock_dt, mock_find, mock_db):
@@ -808,7 +808,7 @@ class TestDaemon:
 class TestShutdownFlag:
     """The shutdown-flag mechanism gates lib_runner.enqueue across process
     boundaries — so gunicorn workers (HTTP /scriptlet/job/item, /scriptlet/
-    schedule/run/{id}) and the internal data service (control.job.create →
+    schedule/run/{id}) and the pyops data service (control.job.create →
     HTTP) all refuse to enqueue once the runner has been signalled."""
 
     def test_enqueue_raises_when_flag_present(self, mock_db, tmp_path, monkeypatch):
@@ -1191,12 +1191,12 @@ class TestShutdownContract:
         mock_proc.stdin.close.assert_called_once()
 
 
-class TestInternalEssentialServices:
-    """Persistent pyops-internal services run without a Schedule row.
-    The schedule loop iterates INTERNAL_ESSENTIAL_SERVICES with the same
+class TestPyopsEssentialServices:
+    """Persistent pyops-managed services run without a Schedule row.
+    The schedule loop iterates PYOPS_ESSENTIAL_SERVICES with the same
     `<3 failed` gating as service-with-empty-schedule."""
 
-    @patch('app.runner.INTERNAL_ESSENTIAL_SERVICES', [{"set": "internal", "name": "data", "owner": "system"}])
+    @patch('app.runner.PYOPS_ESSENTIAL_SERVICES', [{"set": "pyops", "name": "data", "owner": "system"}])
     @patch('app.runner.lib_runner.enqueue')
     @patch('app.runner.lib_runner.find')
     @patch('app.runner.datetime')
@@ -1207,9 +1207,9 @@ class TestInternalEssentialServices:
         # No live job and no failed records → enqueue
         mock_find.return_value = []
         schedule()
-        mock_enqueue.assert_called_once_with("internal", "data", "system", "service", True, None, 0, None)
+        mock_enqueue.assert_called_once_with("pyops", "data", "system", "service", True, None, 0, None)
 
-    @patch('app.runner.INTERNAL_ESSENTIAL_SERVICES', [{"set": "internal", "name": "data", "owner": "system"}])
+    @patch('app.runner.PYOPS_ESSENTIAL_SERVICES', [{"set": "pyops", "name": "data", "owner": "system"}])
     @patch('app.runner.lib_runner.enqueue')
     @patch('app.runner.lib_runner.find')
     @patch('app.runner.datetime')
@@ -1222,7 +1222,7 @@ class TestInternalEssentialServices:
         schedule()
         mock_enqueue.assert_not_called()
 
-    @patch('app.runner.INTERNAL_ESSENTIAL_SERVICES', [{"set": "internal", "name": "data", "owner": "system"}])
+    @patch('app.runner.PYOPS_ESSENTIAL_SERVICES', [{"set": "pyops", "name": "data", "owner": "system"}])
     @patch('app.runner.lib_runner.enqueue')
     @patch('app.runner.lib_runner.find')
     @patch('app.runner.datetime')
@@ -1235,7 +1235,7 @@ class TestInternalEssentialServices:
         schedule()
         mock_enqueue.assert_not_called()
 
-    @patch('app.runner.INTERNAL_ESSENTIAL_SERVICES', [{"set": "internal", "name": "data", "owner": "system"}])
+    @patch('app.runner.PYOPS_ESSENTIAL_SERVICES', [{"set": "pyops", "name": "data", "owner": "system"}])
     @patch('app.runner.lib_runner.enqueue')
     @patch('app.runner.lib_runner.find')
     @patch('app.runner.datetime')
@@ -1246,9 +1246,9 @@ class TestInternalEssentialServices:
         # Live empty, two failures (< 3) → still enqueues
         mock_find.side_effect = [[], [{"id": "f1"}, {"id": "f2"}]]
         schedule()
-        mock_enqueue.assert_called_once_with("internal", "data", "system", "service", True, None, 0, None)
+        mock_enqueue.assert_called_once_with("pyops", "data", "system", "service", True, None, 0, None)
 
-    @patch('app.runner.INTERNAL_ESSENTIAL_SERVICES', [{"set": "internal", "name": "data", "owner": "system"}])
+    @patch('app.runner.PYOPS_ESSENTIAL_SERVICES', [{"set": "pyops", "name": "data", "owner": "system"}])
     @patch('app.runner.lib_runner.enqueue')
     @patch('app.runner.lib_runner.find')
     @patch('app.runner.datetime')
@@ -1273,7 +1273,7 @@ class TestInternalEssentialServices:
 
 class TestServiceRestartGatedOnCancel:
     """Schedule-row-driven service (empty cron string) shares the same
-    cancel-gate semantics as INTERNAL_ESSENTIAL_SERVICES — a cancelled
+    cancel-gate semantics as PYOPS_ESSENTIAL_SERVICES — a cancelled
     job in the table stops auto-restart until the operator removes it."""
 
     @patch('app.runner.lib_runner.enqueue')
@@ -1299,15 +1299,15 @@ class TestServiceRestartGatedOnCancel:
         assert "cancelling" in states
 
 
-class TestInternalSetRunsInHostVenv:
-    """Internal-set scriptlets are pyops-native code and execute in the
+class TestPyopsSetRunsInHostVenv:
+    """Pyops-set scriptlets are pyops-native code and execute in the
     pyops process's own Python — pyzmq / msgpack / psutil / requests are
     already importable there. The runner skips ensure_set_environment for
-    set=='internal' and uses sys.executable instead of a per-set venv
+    set=='pyops' and uses sys.executable instead of a per-set venv
     path. User sets keep the standard per-set-venv flow."""
 
-    def test_main_no_internal_bootstrap_at_startup(self, mock_db):
-        """main() must NOT call ensure_set_environment('internal') at
+    def test_main_no_pyops_bootstrap_at_startup(self, mock_db):
+        """main() must NOT call ensure_set_environment('pyops') at
         startup — the host venv already has every CORE_DEP."""
         from app import runner
 

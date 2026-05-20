@@ -1,7 +1,7 @@
 """Per-set venv/pkg lifecycle for the runner-driven job spawn path.
 
 What lives here after the move of user-facing sets management into
-`app/internal/`:
+`app/pyops/`:
 
   - the bootstrap lock helpers (`set_install_lock`, `_bootstrap_lock_path`)
     serialise pip / git / venv mutations within a set so two concurrent
@@ -9,10 +9,10 @@ What lives here after the move of user-facing sets management into
     cannot race on shared site-packages
   - `ensure_set_environment` creates the per-set venv + installs CORE_DEPS
     on every job spawn — invoked from `runner.py` before each Popen and
-    from the runner startup hook for the internal set
+    from the runner startup hook for the pyops set
 
 Set CRUD (clone / create / pull / switch / remove) and Update Dependencies
-now live as task scriptlets in `app/internal/` and run as normal pyops
+now live as task scriptlets in `app/pyops/` and run as normal pyops
 jobs; they take the SAME bootstrap and repo locks via `fcntl.flock` on
 the exact same lock files, so the lock semantics are preserved across the
 split.
@@ -74,7 +74,7 @@ def set_install_lock(name):
     - two jobs in the same set cannot both `git clone` the same `#!<url>`
       directive's target dir
     - the operator-triggered `set_remove` / `set_update_deps` tasks (in
-      app/internal/) take the same flock and serialise against in-flight
+      app/pyops/) take the same flock and serialise against in-flight
       job-time installs
 
     Different sets remain parallel because each has its own lock file.
@@ -88,14 +88,14 @@ def set_install_lock(name):
 
 
 def ensure_set_environment(name):
-    """Ensure per-set venv exists and pyops-internal runtime deps are
+    """Ensure per-set venv exists and pyops-managed runtime deps are
     present.
 
     Called on every job spawn (`runner.py` before Popen) plus from the
-    runner startup hook for the internal set. The bootstrap lock
+    runner startup hook for the pyops set. The bootstrap lock
     serialises all pip-install / venv-creation activity for this set
     against itself and against the operator-triggered tasks in
-    app/internal/ that hold the same flock. Pyops's graceful shutdown
+    app/pyops/ that hold the same flock. Pyops's graceful shutdown
     waits for in-flight pip installs to finish before exiting
     (gunicorn graceful_timeout + runner's kill_now check before each
     spawn), so pip is never killed mid-flight under controlled shutdown

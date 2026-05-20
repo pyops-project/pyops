@@ -1,4 +1,4 @@
-<script src="/scriptlet/jslib/internal/internal_job"></script>
+<script src="/scriptlet/jslib/pyops/set_job"></script>
 <script>
     // REST helper to the data service via the controller proxy.
     // path is appended after /controller/{{SET}}/{{NAME}}/
@@ -91,7 +91,7 @@
             git_email: document.getElementById("cloneModal-git_email").value,
         };
         bootstrap.Modal.getInstance(document.getElementById("cloneModal")).hide();
-        runInternalJob("/controller/{{SET}}/{{NAME}}/clone", "POST", params, `Clone — ${url}`)
+        runSetJob("/controller/{{SET}}/{{NAME}}/clone", "POST", params, `Clone — ${url}`)
             .then(() => refreshList());
     }
 
@@ -102,7 +102,7 @@
             return;
         }
         bootstrap.Modal.getInstance(document.getElementById("createModal")).hide();
-        runInternalJob("/controller/{{SET}}/{{NAME}}/create", "POST", { name }, `Create — ${name}`)
+        runSetJob("/controller/{{SET}}/{{NAME}}/create", "POST", { name }, `Create — ${name}`)
             .then(() => refreshList());
     }
 
@@ -121,17 +121,17 @@
             return;
         }
         bootstrap.Modal.getInstance(document.getElementById("switchModal")).hide();
-        runInternalJob("/controller/{{SET}}/{{NAME}}/switch", "POST", { name: setName, branch }, `Switch — ${setName} → ${branch}`)
+        runSetJob("/controller/{{SET}}/{{NAME}}/switch", "POST", { name: setName, branch }, `Switch — ${setName} → ${branch}`)
             .then(() => refreshList());
     }
 
     function onPull(setName) {
-        runInternalJob(`/controller/{{SET}}/{{NAME}}/pull/${encodeURIComponent(setName)}`, "POST", null, `Pull — ${setName}`)
+        runSetJob(`/controller/{{SET}}/{{NAME}}/pull/${encodeURIComponent(setName)}`, "POST", null, `Pull — ${setName}`)
             .then(() => refreshList());
     }
 
     function onUpdateDeps(setName) {
-        runInternalJob(`/controller/{{SET}}/{{NAME}}/update_deps/${encodeURIComponent(setName)}`, "POST", null, `Update Dependencies — ${setName}`)
+        runSetJob(`/controller/{{SET}}/{{NAME}}/update_deps/${encodeURIComponent(setName)}`, "POST", null, `Update Dependencies — ${setName}`)
             .then(() => refreshList());
     }
 
@@ -161,13 +161,13 @@
         const message = document.getElementById("commitDraftsModal-message").value;
         bootstrap.Modal.getInstance(modal).hide();
         const params = message.trim() ? { message: message.trim() } : null;
-        runInternalJob(`/controller/{{SET}}/{{NAME}}/commit_drafts/${encodeURIComponent(setName)}`, "POST", params, `Commit drafts — ${setName}`)
+        runSetJob(`/controller/{{SET}}/{{NAME}}/commit_drafts/${encodeURIComponent(setName)}`, "POST", params, `Commit drafts — ${setName}`)
             .then(() => refreshList());
     }
 
     function onRemove(setName) {
         if (!confirm(`Remove set '${setName}'?`)) return;
-        runInternalJob(`/controller/{{SET}}/{{NAME}}/remove/${encodeURIComponent(setName)}`, "DELETE", null, `Remove — ${setName}`)
+        runSetJob(`/controller/{{SET}}/{{NAME}}/remove/${encodeURIComponent(setName)}`, "DELETE", null, `Remove — ${setName}`)
             .then(() => refreshList());
     }
 
