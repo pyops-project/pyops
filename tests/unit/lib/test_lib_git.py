@@ -329,6 +329,11 @@ class TestRepoPathAndFiles:
         file_path = git.get_file_path(mock_repo, name, type_)
         assert expected in os.path.basename(file_path)
 
+    def test_get_file_path_docs_markdown(self, mock_repo):
+        # Non-README markdown goes under docs/{name}.md
+        file_path = git.get_file_path(mock_repo, "intro", "markdown")
+        assert file_path.endswith(os.path.join("docs", "intro.md"))
+
     @pytest.mark.parametrize('type_, name', [('invalid', 'script')])
     def test_get_file_path_invalid_type(self, mock_repo, type_, name):
         with pytest.raises(ValueError):
@@ -339,6 +344,8 @@ class TestRepoPathAndFiles:
         ('view.html', 'view'),
         ('README.md', 'README'),
         ('mylib.js', 'mylib'),
+        ('docs/intro.md', 'intro'),
+        ('docs/api_reference.md', 'api_reference'),
     ])
     def test_get_name_from_file(self, filename, expected):
         assert git.get_name_from_file(filename) == expected
@@ -348,6 +355,8 @@ class TestRepoPathAndFiles:
         ('view.html', 'view'),
         ('README.md', 'markdown'),
         ('mylib.js', 'jslibrary'),
+        ('docs/intro.md', 'markdown'),
+        ('docs/api_reference.md', 'markdown'),
     ])
     def test_infer_type_from_filename(self, filename, expected):
         assert git.infer_type_from_filename(filename) == expected
@@ -359,26 +368,35 @@ class TestRepoPathAndFiles:
 
 class TestListAndUnique:
     def test_list_scriptlets(self, tmp_path, mock_files_conf, mock_subprocess):
-        # Mock sets dir with repos
+        # Mock sets dir with repos + per-path listing (top-level vs docs/)
         def listdir_side_effect(path):
             if '.cache/git' in path:
                 return ['set1']
-            else:
-                return ['script.task.py', 'view.html', 'README.md', 'invalid.txt']
+            if path.endswith('docs') or '/docs' in path:
+                return ['intro.md', 'api.md', 'irrelevant.txt']
+            return ['script.task.py', 'view.html', 'README.md', 'invalid.txt']
+
+        def isdir_side_effect(path):
+            # Treat repo and docs subdir as directories; everything else
+            # (specific files we don't care about) is irrelevant since the
+            # other code paths don't call isdir on them here.
+            return True
+
         with patch('os.listdir', side_effect=listdir_side_effect), \
              patch('os.path.exists', return_value=True), \
-             patch('os.path.isdir', return_value=True), \
+             patch('os.path.isdir', side_effect=isdir_side_effect), \
              patch('app.lib.git.get_repo_path', return_value=str(tmp_path / 'repo')):
             result = git.list_scriptlets()
-            assert len(result) == 3
-            # Adjust for sorted sets; expect set1 first
             expected = [
                 {'set': 'set1', 'name': 'script', 'type': 'task'},
                 {'set': 'set1', 'name': 'view', 'type': 'view'},
-                {'set': 'set1', 'name': 'README', 'type': 'markdown'}
+                {'set': 'set1', 'name': 'README', 'type': 'markdown'},
+                {'set': 'set1', 'name': 'intro', 'type': 'markdown'},
+                {'set': 'set1', 'name': 'api', 'type': 'markdown'},
             ]
             for e in expected:
                 assert e in result
+            assert len(result) == len(expected)
 
     def test_check_name_unique(self, mock_repo):
         with patch('os.listdir', return_value=[]):

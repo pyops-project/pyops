@@ -150,7 +150,9 @@ def pull(repo: str) -> bool:
                     files_in_head = _check(["git", "ls-tree", "-r", "--name-only", "HEAD"], repo).splitlines()
                     new_files = [f for f in files_in_head
                                  if not os.path.exists(os.path.join(repo, f))
-                                 and (f.endswith(('.py', '.html', '.js')) or f == 'README.md')]
+                                 and (f.endswith(('.py', '.html', '.js'))
+                                      or f == 'README.md'
+                                      or (f.startswith('docs/') and f.endswith('.md')))]
                     added_count = len(new_files)
                     if new_files:
                         _call(["git", "checkout", "HEAD", "--"] + new_files, repo)
@@ -221,24 +223,28 @@ def get_repo_path(set: str) -> str:
 
 def get_file_path(repo: str, name: str, type_: str) -> str:
     """Returns the full path to the scriptlet file.
-    
+
     Views: {name}.html (raw HTML).
     Others: {name}.{type_}.py (executable Python).
-    Markdown: README.md only.
-    
+    Markdown: README at the repo root (README.md); any other markdown
+        name lives under docs/{name}.md so multi-page documentation can
+        ship with a set without colliding with scriptlet filenames.
+
     Args:
         repo (str): Repo path.
         name (str): Scriptlet name.
         type_ (str): Scriptlet type.
-    
+
     Returns:
         str: File path.
-    
+
     Raises:
         ValueError: Invalid type.
     """
-    if type_ == "markdown" and name == "README":
-        return os.path.join(repo, "README.md")
+    if type_ == "markdown":
+        if name == "README":
+            return os.path.join(repo, "README.md")
+        return os.path.join(repo, "docs", f"{name}.md")
     if type_ == "view":
         return os.path.join(repo, f"{name}.html")
     if type_ == "jslibrary":
@@ -252,9 +258,12 @@ def get_name_from_file(filename: str) -> str:
 
     Views/Markdown/JS: Basename without extension (allows hyphens/multiples).
     Python: {name}.{type} → name; raise if no type dot.
+    Markdown under docs/: pass the path relative to the repo (e.g.
+        'docs/notes.md') → 'notes'. Top-level 'README.md' → 'README'.
 
     Args:
-        filename (str): e.g., 'myscript.task.py', 'SimpleDog-Head.html', 'mylib.js', or 'README.md'.
+        filename (str): e.g., 'myscript.task.py', 'SimpleDog-Head.html',
+            'mylib.js', 'README.md', or 'docs/notes.md'.
 
     Returns:
         str: Name.
@@ -264,6 +273,8 @@ def get_name_from_file(filename: str) -> str:
     """
     if filename == "README.md":
         return "README"
+    if filename.startswith("docs/") and filename.endswith(".md"):
+        return os.path.splitext(os.path.basename(filename))[0]
     base = os.path.splitext(filename)[0]
     if filename.endswith('.html'):
         return base
@@ -275,29 +286,32 @@ def get_name_from_file(filename: str) -> str:
 
 def infer_type_from_filename(filename: str) -> str:
     """Infers type from filename.
-    
+
     Views: .html → "view".
     Python: {name}.{type}.py → type (task/library/controller).
     JS Libraries: .js → "jslibrary".
-    Markdown: README.md → "markdown".
-    
+    Markdown: top-level 'README.md' or any 'docs/*.md' → "markdown".
+
     Args:
-        filename (str): e.g., 'myscript.task.py', 'myview.html', or 'mylib.js'.
-    
+        filename (str): e.g., 'myscript.task.py', 'myview.html', 'mylib.js',
+            'README.md', or 'docs/notes.md' (path relative to the repo).
+
     Returns:
         str: Type.
-    
+
     Raises:
         ValueError: Invalid format.
     """
     if filename == "README.md":
+        return "markdown"
+    if filename.startswith("docs/") and filename.endswith(".md"):
         return "markdown"
     if filename.endswith('.html'):
         return "view"
     if filename.endswith('.js'):
         return "jslibrary"
     if not filename.endswith('.py'):
-        raise ValueError(f"Not a Python/HTML/JS file: {filename}")
+        raise ValueError(f"Not a Python/HTML/JS/markdown file: {filename}")
     base = os.path.splitext(filename)[0]
     parts = base.rsplit('.', 1)
     if len(parts) < 2:
@@ -309,10 +323,12 @@ def infer_type_from_filename(filename: str) -> str:
 
 def list_scriptlets() -> List[Dict[str, str]]:
     """Lists all scriptlets across repos.
-    
-    Scans Git repos, globs *.py, *.html, README.md; derives set/name/type.
+
+    Scans Git repos, globs *.py / *.html / *.js / README.md / docs/*.md;
+    derives set/name/type.
     Views: .html as {"type": "view"}.
-    
+    Markdown: 'README.md' and free-named entries under 'docs/'.
+
     Returns:
         List[Dict]: [{"set": str, "name": str, "type": str}, ...] sorted.
     """
@@ -320,7 +336,7 @@ def list_scriptlets() -> List[Dict[str, str]]:
     sets = [d for d in os.listdir(git_base)
               if os.path.isdir(os.path.join(git_base, d))
               and os.path.exists(os.path.join(git_base, d, ".git"))]
-    
+
     scriptlets = []
     for set in sorted(sets):
         repo = get_repo_path(set)
@@ -332,18 +348,35 @@ def list_scriptlets() -> List[Dict[str, str]]:
                     scriptlets.append({"set": set, "name": name, "type": type_})
                 except ValueError:
                     continue  # Skip invalid files.
-    
+        docs_dir = os.path.join(repo, "docs")
+        if os.path.isdir(docs_dir):
+            for filename in os.listdir(docs_dir):
+                if not filename.endswith(".md"):
+                    continue
+                rel = f"docs/{filename}"
+                try:
+                    name = get_name_from_file(rel)
+                    type_ = infer_type_from_filename(rel)
+                    scriptlets.append({"set": set, "name": name, "type": type_})
+                except ValueError:
+                    continue
+
     return sorted(scriptlets, key=lambda x: (x["set"], x["name"]))
 
 def list_scriptlet_files(repo: str, name: str) -> List[str]:
     """Lists scriptlet files for a given name in repo.
-    
+
+    Returned paths are relative to `repo`. Top-level filenames stay
+    bare (e.g. 'my_task.task.py'); a markdown file under `docs/` is
+    returned as 'docs/{name}.md' so callers can resolve the location
+    without inspecting type separately.
+
     Args:
         repo (str): Repo path.
         name (str): Scriptlet name.
-    
+
     Returns:
-        List[str]: Matching filenames.
+        List[str]: Matching filenames (repo-relative).
     """
     files = []
     for filename in os.listdir(repo):
@@ -352,22 +385,41 @@ def list_scriptlet_files(repo: str, name: str) -> List[str]:
                 files.append(filename)
         except ValueError:
             continue
+    docs_dir = os.path.join(repo, "docs")
+    if os.path.isdir(docs_dir):
+        for filename in os.listdir(docs_dir):
+            if not filename.endswith(".md"):
+                continue
+            rel = f"docs/{filename}"
+            try:
+                if get_name_from_file(rel) == name:
+                    files.append(rel)
+            except ValueError:
+                continue
     return files
 
 
 
 def check_name_unique(repo: str, name: str) -> bool:
-    """Checks if name is unique (no existing {name}.*.py or {name}.html).
-    
+    """Checks if name is unique across the set.
+
+    Matches scriptlet filenames at the repo root ({name}.*.py / .html /
+    .js / README.md) AND markdown files under docs/{name}.md.
+
     Args:
         repo (str): Repo path.
         name (str): Name to check.
-    
+
     Returns:
         bool: True if unique.
     """
     files = [f for f in os.listdir(repo) if f.startswith(f"{name}.") and (f.endswith(('.py', '.html', '.js')) or f == "README.md")]
-    return len(files) == 0
+    if files:
+        return False
+    docs_path = os.path.join(repo, "docs", f"{name}.md")
+    if os.path.exists(docs_path):
+        return False
+    return True
 
 def read_content(repo: str, name: str, type_: str, committed: bool = False, strict: bool = False) -> str:
     """Reads content preferring unstaged (working dir) or committed (git show HEAD:file).
@@ -420,16 +472,17 @@ def read_content(repo: str, name: str, type_: str, committed: bool = False, stri
 
 def write_content(repo: str, name: str, type_: str, content: str) -> None:  # Renamed from write_code
     """Writes content to file.
-    
+
     Views: Writes HTML.
     Others: Writes Python.
-    
+    Markdown under docs/: creates the docs/ directory on demand.
+
     Args:
         repo (str): Repo path.
         name (str): Name.
         type_ (str): Type.
         content (str): Content to write.
-    
+
     Raises:
         IOError: Write failure.
     """
@@ -437,6 +490,7 @@ def write_content(repo: str, name: str, type_: str, content: str) -> None:  # Re
     set_name = os.path.basename(repo)
     with repo_lock(git_base, set_name):
         file_path = get_file_path(repo, name, type_)
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(content)
 
@@ -468,6 +522,7 @@ def create_scriptlet(set_name: str, name: str, type_: str, content: str) -> str:
         if not check_name_unique(repo, name):
             raise FileExistsError(f"Name '{name}' already exists in set '{set_name}'")
         file_path = get_file_path(repo, name, type_)
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(content)
     return file_path

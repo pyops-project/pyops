@@ -162,8 +162,8 @@ Manages scriptlet files as Git repos in `data/git/{set}/`. All mutating operatio
 - Tasks/libraries/controllers: `{name}.{type}.py`
 - Views: `{name}.html`
 - JS libraries: `{name}.js`
-- Markdown: `README.md`
-- Types inferred by `infer_type_from_filename()`
+- Markdown: top-level `README.md` for the set's primary doc; any number of additional markdown pages under `docs/{name}.md`. All resolve to type `markdown`. The split keeps free-named markdown out of the scriptlet-name namespace (the `name` of a `docs/notes.md` entry is `notes`, not subject to collision with a `notes.task.py`).
+- Types inferred by `infer_type_from_filename()`; `get_file_path(repo, name, "markdown")` returns `README.md` for `name == "README"`, otherwise `docs/{name}.md`.
 
 ### Operations
 
@@ -172,12 +172,12 @@ Manages scriptlet files as Git repos in `data/git/{set}/`. All mutating operatio
 - `write_content(repo, name, type_, content)`: writes file under `repo_lock`
 - `create_scriptlet(set_name, name, type_, content)`: atomic unique-name check + working-tree write under one `repo_lock` span (closes the race where two concurrent same-name creates pass `check_name_unique` before either writes); raises `FileExistsError` on duplicate. No commit — the new file shows up as untracked and is folded into the next `set_commit_drafts` batch.
 - `delete_file_unstaged(repo, file_path)`: working-tree-only deletion under `repo_lock`; no `git rm`, no commit, no push. Idempotent on a missing path.
-- `list_scriptlets()`: scans all sets, returns `[{"set", "name", "type"}, ...]` sorted
+- `list_scriptlets()`: scans all sets (top-level files plus `docs/*.md`), returns `[{"set", "name", "type"}, ...]` sorted
 - `get_repo_status(set)`: returns `{"branch", "is_tag", "flag"}`
 - `rollback_staged(set, name, type_)`: backs up to `.bck`, then `git checkout HEAD`
 - `rollback_committed(set, name, type_)`: `git checkout HEAD` (discards unstaged)
 - `check_name_unique(repo, name)`: prevents duplicate scriptlet names
-- `pull(repo)`: soft-reset to `origin/{branch}` if clean; skips if dirty or on tag; adds new `.py/.html/.js/README` files from HEAD if missing in working directory; retries fetch on `CalledProcessError`
+- `pull(repo)`: soft-reset to `origin/{branch}` if clean; skips if dirty or on tag; adds new `.py/.html/.js/README.md/docs/*.md` files from HEAD if missing in working directory; retries fetch on `CalledProcessError`
 
 ### Sets Management and the `pyops` set (`app/pyops/`)
 

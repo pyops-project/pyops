@@ -58,15 +58,15 @@ async def item_put(cr: CreateArgument, user: str = Depends(get_current_user)):
         if not os.path.exists(os.path.join(potential_repo, '.git')):
             raise HTTPException(status_code=HTTP_400_BAD_REQUEST, detail="Set does not exist")
 
-        if cr.type == "markdown" and cr.name != "README":
-            raise HTTPException(400, "Markdown only for README.")
-
         if cr.type == "view":
             initial_content = '<div class="container">\n  <!-- View content here -->\n</div>'
         elif cr.type == "jslibrary":
             initial_content = "// JS Library\n"
+        elif cr.type == "markdown":
+            # README (top-level) gets a heading; docs/<name>.md starts blank
+            initial_content = f"# {cr.set}\n" if cr.name == "README" else ""
         else:
-            initial_content = "" if cr.type == "markdown" else "pass\n"
+            initial_content = "pass\n"
 
         await run_in_executor(
             git.create_scriptlet,
