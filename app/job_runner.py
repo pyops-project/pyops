@@ -305,6 +305,127 @@ def run_debug_job(job_id: str, owner: str, setname: str, name: str, param: str, 
             stderr_file.close()
         logger.debug(f"{os.getpid():<10}end debug job({job_id})")
 
+def run_test_job(job_id: str, owner: str, setname: str, name: str, param: str, code: str, libs: list[dict[str, str]], runner_sock_path: str, overrides: str | None = None):
+    """Executes a kind=test job.
+
+    Pyops is pytest-agnostic. The runner's only test-specific work is:
+      • materialise scriptlet sources under .test/src/<set>/{task,library}
+        so test frameworks and coverage tools resolve canonical file
+        paths (line numbers in reports match the user's editor view).
+      • exec the task body with __name__ = "__test__" instead of
+        "__main__" so the same *.task.py can act as both production
+        task and its own test suite by gating with an `if __name__ ==`
+        block.
+      • no execution timeout, no retry — same lifecycle policy as debug.
+
+    Pytest itself, test-naming conventions, coverage configuration —
+    none of that lives here. The recommended path is `#!{pyops::pytest}`
+    in the task, which exposes a `pytest_run(test_sets, args=None)`
+    helper; but the author is free to roll their own assertion code or
+    invoke any other test framework from the __test__ block.
+    """
+    data_jobs = os.path.join(_project_root, _conf_data["jobs"])
+    venv_path = os.path.join(_project_root, _conf_runner["venv"])
+    pkg_path = os.path.join(_project_root, _conf_runner["pkg"])
+    web_bind = _conf_web["bind"]
+
+    stdout_file, stderr_file = None, None
+    info_handler, warn_handler = None, None
+
+    try:
+        setspace, workspace = setup_workspace(data_jobs, setname, job_id)
+        stdout_file, stderr_file = setup_execution_environment(venv_path, pkg_path, setname, workspace, logging.DEBUG)
+
+        logger.debug(f"{os.getpid():<10}start test job({job_id})")
+
+        with redirect_stdout(stdout_file):
+            with redirect_stderr(stderr_file):
+                try:
+                    if overrides:
+                        override_dict = json.loads(overrides)
+                        if f"{setname}::{name}" in override_dict:
+                            code = override_dict[f"{setname}::{name}"]
+                        for lib in libs:
+                            if lib["filename"] in override_dict:
+                                lib["code"] = override_dict[lib["filename"]]
+
+                    # Materialise under .test/src/ in the same shape as
+                    # .debug/src/ — keeps the on-disk audit trail of "what
+                    # source produced this test run" consistent and lets
+                    # pytest-cov / coverage.py / debuggers map file paths
+                    # to readable canonical names via their own
+                    # `[paths]` / source-map configuration.
+                    test_src_dir = os.path.join(workspace, ".test", "src")
+                    os.makedirs(test_src_dir, exist_ok=True)
+
+                    main_task_dir = os.path.join(test_src_dir, setname, "task")
+                    os.makedirs(main_task_dir, exist_ok=True)
+
+                    if param:
+                        param_file = os.path.join(main_task_dir, "param.py")
+                        with open(param_file, 'w') as f:
+                            f.write(param)
+
+                    code_file = os.path.join(main_task_dir, f"{name}.py")
+                    with open(code_file, 'w') as f:
+                        f.write(code)
+
+                    lib_files = []
+                    for lib in libs:
+                        lib_set, lib_name = lib["filename"].split("::")
+                        lib_dir = os.path.join(test_src_dir, lib_set, "library")
+                        os.makedirs(lib_dir, exist_ok=True)
+                        lib_file = os.path.join(lib_dir, f"{lib_name}.py")
+                        with open(lib_file, 'w') as f:
+                            f.write(lib["code"])
+                        lib_files.append(lib_file)
+
+                    with open(code_file, 'r') as f:
+                        compiled_code = compile(f.read(), code_file, 'exec')
+
+                    compiled_libs = []
+                    for lib_file in lib_files:
+                        with open(lib_file, 'r') as f:
+                            compiled_libs.append(compile(f.read(), lib_file, 'exec'))
+
+                    glob = setup_job_globals(owner, setspace, workspace, web_bind, job_id, "test", setname, name)
+                    # The whole point of kind=test: switch __name__ so a
+                    # task scriptlet can gate test setup with
+                    # `if __name__ == "__test__":` in the same file as
+                    # its production `if __name__ == "__main__":` block.
+                    glob["__name__"] = "__test__"
+
+                    info_handler, warn_handler = setup_logging(logging.DEBUG, stdout_file, stderr_file)
+
+                    execute_job_code(param, compiled_code, compiled_libs, glob, "test", job_id, runner_sock_path)
+
+                finally:
+                    root = logging.getLogger()
+                    if info_handler:
+                        root.removeHandler(info_handler)
+                    if warn_handler:
+                        root.removeHandler(warn_handler)
+
+    except json.JSONDecodeError as e:
+        error_msg = f"Invalid overrides for test job {job_id}: {e}\n{traceback.format_exc()}"
+        logger.error(error_msg)
+        job_lib.send_completion(runner_sock_path, {"id": job_id, "state": "failed", "detail": error_msg})
+
+    except Exception as e:
+        error_msg = f"Error executing test job {job_id}\n{traceback.format_exc()}"
+        logger.error(error_msg)
+        job_lib.send_completion(runner_sock_path, {"id": job_id, "state": "failed", "detail": error_msg})
+
+    finally:
+        if stdout_file:
+            stdout_file.flush()
+            stdout_file.close()
+        if stderr_file:
+            stderr_file.flush()
+            stderr_file.close()
+        logger.debug(f"{os.getpid():<10}end test job({job_id})")
+
+
 def run_draft_job(job_id: str, owner: str, setname: str, name: str, param: str, code: str, libs: list[dict[str, str]], runner_sock_path: str):
     """Executes draft job in isolated workspace with in-memory compilation."""
     data_jobs = os.path.join(_project_root, _conf_data["jobs"])
@@ -556,6 +677,8 @@ def main(job_id: str, owner: str, setname: str, name: str, kind: str, param: str
         run_debug_job(job_id, owner, setname, name, param, code, libs, runner_sock_path, overrides)
     elif kind == "draft":
         run_draft_job(job_id, owner, setname, name, param, code, libs, runner_sock_path)
+    elif kind == "test":
+        run_test_job(job_id, owner, setname, name, param, code, libs, runner_sock_path, overrides)
     elif kind == "task":
         run_task_job(job_id, owner, setname, name, param, code, libs, runner_sock_path, max_retries)
     elif kind == "service":

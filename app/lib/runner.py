@@ -39,10 +39,10 @@ def enqueue(set: str, name: str, owner: str, kind: str, drop_done: bool, param: 
         set (str): Scriptlet set.
         name (str): Scriptlet name.
         owner (str): Job owner (fixed to 'anonymous').
-        kind (str): Job kind ('task', 'service', 'debug').
+        kind (str): Job kind ('task', 'service', 'debug', 'draft', 'test').
         drop_done (bool): Auto-drop on success.
         param (str): Job parameters/code snippet.
-        overrides (str | None): JSON string of overrides dict for debug kind.
+        overrides (str | None): JSON string of overrides dict for debug/test kind.
 
     Returns:
         str: Generated job ID.

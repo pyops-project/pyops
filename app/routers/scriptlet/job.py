@@ -32,7 +32,7 @@ class RunArgument(BaseModel):
     drop_done: bool
     max_retries: int = 0
     param: str
-    kind: Literal["task", "debug", "draft"] = "task"
+    kind: Literal["task", "debug", "draft", "test"] = "task"
     overrides: dict[str, str] | None = None
 
 @router.get("/scriptlet/job/list", tags=["job"])
@@ -68,24 +68,23 @@ async def job_put(ru: RunArgument, user: str = Depends(get_current_user)):
     """
     try:
         repo = await run_in_executor(git.get_repo_path, ru.set)
-        # Check exists (committed), skip for debug/draft (uses unstaged or overrides).
+        # Check exists (committed), skip for debug/draft/test (use unstaged or overrides).
         scriptlet_key = f"{ru.set}::{ru.name}"
         overrides_present = ru.overrides is not None and scriptlet_key in ru.overrides
-        if ru.kind not in ("debug", "draft") or (ru.kind == "debug" and not overrides_present):
+        if ru.kind not in ("debug", "draft", "test") or (ru.kind in ("debug", "test") and not overrides_present):
             try:
                 await run_in_executor(git.read_content, repo, ru.name, "task", committed=True)
             except FileNotFoundError:
                 raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail=f"Scriptlet {scriptlet_key} not existing.")
 
-        # Validate overrides for debug kind
+        # Validate overrides for debug/test kind
         overrides_json = None
-        if ru.kind == "debug" and ru.overrides is not None:
+        if ru.kind in ("debug", "test") and ru.overrides is not None:
             for key in ru.overrides:
                 if not re.match(r"^[a-zA-Z0-9_-]+::[a-zA-Z0-9_-]+$", key):
                     raise HTTPException(status_code=400, detail=f"Invalid override key '{key}': must be 'set::name' format.")
             overrides_json = json.dumps(ru.overrides)
 
-        # "debug" kind skeleton for future VSIX integration (e.g., special execution mode)
         job = runner.enqueue(ru.set, ru.name, user, ru.kind, ru.drop_done, ru.param, ru.max_retries, overrides_json)
 
         return {"job": job}

@@ -529,11 +529,54 @@ The param author is responsible for picking a port (client-side per-user pool) a
 
 `execute_job_code()` in `app/job_runner.py`:
 - **task**: loops `max_retries + 1` times; on exception sleeps 60s and retries; final failure → `send_completion failed`
-- **service/debug/draft**: no retry; single failure → `send_completion failed`
+- **service/debug/draft/test**: no retry; single failure → `send_completion failed`
 
 #### `state=running` for all kinds
 
-The `state=running` ZMQ completion fires the first time `exec(param)` returns successfully, before libs/code start. `assignJob` no longer flips the row to running on spawn; the job process owns that transition. This makes `running` mean the same thing across kinds — for task/service/draft it's "param executed, real work starting"; for debug it's "debugger bootstrap finished, attach window open" — without pyops having to probe anything debugger-specific.
+The `state=running` ZMQ completion fires the first time `exec(param)` returns successfully, before libs/code start. `assignJob` no longer flips the row to running on spawn; the job process owns that transition. This makes `running` mean the same thing across kinds — for task/service/draft/test it's "param executed, real work starting"; for debug it's "debugger bootstrap finished, attach window open" — without pyops having to probe anything debugger-specific.
+
+### Test Jobs
+
+`kind="test"` is a peer of `task | service | debug | draft`. The point: the same `*.task.py` file can serve as both a production task and its own test suite, gated by the standard `if __name__ == "__main__":` / `if __name__ == "__test__":` idiom. When enqueued with `kind=test` pyops sets `__name__` to `"__test__"`; for every other kind it stays `"__main__"`.
+
+**Pyops is pytest-agnostic.** The runner does not import, install, or invoke pytest, has no concept of test discovery, and does not parse `test_sets`. The runtime cost of the kind is exactly:
+
+1. Apply overrides (same mechanism as `kind=debug` — VSIX / pyopsctl can run uncommitted local code via the `overrides` dict).
+2. Materialise scriptlet sources under `workspace/.test/src/{set}/(task|library)/<name>.py` so coverage / debuggers / log paths refer to canonical file paths. Verbatim copy of the source; line numbers match the editor view.
+3. Compile from the materialised files (so `frame.f_code.co_filename` points at `.test/src/...`).
+4. Exec the task body in globals with `__name__ = "__test__"`. `state=running` ZMQ flip fires after `exec(param)` returns (matches every other kind).
+5. Exit derived from the body's outcome: clean return → `done`, exception → `failed` with traceback in `detail`.
+6. No retry, no execution timeout — same lifecycle policy as `kind=debug`.
+
+Authors who want pytest invoke it themselves — typically via the bundled helper `pyops::pytest` (see "Sets Management and the `pyops` set"). The helper resolves `test_sets` strings (`'TestX'` or `'TestX::method'`) by AST-scanning the materialised library tree, invokes `pytest.main()` programmatically with the resolved node IDs, and auto-attaches `pytest-cov` flags + a `[paths]`-mapped `.coveragerc` whenever `import pytest_cov` succeeds (i.e. the author has `#!pytest-cov` somewhere in the import graph). Authors who want a different test framework, plain `assert` statements, or a custom coverage flow skip the import and write whatever they need in the `__test__` block — pyops never inspects the body.
+
+Typical shape:
+
+```python
+# my_task.task.py
+#!pytest                      # pip install pytest
+#!pytest-cov                  # optional — turns on coverage automatically
+#!{::unit_tests}              # test library in same set
+#!{pyops::pytest}             # the helper described above
+
+def do_work(x):
+    return x * 2
+
+if __name__ == "__main__":
+    do_work(input_value)
+
+if __name__ == "__test__":
+    pytest_run(
+        test_sets=[
+            "TestWork",                  # whole class
+            "TestEdge::test_zero",       # single method
+            "TestE2E",
+        ],
+        args=["-v"],
+    )
+```
+
+The router accepts `kind=test` via `PUT /scriptlet/job/item`; `loadJob` reads unstaged content for `kind in ("debug", "draft", "test")`, matching the "operator iterating on local code" use case for all three preview/diagnostic kinds.
 
 ---
 
