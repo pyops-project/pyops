@@ -16,6 +16,7 @@ from app.lib import git
 from app.lib import pyops
 from app.lib.sets import ensure_set_environment
 from app.lib import job as job_lib
+from app.lib.data import SetData
 
 import logging
 from contextlib import redirect_stdout, redirect_stderr
@@ -59,17 +60,26 @@ def setup_job_globals(owner: str, setspace: str, workspace: str, web_bind: str, 
     else:
         listener = None
 
+    gitspace = os.path.join(_project_root, _conf_data["git"])
+    # Set-scoped structured data (yaml/json files under
+    # data/git/{setname}/data/). Cross-set access raises; reads take a
+    # shared lock, writes take an exclusive lock per file. Path is built
+    # straight from `gitspace + setname` — no `get_repo_path` call here
+    # because that has side effects (git init + initial commit) we
+    # don't want to trigger on every job spawn.
+    set_data = SetData(setname, os.path.join(gitspace, setname)) if setname else None
     glob = {
         "user": owner,
         "setname": setname,
         "name": name,
         "setspace": setspace,
         "workspace": workspace,
-        "gitspace": os.path.join(_project_root, _conf_data["git"]),
+        "gitspace": gitspace,
         "pkgspace": os.path.join(_project_root, _conf_runner["pkg"]),
         "jobsspace": os.path.join(_project_root, _conf_data["jobs"]),
         "control": pyops.Control(owner, web_bind),
         "listener": listener,
+        "data": set_data,
         "__name__": "__main__",
         "__builtins__": __builtins__
     }

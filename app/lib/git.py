@@ -152,7 +152,8 @@ def pull(repo: str) -> bool:
                                  if not os.path.exists(os.path.join(repo, f))
                                  and (f.endswith(('.py', '.html', '.js'))
                                       or f == 'README.md'
-                                      or (f.startswith('docs/') and f.endswith('.md')))]
+                                      or (f.startswith('docs/') and f.endswith('.md'))
+                                      or (f.startswith('data/') and f.endswith(('.yaml', '.yml', '.json'))))]
                     added_count = len(new_files)
                     if new_files:
                         _call(["git", "checkout", "HEAD", "--"] + new_files, repo)
@@ -229,6 +230,10 @@ def get_file_path(repo: str, name: str, type_: str) -> str:
     Markdown: README at the repo root (README.md); any other markdown
         name lives under docs/{name}.md so multi-page documentation can
         ship with a set without colliding with scriptlet filenames.
+    Data: {name}.{yaml|json} under data/, picked by which file exists.
+        For brand-new data files, `type_="data"` defaults the extension
+        to `.yaml`. The on-disk extension is the single source of
+        truth — `name` is unique within data/ regardless of format.
 
     Args:
         repo (str): Repo path.
@@ -249,6 +254,16 @@ def get_file_path(repo: str, name: str, type_: str) -> str:
         return os.path.join(repo, f"{name}.html")
     if type_ == "jslibrary":
         return os.path.join(repo, f"{name}.js")
+    if type_ == "data":
+        data_dir = os.path.join(repo, "data")
+        for ext in ("yaml", "yml", "json"):
+            candidate = os.path.join(data_dir, f"{name}.{ext}")
+            if os.path.isfile(candidate):
+                return candidate
+        # Brand-new data file: default to yaml. Callers that need json
+        # use `data.write(name, format="json")` from the scriptlet side,
+        # which goes through SetData (not get_file_path).
+        return os.path.join(data_dir, f"{name}.yaml")
     if type_ not in ["task", "library", "controller"]:
         raise ValueError(f"Invalid type: {type_}")
     return os.path.join(repo, f"{name}.{type_}.py")
@@ -260,10 +275,12 @@ def get_name_from_file(filename: str) -> str:
     Python: {name}.{type} → name; raise if no type dot.
     Markdown under docs/: pass the path relative to the repo (e.g.
         'docs/notes.md') → 'notes'. Top-level 'README.md' → 'README'.
+    Data under data/: 'data/config.yaml' / 'data/state.json' → 'config' /
+        'state'. Name is the basename without extension.
 
     Args:
         filename (str): e.g., 'myscript.task.py', 'SimpleDog-Head.html',
-            'mylib.js', 'README.md', or 'docs/notes.md'.
+            'mylib.js', 'README.md', 'docs/notes.md', or 'data/config.yaml'.
 
     Returns:
         str: Name.
@@ -274,6 +291,8 @@ def get_name_from_file(filename: str) -> str:
     if filename == "README.md":
         return "README"
     if filename.startswith("docs/") and filename.endswith(".md"):
+        return os.path.splitext(os.path.basename(filename))[0]
+    if filename.startswith("data/") and filename.endswith((".yaml", ".yml", ".json")):
         return os.path.splitext(os.path.basename(filename))[0]
     base = os.path.splitext(filename)[0]
     if filename.endswith('.html'):
@@ -291,10 +310,12 @@ def infer_type_from_filename(filename: str) -> str:
     Python: {name}.{type}.py → type (task/library/controller).
     JS Libraries: .js → "jslibrary".
     Markdown: top-level 'README.md' or any 'docs/*.md' → "markdown".
+    Data: any 'data/*.{yaml,yml,json}' → "data".
 
     Args:
         filename (str): e.g., 'myscript.task.py', 'myview.html', 'mylib.js',
-            'README.md', or 'docs/notes.md' (path relative to the repo).
+            'README.md', 'docs/notes.md', or 'data/config.yaml' (path
+            relative to the repo).
 
     Returns:
         str: Type.
@@ -306,12 +327,14 @@ def infer_type_from_filename(filename: str) -> str:
         return "markdown"
     if filename.startswith("docs/") and filename.endswith(".md"):
         return "markdown"
+    if filename.startswith("data/") and filename.endswith((".yaml", ".yml", ".json")):
+        return "data"
     if filename.endswith('.html'):
         return "view"
     if filename.endswith('.js'):
         return "jslibrary"
     if not filename.endswith('.py'):
-        raise ValueError(f"Not a Python/HTML/JS/markdown file: {filename}")
+        raise ValueError(f"Not a Python/HTML/JS/markdown/data file: {filename}")
     base = os.path.splitext(filename)[0]
     parts = base.rsplit('.', 1)
     if len(parts) < 2:
@@ -360,16 +383,37 @@ def list_scriptlets() -> List[Dict[str, str]]:
                     scriptlets.append({"set": set, "name": name, "type": type_})
                 except ValueError:
                     continue
+        data_dir = os.path.join(repo, "data")
+        if os.path.isdir(data_dir):
+            for filename in os.listdir(data_dir):
+                if not filename.endswith((".yaml", ".yml", ".json")):
+                    continue
+                rel = f"data/{filename}"
+                try:
+                    name = get_name_from_file(rel)
+                    type_ = infer_type_from_filename(rel)
+                    ext = os.path.splitext(filename)[1].lstrip(".")
+                    # Data files carry their extension so clients can
+                    # mirror the on-disk format locally (yaml vs json
+                    # affects both filename and syntax highlighting).
+                    scriptlets.append({"set": set, "name": name, "type": type_, "ext": ext})
+                except ValueError:
+                    continue
 
     return sorted(scriptlets, key=lambda x: (x["set"], x["name"]))
 
 def list_scriptlet_files(repo: str, name: str) -> List[str]:
     """Lists scriptlet files for a given name in repo.
 
-    Returned paths are relative to `repo`. Top-level filenames stay
-    bare (e.g. 'my_task.task.py'); a markdown file under `docs/` is
-    returned as 'docs/{name}.md' so callers can resolve the location
-    without inspecting type separately.
+    Returned paths are relative to `repo`. Top-level scriptlet files
+    stay bare (e.g. 'my_task.task.py'); a markdown file under `docs/`
+    or a data file under `data/` is returned as 'docs/{name}.md' /
+    'data/{name}.yaml' so callers can resolve the location without
+    inspecting type separately.
+
+    Matching uses filename-prefix-plus-extension rather than calling
+    `get_name_from_file` per entry, so callers don't depend on every
+    file in the repo being a well-formed scriptlet filename.
 
     Args:
         repo (str): Repo path.
@@ -380,22 +424,23 @@ def list_scriptlet_files(repo: str, name: str) -> List[str]:
     """
     files = []
     for filename in os.listdir(repo):
-        try:
-            if get_name_from_file(filename) == name:
-                files.append(filename)
-        except ValueError:
-            continue
+        # Top-level scriptlet shapes: {name}.{type}.py, {name}.html, {name}.js
+        if filename.startswith(f"{name}.") and filename.endswith(('.py', '.html', '.js')):
+            files.append(filename)
+        # README.md at the top level is the only zero-extension match
+        elif filename == "README.md" and name == "README":
+            files.append(filename)
     docs_dir = os.path.join(repo, "docs")
     if os.path.isdir(docs_dir):
         for filename in os.listdir(docs_dir):
-            if not filename.endswith(".md"):
-                continue
-            rel = f"docs/{filename}"
-            try:
-                if get_name_from_file(rel) == name:
-                    files.append(rel)
-            except ValueError:
-                continue
+            if filename == f"{name}.md":
+                files.append(f"docs/{filename}")
+    data_dir = os.path.join(repo, "data")
+    if os.path.isdir(data_dir):
+        for ext in (".yaml", ".yml", ".json"):
+            candidate = f"{name}{ext}"
+            if os.path.isfile(os.path.join(data_dir, candidate)):
+                files.append(f"data/{candidate}")
     return files
 
 
@@ -404,7 +449,9 @@ def check_name_unique(repo: str, name: str) -> bool:
     """Checks if name is unique across the set.
 
     Matches scriptlet filenames at the repo root ({name}.*.py / .html /
-    .js / README.md) AND markdown files under docs/{name}.md.
+    .js / README.md), markdown files under docs/{name}.md, and data
+    files under data/{name}.{yaml,yml,json}. Names share one namespace
+    so the editor can resolve `{set}::{name}` unambiguously.
 
     Args:
         repo (str): Repo path.
@@ -419,7 +466,23 @@ def check_name_unique(repo: str, name: str) -> bool:
     docs_path = os.path.join(repo, "docs", f"{name}.md")
     if os.path.exists(docs_path):
         return False
+    data_dir = os.path.join(repo, "data")
+    if os.path.isdir(data_dir):
+        for ext in ("yaml", "yml", "json"):
+            if os.path.isfile(os.path.join(data_dir, f"{name}.{ext}")):
+                return False
     return True
+
+
+def check_data_name_unique(repo: str, name: str) -> bool:
+    """Cross-format uniqueness inside a set's data/ subdir.
+
+    True iff no `name.{yaml,yml,json}` exists in `data/git/{set}/data/`.
+    Pyops-internal inventory creates use this in addition to
+    `check_name_unique`; the SetData write path uses it through its own
+    file-by-file resolution (see app/lib/data.py)."""
+    from app.lib.data import check_data_name_unique as _impl
+    return _impl(repo, name)
 
 def read_content(repo: str, name: str, type_: str, committed: bool = False, strict: bool = False) -> str:
     """Reads content preferring unstaged (working dir) or committed (git show HEAD:file).

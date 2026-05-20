@@ -163,7 +163,9 @@ Manages scriptlet files as Git repos in `data/git/{set}/`. All mutating operatio
 - Views: `{name}.html`
 - JS libraries: `{name}.js`
 - Markdown: top-level `README.md` for the set's primary doc; any number of additional markdown pages under `docs/{name}.md`. All resolve to type `markdown`. The split keeps free-named markdown out of the scriptlet-name namespace (the `name` of a `docs/notes.md` entry is `notes`, not subject to collision with a `notes.task.py`).
-- Types inferred by `infer_type_from_filename()`; `get_file_path(repo, name, "markdown")` returns `README.md` for `name == "README"`, otherwise `docs/{name}.md`.
+- Data: `data/{name}.{yaml,yml,json}` for set-scoped YAML/JSON. Resolve to type `data`. `list_scriptlets` reports an `ext` field for these entries so clients can mirror the actual format locally. See "Set Data" below.
+- Types inferred by `infer_type_from_filename()`; `get_file_path(repo, name, "markdown")` returns `README.md` for `name == "README"`, otherwise `docs/{name}.md`. `get_file_path(repo, name, "data")` returns the existing `data/{name}.{yaml,yml,json}` or, for a brand-new file, defaults to `data/{name}.yaml`.
+- Name uniqueness: `check_name_unique(repo, name)` covers top-level scriptlets, `docs/*.md` pages, and `data/*` files — all live in one namespace per set. Inventory creates and `data.write` use the same check so a `notes.task.py` and a `docs/notes.md` cannot both exist, and `config.yaml` excludes `config.json` (and vice versa).
 
 ### Operations
 
@@ -223,6 +225,47 @@ flowchart TD
     D -->|No| F[return False]
     C -->|CalledProcessError| G["sleep(2); retry or return False"]
 ```
+
+### Set Data (`app/lib/data.py`)
+
+Tasks and libraries in the same set can read/write small structured files under `data/git/{set}/data/`. The `data` global is injected into every scriptlet's namespace by `job_runner.setup_job_globals`; it is bound to the calling job's set and has no surface for cross-set access.
+
+```python
+# read (shared lock — concurrent reads in different jobs proceed in parallel)
+with data.read("config") as cfg:
+    threshold = cfg["threshold"]
+
+# write (exclusive lock — blocks readers and other writers for this file)
+with data.write("state") as st:
+    st["last_run"] = time.time()
+
+data.list()                     # ['config', 'state']
+```
+
+Format is auto-detected by extension: `.yaml`/`.yml` use `yaml.safe_load`/`safe_dump`, `.json` uses `json.loads`/`dumps`. On a brand-new file the caller passes `format="yaml"` or `format="json"`; existing files keep their format.
+
+Concurrency:
+
+- One `fcntl.flock` per file at `data/git/{set}/data/.{name}.lock` (persistent sidecar, never unlinked — same lockfile lifetime pattern as `repo_lock` and `set_install_lock`).
+- `LOCK_SH` for `read`, `LOCK_EX` for `write`. Different files in the same set don't serialise; different sets always run in parallel by construction.
+- Writes are atomic: serialise to `{name}.{ext}.tmp` then `os.replace` under the exclusive lock. Readers see either the previous file or the new one — never a torn write.
+- Read-modify-write inside one `with data.write(...) as obj:` block is the unit of atomicity; multi-step orchestration that needs to span a "decide then change" cycle should keep both the decision and the change inside the same `with` block.
+
+Name uniqueness:
+
+- A name is unique within a set's `data/` regardless of format. `config.yaml` and `config.json` cannot coexist — the second create raises `FileExistsError`.
+- `check_data_name_unique(repo, name)` is the cross-format check used by inventory writes; `SetData.write` calls the same check internally before allocating the new file.
+- The set-wide `check_name_unique` (used by scriptlet creates) also returns False if any `data/{name}.{yaml,yml,json}` exists, so scriptlet names and data names share one namespace per set.
+
+Gitignore:
+
+- The set's `.gitignore` (initialised by `get_repo_path` and committed) gets a `data/.*.lock` entry appended on first `SetData` use (idempotent — appended only if missing). The lock sidecars therefore don't appear as unstaged changes.
+
+Inventory integration:
+
+- `list_scriptlets()` walks `data/git/{set}/data/*.{yaml,yml,json}` and emits entries with `type="data"` plus an `ext` field. Clients (VSIX) use the `ext` to mirror the actual format locally — yaml vs json affects both filename and editor language mode.
+- `get_file_path(repo, name, "data")` returns the on-disk file if it exists, otherwise defaults to `data/{name}.yaml` for new creates from the inventory router.
+- `pull(repo)`'s working-tree restore picks up `data/*.{yaml,yml,json}` alongside `.py/.html/.js/README.md/docs/*.md`.
 
 ---
 
@@ -368,6 +411,7 @@ graph TD
 | `jobsspace` | `data/jobs/` |
 | `control` | `pyops.Control(owner, web_bind)` |
 | `listener` | `pyops.ServiceListener(owner, job_id)` (service/debug/draft) |
+| `data` | `SetData(setname, repo_path)` — set-scoped YAML/JSON I/O with shared/exclusive locks; see "Set Data" |
 
 #### Output Isolation
 

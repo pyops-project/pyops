@@ -82,7 +82,8 @@ Displays scriptlet sets with their scriptlets. Each refresh:
 interface ScriptletInfo {
     set: string;
     name: string;
-    type: string;            // 'task' | 'service' | 'library' | 'controller' | 'view' | 'markdown' | 'jslibrary'
+    type: string;            // 'task' | 'service' | 'library' | 'controller' | 'view' | 'markdown' | 'jslibrary' | 'data'
+    ext?: string;            // for type='data': 'yaml' | 'yml' | 'json' — picked by which file exists server-side
     isLocalOnly?: boolean;
 }
 ```
@@ -125,7 +126,7 @@ interface Job {
 
 ## File Type Mapping (`src/utils.ts`)
 
-`inferExt(type: string): string`:
+`inferExt(type: string, hint?: string): string`:
 
 | Type | Extension |
 |------|-----------|
@@ -133,13 +134,17 @@ interface Job {
 | `view` | `.html` |
 | `markdown` | `.md` |
 | `jslibrary` | `.js` |
+| `data` (hint='json') | `.json` |
+| `data` (hint='yaml'/'yml'/missing) | `.yaml` |
 | unknown | `.py` (fallback) |
+
+For `type='data'`, the second argument is the `ScriptletInfo.ext` field reported by the server — used so the local mirror filename matches the remote on-disk format.
 
 ---
 
 ## Remote Content Provider (`src/providers/RemoteContentProvider.ts`)
 
-Serves `pyops-remote://{set}/{name}?type={type}` URIs. Content is decoded from the URI fragment (base64). Language mode is set via `registerRemoteLanguageModeSetter()`:
+Serves `pyops-remote://{set}/{name}?type={type}&ext={ext}` URIs. Content is decoded from the URI fragment (base64). Language mode is set via `registerRemoteLanguageModeSetter()`:
 
 | Type | Language ID |
 |------|-------------|
@@ -147,6 +152,8 @@ Serves `pyops-remote://{set}/{name}?type={type}` URIs. Content is decoded from t
 | `view` | `html` |
 | `markdown` | `markdown` |
 | `jslibrary` | `javascript` |
+| `data` (ext='json') | `json` |
+| `data` (ext='yaml'/'yml'/missing) | `yaml` |
 
 Used by `diffLocalRemote` to show the remote version read-only in the VSCode diff editor.
 

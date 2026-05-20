@@ -15,6 +15,10 @@ interface ScriptletInfo {
     set: string;
     name: string;
     type: string;
+    // For type='data' the server reports the on-disk extension
+    // ('yaml' | 'yml' | 'json') so the client mirror filename and
+    // editor language mode match the remote source.
+    ext?: string;
     isLocalOnly?: boolean;
 }
 
@@ -156,14 +160,14 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
         const baseLocalPath = path.join(workspaceRoot, localPyopsDir);
 
         const downloadPromises = scriptlets.map(async (s) => {
-            const sObj = { set: s.set, name: s.name, type: s.type };
+            const sObj = { set: s.set, name: s.name, type: s.type, ext: s.ext };
             const key = `${sObj.set}-${sObj.name}-${sObj.type}`;
             try {
                 const response = await this._apiClient.fetch(`/scriptlet/inventory/code?set=${sObj.set}&name=${sObj.name}`);
                 if (response.ok) {
                     const data = await response.json() as {code: string};
                     const remoteCode = data.code;
-                    const ext = inferExt(sObj.type);
+                    const ext = inferExt(sObj.type, sObj.ext);
                     const dirPath = path.join(baseLocalPath, sObj.set, sObj.type);
                     if (!fs.existsSync(dirPath)) {
                         fs.mkdirSync(dirPath, { recursive: true });
@@ -211,7 +215,7 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
             const dirPath = path.join(baseLocalPath, dir);
             return fs.statSync(dirPath).isDirectory();
         }).sort();
-        const knownTypes = ['task', 'service', 'library', 'controller', 'view', 'markdown', 'jslibrary'];
+        const knownTypes = ['task', 'service', 'library', 'controller', 'view', 'markdown', 'jslibrary', 'data'];
         for (const set of setDirs) {
             const setPath = path.join(baseLocalPath, set);
             for (const type of knownTypes) {
@@ -220,6 +224,16 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
                 const files = fs.readdirSync(typePath);
                 for (const file of files) {
                     const ext = path.extname(file);
+                    if (type === 'data') {
+                        // yaml/yml/json are all valid for data; record the
+                        // actual extension so the tree shows the right
+                        // language icon and round-trip writes preserve it.
+                        if (ext === '.yaml' || ext === '.yml' || ext === '.json') {
+                            const name = path.basename(file, ext);
+                            localScriptlets.push({ set, name, type, ext: ext.slice(1), isLocalOnly: true });
+                        }
+                        continue;
+                    }
                     const expectedExtNoDot = inferExt(type);
                     const expectedExt = `.${expectedExtNoDot}`;
                     if (ext === expectedExt) {

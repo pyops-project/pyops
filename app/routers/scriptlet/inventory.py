@@ -65,6 +65,12 @@ async def item_put(cr: CreateArgument, user: str = Depends(get_current_user)):
         elif cr.type == "markdown":
             # README (top-level) gets a heading; docs/<name>.md starts blank
             initial_content = f"# {cr.set}\n" if cr.name == "README" else ""
+        elif cr.type == "data":
+            # Default new data files to YAML with an empty mapping —
+            # valid in both YAML and JSON dialects? No: JSON requires {}.
+            # get_file_path defaults type=data without an existing file to
+            # .yaml, so this content matches that extension.
+            initial_content = "{}\n"
         else:
             initial_content = "pass\n"
 
@@ -96,8 +102,9 @@ async def draft_post(sa: SaveArgument):
     try:
         _reject_if_pyops(sa.set)
         repo = await run_in_executor(git.get_repo_path, sa.set)
-        # Infer type from existing file.
-        files = [f for f in os.listdir(repo) if f.startswith(f"{sa.name}.") and f.endswith(('.py', '.html', '.md', '.js'))]
+        # Infer type from existing file. Searches top-level + docs/ + data/
+        # so markdown and data files round-trip through the same routes.
+        files = await run_in_executor(git.list_scriptlet_files, repo, sa.name)
         if not files:
             raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Scriptlet {}::{} not existing".format(sa.set, sa.name))
         filename = files[0]  # Assume unique.
@@ -122,7 +129,7 @@ async def item_del(set: str, name: str, user: str = Depends(get_current_user)):
     try:
         _reject_if_pyops(set)
         repo = await run_in_executor(git.get_repo_path, set)
-        files = [f for f in os.listdir(repo) if f.startswith(f"{name}.") and f.endswith(('.py', '.html', '.md', '.js'))]
+        files = await run_in_executor(git.list_scriptlet_files, repo, name)
         if not files:
             raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Scriptlet {}::{} not existing".format(set, name))
         filename = files[0]
@@ -147,7 +154,7 @@ async def draft_del(set: str = Query(..., description="Set"), name: str = Query(
     try:
         _reject_if_pyops(set)
         repo = await run_in_executor(git.get_repo_path, set)
-        files = [f for f in os.listdir(repo) if f.startswith(f"{name}.") and f.endswith(('.py', '.html', '.md', '.js'))]
+        files = await run_in_executor(git.list_scriptlet_files, repo, name)
         if not files:
             raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail=f"Scriptlet {set}::{name} not existing")
         filename = files[0]
