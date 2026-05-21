@@ -142,7 +142,12 @@
                     enableSnippets: true,
                     selectionStyle: "text",
                     fontSize: $("#font-size").val(),
-                    useWorker: false
+                    useWorker: false,
+                    // YAML convention: 2-space soft tabs. Ace's default
+                    // is 4, which produces wrong indentation when round-
+                    // tripping through yaml.safe_dump (which uses 2).
+                    tabSize: 2,
+                    useSoftTabs: true
                 });
 
                 editor.on("change", ()=>{

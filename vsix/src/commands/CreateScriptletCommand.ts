@@ -91,12 +91,10 @@ export class CreateScriptletCommand {
                 let template = '';
                 if (ext === 'py') {
                     template = 'pass';
-                } else if (typeLower === 'data') {
-                    // Empty YAML mapping — also valid as empty JSON if the
-                    // author renames to .json. Matches the server-side
-                    // initial_content for type=data.
-                    template = '{}\n';
                 }
+                // type=data files start empty (no `{}` flow-mapping
+                // placeholder) — matches the server-side initial_content
+                // for type=data; see app/routers/scriptlet/inventory.py.
                 fs.writeFileSync(localPath, template);
                 outputChannel.appendLine(`[Create Scriptlet] Created local file: ${localPath}`);
                 managerTreeProvider.refresh();

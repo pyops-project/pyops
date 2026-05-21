@@ -66,11 +66,12 @@ async def item_put(cr: CreateArgument, user: str = Depends(get_current_user)):
             # README (top-level) gets a heading; docs/<name>.md starts blank
             initial_content = f"# {cr.set}\n" if cr.name == "README" else ""
         elif cr.type == "data":
-            # Default new data files to YAML with an empty mapping —
-            # valid in both YAML and JSON dialects? No: JSON requires {}.
-            # get_file_path defaults type=data without an existing file to
-            # .yaml, so this content matches that extension.
-            initial_content = "{}\n"
+            # New YAML files start empty rather than `{}`: empty parses
+            # to None / {} via yaml.safe_load (see app/lib/data.py
+            # `_deserialise`), and unlike `{}` it lets the author start
+            # typing block-style entries without removing a flow-mapping
+            # placeholder first.
+            initial_content = ""
         else:
             initial_content = "pass\n"
 

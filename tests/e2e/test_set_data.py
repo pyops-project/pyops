@@ -39,9 +39,9 @@ class TestDataInventory:
                     json={"set": SET, "name": "config", "type": "data"})
         assert r.status_code == 200, r.text
 
-        # On disk: data/config.yaml with default empty-mapping content.
+        # On disk: data/config.yaml starts empty (no `{}` placeholder).
         repo = e2e_env["data_dir"] / "git" / SET
-        assert (repo / "data" / "config.yaml").read_text() == "{}\n"
+        assert (repo / "data" / "config.yaml").read_text() == ""
 
         # list_scriptlets reports the entry with ext.
         scripts = api.get("/scriptlet/inventory/list").json()
@@ -56,7 +56,7 @@ class TestDataInventory:
         body = r.json()
         assert body["type"] == "data"
         assert body["ext"] == "yaml"
-        assert body["code"] == "{}\n"
+        assert body["code"] == ""
         pyops_server.assert_no_unexpected_errors()
 
     def test_draft_round_trips(self, api, pyops_server, set_factory, e2e_env):

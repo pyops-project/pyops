@@ -270,7 +270,10 @@ def _serialise(obj: Any, ext: str) -> str:
         return json.dumps(obj, indent=2, sort_keys=True) + "\n"
     if ext in ("yaml", "yml"):
         import yaml  # lazy: see top of module
-        return yaml.safe_dump(obj, sort_keys=True, default_flow_style=False)
+        # indent=2: explicit YAML convention. Pyyaml's default is also 2
+        # but pinning here documents intent and matches the editor's
+        # tabSize for round-trip stability.
+        return yaml.safe_dump(obj, sort_keys=True, default_flow_style=False, indent=2)
     raise ValueError(f"unsupported data extension: {ext!r}")
 
 

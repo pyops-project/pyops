@@ -209,8 +209,9 @@ describe('CreateScriptletCommand', () => {
     expect(firstQuickPickArgs).toEqual(expect.arrayContaining([
       expect.objectContaining({ label: 'Data' })
     ]));
-    // File written with the empty-YAML template.
-    expect(require('fs').writeFileSync).toHaveBeenCalledWith(localPathData, '{}\n');
+    // File written empty (no `{}` placeholder; matches the server-side
+    // type=data initial_content in inventory.py).
+    expect(require('fs').writeFileSync).toHaveBeenCalledWith(localPathData, '');
   });
 
 
