@@ -90,6 +90,17 @@
                 `
             }
 
+            function genDataActions(set, name) {
+                return `
+                    <button type="button" onclick="del('${set}', '${name}')" class="btn btn-danger p-0" data-testid="scriptlet-delete-${set}-${name}">
+                        <span class="material-icons-round">delete</span>
+                    </button>
+                    <button type="button" onclick="onEditData('${set}', '${name}')" class="btn btn-warning p-0" data-testid="scriptlet-edit-${set}-${name}">
+                        <span class="material-icons-round">edit</span>
+                    </button>
+                `
+            }
+
             function genActions(set, name, type) {
                 let actions = "";
                 if(type == "task")
@@ -100,6 +111,8 @@
                     actions = genViewActions(set, name);
                 else if(type == "markdown")
                     actions = genMdActions(set, name);
+                else if(type == "data")
+                    actions = genDataActions(set, name);
                 return actions;
             }
 
@@ -239,6 +252,11 @@
                 console.debug("onEdit", set, name);
 
                 window.open(`${window.location.origin}/scriptlet/editor_view?set=${set}&name=${name}`,`PyOps - View Editor ${set}/${name}`,"titlebar=no,toolbar=no,menubar=no,scrollbars=no");
+            }
+
+            function onEditData(set, name) {
+                console.debug("onEdit", set, name);
+                window.open(`${window.location.origin}/scriptlet/editor_data?set=${set}&name=${name}`,`PyOps - Data Editor ${set}/${name}`,"titlebar=no,toolbar=no,menubar=no,scrollbars=no");
             }
 
             function onEditMd(set, name) {
@@ -394,10 +412,8 @@
                                 <option value="library">Library</option>
                                 <option value="controller">Controller</option>
                                 <option value="view">View</option>
-                                <!--
-                                <option value="model">Model</option>
-                                <option value="view">View</option>
-                                -->
+                                <option value="markdown">Markdown</option>
+                                <option value="data">Data (YAML)</option>
                             </select>
                         </div>
                     </div>

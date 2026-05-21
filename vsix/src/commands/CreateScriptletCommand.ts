@@ -15,7 +15,8 @@ export class CreateScriptletCommand {
             { label: 'Controller', description: 'Python controller' },
             { label: 'View', description: 'HTML view template' },
             { label: 'JS Library', description: 'JavaScript library module' },
-            { label: 'Markdown', description: 'Markdown document (README only)' }
+            { label: 'Markdown', description: 'Markdown document (README.md or docs/<name>.md)' },
+            { label: 'Data', description: 'YAML data file under data/<name>.yaml' }
         ];
         const typePick = await vscode.window.showQuickPick(types, { placeHolder: 'Select scriptlet type' });
         if (!typePick) return;
@@ -78,11 +79,6 @@ export class CreateScriptletCommand {
                 }
                 outputChannel.appendLine(`[Create Scriptlet] Selected unique name: ${name}`);
 
-                if (typeLower === 'markdown' && name !== 'README') {
-                    vscode.window.showErrorMessage('Markdown only allowed for README');
-                    return;
-                }
-
                 outputChannel.appendLine(`[Create Scriptlet] Creating local ${typeLower} '${set}::${name}'...`);
                 const workspaceRoot = vscode.workspace.workspaceFolders![0].uri.fsPath;
                 const localPyopsDir = pyopsConfig.get('localPyopsDir', 'pyops') as string;
@@ -95,6 +91,11 @@ export class CreateScriptletCommand {
                 let template = '';
                 if (ext === 'py') {
                     template = 'pass';
+                } else if (typeLower === 'data') {
+                    // Empty YAML mapping — also valid as empty JSON if the
+                    // author renames to .json. Matches the server-side
+                    // initial_content for type=data.
+                    template = '{}\n';
                 }
                 fs.writeFileSync(localPath, template);
                 outputChannel.appendLine(`[Create Scriptlet] Created local file: ${localPath}`);

@@ -7,6 +7,103 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 from 3.0.0 onward.
 
+## [3.3.0] — 2026-05-21
+
+Three additive set capabilities plus a public-namespace rename:
+
+- **`pyops` set as public library namespace** (was `internal`). Until
+  3.3.0 the bundled set was implementation-internal and user
+  scriptlets never imported from it. Starting with 3.3.0 the bundle is
+  a published library namespace authors are expected to import from
+  via `#!{pyops::name}` — starting with `pyops::pytest`. URL moves
+  from `/controller/internal/sets` to `/controller/pyops/sets`. No
+  compat alias — clean break, nothing user-authored referenced
+  `internal::*`.
+- **Multi-page markdown per set.** `data/git/{set}/docs/{name}.md`
+  joins the long-standing `README.md` at the top level. Authors can
+  ship multi-page documentation alongside scriptlets; the docs/
+  subdir keeps free-named markdown out of the scriptlet-name
+  namespace. `list_scriptlets` walks both locations; `pull`'s
+  working-tree restore picks `docs/*.md` up alongside the existing
+  `.py/.html/.js/README` set.
+- **Set-scoped YAML/JSON data with shared/exclusive locks.** Tasks
+  and libraries in the same set can read/write small structured
+  files under `data/git/{set}/data/{name}.{yaml,yml,json}` via the
+  new `data` global (peer of `control` and `listener`). Shared
+  `fcntl.flock` on read, exclusive on write, per-file lock files;
+  unrelated data files in the same set don't serialise; different
+  sets run fully in parallel by construction. Cross-set access
+  raises; name-uniqueness across formats prevents
+  `config.yaml`/`config.json` coexisting.
+- **Test kind.** A `*.task.py` file can act as both production task
+  and its own test suite, gated by `if __name__ == "__main__":` /
+  `if __name__ == "__test__":`. Pyops core stays pytest-agnostic —
+  the kind dispatch sets `__name__` to `"__test__"`, materialises
+  source under `.test/src/{set}/`, exec's. The new `pyops::pytest`
+  library does the work: AST-scan-driven class/method-id resolution
+  (no filesystem discovery), programmatic `pytest.main()` against
+  the named test classes, auto-attached coverage when `pytest-cov`
+  is in the import graph, `.coveragerc` with `[paths]` mapping back
+  to canonical source paths. Authors who want a different test
+  framework skip the import and put whatever they need in
+  `__test__`.
+
+### Added
+- `app/lib/data.py` — `SetData` API for set-scoped YAML/JSON I/O
+  with shared/exclusive locks and atomic writes.
+- `app/pyops/pytest.library.py` — public `#!{pyops::pytest}`
+  helper for programmatic pytest invocation in `kind=test` jobs.
+- `app/sites/scriptlet/editor_data.html` — Ace-based editor for
+  `data/*.{yaml,yml,json}` files with mode switching by extension.
+  Routed at `/scriptlet/editor_data`.
+- `data` type to the Manager's create dialog, `Markdown` already
+  listed but now creates either `README.md` or `docs/{name}.md`
+  depending on the chosen name (the "README only" restriction is
+  gone).
+- VSIX: `data` type in the Manager tree, with the on-disk extension
+  (`yaml` | `yml` | `json`) propagating through `ScriptletInfo.ext`
+  → `ScriptletTreeItem.scriptletExt` → `inferExt()` (local mirror
+  filename matches remote format) → `pyops-remote://` diff URI's
+  `?ext=...` query param → `RemoteContentProvider`'s language-mode
+  setter (correct syntax highlighting). VSIX `CreateScriptletCommand`
+  offers `Data` and accepts non-README markdown names.
+- pyopsctl: `--type data` accepted by `scriptlet create`;
+  `--kind {test,debug,draft}` accepted by `job run`.
+- E2E tests for the three new features
+  (`tests/e2e/test_multi_markdown.py`, `test_set_data.py`,
+  `test_test_kind.py`).
+
+### Changed
+- Directory rename `app/internal/` → `app/pyops/`. Constants
+  `INTERNAL_*` → `PYOPS_*`. URL `/controller/internal/sets` →
+  `/controller/pyops/sets`. JSlib `internal_job.js` → `set_job.js`
+  with test IDs `internal-job-*` → `set-job-*`.
+- The directive-syntax line in `docs/insights_app.md` is corrected:
+  `#!{set::name}` with mandatory `::` (an empty `set` means current
+  set, e.g. `#!{::lib}`), replacing the earlier
+  `#!{[set::]name}` text that read the `::` as optional.
+- Inventory routes (`code_get`, `draft_post`, `item_del`,
+  `draft_del`) now use `git.list_scriptlet_files` for type
+  resolution so they find `docs/*.md` and `data/*.{yaml,yml,json}`
+  alongside top-level scriptlets.
+- The Manager UI's create modal lists `Markdown` and `Data (YAML)`
+  in addition to Task/Library/Controller/View.
+
+### Fixed
+- Inventory `code_get` previously globbed only the top level of a
+  set's working tree; multi-markdown / data files were unreadable
+  via the WebUI editor as a result.
+
+### CI / Docs
+- `pyyaml` added to the runner's image (`Dockerfile`) and the four
+  pip-install lines in `.gitlab-ci.yml`.
+- Insights kept in lockstep: `docs/insights_app.md`,
+  `docs/insights_vsix.md`, `docs/insights_ctl.md`, plus
+  `docs/overview.md`, `docs/pyops_guide.md`, `docs/pyops_rules.md`,
+  `README.md`, and the project-root `CLAUDE.md` are all updated to
+  reflect the new set/file layout, the new `pyops` namespace, the
+  `data` and `test` features, and the corrected directive syntax.
+
 ## [3.2.0] — 2026-05-19
 
 Three debug-flow bugs and a vendored JS lib refresh:

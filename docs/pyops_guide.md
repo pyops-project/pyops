@@ -21,7 +21,7 @@ PyOps is an execution platform for Python operations scriptlets, licensed under 
 - **Status**: Status bar shows connection (requires valid `pyops.serverUrl`).
 
 VSIX provides pyops-container in sidebar/activitybar:
-- **pyops-manager**: Sets > type folders (task/service/library/controller/view/markdown/jslibrary) > scriptlets; icons: ✓ synced, ⚠ unsynced/draft/local-only; contextValues pyopsItem-{type}(-local).
+- **pyops-manager**: Sets > type folders (task/service/library/controller/view/markdown/jslibrary/data) > scriptlets; icons: ✓ synced, ⚠ unsynced/draft/local-only; contextValues pyopsItem-{type}(-local). Markdown supports multiple pages: top-level `README.md` plus any number of free-named `docs/{name}.md`. Data files (yaml/json) live under `data/{name}.{yaml,yml,json}` and round-trip through the standard sync/diff/draft flow.
   Right-click: Reset Local from Remote, Write Local to Remote Draft, Diff Local Remote, Delete Scriptlet; Start/Stop Debug Job (tasks). Per-file commit/push is gone — commit the whole set's draft changeset at once via the Sets view.
   Titlebar: Refresh Manager, Create Scriptlet, Attach to Debug Job.
 - **pyops-monitor**: Jobs by state; right-click: Copy Job Param, Cancel/Download/Delete/View Job.
@@ -41,13 +41,14 @@ Examples:
 - View: "Enhance body.html with Bootstrap table for job list, AJAX GET to /jobs via apiCall, populate rows with Material Icons."
 - Library: "Generate a Python library scriptlet with shared functions, e.g., data processing utilities, for import in other scriptlets."
 - JS Library: "Create a JavaScript library scriptlet with utility functions, e.g., `function apiCall(type, path, params, callback) { /* REST AJAX implementation */ }` for use in views."
-- Markdown: "Write a markdown scriptlet for documentation or README content."
+- Markdown: "Write a markdown scriptlet for documentation. Use `README` as name for the set's top-level README.md, or any other name for a `docs/{name}.md` page."
+- Data: "Create a YAML data file scriptlet with `threshold: 42`, `enabled: true`, and a `defaults` section. Tasks/libraries read it via `with data.read('config') as cfg:`."
 
 Cline outputs full file content; paste/replace in editor, then save via VSIX. Iterate prompts for refinements (e.g., "Add validation to previous code").
 
 ## VSIX Workflow
 
-- **Create Scriptlet**: pyops-manager titlebar > Create Scriptlet (prompts for set/type/name); opens local `pyops/{set}/{type}/{name}.{ext}` (.py for task/service/library/controller, .html for view, .md for markdown, .js for jslibrary).
+- **Create Scriptlet**: pyops-manager titlebar > Create Scriptlet (prompts for set/type/name); opens local `pyops/{set}/{type}/{name}.{ext}` (.py for task/service/library/controller, .html for view, .md for markdown, .js for jslibrary, .yaml for data). The server stores markdown as `docs/{name}.md` (or `README.md` if name=README) and data as `data/{name}.{yaml,json}`; the per-type subdir layout is a client-side convention.
 - **Edit/Generate**: Use VSCode/Cline to code. Edit local file.
 - **Sync**: Right-click > Reset Local from Remote (download draft), Write Local to Remote Draft (upload — unstaged). To commit + push, open the Sets view and click "Commit drafts" on the set; a modal previews the porcelain status and accepts an optional commit message.
 - **Diff**: Right-click > Diff Local Remote.
@@ -76,6 +77,54 @@ view or `pyopsctl job view <id>`.
 - Local-only tasks: full debug cycle (overrides skip remote check).
 
 Controllers: `debug=True` uses unstaged/draft code (preview).
+
+## Writing Tests
+
+Tests are a peer of debug: enqueue any `*.task.py` with `kind=test` and pyops sets `__name__='__test__'`, materialises sources under `.test/src/<set>/{task,library}/<name>.py`, then exec's. The same file can serve as both production task and its own test suite via the `__main__` / `__test__` idiom — no retry, no timeout, same source-path-mapping shape as debug.
+
+Pyops core is pytest-agnostic. The bundled `pyops::pytest` library encapsulates the common pattern: AST-driven class/method-id resolution against the materialised library tree, programmatic `pytest.main()` invocation, auto-attached coverage when `pytest-cov` is in the import graph, `[paths]`-mapped `.coveragerc` so reports reference canonical source.
+
+```python
+# my_task.task.py
+#!pytest
+#!pytest-cov                # optional — turns on coverage automatically
+#!{::unit_tests}            # test classes live in libraries
+#!{pyops::pytest}           # the helper
+
+def do_work(x):
+    return x * 2
+
+if __name__ == "__main__":
+    do_work(input_value)
+
+if __name__ == "__test__":
+    pytest_run(
+        test_sets=["TestWork", "TestEdge::test_zero"],
+        args=["-v"],
+    )
+```
+
+Test libraries (e.g. `unit_tests.library.py`) hold the pytest classes with `class TestWork: def test_positive(self): ...`. Fixtures, monkeypatch, and `@pytest.fixture` all work — pyops invokes the real pytest API.
+
+Enqueue: `pyopsctl job run myset my_task --kind test`, or `PUT /scriptlet/job/item` with `kind=test`, or via the manager UI (no dedicated button — copy a task's job-create payload and change `kind`).
+
+## Set-Scoped Data
+
+Tasks and libraries in the same set can read/write small structured files under `data/git/{set}/data/{name}.{yaml,yml,json}` via the `data` global (peer of `control` and `listener`, injected into every scriptlet's namespace).
+
+```python
+with data.read("config") as cfg:        # shared lock — concurrent reads run in parallel
+    threshold = cfg["threshold"]
+
+with data.write("state") as st:         # exclusive lock — blocks readers and other writers
+    st["last_run"] = time.time()
+
+data.list()                              # ['config', 'state']
+```
+
+Format is detected by file extension. On first create, `data.write("name", format="yaml")` or `format="json"` is required. Existing files keep their format; a name is unique across formats (`config.yaml` and `config.json` can't coexist). Cross-set access raises — there is no API surface that accepts another set name.
+
+Files are versioned alongside scriptlets; runtime writes show as unstaged changes foldable into the standard draft-commit flow. Per-file flocks live alongside the data files under `data/.{name}.lock` and are gitignored automatically.
 
 ## Full Workflow Example
 
@@ -224,7 +273,7 @@ Every command accepts the global flags: `--profile NAME`, `--server URL`,
 - `pyopsctl scriptlet status SET NAME`
 - `pyopsctl scriptlet repo-status SET`
 - `pyopsctl scriptlet get-code SET NAME`
-- `pyopsctl scriptlet create SET NAME --kind {task|service|schedule|controller|view|library|markdown|jslibrary}`
+- `pyopsctl scriptlet create SET NAME --kind {task|service|schedule|controller|view|library|markdown|jslibrary|data}`
 - `pyopsctl scriptlet draft SET NAME [--file PATH | --stdin]`
 - `pyopsctl scriptlet delete SET NAME`
 - `pyopsctl scriptlet diff SET NAME [--local-file PATH]`
@@ -233,7 +282,7 @@ Every command accepts the global flags: `--profile NAME`, `--server URL`,
 
 - `pyopsctl job list [--state S] [--owner U] [--set X] [--name Y]`
 - `pyopsctl job view ID [--follow] [--stream stdout|stderr|both]`
-- `pyopsctl job run SET NAME [--kind task|service] [--param TEXT | --param-file PATH] [--drop-done] [--max-retries N]`
+- `pyopsctl job run SET NAME [--kind task|service|debug|draft|test] [--param TEXT | --param-file PATH] [--drop-done] [--max-retries N]`
 - `pyopsctl job cancel ID`
 - `pyopsctl job delete ID`
 - `pyopsctl job download ID [--out PATH]`

@@ -82,6 +82,7 @@ graph TD
 - Stale PID handling: After cleanProcesses, sync DB running jobs to 'failed' if !psutil.Process(pid).is_running().
 - Job states: todo, dequeued, loading, running, done, failed, cancel, cancelling, cancelled, remove, removed.
 - Debug mode: pyops doesn't inject a debugger. The client's `param` carries the bootstrap (debugpy / gdbserver / cuda-gdbserver / lldb-server / anything that speaks the wire its consumer understands). The runner only flips `running` after `exec(param)` returns. `kind=debug` keeps no timeout, no retry, and materialises sources under `.debug/src/<set>/{task,library}/<name>.py`.
+- Test mode: peer of debug. `kind=test` materialises sources under `.test/src/<set>/{task,library}/<name>.py`, sets `__name__='__test__'` (so the same `*.task.py` can act as both production task and its own test suite), and exec's. Pyops is pytest-agnostic — invocation/coverage live in the `pyops::pytest` library or whatever the author imports.
 
 ### Web (`app/web.py`)
 - Serves /controller/{set}/{name}, /menu, and static /files/
@@ -228,6 +229,7 @@ Jobs executed via subprocess.Popen with set-specific venv Python interpreter for
 - **Process Management**: Polling uses p.poll() is None (alive), termination via Popen.terminate() with psutil tree-kill.
 - **ZMQ IPC**: Works across subprocess boundaries.
 - **Debug Handling**: `kind=debug` materialises sources under `.debug/src/`; the client's `param` brings the debugger.
+- **Test Handling**: `kind=test` materialises sources under `.test/src/`, sets `__name__='__test__'`. Pyops doesn't invoke pytest; `pyops::pytest` does (or the author's own framework).
 - **Testing**: Mocks use subprocess.Popen; maintains >90% coverage.
 
 
@@ -455,7 +457,7 @@ RemoteContentProvider serves remote files; onDidChange events.
 
 ## Key Features
 
-- Scriptlets support types: task, service, schedule, controller, view, library, markdown, jslibrary
+- Scriptlets support types: task, service, schedule, controller, view, library, markdown, jslibrary, data
 - Support directives for pip packages, git repos, libraries
 - Scheduling via croniter
 - Monitoring and bulk operations

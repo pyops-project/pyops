@@ -209,7 +209,7 @@ The `pyops` set is a fixed bundle: the git lib resolves the set name `"pyops"` t
 
 Runner-side primitives in `app/lib/sets.py` (still used directly by the runner and by `set_install_lock` callers):
 
-- `ensure_set_environment(name)`: idempotent — creates `data/venv/{name}` and pip-installs `CORE_DEPS` (pyzmq, msgpack, psutil, requests) under `_bootstrap_lock`. Skipped entirely for `name == "pyops"` — those scriptlets run in pyops's own host venv via `sys.executable`. Debug-kind jobs whose client bootstrap needs an extra package (e.g. `debugpy`, `gdbserver` companion libs) pull it via a `#!<pkg>` directive in `param`, not from CORE_DEPS.
+- `ensure_set_environment(name)`: idempotent — creates `data/venv/{name}` and pip-installs `CORE_DEPS` (pyzmq, msgpack, psutil, requests, pyyaml) under `_bootstrap_lock`. Skipped entirely for `name == "pyops"` — those scriptlets run in pyops's own host venv via `sys.executable`. Debug-kind jobs whose client bootstrap needs an extra package (e.g. `debugpy`, `gdbserver` companion libs) pull it via a `#!<pkg>` directive in `param`, not from CORE_DEPS. `pyyaml` is in CORE_DEPS because the `data` global injected into every scriptlet needs it for YAML reads/writes — making it part of the floor avoids per-scriptlet `#!pyyaml` boilerplate.
 - `set_install_lock(name)`: `fcntl.flock` context manager on `data/git/{name}/.install.lock`, used both by `process_code_installs` and by the `set_*` tasks.
 
 ### Status Detection
@@ -659,9 +659,9 @@ All routers mount under `/scriptlet/`. Owner resolved from `X-User` header (defa
 
 | Router | Path | Purpose |
 |--------|------|---------|
-| `job.py` | `/scriptlet/job/` | Job lifecycle: enqueue (task/service/debug/draft), cancel, delete, download |
-| `inventory.py` | `/scriptlet/inventory/` | Scriptlet CRUD: list, create, save, delete |
-| `editor.py` | `/scriptlet/editor/` | Code editing, Jedi completion, preview |
+| `job.py` | `/scriptlet/job/` | Job lifecycle: enqueue (task/service/debug/draft/test), cancel, delete, download |
+| `inventory.py` | `/scriptlet/inventory/` | Scriptlet CRUD: list, create, save, delete. `code_get` returns `type` and (for data files) `ext` so the editor picks the right Ace mode. |
+| `editor.py` | `/scriptlet/editor/` | Per-type editor templates: `editor_task` / `editor_library` / `editor_view` / `editor_md` / `editor_jslibrary` / `editor_data` (Ace yaml/json mode by extension). Plus Jedi completion. |
 | `schedule.py` | `/scriptlet/schedule/` | Schedule CRUD |
 | `scheduler.py` | `/scriptlet/scheduler/` | Activate cron triggers; UI |
 | `manager.py` | `/scriptlet/manager/` | Bulk ops UI |

@@ -32,7 +32,11 @@ import os
 from contextlib import contextmanager
 from typing import Any, ContextManager, Iterator
 
-import yaml
+# `yaml` is imported lazily inside `_deserialise` / `_serialise` so that
+# scriptlets in sets that don't carry yaml/json data files don't pay the
+# pyyaml import cost — and per-set venvs without pyyaml installed only
+# fail if they actually try to read/write a yaml file (json works on
+# stdlib alone).
 
 
 _SUPPORTED_EXTS = ("yaml", "yml", "json")
@@ -255,6 +259,7 @@ def _deserialise(raw: str, ext: str) -> Any:
     if ext == "json":
         return json.loads(raw) if raw.strip() else {}
     if ext in ("yaml", "yml"):
+        import yaml  # lazy: see top of module
         return yaml.safe_load(raw) if raw.strip() else {}
     raise ValueError(f"unsupported data extension: {ext!r}")
 
@@ -264,6 +269,7 @@ def _serialise(obj: Any, ext: str) -> str:
     if ext == "json":
         return json.dumps(obj, indent=2, sort_keys=True) + "\n"
     if ext in ("yaml", "yml"):
+        import yaml  # lazy: see top of module
         return yaml.safe_dump(obj, sort_keys=True, default_flow_style=False)
     raise ValueError(f"unsupported data extension: {ext!r}")
 

@@ -119,7 +119,7 @@ export async function run(): Promise<void> {
     const debugRegex = /^pyopsItem-task(-local)?$/;
     assert.ok(debugRegex.test(localTestItem.contextValue!), 'ContextValue must support debug command');
     // Verify contextValue supports writeLocalToRemoteDraft & deleteScriptlet menus (matches package.json when regex)
-    const writeRegex = /^pyopsItem-(task|service|library|controller|view|markdown|jslibrary)(-local)?$/;
+    const writeRegex = /^pyopsItem-(task|service|library|controller|view|markdown|jslibrary|data)(-local)?$/;
     assert.ok(writeRegex.test(localTestItem.contextValue!), 'ContextValue must support writeLocalToRemoteDraft command');
     
     // Test writeLocalToRemoteDraft on local-only -> auto-create + draft -> no longer local-only
@@ -157,7 +157,7 @@ export async function run(): Promise<void> {
     assert(String(jsTestItem.description).endsWith('(local)'));
     assert.strictEqual((jsTestItem.iconPath as vscode.ThemeIcon).id, 'diff-added');
     // Verify contextValue supports sync menus (matches package.json when regex)
-    const jsWriteRegex = /^pyopsItem-(task|service|library|controller|view|markdown|jslibrary)(-local)?$/;
+    const jsWriteRegex = /^pyopsItem-(task|service|library|controller|view|markdown|jslibrary|data)(-local)?$/;
     assert.ok(jsWriteRegex.test(jsTestItem.contextValue!), 'ContextValue must support writeLocalToRemoteDraft command');
 
     console.log('✓ Test 10 passed');

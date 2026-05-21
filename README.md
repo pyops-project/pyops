@@ -32,18 +32,21 @@ Stored in `etc/pyops.json` (override path via `PYOPS_CONFIG` env var):
 - `log`: `{"loglevel": "debug"}`
 
 ## Features
-PyOps supports various scriptlet types: task, service, schedule, controller, view, library, markdown, jslibrary.
+PyOps supports various scriptlet types: task, service, schedule, controller, view, library, markdown, jslibrary, data.
 
 In addition to WebUI it also includes a VSCode extension for direct use from VSCode and derivatives, plus `pyopsctl` — a terminal-driven operator CLI for remote admin (no venv, no pip, distro packages only). See [`docs/pyops_guide.md`](docs/pyops_guide.md) § pyopsctl.
 
-- **Task**: One-time executed scriptlets for debugging or batch operations
+- **Task**: One-time executed scriptlets for debugging or batch operations. Same file can serve as its own test suite via `kind=test` + `if __name__ == "__test__":` (uses `#!{pyops::pytest}` for programmatic pytest invocation).
 - **Service**: Persistent services that run continuously
 - **Schedule**: Cron-based scheduling of tasks
 - **Controller**: Web controllers for dynamic UI generation
 - **View**: HTML views for the web interface
 - **Library**: Reusable code libraries
-- **Markdown**: Documentation scriptlets
+- **Markdown**: Documentation scriptlets — `README.md` at the set root plus any number of free-named `docs/{name}.md` pages
 - **JSLibrary**: JavaScript libraries
+- **Data**: Set-scoped YAML/JSON files under `data/{name}.{yaml,json}`, accessed by tasks/libraries through the `data` global with shared-RO / exclusive-RW locks for cross-task safety
+
+Job kinds: `task | service | debug | draft | test`.
 
 ## Setup
 ### Direct

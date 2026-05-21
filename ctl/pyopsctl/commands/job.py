@@ -192,9 +192,9 @@ def register(subparsers, parents):
     vw.add_argument("--stream", choices=["stdout", "stderr", "both"], default="both")
     vw.set_defaults(func=_view)
 
-    rn = sub.add_parser("run", help="enqueue a task or service job", parents=parents)
+    rn = sub.add_parser("run", help="enqueue a job (task/service/debug/draft/test)", parents=parents)
     rn.add_argument("set"); rn.add_argument("name")
-    rn.add_argument("--kind", choices=["task", "service"], default="task")
+    rn.add_argument("--kind", choices=["task", "service", "debug", "draft", "test"], default="task")
     rn.add_argument("--param", metavar="TEXT", default=None,
                     help="param to pass to the scriptlet")
     rn.add_argument("--param-file", metavar="PATH", default=None,

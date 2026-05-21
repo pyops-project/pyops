@@ -203,6 +203,50 @@ describe('ManagerTreeDataProvider', () => {
         'remote code'
       );
     });
+
+    it('mirrors a data/yaml file with .yaml extension locally', async () => {
+      require('./utils/helpers').setupConfigMock();
+      mockApiClient.fetch.mockResolvedValue({
+        ok: true,
+        json: jest.fn().mockResolvedValue({ code: 'foo: 1\n' }),
+      });
+      (require('fs').existsSync as jest.Mock).mockReturnValue(false);
+      await (provider as any).downloadScriptlets([{ set: 'set1', name: 'config', type: 'data', ext: 'yaml' }]);
+      expect(require('fs').writeFileSync).toHaveBeenCalledWith(
+        '/test/workspace/pyops/set1/data/config.yaml',
+        'foo: 1\n'
+      );
+    });
+
+    it('mirrors a data/json file with .json extension locally', async () => {
+      require('./utils/helpers').setupConfigMock();
+      mockApiClient.fetch.mockResolvedValue({
+        ok: true,
+        json: jest.fn().mockResolvedValue({ code: '{"k": 1}\n' }),
+      });
+      (require('fs').existsSync as jest.Mock).mockReturnValue(false);
+      await (provider as any).downloadScriptlets([{ set: 'set1', name: 'state', type: 'data', ext: 'json' }]);
+      expect(require('fs').writeFileSync).toHaveBeenCalledWith(
+        '/test/workspace/pyops/set1/data/state.json',
+        '{"k": 1}\n'
+      );
+    });
+
+    it('mirrors a docs/*.md markdown file under pyops/{set}/markdown/', async () => {
+      // Server stores at docs/intro.md but reports `{type: markdown, name: intro}`
+      // — the client mirror uses the per-type folder convention.
+      require('./utils/helpers').setupConfigMock();
+      mockApiClient.fetch.mockResolvedValue({
+        ok: true,
+        json: jest.fn().mockResolvedValue({ code: '# Intro\n' }),
+      });
+      (require('fs').existsSync as jest.Mock).mockReturnValue(false);
+      await (provider as any).downloadScriptlets([{ set: 'set1', name: 'intro', type: 'markdown' }]);
+      expect(require('fs').writeFileSync).toHaveBeenCalledWith(
+        '/test/workspace/pyops/set1/markdown/intro.md',
+        '# Intro\n'
+      );
+    });
   });
 
   describe('fetchScriptlets', () => {
@@ -518,6 +562,43 @@ describe('ManagerTreeDataProvider', () => {
 
       const result = await (provider as any).scanLocalScriptlets();
       expect(result).toEqual([]);
+    });
+
+    it('discovers yaml and json files under data/ with correct ext tag', async () => {
+      require('./utils/helpers').setupConfigMock();
+      const mockFs = require('fs');
+      const mockPath = require('path');
+
+      mockPath.join.mockImplementation((...args: string[]) => args.join('/'));
+      mockPath.extname = jest.fn((f: string) => {
+        const idx = f.lastIndexOf('.');
+        return idx >= 0 ? f.substring(idx) : '';
+      });
+      mockPath.basename.mockImplementation((f: string, ext?: string) => {
+        const base = f.split('/').pop() || '';
+        return ext ? base.replace(new RegExp(ext.replace(/\./g, '\\.') + '$'), '') : base;
+      });
+
+      mockFs.existsSync.mockImplementation((p: string) => {
+        if (p === '/test/workspace/pyops') return true;
+        if (p === '/test/workspace/pyops/set1') return true;
+        if (p === '/test/workspace/pyops/set1/data') return true;
+        return false;
+      });
+      mockFs.readdirSync.mockImplementation((p: string) => {
+        if (p === '/test/workspace/pyops') return ['set1'];
+        if (p === '/test/workspace/pyops/set1/data') return ['config.yaml', 'state.json', 'ignore.txt'];
+        return [];
+      });
+      mockFs.statSync.mockImplementation((p: string) => ({
+        isDirectory: () => p === '/test/workspace/pyops/set1' || p === '/test/workspace/pyops/set1/data',
+      }));
+
+      const result = await (provider as any).scanLocalScriptlets();
+      expect(result).toEqual([
+        { set: 'set1', name: 'config', type: 'data', ext: 'yaml', isLocalOnly: true },
+        { set: 'set1', name: 'state', type: 'data', ext: 'json', isLocalOnly: true },
+      ]);
     });
   });
 

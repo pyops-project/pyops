@@ -72,6 +72,19 @@ async def get_editor_md():
         logger.exception("Error in get_editor_md: %s", ex)
         raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
 
+@router.get("/scriptlet/editor_data")
+async def get_editor_data():
+    try:
+        return HTMLResponse(
+            content=sites.get("scriptlet/editor_data"),
+            status_code=HTTP_200_OK
+        )
+    except HTTPException as ex:
+        raise ex
+    except Exception as ex:
+        logger.exception("Error in get_editor_data: %s", ex)
+        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
+
 @router.get("/scriptlet/editor_jslibrary")
 async def get_editor_jslibrary():
     try:

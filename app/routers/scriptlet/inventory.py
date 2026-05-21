@@ -201,13 +201,22 @@ async def draft_del(set: str = Query(..., description="Set"), name: str = Query(
 async def code_get(set: str, name: str):
     try:
         repo = await run_in_executor(git.get_repo_path, set)
-        files = [f for f in os.listdir(repo) if f.startswith(f"{name}.") and f.endswith(('.py', '.html', '.md', '.js'))]
+        # list_scriptlet_files walks top-level + docs/ + data/ so markdown
+        # pages under docs/ and yaml/json data files round-trip through
+        # the same endpoint as Python scriptlets.
+        files = await run_in_executor(git.list_scriptlet_files, repo, name)
         if not files:
             raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Scriptlet {}::{} not existing".format(set, name))
         filename = files[0]
         type_ = git.infer_type_from_filename(filename)
         content = await run_in_executor(git.read_content, repo, name, type_, committed=False)
-        return {"code": content}
+        # For data files, expose the actual on-disk extension so the
+        # editor (and other clients) can pick the right syntax mode.
+        # The filename is `data/{name}.{ext}` here per list_scriptlet_files.
+        response: dict = {"code": content, "type": type_}
+        if type_ == "data":
+            response["ext"] = os.path.splitext(filename)[1].lstrip(".")
+        return response
     except git.GitNotFoundError as ex:
         raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail=str(ex))
     except HTTPException as ex:

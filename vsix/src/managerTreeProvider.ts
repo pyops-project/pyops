@@ -9,6 +9,11 @@ interface ScriptletTreeItem extends TreeItem {
     set?: string;
     scriptletName?: string;
     scriptletType?: string;
+    // For type='data' the on-disk extension ('yaml' | 'yml' | 'json'),
+    // propagated from `ScriptletInfo.ext`. Local mirror naming, diff URI
+    // language mode, and inferExt() calls all use this so yaml vs json
+    // round-trip correctly.
+    scriptletExt?: string;
 }
 
 interface ScriptletInfo {
@@ -73,7 +78,7 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
                 const itemTrees: TreeItem[] = setItems.map(item => {
                     const itemObj = item;
                     const label = `${itemObj.name} (${itemObj.type})`;
-                    const ext = inferExt(itemObj.type);
+                    const ext = inferExt(itemObj.type, itemObj.ext);
                     const key = `${set}-${itemObj.name}-${itemObj.type}`;
                     const treeItem = new TreeItem(label, vscode.TreeItemCollapsibleState.None) as ScriptletTreeItem;
                     treeItem.description = ext ? `.${ext}` : '';
@@ -81,6 +86,7 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
                     treeItem.set = set;
                     treeItem.scriptletName = itemObj.name;
                     treeItem.scriptletType = itemObj.type;
+                    treeItem.scriptletExt = itemObj.ext;
                     treeItem.command = { command: 'pyops.openLocalFile', title: 'Open Local File', arguments: [treeItem] };
                     if (itemObj.isLocalOnly) {
                         treeItem.iconPath = new vscode.ThemeIcon('diff-added');

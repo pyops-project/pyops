@@ -169,14 +169,16 @@ describe('CreateScriptletCommand', () => {
     expect(mockShowErrorMessage).toHaveBeenCalledWith('No existing sets found. Cannot create scriptlet without a set.');
   });
 
-  it('should reject markdown not README', async () => {
-    const localPathMd = '/test/workspace/pyops/set1/markdown/notreadme.md';
-    mockPathJoin.mockReturnValueOnce(localPathMd);
+  it('accepts markdown with non-README name (docs/<name>.md)', async () => {
+    // 3.3.0 supports multi-markdown: docs/<name>.md alongside README.md.
+    // The old "Markdown only allowed for README" restriction was removed.
+    const localPathMd = '/test/workspace/pyops/set1/markdown/intro.md';
+    mockPathJoin.mockReturnValueOnce(localPathMd).mockReturnValueOnce(localPathMd);
 
     mockShowQuickPick
       .mockResolvedValueOnce({ label: 'Markdown' })
       .mockResolvedValueOnce({ label: 'set1' });
-    mockShowInputBox.mockResolvedValue('notreadme');
+    mockShowInputBox.mockResolvedValue('intro');
     mockApiClient.fetch.mockResolvedValueOnce({
       ok: true,
       json: jest.fn().mockResolvedValue([{ set: 'set1', name: 'other', type: 'task' }]),
@@ -184,7 +186,31 @@ describe('CreateScriptletCommand', () => {
 
     await CreateScriptletCommand.execute(mockApiClient, outputChannel, managerTreeProvider);
 
-    expect(mockShowErrorMessage).toHaveBeenCalledWith('Markdown only allowed for README');
+    expect(mockShowErrorMessage).not.toHaveBeenCalledWith(expect.stringContaining('Markdown only allowed'));
+  });
+
+  it('offers Data in the type picker (yaml default template)', async () => {
+    const localPathData = '/test/workspace/pyops/set1/data/cfg.yaml';
+    mockPathJoin.mockReturnValueOnce(localPathData).mockReturnValueOnce(localPathData);
+
+    mockShowQuickPick
+      .mockResolvedValueOnce({ label: 'Data' })
+      .mockResolvedValueOnce({ label: 'set1' });
+    mockShowInputBox.mockResolvedValue('cfg');
+    mockApiClient.fetch.mockResolvedValueOnce({
+      ok: true,
+      json: jest.fn().mockResolvedValue([{ set: 'set1', name: 'other', type: 'task' }]),
+    });
+
+    await CreateScriptletCommand.execute(mockApiClient, outputChannel, managerTreeProvider);
+
+    // First quickpick call's choices include a Data entry.
+    const firstQuickPickArgs = mockShowQuickPick.mock.calls[0][0];
+    expect(firstQuickPickArgs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ label: 'Data' })
+    ]));
+    // File written with the empty-YAML template.
+    expect(require('fs').writeFileSync).toHaveBeenCalledWith(localPathData, '{}\n');
   });
 
 

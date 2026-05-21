@@ -15,7 +15,10 @@ export class ScriptletService {
     }
 
     private getLocalPath(treeItem: ScriptletTreeItem, workspaceRoot: string, localPyopsDir: string): string {
-        const ext = inferExt(treeItem.scriptletType!);
+        // Pass treeItem.scriptletExt as hint so data-type yaml/json files
+        // mirror to the right local extension; non-data types ignore the
+        // hint (it's just `undefined` for them).
+        const ext = inferExt(treeItem.scriptletType!, treeItem.scriptletExt);
         return path.join(workspaceRoot, localPyopsDir, treeItem.set!, treeItem.scriptletType!, `${treeItem.scriptletName!}.${ext}`);
     }
 
@@ -159,7 +162,12 @@ export class ScriptletService {
                 }
                 const uriPath = `/${set}/${name}`;
                 this.remoteProvider.setContent(uriPath, code);
-                const remoteUri = vscode.Uri.parse(`pyops-remote:${uriPath}?type=${treeItem.scriptletType!}`);
+                // Pass `ext` query param so RemoteContentProvider's language
+                // setter picks `json` vs `yaml` for data files. Without it,
+                // the data-type branch defaults to yaml regardless of the
+                // actual on-disk format.
+                const extParam = treeItem.scriptletExt ? `&ext=${treeItem.scriptletExt}` : '';
+                const remoteUri = vscode.Uri.parse(`pyops-remote:${uriPath}?type=${treeItem.scriptletType!}${extParam}`);
                 const localUri = vscode.Uri.file(localPath);
                 await vscode.commands.executeCommand('vscode.diff', remoteUri, localUri, 'Remote vs Local');
             } else {
