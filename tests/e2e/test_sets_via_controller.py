@@ -2,7 +2,7 @@
 
 Restores what the deleted test_set_lifecycle / test_sets_git / test_sets_ui /
 test_update_deps modules covered against the old `/scriptlet/sets/*` endpoints,
-plus the new live-output dialog (set_job.js / runSetJob) the
+plus the new live-output dialog (sets_job.js / runSetsJob) the
 controller-mediated flow introduces.
 
 Every mutating operation now travels:
@@ -170,10 +170,10 @@ def _nav_sets(e2e_page):
 
 
 def _await_modal_done(frame, timeout=60_000):
-    """Wait until the set-job modal's state badge reads done / failed
+    """Wait until the sets-job modal's state badge reads done / failed
     / cancelled / removed AND the Close button is enabled — i.e. the
     sub-task has finished from the operator's perspective."""
-    badge = frame.locator('[data-testid="set-job-state"]')
+    badge = frame.locator('[data-testid="sets-job-state"]')
     badge.wait_for(state="visible", timeout=10_000)
     deadline = time.time() + timeout / 1000
     while time.time() < deadline:
@@ -182,11 +182,11 @@ def _await_modal_done(frame, timeout=60_000):
         except Exception:
             text = ""
         if text in {"done", "failed", "cancelled", "removed"}:
-            close_btn = frame.locator('[data-testid="set-job-close"]')
+            close_btn = frame.locator('[data-testid="sets-job-close"]')
             if not close_btn.is_disabled():
                 return text
         time.sleep(0.2)
-    raise AssertionError(f"set-job modal did not reach terminal state within {timeout}ms (last badge: {text!r})")
+    raise AssertionError(f"sets-job modal did not reach terminal state within {timeout}ms (last badge: {text!r})")
 
 
 # ---------------------------------------------------------------------------
@@ -628,12 +628,12 @@ class TestSetsCloneUI:
 
         # Input modal closes; live-output modal opens.
         frame.locator('[data-testid="sets-clone-modal"]').wait_for(state="hidden", timeout=5_000)
-        frame.locator('[data-testid="set-job-modal"]').wait_for(state="visible", timeout=10_000)
+        frame.locator('[data-testid="sets-job-modal"]').wait_for(state="visible", timeout=10_000)
         terminal = _await_modal_done(frame)
         assert terminal == "done", f"clone did not succeed: badge={terminal}"
 
-        frame.locator('[data-testid="set-job-close"]').click()
-        frame.locator('[data-testid="set-job-modal"]').wait_for(state="hidden", timeout=5_000)
+        frame.locator('[data-testid="sets-job-close"]').click()
+        frame.locator('[data-testid="sets-job-modal"]').wait_for(state="hidden", timeout=5_000)
 
         frame.locator('[data-testid="set-row-remote_repo"]').wait_for(state="visible", timeout=10_000)
         sets = api_anon.get("/controller/pyops/sets/list").json()["sets"]
@@ -651,8 +651,8 @@ class TestSetsCloneUI:
         assert "URL" in err
         assert frame.locator('[data-testid="sets-clone-modal"]').is_visible()
         # No job modal opened.
-        assert frame.locator('[data-testid="set-job-modal"]').count() == 0 or \
-               not frame.locator('[data-testid="set-job-modal"]').is_visible()
+        assert frame.locator('[data-testid="sets-job-modal"]').count() == 0 or \
+               not frame.locator('[data-testid="sets-job-modal"]').is_visible()
         frame.locator('[data-testid="sets-clone-cancel"]').click()
         pyops_server.assert_no_unexpected_errors()
 
@@ -703,10 +703,10 @@ class TestSetsCreateUI:
         frame.locator('[data-testid="sets-create-submit"]').click()
 
         frame.locator('[data-testid="sets-create-modal"]').wait_for(state="hidden", timeout=5_000)
-        frame.locator('[data-testid="set-job-modal"]').wait_for(state="visible", timeout=10_000)
+        frame.locator('[data-testid="sets-job-modal"]').wait_for(state="visible", timeout=10_000)
         terminal = _await_modal_done(frame)
         assert terminal == "done"
-        frame.locator('[data-testid="set-job-close"]').click()
+        frame.locator('[data-testid="sets-job-close"]').click()
 
         frame.locator('[data-testid="set-row-ui_create"]').wait_for(state="visible", timeout=10_000)
         pyops_server.assert_no_unexpected_errors()
@@ -725,10 +725,10 @@ class TestSetsSwitchUI:
         frame.locator('[data-testid="sets-switch-submit"]').click()
 
         frame.locator('[data-testid="sets-switch-modal"]').wait_for(state="hidden", timeout=5_000)
-        frame.locator('[data-testid="set-job-modal"]').wait_for(state="visible", timeout=10_000)
+        frame.locator('[data-testid="sets-job-modal"]').wait_for(state="visible", timeout=10_000)
         terminal = _await_modal_done(frame)
         assert terminal == "done"
-        frame.locator('[data-testid="set-job-close"]').click()
+        frame.locator('[data-testid="sets-job-close"]').click()
 
         repo = Path(e2e_env["data_dir"]) / "git" / "switch_ui"
         head = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "--abbrev-ref", "HEAD"], text=True).strip()
@@ -755,7 +755,7 @@ class TestSetsSwitchUI:
 
 class TestSetActionsUI:
     """Direct-action buttons (pull / update-deps / remove) open the
-    set-job dialog without a pre-modal."""
+    sets-job dialog without a pre-modal."""
 
     def test_pull_button_streams_output(self, e2e_page, api_anon, pyops_server, bare_remote, set_factory):
         _service_ready(api_anon)
@@ -767,10 +767,10 @@ class TestSetActionsUI:
         frame.locator('[data-testid="set-pull-remote_repo"]').wait_for(state="visible", timeout=10_000)
         frame.locator('[data-testid="set-pull-remote_repo"]').click()
 
-        frame.locator('[data-testid="set-job-modal"]').wait_for(state="visible", timeout=10_000)
+        frame.locator('[data-testid="sets-job-modal"]').wait_for(state="visible", timeout=10_000)
         terminal = _await_modal_done(frame)
         assert terminal == "done", f"pull failed in UI: {terminal}"
-        frame.locator('[data-testid="set-job-close"]').click()
+        frame.locator('[data-testid="sets-job-close"]').click()
         pyops_server.assert_no_unexpected_errors()
 
     def test_commit_drafts_button_disabled_on_clean_set(self, e2e_page, api_anon, pyops_server, set_factory):
@@ -825,10 +825,10 @@ class TestSetActionsUI:
         modal.wait_for(state="hidden", timeout=5_000)
 
         # Live-output modal opens for the actual job.
-        frame.locator('[data-testid="set-job-modal"]').wait_for(state="visible", timeout=10_000)
+        frame.locator('[data-testid="sets-job-modal"]').wait_for(state="visible", timeout=10_000)
         terminal = _await_modal_done(frame)
         assert terminal == "done", f"commit_drafts UI: badge={terminal}"
-        frame.locator('[data-testid="set-job-close"]').click()
+        frame.locator('[data-testid="sets-job-close"]').click()
 
         # Working tree clean + commit message persisted.
         dirty = subprocess.check_output(
@@ -852,10 +852,10 @@ class TestSetActionsUI:
         e2e_page.once("dialog", lambda d: d.accept())
         frame.locator('[data-testid="set-remove-rm_ui"]').click()
 
-        frame.locator('[data-testid="set-job-modal"]').wait_for(state="visible", timeout=10_000)
+        frame.locator('[data-testid="sets-job-modal"]').wait_for(state="visible", timeout=10_000)
         terminal = _await_modal_done(frame)
         assert terminal == "done"
-        frame.locator('[data-testid="set-job-close"]').click()
+        frame.locator('[data-testid="sets-job-close"]').click()
 
         # Row disappears after refresh.
         frame.locator('[data-testid="set-row-rm_ui"]').wait_for(state="hidden", timeout=15_000)

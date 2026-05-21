@@ -118,7 +118,7 @@ def _collect_dependency_conflicts() -> list[dict]:
         return []
     out = []
     for entry in sorted(os.listdir(git_base)):
-        if not os.path.isdir(os.path.join(git_base, entry)) or entry == files.PYOPS_SET_NAME:
+        if not os.path.isdir(os.path.join(git_base, entry)) or entry == files.BUNDLED_SET_NAME:
             continue
         warnings_path = os.path.join(venv_base, entry, '.update_warnings.json')
         if not os.path.isfile(warnings_path):

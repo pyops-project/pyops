@@ -1,7 +1,13 @@
-// JS library: pyops-set job launcher with a live-log modal.
+// JS library: sets-management job launcher with a live-log modal.
 //
-// Usage from any pyops-set view:
-//     runSetJob(url, method, params, title)
+// Drives the Sets controller view's set-management actions (clone /
+// create / pull / switch / remove / update-deps / commit-drafts), each
+// of which enqueues a `pyops::set_<op>` task and runs it asynchronously
+// while this modal polls /scriptlet/job/item for stdout/stderr and
+// the terminal state.
+//
+// Usage from any sets-management view:
+//     runSetsJob(url, method, params, title)
 //         .then(({ ok, state, detail }) => { ... });
 //
 // Sequence:
@@ -31,20 +37,20 @@
         modalEl.setAttribute("tabindex", "-1");
         modalEl.setAttribute("data-bs-backdrop", "static");
         modalEl.setAttribute("data-bs-keyboard", "false");
-        modalEl.setAttribute("data-testid", "set-job-modal");
+        modalEl.setAttribute("data-testid", "sets-job-modal");
         modalEl.innerHTML = `
             <div class="modal-dialog modal-lg modal-dialog-scrollable">
                 <div class="modal-content">
                     <div class="modal-header">
-                        <h5 class="modal-title" data-testid="set-job-title">Operation</h5>
-                        <span class="badge bg-secondary ms-2" data-testid="set-job-state">starting…</span>
+                        <h5 class="modal-title" data-testid="sets-job-title">Operation</h5>
+                        <span class="badge bg-secondary ms-2" data-testid="sets-job-state">starting…</span>
                     </div>
                     <div class="modal-body p-0">
-                        <pre data-testid="set-job-stdout" style="margin:0;padding:1rem;max-height:50vh;overflow:auto;white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:0.85rem;"></pre>
-                        <pre data-testid="set-job-stderr" style="margin:0;padding:1rem;max-height:25vh;overflow:auto;white-space:pre-wrap;color:#dc3545;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:0.85rem;"></pre>
+                        <pre data-testid="sets-job-stdout" style="margin:0;padding:1rem;max-height:50vh;overflow:auto;white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:0.85rem;"></pre>
+                        <pre data-testid="sets-job-stderr" style="margin:0;padding:1rem;max-height:25vh;overflow:auto;white-space:pre-wrap;color:#dc3545;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:0.85rem;"></pre>
                     </div>
                     <div class="modal-footer">
-                        <button type="button" class="btn btn-primary" data-bs-dismiss="modal" disabled data-testid="set-job-close">Close</button>
+                        <button type="button" class="btn btn-primary" data-bs-dismiss="modal" disabled data-testid="sets-job-close">Close</button>
                     </div>
                 </div>
             </div>
@@ -78,13 +84,13 @@
         if (nearBottom) pre.scrollTop = pre.scrollHeight;
     }
 
-    window.runSetJob = function runSetJob(url, method, params, title) {
+    window.runSetsJob = function runSetsJob(url, method, params, title) {
         const el = ensureModal();
-        const titleEl = el.querySelector('[data-testid="set-job-title"]');
-        const stateEl = el.querySelector('[data-testid="set-job-state"]');
-        const outEl = el.querySelector('[data-testid="set-job-stdout"]');
-        const errEl = el.querySelector('[data-testid="set-job-stderr"]');
-        const closeBtn = el.querySelector('[data-testid="set-job-close"]');
+        const titleEl = el.querySelector('[data-testid="sets-job-title"]');
+        const stateEl = el.querySelector('[data-testid="sets-job-state"]');
+        const outEl = el.querySelector('[data-testid="sets-job-stdout"]');
+        const errEl = el.querySelector('[data-testid="sets-job-stderr"]');
+        const closeBtn = el.querySelector('[data-testid="sets-job-close"]');
 
         titleEl.textContent = title || "Operation";
         outEl.textContent = "";

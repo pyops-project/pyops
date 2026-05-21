@@ -14,7 +14,7 @@ from app.web import app
 from app.lib import files
 
 
-PYOPS_SET_DIR = files.pyops_set_path
+PYOPS_SET_DIR = files.bundled_set_path
 client = TestClient(app)
 
 
@@ -54,7 +54,7 @@ class TestPyopsSetBundlePresent:
         assert os.path.exists(_path(filename))
 
     def test_jslibrary_present(self):
-        assert os.path.exists(_path("set_job.js"))
+        assert os.path.exists(_path("sets_job.js"))
 
 
 class TestPyopsControllerRoute:
@@ -74,7 +74,7 @@ class TestPyopsControllerRoute:
         assert 'data-testid="sets-clone"' in html
         assert 'data-testid="sets-create"' in html
         # Head view loads the jslib via the standard pyops endpoint
-        assert "/scriptlet/jslib/pyops/set_job" in html
+        assert "/scriptlet/jslib/pyops/sets_job" in html
         # {{SET}} / {{NAME}} substitution applied in apiCall + button handlers
         assert "/controller/pyops/sets/" in html
         assert "{{SET}}" not in html
@@ -82,18 +82,18 @@ class TestPyopsControllerRoute:
 
 
 class TestPyopsJslibRoute:
-    """The set_job.js library is served via the same jslib endpoint
-    user-set JS libraries use — set='pyops', name='set_job'."""
+    """The sets_job.js library is served via the same jslib endpoint
+    user-set JS libraries use — set='pyops', name='sets_job'."""
 
     def test_jslibrary_served(self):
         r = client.get(
-            "/scriptlet/jslib/pyops/set_job",
+            "/scriptlet/jslib/pyops/sets_job",
             params={"committed": False},
         )
         assert r.status_code == 200
         assert r.headers["content-type"].startswith("application/javascript")
-        # Exposes the runSetJob global
-        assert "runSetJob" in r.text
+        # Exposes the runSetsJob global
+        assert "runSetsJob" in r.text
 
 
 class TestPyopsControllerProxyNeedsRunningService:

@@ -51,8 +51,11 @@
                     <button type="button" onclick="onEditTask('${set}', '${name}')" class="btn btn-warning p-0" data-testid="scriptlet-edit-${set}-${name}">
                         <span class="material-icons-round">edit</span>
                     </button>
-                    <button type="button" onclick="onRunDraftTask('${set}', '${name}')" class="btn btn-success p-0" data-testid="scriptlet-run-${set}-${name}">
+                    <button type="button" onclick="onRunDraftTask('${set}', '${name}')" class="btn btn-success p-0" title="Run draft (kind=draft)" data-testid="scriptlet-run-${set}-${name}">
                         <span class="material-icons-round">play_arrow</span>
+                    </button>
+                    <button type="button" onclick="onRunTestTask('${set}', '${name}')" class="btn btn-info p-0" title="Run as test (kind=test)" data-testid="scriptlet-test-${set}-${name}">
+                        <span class="material-icons-round">science</span>
                     </button>
                 `
             }
@@ -239,6 +242,33 @@
                 }).catch((e) => {
                     console.error("run draft error", e.toString());
                     alert(`Failed to enqueue draft for ${set}/${name}: ${e}`);
+                });
+            }
+
+            function onRunTestTask(set, name) {
+                console.debug("onRunTestTask", set, name);
+                fetch("/scriptlet/job/item", {
+                    method: "PUT",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        set: set,
+                        name: name,
+                        drop_done: false,
+                        param: "",
+                        kind: "test",
+                    }),
+                }).then(async (r) => {
+                    if (r.ok) {
+                        const d = await r.json();
+                        console.debug("run test", d.job);
+                    } else {
+                        const t = await r.text();
+                        console.error("run test failed", r.status, t);
+                        alert(`Failed to enqueue test for ${set}/${name}: ${t}`);
+                    }
+                }).catch((e) => {
+                    console.error("run test error", e.toString());
+                    alert(`Failed to enqueue test for ${set}/${name}: ${e}`);
                 });
             }
 

@@ -219,13 +219,16 @@ exclusive) supply an optional preamble that runs **after** pdb is
 attached and paused at the bootstrap's `set_trace()` — i.e. the
 operator sees it only after issuing `continue`.
 
-`_build_overrides(overrides_dir, set_name)` walks
+`pyopsctl.overrides.build_overrides(overrides_dir, set_name)` walks
 `overrides_dir/<set>/*.py` and returns a `dict[str, str]` keyed by
 `"<set>::<name>"` — the same shape the server enforces via
 `^[a-zA-Z0-9_-]+::[a-zA-Z0-9_-]+$` in
 `app/routers/scriptlet/job.py`. Returns `None` (not `{}`) when no
 override dir is given, so the JSON body omits the `overrides` key
 entirely and the server reads from the per-set git working tree.
+Shared between `debug start` and `job run --kind test|debug` (the two
+client paths that ship local working-copy bodies); the server consumes
+the same map regardless of which verb produced it.
 
 `_poll_until_running(c, job_id, timeout=60.0, interval=0.5)` is the
 shared poll loop for `--wait-running` and `debug attach`. Under the
@@ -279,7 +282,12 @@ Sets view's "Commit drafts" button or by enqueuing the task directly.
 
 **job** — `GET /scriptlet/job/list`, `GET /scriptlet/job/item`,
 `PUT /scriptlet/job/item`, `DELETE /scriptlet/job/item`,
-`GET /scriptlet/job/cancel`, `GET /scriptlet/job/download`.
+`GET /scriptlet/job/cancel`, `GET /scriptlet/job/download`. The
+`PUT` body of `job run` accepts `--overrides-dir DIR` when paired
+with `--kind test|debug`; the CLI then calls the shared
+`pyopsctl.overrides.build_overrides()` and ships the resulting
+`{set::name: body}` map in the `overrides` JSON key, letting the
+operator iterate on local edits without committing first.
 
 **debug** — `PUT /scriptlet/job/item` (with `kind=debug`), plus the
 job list/item/cancel endpoints above. The debug session runs
@@ -327,6 +335,7 @@ unit/
   test_pdb_client.py           # PdbClient prompt reader + response parsers
   test_human_output.py         # vertical state-dump renderer
   test_commands_debug.py       # argparse wiring → request body shape
+  test_commands_job.py         # job-run override path: --kind test + --overrides-dir
 integration/
   test_smoke.py                # version/config check/health/metrics
   test_debug_flow.py           # composed-param shape against a real server

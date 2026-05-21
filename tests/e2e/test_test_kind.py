@@ -30,7 +30,9 @@ def _wait_for_job(api, job_id, timeout=90):
 
 
 TASK_BODY = (
-    "#!pytest\n"
+    # pytest no longer needs its own directive here — `#!{pyops::pytest}`
+    # carries `#!pytest` at the top of pytest.library.py and pyops
+    # processes library directives transitively.
     "#!{::tests_lib}\n"
     "#!{pyops::pytest}\n"
     "\n"
@@ -168,3 +170,43 @@ class TestKindTestLifecycle:
         assert "1 passed" in stdout, f"expected exactly one pass:\n{stdout}"
         assert "2 passed" not in stdout, f"both methods ran; node-id selection ignored:\n{stdout}"
         pyops_server.assert_no_unexpected_errors()
+
+    def test_manager_ui_test_button_enqueues_kind_test(self, e2e_page, api, pyops_server, set_factory, commit_set, e2e_env):
+        """Clicking the new 'science' button in the Manager UI on a
+        task scriptlet enqueues a kind=test job. Round-trip proof that
+        the WebUI surface is wired: the button exists, the handler
+        emits the right PUT body, and the runner picks it up."""
+        _setup(api, set_factory, commit_set, GREEN_LIB)
+
+        # Navigate to Manager via the sidebar menu.
+        e2e_page.locator('[data-testid="menu-link-scriptlet_manager"]').click()
+        frame = e2e_page.frame_locator('[data-testid="content-frame"]')
+        # Wait for the row of our task to appear (refresh is polled).
+        frame.locator(f'[data-testid="scriptlet-row-{SET}-my_task"]').wait_for(state="visible", timeout=15_000)
+        # The new science-icon button.
+        frame.locator(f'[data-testid="scriptlet-test-{SET}-my_task"]').click()
+
+        # Poll for the kind=test job to appear and reach terminal state.
+        # /scriptlet/job/list returns id only (no set/name fields); the id
+        # is `{owner}_{set}_{name}_{timestamp}` so we match by prefix.
+        deadline = time.time() + 60
+        chosen = None
+        terminal = {"done", "failed", "cancelled", "killed"}
+        id_prefix_fragment = f"_{SET}_my_task_"
+        while time.time() < deadline and chosen is None:
+            for j in api.get("/scriptlet/job/list").json():
+                if id_prefix_fragment in j["id"] and j["kind"] == "test":
+                    chosen = j
+                    break
+            time.sleep(0.5)
+        assert chosen is not None, "no kind=test job appeared after clicking the science button"
+        # Use the param-less default; with TEST_SETS undefined, pytest_run
+        # raises ValueError (empty list), which is fine — the test only
+        # cares that kind=test was enqueued and ran.
+        if chosen["state"] not in terminal:
+            chosen = _wait_for_job(api, chosen["id"], timeout=60)
+        # Failed is acceptable here (the task has no param so test_sets is
+        # not set; pytest_run raises). The point is the button wired up
+        # to kind=test correctly.
+        assert chosen["state"] in terminal
+        pyops_server.assert_no_unexpected_errors(allow=["ValueError", "test_sets", "NameError"])

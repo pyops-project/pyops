@@ -74,10 +74,21 @@ Three additive set capabilities plus a public-namespace rename:
   `test_test_kind.py`).
 
 ### Changed
-- Directory rename `app/internal/` → `app/pyops/`. Constants
-  `INTERNAL_*` → `PYOPS_*`. URL `/controller/internal/sets` →
-  `/controller/pyops/sets`. JSlib `internal_job.js` → `set_job.js`
-  with test IDs `internal-job-*` → `set-job-*`.
+- Directory rename `app/internal/` → `app/pyops/`. URL
+  `/controller/internal/sets` → `/controller/pyops/sets`. JSlib
+  `internal_job.js` → `sets_job.js` with global `runSetsJob` and test
+  IDs `internal-job-*` → `sets-job-*`. The role-describing identifiers
+  in code use the `bundled_*` prefix (`BUNDLED_SET_NAME`,
+  `bundled_set_path`, `is_bundled_set`, `_reject_if_bundled`) so the
+  question "is this the application-bundled set?" doesn't read as "is
+  this a pyops set?" (every set is — the project's name is pyops).
+- `pyops::pytest` pulls in pytest itself via a `#!pytest` directive at
+  the top of its library file — consumers of `#!{pyops::pytest}` no
+  longer need their own `#!pytest` line.
+- Manager UI and task editor gain a **Run as Test** button (material
+  `science` icon, info-blue) next to the existing Run-as-Draft. Both
+  PUT `kind=test`. Operators can now invoke `kind=test` jobs from the
+  WebUI without `pyopsctl` / API.
 - The directive-syntax line in `docs/insights_app.md` is corrected:
   `#!{set::name}` with mandatory `::` (an empty `set` means current
   set, e.g. `#!{::lib}`), replacing the earlier

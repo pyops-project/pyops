@@ -901,7 +901,7 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
                         # msgpack / psutil / requests are already there
                         # (pyops itself uses them). User sets get their
                         # own venv via the standard ensure_set_environment.
-                        if setname == files.PYOPS_SET_NAME:
+                        if setname == files.BUNDLED_SET_NAME:
                             venv_python = sys.executable
                         else:
                             ensure_set_environment(setname)

@@ -194,7 +194,7 @@ Structure of the bundle:
 | `data.task.py` | Service (`kind=service`); `ServiceListener` loop that routes incoming `controller/pyops/sets/{...}` requests |
 | `set.library.py` | Shared helpers used by the `set_*` tasks (lock paths, run_cmd, status) |
 | `set_clone.task.py`, `set_create.task.py`, `set_pull.task.py`, `set_switch.task.py`, `set_remove.task.py`, `set_update_deps.task.py`, `set_commit_drafts.task.py` | One task per mutating operation, each held against the same `set_install_lock` the runner-side spawn path uses |
-| `set_job.js` | Jslibrary modal (loaded as `pyops::set_job`): fires the controller POST, polls `/scriptlet/job/item` until terminal, tails stdout/stderr live |
+| `sets_job.js` | Jslibrary modal (loaded as `pyops::sets_job`): fires the sets-management controller POST, polls `/scriptlet/job/item` until terminal, tails stdout/stderr live |
 | `pytest.library.py` | Reusable library imported from test-kind tasks via `#!{pyops::pytest}` — programmatic pytest invocation against named test classes, conditional coverage (see "Test Jobs") |
 
 Request flow for a mutating action (e.g. clone):

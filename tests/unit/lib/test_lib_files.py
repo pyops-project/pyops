@@ -376,21 +376,21 @@ def test_version_matches_project_version_file():
     assert files.version() == expected
 
 
-def test_is_pyops_set_true():
+def test_is_bundled_set_true():
     from app.lib import files
-    assert files.is_pyops_set("pyops") is True
-    assert files.is_pyops_set(files.PYOPS_SET_NAME) is True
+    assert files.is_bundled_set("pyops") is True
+    assert files.is_bundled_set(files.BUNDLED_SET_NAME) is True
 
 
-def test_is_pyops_set_false():
+def test_is_bundled_set_false():
     from app.lib import files
-    assert files.is_pyops_set("myops") is False
-    assert files.is_pyops_set("Pyops") is False
-    assert files.is_pyops_set("") is False
-    assert files.is_pyops_set("internal") is False
+    assert files.is_bundled_set("myops") is False
+    assert files.is_bundled_set("Pyops") is False
+    assert files.is_bundled_set("") is False
+    assert files.is_bundled_set("internal") is False
 
 
-def test_pyops_set_path_under_app():
+def test_bundled_set_path_under_app():
     from app.lib import files
-    assert files.pyops_set_path.endswith(os.path.join("app", "pyops"))
-    assert os.path.isabs(files.pyops_set_path)
+    assert files.bundled_set_path.endswith(os.path.join("app", "pyops"))
+    assert os.path.isabs(files.bundled_set_path)

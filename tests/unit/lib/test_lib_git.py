@@ -60,11 +60,12 @@ def mock_logging():
 class TestPullIfNeeded:
     def test_pull_happy_path(self, mock_repo, mock_subprocess, mock_files_conf, mock_logging, mock_fcntl):
         mock_run, mock_check = mock_subprocess
-        # Calls: _check remote, direct check_output tag, _check status, _check branch, _check pre, _check ls-remote, run fetch, _check post, _check log, _check ls-tree
+        # Calls (after the pull() reorg): _check remote, direct check_output tag,
+        # _check branch, _check pre, _check ls-remote, run fetch, _check post,
+        # _check log, _check ls-tree
         mock_check.side_effect = [
             b'origin\n',  # remote _check
             b'',  # tag direct
-            b'',  # status _check
             b'main\n',  # branch _check
             b'abc123\n',  # pre _check
             b'def456\n',  # ls-remote _check
@@ -95,11 +96,10 @@ class TestPullIfNeeded:
 
     def test_pull_no_changes(self, mock_repo, mock_subprocess, mock_files_conf, mock_logging):
         mock_run, mock_check = mock_subprocess
-        # Calls: _check remote, direct tag, _check status, _check branch, _check pre, _check ls-remote (match), no fetch
+        # Calls: _check remote, direct tag, _check branch, _check pre, _check ls-remote (match), no fetch
         mock_check.side_effect = [
             b'origin\n',  # remote
             b'',  # tag
-            b'',  # status
             b'main\n',  # branch
             b'abc123\n',  # pre
             b'abc123\n',  # ls-remote
@@ -204,11 +204,10 @@ class TestPullIfNeeded:
 
     def test_pull_new_file_failure(self, mock_repo, mock_subprocess, mock_files_conf, mock_logging):
         mock_run, mock_check = mock_subprocess
-        # Calls: _check remote, direct tag, _check status, _check branch, _check pre, run fetch, _check post, _check log, _check ls-tree
+        # Calls: _check remote, direct tag, _check branch, _check pre, _check ls-remote, run fetch, _check post, _check log, _check ls-tree
         mock_check.side_effect = [
             b'origin\n',  # remote
             b'',  # tag
-            b'',  # status
             b'main\n',  # branch
             b'abc123\n',  # pre
             b'def456\n',  # ls-remote
@@ -233,7 +232,6 @@ class TestPullIfNeeded:
         mock_check.side_effect = [
             b'origin\n',  # remote
             b'',  # tag
-            b'',  # status
             b'main\n',  # branch
             b'abc123\n',  # pre_head
             b'abc123 abc123\n',  # ls-remote --heads origin main
@@ -246,15 +244,13 @@ class TestPullIfNeeded:
 
     def test_pull_skip_fetch_mismatch(self, mock_repo, mock_subprocess, mock_files_conf, mock_logging):
         mock_run, mock_check = mock_subprocess
-        # Calls: _check remote, direct tag, _check status, _check branch, _check pre, _check ls-remote, run fetch, _check post, _check log, _check ls-tree
+        # Calls: _check remote, direct tag, _check branch, _check pre, _check ls-remote, run fetch, _check post, _check log, _check ls-tree
         mock_check.side_effect = [
             b'origin\n',  # remote
             b'',  # tag
-            b'',  # status
             b'main\n',  # branch
             b'abc123\n',  # pre
             b'def456 def456\n',  # ls-remote different
-            b'',  # status again? No, after fetch no status
             b'def456\n',  # post
             b'new commit msg\n',  # log
             b'file1.py\n',  # ls-tree
@@ -266,11 +262,10 @@ class TestPullIfNeeded:
 
     def test_pull_skip_fetch_lsremote_error(self, mock_repo, mock_subprocess, mock_files_conf, mock_logging):
         mock_run, mock_check = mock_subprocess
-        # Calls: _check remote, direct tag, _check status, _check branch, _check pre, _check ls-remote fails, run fetch, _check post, _check log, _check ls-tree
+        # Calls: _check remote, direct tag, _check branch, _check pre, _check ls-remote fails, run fetch, _check post, _check log, _check ls-tree
         mock_check.side_effect = [
             b'origin\n',  # remote
             b'',  # tag
-            b'',  # status
             b'main\n',  # branch
             b'abc123\n',  # pre
             subprocess.CalledProcessError(1, [], output=b''),  # ls-remote fails
@@ -600,20 +595,20 @@ class TestPyopsSetResolver:
     def test_get_repo_path_pyops_returns_app_pyops(self, tmp_path):
         fake_pyops = tmp_path / "app" / "pyops"
         fake_pyops.mkdir(parents=True)
-        with patch.object(files, "pyops_set_path", str(fake_pyops)):
+        with patch.object(files, "bundled_set_path", str(fake_pyops)):
             result = git.get_repo_path("pyops")
         assert result == str(fake_pyops)
 
     def test_get_repo_path_pyops_raises_if_missing(self, tmp_path):
         missing = tmp_path / "app" / "pyops_missing"
-        with patch.object(files, "pyops_set_path", str(missing)):
+        with patch.object(files, "bundled_set_path", str(missing)):
             with pytest.raises(git.GitNotFoundError):
                 git.get_repo_path("pyops")
 
     def test_get_repo_path_pyops_skips_git_init(self, tmp_path):
         fake_pyops = tmp_path / "app" / "pyops"
         fake_pyops.mkdir(parents=True)
-        with patch.object(files, "pyops_set_path", str(fake_pyops)), \
+        with patch.object(files, "bundled_set_path", str(fake_pyops)), \
              patch("app.lib.git._call") as mock_call:
             git.get_repo_path("pyops")
         # Pyops set never gets `git init` / commit dance
@@ -624,7 +619,7 @@ class TestPyopsSetResolver:
         fake_pyops = tmp_path / "app" / "pyops"
         fake_pyops.mkdir(parents=True)
         (fake_pyops / "set_clone.task.py").write_text("print('hi')\n")
-        with patch.object(files, "pyops_set_path", str(fake_pyops)):
+        with patch.object(files, "bundled_set_path", str(fake_pyops)):
             # committed=True/strict=True are intentionally ignored for the pyops set
             content = git.read_content(str(fake_pyops), "set_clone", "task", committed=True, strict=True)
         assert content == "print('hi')\n"
@@ -632,7 +627,7 @@ class TestPyopsSetResolver:
     def test_read_content_pyops_missing_raises_filenotfound(self, tmp_path):
         fake_pyops = tmp_path / "app" / "pyops"
         fake_pyops.mkdir(parents=True)
-        with patch.object(files, "pyops_set_path", str(fake_pyops)):
+        with patch.object(files, "bundled_set_path", str(fake_pyops)):
             with pytest.raises(FileNotFoundError):
                 git.read_content(str(fake_pyops), "no_such", "task", committed=False)
 

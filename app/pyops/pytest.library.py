@@ -1,4 +1,9 @@
+#!pytest
 # Library: pyops::pytest — programmatic pytest entry point for kind=test jobs.
+#
+# The `#!pytest` directive at the top of this file installs pytest into
+# the consuming set's venv when this library is loaded via
+# `#!{pyops::pytest}`. So callers don't need their own `#!pytest` line.
 #
 # Loaded via `#!{pyops::pytest}` from a *.task.py whose __test__ block
 # wants to run named test classes (or specific methods) without any

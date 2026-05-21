@@ -86,10 +86,9 @@ Pyops core is pytest-agnostic. The bundled `pyops::pytest` library encapsulates 
 
 ```python
 # my_task.task.py
-#!pytest
 #!pytest-cov                # optional — turns on coverage automatically
 #!{::unit_tests}            # test classes live in libraries
-#!{pyops::pytest}           # the helper
+#!{pyops::pytest}           # the helper; transitively installs pytest
 
 def do_work(x):
     return x * 2
@@ -104,7 +103,39 @@ if __name__ == "__test__":
     )
 ```
 
-Test libraries (e.g. `unit_tests.library.py`) hold the pytest classes with `class TestWork: def test_positive(self): ...`. Fixtures, monkeypatch, and `@pytest.fixture` all work — pyops invokes the real pytest API.
+Test libraries hold the pytest classes. Production code that the
+classes need either lives in the test library too (simplest) or in a
+sibling library imported with a plain Python `import` — pytest's
+default import mode prepends the materialised library directory to
+`sys.path`, so `from production_lib import do_work` works:
+
+```python
+# unit_tests.library.py
+import pytest
+
+def double(x):
+    return x * 2
+
+class TestWork:
+    def test_doubles(self):
+        assert double(3) == 6
+
+    def test_zero(self):
+        assert double(0) == 0
+
+class TestEdge:
+    def test_zero(self):
+        assert double(0) == 0
+
+    def test_negative(self):
+        assert double(-2) == -4
+
+@pytest.fixture
+def shared_thing():
+    return {"key": "value"}
+```
+
+Fixtures, monkeypatch, and `@pytest.fixture` all work — pyops invokes the real pytest API.
 
 Enqueue: `pyopsctl job run myset my_task --kind test`, or `PUT /scriptlet/job/item` with `kind=test`, or via the manager UI (no dedicated button — copy a task's job-create payload and change `kind`).
 

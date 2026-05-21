@@ -141,7 +141,7 @@ class TestInventoryPyopsGuard:
             headers={"X-User": "alice"},
         )
         assert response.status_code == 400
-        assert "pyops-managed" in response.json()["detail"]
+        assert "bundled with pyops" in response.json()["detail"]
 
     def test_draft_post_pyops_rejected(self, mock_client, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
         response = mock_client.post(

@@ -86,88 +86,119 @@ def get_git_pull_interval() -> int:
     """
     return files.conf_runner()["git_pull_interval"]
 
+# Files restored into the working tree after a `pull()` soft-reset:
+# any path matching one of these predicates AND newly present in HEAD
+# but missing in the working directory gets `git checkout HEAD -- <path>`.
+# New content types (e.g. yaml/json under data/) are added here as they
+# are introduced.
+_PULL_RESTORE_PREDICATES = (
+    lambda f: f.endswith((".py", ".html", ".js")),
+    lambda f: f == "README.md",
+    lambda f: f.startswith("docs/") and f.endswith(".md"),
+    lambda f: f.startswith("data/") and f.endswith((".yaml", ".yml", ".json")),
+)
+
+
+def _is_on_tag(repo: str) -> bool:
+    """True iff HEAD is exactly at a tag (so a pull would clobber the tag pin)."""
+    tags_output = subprocess.check_output(["git", "tag", "-l"], cwd=repo).decode().strip()
+    if not tags_output:
+        return False
+    try:
+        _check(["git", "describe", "--tags", "--exact-match", "HEAD"], repo)
+        return True
+    except subprocess.CalledProcessError:
+        return False
+
+
+def _remote_head_matches_local(repo: str, remote: str, branch: str, local_head: str) -> bool:
+    """True iff `remote`'s `branch` points at `local_head` — short-circuits
+    the fetch/reset when there's nothing to pull. Treats an ls-remote
+    failure as 'unknown, proceed to fetch'."""
+    try:
+        remote_ref = _check(["git", "ls-remote", "--heads", remote, branch], repo).split()[0]
+        return remote_ref == local_head
+    except subprocess.CalledProcessError:
+        logger.debug(f"ls-remote failed for {os.path.basename(repo)}; proceeding to fetch")
+        return False
+
+
+def _restore_new_files_from_head(repo: str) -> None:
+    """Checkout files newly present in HEAD but missing in the working
+    tree, restricted by `_PULL_RESTORE_PREDICATES`. Soft-reset alone
+    doesn't materialise newly-added files; this loop completes that.
+    Errors are logged but never raised — restoration is best-effort."""
+    try:
+        files_in_head = _check(["git", "ls-tree", "-r", "--name-only", "HEAD"], repo).splitlines()
+        new_files = [
+            f for f in files_in_head
+            if not os.path.exists(os.path.join(repo, f))
+            and any(pred(f) for pred in _PULL_RESTORE_PREDICATES)
+        ]
+        if new_files:
+            _call(["git", "checkout", "HEAD", "--"] + new_files, repo)
+            logger.info(f"Added {len(new_files)} new files to {os.path.basename(repo)} working directory")
+    except subprocess.CalledProcessError as e:
+        logger.warning(f"Failed to add new files for {os.path.basename(repo)}: {e}")
+
+
 def pull(repo: str) -> bool:
-    """Syncs to origin/HEAD via soft reset if clean; skips if dirty to preserve unstaged changes.
-    
+    """Syncs to origin/HEAD via soft reset if clean; skips if dirty to
+    preserve unstaged changes.
+
     Args:
         repo (str): Repo path.
-    
+
     Returns:
-        bool: True if reset performed.
-    
+        bool: True if the pull was attempted (whether or not it caused a
+            head change); False if skipped (no .git, no remote, on tag).
+
     Raises:
         subprocess.CalledProcessError: Reset failures (retried).
     """
     if not os.path.exists(os.path.join(repo, ".git")):
         return False
-    
+
     git_base = get_git_base()
     set_name = os.path.basename(repo)
     with repo_lock(git_base, set_name):
         try:
             remotes = _check(["git", "remote"], repo).split()
             if not remotes:
-                logger.info(f"No remote for {os.path.basename(repo)}; skipping reset")
+                logger.info(f"No remote for {set_name}; skipping reset")
                 return False
-            
-            # Check if on tag only if tags exist
-            tags_output = subprocess.check_output(["git", "tag", "-l"], cwd=repo).decode().strip()
-            if tags_output:
-                try:
-                    _check(["git", "describe", "--tags", "--exact-match", "HEAD"], repo)
-                    logger.info(f"On tag in {os.path.basename(repo)}; skipping reset")
-                    return False
-                except subprocess.CalledProcessError:
-                    pass  # Not on tag
-            else:
-                # No tags, assume not on tag
-                pass
-            
-            status_out = _check(["git", "status", "--porcelain"], repo)
-            
+
+            if _is_on_tag(repo):
+                logger.info(f"On tag in {set_name}; skipping reset")
+                return False
+
             branch = _check(["git", "branch", "--show-current"], repo)
             pre_head = _check(["git", "rev-parse", "HEAD"], repo)
 
-            if remotes:
-                try:
-                    remote_ref = _check(["git", "ls-remote", "--heads", remotes[0], branch], repo).split()[0]
-                    if remote_ref == pre_head:
-                        logger.debug(f"Up-to-date: local HEAD matches origin/{branch} for {os.path.basename(repo)}")
-                        return True
-                except subprocess.CalledProcessError:
-                    logger.debug(f"ls-remote failed for {os.path.basename(repo)}; proceeding to fetch")
+            if _remote_head_matches_local(repo, remotes[0], branch, pre_head):
+                logger.debug(f"Up-to-date: local HEAD matches origin/{branch} for {set_name}")
+                return True
 
             _retry_call(["git", "fetch"], repo)
             _call(["git", "reset", "--soft", f"origin/{branch}"], repo)
-            
+
             post_head = _check(["git", "rev-parse", "HEAD"], repo)
             if pre_head != post_head:
                 changes = _check(["git", "log", "--oneline", "-1"], repo)
-                logger.info(f"Reset {os.path.basename(repo)} to origin/HEAD: {changes}")
-
-                # Add new files from HEAD not in working directory
-                try:
-                    files_in_head = _check(["git", "ls-tree", "-r", "--name-only", "HEAD"], repo).splitlines()
-                    new_files = [f for f in files_in_head
-                                 if not os.path.exists(os.path.join(repo, f))
-                                 and (f.endswith(('.py', '.html', '.js'))
-                                      or f == 'README.md'
-                                      or (f.startswith('docs/') and f.endswith('.md'))
-                                      or (f.startswith('data/') and f.endswith(('.yaml', '.yml', '.json'))))]
-                    added_count = len(new_files)
-                    if new_files:
-                        _call(["git", "checkout", "HEAD", "--"] + new_files, repo)
-                        logger.info(f"Added {added_count} new files to {os.path.basename(repo)} working directory")
-                except subprocess.CalledProcessError as e:
-                    logger.warning(f"Failed to add new files for {os.path.basename(repo)}: {e}")
-
+                logger.info(f"Reset {set_name} to origin/HEAD: {changes}")
+                _restore_new_files_from_head(repo)
             else:
-                logger.debug(f"No changes reset for {os.path.basename(repo)}")
+                logger.debug(f"No changes reset for {set_name}")
 
             return True
-        
+
         except subprocess.CalledProcessError as e:
-            logger.error(f"Reset failed for {os.path.basename(repo)} (rc={e.returncode}): stdout='{e.stdout.strip() if hasattr(e, 'stdout') else 'N/A'}', stderr='{e.stderr.strip() if hasattr(e, 'stderr') else 'N/A'}'")
+            # `e.stdout` / `e.stderr` are None when the subprocess wasn't
+            # run with stdout/stderr capture — guard against `.strip()`
+            # on None.
+            out = e.stdout.strip() if getattr(e, "stdout", None) else "N/A"
+            err = e.stderr.strip() if getattr(e, "stderr", None) else "N/A"
+            logger.error(f"Reset failed for {set_name} (rc={e.returncode}): stdout='{out}', stderr='{err}'")
             raise
 
 def get_repo_path(set: str) -> str:
@@ -185,10 +216,10 @@ def get_repo_path(set: str) -> str:
     # The pyops set ships with the application source — it's checked
     # into the pyops repo under app/pyops/. No per-set .git, no init,
     # no commit dance: scriptlets there are versioned with pyops itself.
-    if set == files.PYOPS_SET_NAME:
-        if not os.path.isdir(files.pyops_set_path):
+    if set == files.BUNDLED_SET_NAME:
+        if not os.path.isdir(files.bundled_set_path):
             raise GitNotFoundError(f"Set '{set}' does not exist")
-        return files.pyops_set_path
+        return files.bundled_set_path
 
     git_base = get_git_base()
     repo = os.path.abspath(os.path.join(git_base, set))
@@ -344,61 +375,80 @@ def infer_type_from_filename(filename: str) -> str:
         raise ValueError(f"Unknown type in filename: {type_}")
     return type_
 
+def _scan_set_top_level(set_name: str, repo: str) -> List[Dict[str, str]]:
+    """Scan the repo root for `.py` / `.html` / `.js` scriptlets and
+    the top-level `README.md`. Type inferred via `infer_type_from_filename`."""
+    out: List[Dict[str, str]] = []
+    for filename in os.listdir(repo):
+        if filename.endswith(('.py', '.html', '.js')) or filename == "README.md":
+            try:
+                out.append({
+                    "set": set_name,
+                    "name": get_name_from_file(filename),
+                    "type": infer_type_from_filename(filename),
+                })
+            except ValueError:
+                continue  # Skip filenames that don't match a known shape.
+    return out
+
+
+def _scan_set_subdir(set_name: str, repo: str, subdir: str,
+                     extensions: tuple[str, ...],
+                     include_ext: bool = False) -> List[Dict[str, str]]:
+    """Scan `repo/<subdir>/` for files matching any of `extensions`.
+
+    `include_ext=True` adds the actual on-disk extension as the `ext`
+    field on each entry (used for `data/*.{yaml,yml,json}` so clients
+    can mirror the format locally — yaml vs json affects both filename
+    and syntax mode).
+    """
+    out: List[Dict[str, str]] = []
+    dir_path = os.path.join(repo, subdir)
+    if not os.path.isdir(dir_path):
+        return out
+    for filename in os.listdir(dir_path):
+        if not filename.endswith(extensions):
+            continue
+        rel = f"{subdir}/{filename}"
+        try:
+            entry: Dict[str, str] = {
+                "set": set_name,
+                "name": get_name_from_file(rel),
+                "type": infer_type_from_filename(rel),
+            }
+            if include_ext:
+                entry["ext"] = os.path.splitext(filename)[1].lstrip(".")
+            out.append(entry)
+        except ValueError:
+            continue
+    return out
+
+
 def list_scriptlets() -> List[Dict[str, str]]:
     """Lists all scriptlets across repos.
 
-    Scans Git repos, globs *.py / *.html / *.js / README.md / docs/*.md;
-    derives set/name/type.
-    Views: .html as {"type": "view"}.
-    Markdown: 'README.md' and free-named entries under 'docs/'.
+    Per set, three scanners run in sequence:
+      - top-level: `*.py` / `*.html` / `*.js` / `README.md`
+      - `docs/*.md`
+      - `data/*.{yaml,yml,json}` (with `ext` field)
 
     Returns:
-        List[Dict]: [{"set": str, "name": str, "type": str}, ...] sorted.
+        List[Dict]: [{"set", "name", "type"[, "ext"]}, ...] sorted by
+            (set, name).
     """
     git_base = get_git_base()
     sets = [d for d in os.listdir(git_base)
               if os.path.isdir(os.path.join(git_base, d))
               and os.path.exists(os.path.join(git_base, d, ".git"))]
 
-    scriptlets = []
-    for set in sorted(sets):
-        repo = get_repo_path(set)
-        for filename in os.listdir(repo):
-            if filename.endswith(('.py', '.html', '.js')) or filename == "README.md":
-                try:
-                    name = get_name_from_file(filename)
-                    type_ = infer_type_from_filename(filename)
-                    scriptlets.append({"set": set, "name": name, "type": type_})
-                except ValueError:
-                    continue  # Skip invalid files.
-        docs_dir = os.path.join(repo, "docs")
-        if os.path.isdir(docs_dir):
-            for filename in os.listdir(docs_dir):
-                if not filename.endswith(".md"):
-                    continue
-                rel = f"docs/{filename}"
-                try:
-                    name = get_name_from_file(rel)
-                    type_ = infer_type_from_filename(rel)
-                    scriptlets.append({"set": set, "name": name, "type": type_})
-                except ValueError:
-                    continue
-        data_dir = os.path.join(repo, "data")
-        if os.path.isdir(data_dir):
-            for filename in os.listdir(data_dir):
-                if not filename.endswith((".yaml", ".yml", ".json")):
-                    continue
-                rel = f"data/{filename}"
-                try:
-                    name = get_name_from_file(rel)
-                    type_ = infer_type_from_filename(rel)
-                    ext = os.path.splitext(filename)[1].lstrip(".")
-                    # Data files carry their extension so clients can
-                    # mirror the on-disk format locally (yaml vs json
-                    # affects both filename and syntax highlighting).
-                    scriptlets.append({"set": set, "name": name, "type": type_, "ext": ext})
-                except ValueError:
-                    continue
+    scriptlets: List[Dict[str, str]] = []
+    for set_name in sorted(sets):
+        repo = get_repo_path(set_name)
+        scriptlets += _scan_set_top_level(set_name, repo)
+        scriptlets += _scan_set_subdir(set_name, repo, "docs", (".md",))
+        scriptlets += _scan_set_subdir(set_name, repo, "data",
+                                       (".yaml", ".yml", ".json"),
+                                       include_ext=True)
 
     return sorted(scriptlets, key=lambda x: (x["set"], x["name"]))
 
@@ -509,7 +559,7 @@ def read_content(repo: str, name: str, type_: str, committed: bool = False, stri
 
     # Pyops set has no per-set .git — read directly from disk, ignore
     # the committed/strict flags (they don't apply to pyops-shipped code).
-    if os.path.abspath(repo) == files.pyops_set_path:
+    if os.path.abspath(repo) == files.bundled_set_path:
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"File not found: {file_path}")
         with open(file_path, "r", encoding="utf-8") as f:
