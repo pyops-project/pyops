@@ -273,7 +273,13 @@ test:pyopsctl:install:
 verify:version_bumped:
   stage: build
   needs: []
-  image: alpine/git
+  # alpine/git defaults its ENTRYPOINT to `git`, so the GitLab runner's
+  # `sh -c '...'` script trampoline ends up as `git sh -c '...'` and dies
+  # with `git: 'sh' is not a git command`. Clearing the entrypoint lets
+  # the runner exec `sh` itself; `git` is still on PATH from the image.
+  image:
+    name: alpine/git
+    entrypoint: [""]
   before_script:
     - apk add --no-cache grep
   script:
