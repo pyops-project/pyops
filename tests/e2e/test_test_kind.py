@@ -171,6 +171,45 @@ class TestKindTestLifecycle:
         assert "2 passed" not in stdout, f"both methods ran; node-id selection ignored:\n{stdout}"
         pyops_server.assert_no_unexpected_errors()
 
+    def test_kind_testdebug_runs_test_block_under_debug_materialisation(self, api, pyops_server, set_factory, commit_set, e2e_env):
+        """kind=testdebug is the hybrid: __name__='__test__' (test
+        trait) but sources materialise under .debug/src/ (debug trait)
+        with a .test → .debug symlink so tooling on either path
+        resolves. Param is empty here — the kind's debugger semantics
+        only kick in when the client puts a bootstrap into param; the
+        materialisation + __name__ wiring is independent."""
+        _setup(api, set_factory, commit_set, GREEN_LIB)
+        r = api.put("/scriptlet/job/item",
+                    json={"set": SET, "name": "my_task", "drop_done": False,
+                          "max_retries": 0,
+                          "param": "TEST_SETS = ['TestWork']\n",
+                          "kind": "testdebug"})
+        job_id = r.json()["job"]
+        job = _wait_for_job(api, job_id)
+        assert job["state"] == "done", f"failed: {job.get('detail')}"
+        ws = e2e_env["data_dir"] / "jobs" / SET / job_id
+
+        # __test__ block ran, __main__ did not — same as kind=test.
+        assert (ws / "test_block_ran.json").is_file()
+        assert not (ws / "main_ran.json").exists()
+
+        # Sources materialised under .debug/src/ (NOT .test/src/) —
+        # the debug-family trait. The path-mapping in VSIX
+        # (`./.debug/src` ↔ workspace pyops dir) therefore works for
+        # both debug and testdebug unchanged.
+        debug_lib = ws / ".debug" / "src" / SET / "library" / "tests_lib.py"
+        assert debug_lib.is_file(), f"expected sources under .debug/src/, got: {list(ws.iterdir())}"
+
+        # .test must be a symlink → .debug so consumers that look at
+        # the canonical "test-sources" path find them too.
+        test_link = ws / ".test"
+        assert test_link.is_symlink(), f".test must be a symlink, got: {test_link}"
+        assert os.readlink(str(test_link)) == ".debug"
+        # And it must resolve: walking through .test/src/ hits the same files.
+        assert (ws / ".test" / "src" / SET / "library" / "tests_lib.py").is_file()
+
+        pyops_server.assert_no_unexpected_errors()
+
     def test_manager_ui_test_button_enqueues_kind_test(self, e2e_page, api, pyops_server, set_factory, commit_set, e2e_env):
         """Clicking the new 'science' button in the Manager UI on a
         task scriptlet enqueues a kind=test job. Round-trip proof that

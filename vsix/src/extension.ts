@@ -217,7 +217,15 @@ export async function activate(context: vscode.ExtensionContext) {
             await scriptletService.writeLocalToRemoteDraft(treeItem);
         }));
 
-        context.subscriptions.push(vscode.commands.registerCommand('pyops.startDebugJob', async (treeItem?: ScriptletTreeItem) => {
+        // Shared launcher for the two debug-family commands. The only
+        // difference between kind='debug' and kind='testdebug' is the
+        // kind we ship in the PUT body — server materialisation stays
+        // under `.debug/src/` for both, so path mappings + debugpy
+        // attach flow are identical.
+        const startDebugFamilyJob = async (
+            kind: 'debug' | 'testdebug',
+            treeItem?: ScriptletTreeItem,
+        ): Promise<void> => {
             const isValidConfig = ApiClient.hasValidConfigStatic();
             if (!isValidConfig) {
                 vscode.window.showWarningMessage('No valid PyOps configuration set. Please configure in settings.');
@@ -228,7 +236,7 @@ export async function activate(context: vscode.ExtensionContext) {
             const name = treeItem.scriptletName!;
             const key = `${set}-${name}`;
             if (debugOutputMonitor.isMonitoring(key)) {
-                vscode.window.showWarningMessage('Debug job already running');
+                vscode.window.showWarningMessage(`${kind} job already running`);
                 return;
             }
 
@@ -241,7 +249,7 @@ export async function activate(context: vscode.ExtensionContext) {
             const { overrides, pathMappings } = DebugService.buildOverrides(set, workspaceRoot);
             outputChannel.appendLine(`[DEBUG] Built overrides for ${set}: ${Object.keys(overrides).length} files`);
             outputChannel.appendLine(`[DEBUG] Path mappings: ${JSON.stringify(pathMappings, null, 2)}`);
-            const result = await debugService.enqueueDebugJob(set, name, overrides);
+            const result = await debugService.enqueueDebugJob(set, name, overrides, kind);
             if (result.jobId) {
                 try {
                     jobOutputChannel.clear();
@@ -300,7 +308,7 @@ export async function activate(context: vscode.ExtensionContext) {
                     outputChannel.appendLine(`[DEBUG] Starting debug with config: ${JSON.stringify(config, null, 2)}`);
                     await vscode.debug.startDebugging(workspaceFolder, config);
 
-                    vscode.window.showInformationMessage(`Started debug job ${result.jobId} for ${name} with local overrides`);
+                    vscode.window.showInformationMessage(`Started ${kind} job ${result.jobId} for ${name} with local overrides`);
                 } catch (error: unknown) {
                     // The port was leased in enqueueDebugJob; if we never
                     // get to vscode.debug.startDebugging (job died early,
@@ -317,12 +325,17 @@ export async function activate(context: vscode.ExtensionContext) {
                         debugService.releasePort(result.port);
                     }
                     const errorMessage = error instanceof Error ? error.message : String(error);
-                    vscode.window.showErrorMessage(`Failed to start debug: ${errorMessage}`);
+                    vscode.window.showErrorMessage(`Failed to start ${kind}: ${errorMessage}`);
                 }
             } else {
-                vscode.window.showErrorMessage(`Failed to start debug`);
+                vscode.window.showErrorMessage(`Failed to start ${kind}`);
             }
-        }));
+        };
+
+        context.subscriptions.push(vscode.commands.registerCommand('pyops.startDebugJob', (treeItem?: ScriptletTreeItem) =>
+            startDebugFamilyJob('debug', treeItem)));
+        context.subscriptions.push(vscode.commands.registerCommand('pyops.startTestDebugJob', (treeItem?: ScriptletTreeItem) =>
+            startDebugFamilyJob('testdebug', treeItem)));
 
         context.subscriptions.push(vscode.commands.registerCommand('pyops.stopDebugJob', async (treeItem?: ScriptletTreeItem) => {
             const isValidConfig = ApiClient.hasValidConfigStatic();
@@ -344,7 +357,14 @@ export async function activate(context: vscode.ExtensionContext) {
                 return;
             }
             const jobs = await jobService.listJobs();
-            const runningDebugJobs = jobs.filter(j => j.kind === 'debug' && (j.state === 'running' || j.state === 'dequeued'));
+            // Attach treats debug and testdebug identically — both
+            // expose a debugpy listener on a leased port. The server-
+            // side gate (lib/runner.py) already enforces "one
+            // interactive session per owner", so there is at most one.
+            const runningDebugJobs = jobs.filter(j =>
+                (j.kind === 'debug' || j.kind === 'testdebug')
+                && (j.state === 'running' || j.state === 'dequeued'),
+            );
             if (runningDebugJobs.length === 0) {
                 vscode.window.showErrorMessage('No running debug job found');
                 return;

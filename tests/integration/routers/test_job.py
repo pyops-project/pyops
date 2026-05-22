@@ -465,3 +465,91 @@ class TestJobRouter:
             assert code == "# overridden code"
             assert overrides_str is not None
             assert max_retries == 0
+
+    def test_put_job_item_testdebug_accepted(self, mock_client, mock_db, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
+        """kind=testdebug is a valid Literal value and stored verbatim on the Job row.
+        Mirrors the kind=debug acceptance path; the runner-side __name__=__test__
+        and .test→.debug symlink semantics are exercised in unit/e2e tests."""
+        with patch("app.lib.git.read_content", side_effect=FileNotFoundError):
+            response = mock_client.put(
+                "/scriptlet/job/item",
+                json={
+                    "set": "default",
+                    "name": "missingtask",
+                    "drop_done": False,
+                    "param": "{}",
+                    "kind": "testdebug",
+                    "overrides": {"default::missingtask": "# overridden code"}
+                },
+                headers={"X-User": "testuser"}
+            )
+            assert response.status_code == 200
+            job_id = response.json()["job"]
+            with Session(get_db_engine()) as session:
+                job = session.query(Job).filter(Job.id == job_id).first()
+                assert job is not None
+                assert job.kind == "testdebug"
+                assert job.state == "todo"
+
+    def test_put_job_item_testdebug_invalid_overrides_key(self, mock_client, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
+        """Override-key regex applies to testdebug too — same validation pathway."""
+        response = mock_client.put(
+            "/scriptlet/job/item",
+            json={
+                "set": "default",
+                "name": "test_task",
+                "drop_done": False,
+                "param": "{}",
+                "kind": "testdebug",
+                "overrides": {"invalid_key": "code"}
+            },
+            headers={"X-User": "testuser"},
+        )
+        assert response.status_code == 400
+        assert "Invalid override key" in response.json()["detail"]
+
+    def test_loadjob_testdebug_override_returns_unstaged(self, mock_client, mock_db, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
+        """loadJob reads override body for kind=testdebug, mirroring debug.
+        Confirms `committed=False` and the override-dict fast-path both treat
+        testdebug like the other preview/diagnostic kinds."""
+        with patch("app.lib.git.read_content") as mock_read_content, \
+             patch("os.listdir") as mock_listdir:
+            mock_read_content.side_effect = FileNotFoundError("missing")
+
+            def listdir_side_effect(path):
+                repo_path = git.get_repo_path("default")
+                if repo_path == path:
+                    return []
+                try:
+                    return os.listdir(path)
+                except OSError:
+                    return []
+
+            mock_listdir.side_effect = listdir_side_effect
+
+            response = mock_client.put(
+                "/scriptlet/job/item",
+                json={
+                    "set": "default",
+                    "name": "missingtask",
+                    "drop_done": False,
+                    "param": "{}",
+                    "kind": "testdebug",
+                    "overrides": {"default::missingtask": "# overridden testdebug code"},
+                },
+                headers={"X-User": "testuser"},
+            )
+            assert response.status_code == 200
+            job_id = response.json()["job"]
+
+            with Session(get_db_engine()) as session:
+                job = session.query(Job).filter(Job.id == job_id).first()
+                assert job is not None
+                job.state = "dequeued"
+                session.commit()
+
+            from app.runner import loadJob
+            owner, set_, name, kind, param, code, overrides_str, max_retries = loadJob(job_id)
+            assert kind == "testdebug"
+            assert code == "# overridden testdebug code"
+            assert overrides_str is not None

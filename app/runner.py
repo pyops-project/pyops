@@ -492,10 +492,10 @@ def loadJob(job_id: str):
                 raise Exception("Invalid overrides JSON")
             if main_key in override_dict:
                 override_code = override_dict[main_key]
-        # debug/draft/test all read unstaged: the operator is iterating
-        # on local code that may not be committed yet, exactly the same
-        # use case across the three preview/diagnostic kinds.
-        committed = kind not in ("debug", "draft", "test")
+        # debug/draft/test/testdebug all read unstaged: the operator is
+        # iterating on local code that may not be committed yet, exactly
+        # the same use case across the four preview/diagnostic kinds.
+        committed = kind not in ("debug", "draft", "test", "testdebug")
         if override_code is not None:
             code = override_code
         else:

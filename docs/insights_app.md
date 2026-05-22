@@ -357,7 +357,7 @@ After `_shutdown_job_processes` returns, the runner drains any final ZMQ events,
 
 #### Debug Spawn
 
-Debug jobs spawn exactly like every other kind — no special readiness probe, no port allocation, no debugger-specific cleanup. The runner doesn't import or know about any debugger. The only debug-specific behaviour lives in `run_debug_job` (file materialisation under `.debug/src/`, `kind=debug` overrides) and in the job lifecycle (no retry, no execution timeout). The client's `param` block is what brings a debugger up (`debugpy.listen()`, `gdbserver --attach $$ :<port>`, ...); the `state=running` ZMQ completion that flips `loading` → `running` fires after that param block returns, so consumers polling job state observe ready := "debugger bootstrap finished".
+Debug jobs spawn exactly like every other kind — no special readiness probe, no port allocation, no debugger-specific cleanup. The runner doesn't import or know about any debugger. The only debug-specific behaviour lives in `run_debug_job` (file materialisation under `.debug/src/`, `kind in ("debug", "testdebug")` overrides) and in the job lifecycle (no retry, no execution timeout). The client's `param` block is what brings a debugger up (`debugpy.listen()`, `gdbserver --attach $$ :<port>`, ...); the `state=running` ZMQ completion that flips `loading` → `running` fires after that param block returns, so consumers polling job state observe ready := "debugger bootstrap finished". `kind=testdebug` reuses `run_debug_job` with `__name__='__test__'` overlaid — see "Testdebug Jobs (Hybrid)" below.
 
 ### Job Setup (`app/job_setup.py`)
 
@@ -374,7 +374,7 @@ On install failure: writes the error trace to `stderr.log`, calls `job_lib.send_
 
 ### Job Runner (`app/job_runner.py`)
 
-Second-phase subprocess (post-execv); runs inside per-set venv with `site.py` already having loaded every editable install's `.pth`. Receives all config as JSON kwargs on command line (no file reads). Dispatches to `run_task_job`, `run_service_job`, `run_debug_job`, `run_draft_job`.
+Second-phase subprocess (post-execv); runs inside per-set venv with `site.py` already having loaded every editable install's `.pth`. Receives all config as JSON kwargs on command line (no file reads). Dispatches to `run_task_job`, `run_service_job`, `run_debug_job` (also services `kind=testdebug` via a `kind=` parameter), `run_test_job`, `run_draft_job`.
 
 Opens `stdout.log` and `stderr.log` in `'a'` mode so the install logs written by `job_setup.py` are preserved above the user-code output.
 
@@ -410,7 +410,7 @@ graph TD
 | `pkgspace` | `data/pkg/` |
 | `jobsspace` | `data/jobs/` |
 | `control` | `pyops.Control(owner, web_bind)` |
-| `listener` | `pyops.ServiceListener(owner, job_id)` (service/debug/draft) |
+| `listener` | `pyops.ServiceListener(owner, job_id)` (service/debug/draft/testdebug) |
 | `data` | `SetData(setname, repo_path)` — set-scoped YAML/JSON I/O with shared/exclusive locks; see "Set Data" |
 
 #### Output Isolation
@@ -576,7 +576,24 @@ if __name__ == "__test__":
     )
 ```
 
-The router accepts `kind=test` via `PUT /scriptlet/job/item`; `loadJob` reads unstaged content for `kind in ("debug", "draft", "test")`, matching the "operator iterating on local code" use case for all three preview/diagnostic kinds.
+The router accepts `kind=test` via `PUT /scriptlet/job/item`; `loadJob` reads unstaged content for `kind in ("debug", "draft", "test", "testdebug")`, matching the "operator iterating on local code" use case for all four preview/diagnostic kinds.
+
+### Testdebug Jobs (Hybrid)
+
+`kind="testdebug"` is the hybrid of `debug` and `test`: it runs the scriptlet's `__test__` block (test trait) under a debugger that the client attached via the `param` block (debug trait). The runner dispatches it through `run_debug_job` with `kind="testdebug"`, so:
+
+- **Sources materialise under `.debug/src/`** (not `.test/src/`). The path-mapping that VSIX and pyopsctl already use for `kind=debug` (`./.debug/src ↔ <localPyopsDir>`) keeps working unchanged.
+- **A `.test → .debug` symlink is added in the workspace.** Tooling that walks the canonical "test sources" path (`workspace/.test/src/...`) resolves to the same files. `zipstream` follows symlinks when packaging the download, so the workspace zip ends up with both roots populated — slightly larger but no separate code path to maintain.
+- **`__name__ = "__test__"`** is set in the exec globals before `exec(param)` runs. Same flip as `kind=test` — the scriptlet's `if __name__ == "__test__":` block runs while pdb/debugpy holds the program at the bootstrap's `set_trace()`/`wait_for_client()`.
+- **No retry, no timeout** — inherited from the debug-family lifecycle.
+- **One-active-debug-per-owner** gate (`app/lib/runner.py:enqueue`) is shared between `debug` and `testdebug`: starting either kind cancels a running session of the other for the same owner. Both block on a debugger attach, so the operator can only have one active interactive session.
+- **Overrides + unstaged read** behave like the other preview kinds — `kind in ("debug", "test", "testdebug")` is the overrides-accepted set on the router, `kind in ("debug", "draft", "test", "testdebug")` is the unstaged-read set in `loadJob`.
+
+Client surface:
+- **pyopsctl**: `pyopsctl debug start --kind testdebug <set> <name>` — same flow as `--kind debug` (port lease, attach, session daemon) with the kind tag changed.
+- **VSIX**: `pyops.startTestDebugJob` command on a task tree item, alongside `pyops.startDebugJob`. Both delegate to the same `startDebugFamilyJob` helper in `extension.ts`; the only diff is the kind passed to `DebugService.enqueueDebugJob`.
+
+The router accepts `kind=testdebug` via `PUT /scriptlet/job/item`, same Literal entry as the other kinds.
 
 ---
 

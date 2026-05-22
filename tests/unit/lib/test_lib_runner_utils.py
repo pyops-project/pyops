@@ -502,6 +502,53 @@ class TestKillProcTree:
             updated = test_session.get(Job, "existing_debug")
             assert updated.state == "cancel"
 
+    def test_enqueue_testdebug_cancels_existing_debug(self, mock_db):
+        """The one-active-interactive-per-owner gate is shared between
+        debug and testdebug — starting a testdebug job must cancel a
+        running debug job for the same owner."""
+        from app.lib import runner
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        with Session(get_db_engine()) as test_session:
+            existing_job = Job(id="existing_debug", owner="owner", set="set", name="name", kind="debug", state="running", pid=12345, param="{}")
+            test_session.add(existing_job)
+            test_session.commit()
+        runner.enqueue("set", "name", "owner", "testdebug", False, "{}")
+        with Session(get_db_engine()) as test_session:
+            updated = test_session.get(Job, "existing_debug")
+            assert updated.state == "cancel"
+            assert "testdebug" in updated.detail
+
+    def test_enqueue_debug_cancels_existing_testdebug(self, mock_db):
+        """Inverse: starting a debug job must cancel a running testdebug
+        for the same owner."""
+        from app.lib import runner
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        with Session(get_db_engine()) as test_session:
+            existing_job = Job(id="existing_td", owner="owner", set="set", name="name", kind="testdebug", state="running", pid=12345, param="{}")
+            test_session.add(existing_job)
+            test_session.commit()
+        runner.enqueue("set", "name", "owner", "debug", False, "{}")
+        with Session(get_db_engine()) as test_session:
+            updated = test_session.get(Job, "existing_td")
+            assert updated.state == "cancel"
+
+    def test_enqueue_task_does_not_disturb_testdebug(self, mock_db):
+        """The gate is interactive-only: enqueuing a task must NOT
+        cancel a running testdebug session."""
+        from app.lib import runner
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        with Session(get_db_engine()) as test_session:
+            existing_job = Job(id="td_running", owner="owner", set="set", name="name", kind="testdebug", state="running", pid=12345, param="{}")
+            test_session.add(existing_job)
+            test_session.commit()
+        runner.enqueue("set", "name", "owner", "task", False, "{}")
+        with Session(get_db_engine()) as test_session:
+            updated = test_session.get(Job, "td_running")
+            assert updated.state == "running"
+
     def test_enqueue_with_overrides(self, mock_db):
         from app.lib import runner
         from app.orm.database import get_db_engine

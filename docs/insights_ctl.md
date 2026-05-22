@@ -289,10 +289,17 @@ with `--kind test|debug`; the CLI then calls the shared
 `{set::name: body}` map in the `overrides` JSON key, letting the
 operator iterate on local edits without committing first.
 
-**debug** — `PUT /scriptlet/job/item` (with `kind=debug`), plus the
+**debug** — `PUT /scriptlet/job/item` (with `kind` in `{"debug", "testdebug"}`, selected via `debug start --kind {debug,testdebug}`; default is `debug`), plus the
 job list/item/cancel endpoints above. The debug session runs
 client-side against the remote-pdb listener the param's bootstrap
-opened; no server endpoint mediates the debugger wire.
+opened; no server endpoint mediates the debugger wire. `--kind testdebug`
+yields the hybrid that materialises sources under `.debug/src/` (same as
+debug) but runs the scriptlet with `__name__='__test__'` — useful for
+stepping through a task's `if __name__ == "__test__":` block under pdb.
+Subverbs (`attach`, `state`, `stack`, `continue`, `break set/list/remove`,
+`step*`, `terminate`, `detach`) are kind-agnostic: they operate on the
+remote-pdb wire and resolve sources against the same `.debug/src/`
+layout regardless of which kind started the job.
 
 **monitoring** — `GET /health`, `GET /health/failed`,
 `GET /metrics`, `GET /version`.
@@ -334,11 +341,16 @@ unit/
   test_ports.py                # port-lease store: pool, stale reclaim
   test_pdb_client.py           # PdbClient prompt reader + response parsers
   test_human_output.py         # vertical state-dump renderer
-  test_commands_debug.py       # argparse wiring → request body shape
+  test_commands_debug.py       # argparse wiring → request body shape (incl. --kind testdebug)
   test_commands_job.py         # job-run override path: --kind test + --overrides-dir
 integration/
   test_smoke.py                # version/config check/health/metrics
-  test_debug_flow.py           # composed-param shape against a real server
+  test_debug_flow.py           # composed-param shape against a real server (debug + testdebug)
+e2e/
+  test_debug_actual_debugging.py  # real-pdb attach/step/locals/evaluate (debug + testdebug)
+  test_debug_client_attach.py
+  test_debug_detach_reattach.py
+  test_debug_interactive_session.py
 ```
 
 The shared server fixture starts a fresh pyops in a new process group

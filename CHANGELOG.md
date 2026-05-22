@@ -47,6 +47,21 @@ Three additive set capabilities plus a public-namespace rename:
   to canonical source paths. Authors who want a different test
   framework skip the import and put whatever they need in
   `__test__`.
+- **Testdebug kind (hybrid).** Run the scriptlet's `__test__` block
+  under a debugger. Server adds `kind="testdebug"` to the Literal
+  union; `run_debug_job` services it via a `kind=` parameter and
+  flips `glob["__name__"] = "__test__"` before `exec(param)`.
+  Sources materialise under `.debug/src/` (same root as `kind=debug`,
+  so VSIX/pyopsctl path-mappings keep working unchanged); a
+  `.test → .debug` symlink is added in the workspace so tooling
+  that walks the canonical "test sources" path resolves too. The
+  one-active-interactive-per-owner gate in `app/lib/runner.py` is
+  shared between `debug` and `testdebug`. Client surfaces:
+  `pyopsctl debug start --kind testdebug` (default `debug`); VSIX
+  `pyops.startTestDebugJob` command alongside `pyops.startDebugJob`,
+  both delegating to a shared `startDebugFamilyJob` helper.
+  `DebugService.enqueueDebugJob(..., kind='debug' | 'testdebug')`.
+  Attach treats `kind in ("debug", "testdebug")` identically.
 
 ### Added
 - `app/lib/data.py` — `SetData` API for set-scoped YAML/JSON I/O
@@ -68,10 +83,19 @@ Three additive set capabilities plus a public-namespace rename:
   setter (correct syntax highlighting). VSIX `CreateScriptletCommand`
   offers `Data` and accepts non-README markdown names.
 - pyopsctl: `--type data` accepted by `scriptlet create`;
-  `--kind {test,debug,draft}` accepted by `job run`.
-- E2E tests for the three new features
+  `--kind {test,debug,draft,testdebug}` accepted by `job run`;
+  `--overrides-dir DIR` accepted by `job run` when paired with
+  `--kind {test,debug,testdebug}` (ships the working-copy
+  scriptlets via `overrides`, mirroring the `debug start` path).
+  `debug start --kind {debug,testdebug}` switches the kind tag
+  in the body; everything else (port lease, bootstrap composition,
+  attach, source-path resolution) is unchanged.
+- E2E tests for the three new features plus the testdebug hybrid
   (`tests/e2e/test_multi_markdown.py`, `test_set_data.py`,
-  `test_test_kind.py`).
+  `test_test_kind.py` — testdebug coverage added);
+  `tests/pyopsctl/e2e/test_debug_actual_debugging.py` exercises a
+  real-pdb attach + continue + verify-completion against a
+  `kind=testdebug` job.
 
 ### Changed
 - Directory rename `app/internal/` → `app/pyops/`. URL

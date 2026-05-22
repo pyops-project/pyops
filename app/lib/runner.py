@@ -39,10 +39,10 @@ def enqueue(set: str, name: str, owner: str, kind: str, drop_done: bool, param: 
         set (str): Scriptlet set.
         name (str): Scriptlet name.
         owner (str): Job owner (fixed to 'anonymous').
-        kind (str): Job kind ('task', 'service', 'debug', 'draft', 'test').
+        kind (str): Job kind ('task', 'service', 'debug', 'draft', 'test', 'testdebug').
         drop_done (bool): Auto-drop on success.
         param (str): Job parameters/code snippet.
-        overrides (str | None): JSON string of overrides dict for debug/test kind.
+        overrides (str | None): JSON string of overrides dict for debug/test/testdebug kind.
 
     Returns:
         str: Generated job ID.
@@ -54,9 +54,12 @@ def enqueue(set: str, name: str, owner: str, kind: str, drop_done: bool, param: 
     if is_shutdown_pending():
         raise ShutdownPending(f"pyops shutdown in progress; refusing {kind} enqueue for {set}::{name}")
     with Session(get_db_engine()) as session:
-        if kind == "debug":
-            # Mark existing debug job for cancellation to allow new one (only one debug session at a time)
-            stmt = select(Job).where(and_(Job.owner == owner, Job.kind == "debug", Job.state.in_(["dequeued", "running"]))).limit(1)
+        if kind in ("debug", "testdebug"):
+            # Mark any existing interactive-debug job for cancellation
+            # to allow the new one. debug and testdebug share this gate:
+            # both block on a debugger attach, so only one of either kind
+            # can be active per owner at a time.
+            stmt = select(Job).where(and_(Job.owner == owner, Job.kind.in_(["debug", "testdebug"]), Job.state.in_(["dequeued", "running"]))).limit(1)
             existing = session.scalar(stmt)
             if existing:
                 existing.state = "cancel"

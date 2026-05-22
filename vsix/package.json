@@ -74,6 +74,12 @@
         "icon": "$(play)"
       },
       {
+        "command": "pyops.startTestDebugJob",
+        "title": "Start Test-Debug Job",
+        "category": "PyOps",
+        "icon": "$(debug-alt)"
+      },
+      {
         "command": "pyops.stopDebugJob",
         "title": "Stop Debug Job",
         "category": "PyOps",
@@ -204,6 +210,11 @@
 
         {
           "command": "pyops.startDebugJob",
+          "when": "view == 'pyops-manager' && viewItem =~ /^pyopsItem-task(-local)?$/ && pyops.hasValidConfig",
+          "group": "navigation"
+        },
+        {
+          "command": "pyops.startTestDebugJob",
           "when": "view == 'pyops-manager' && viewItem =~ /^pyopsItem-task(-local)?$/ && pyops.hasValidConfig",
           "group": "navigation"
         },

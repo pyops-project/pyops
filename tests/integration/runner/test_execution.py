@@ -238,6 +238,96 @@ class TestExecution:
     @patch('app.job_runner.subprocess.run')
     @patch('app.lib.sets.subprocess.check_call')
     @patch('app.lib.pyops.ServiceListener')
+    def test_run_testdebug_sets_name_to_test(self, mock_listener, mock_check_call, mock_run, mock_send, tmp_path, mock_conf):
+        """kind=testdebug runs the body with __name__='__test__' just like
+        kind=test — the hybrid kind's whole point is "test semantics under
+        a debugger". The debug-style source materialisation under
+        .debug/src/ is asserted by the next test."""
+        from app.job_runner import main as run
+        mock_listener.return_value = Mock()
+        mock_check_call.return_value = None
+        mock_run.return_value = Mock(returncode=0)
+        data_base = os.path.join(tmp_path, "data")
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
+
+        code = (
+            "import os, json\n"
+            "open(os.path.join(workspace, 'name.json'), 'w').write(json.dumps({'name': __name__}))\n"
+        )
+        run("id", "owner", "myset", "my_task", "testdebug", "", code, [], "/tmp/pyops/runner.sock", 0, None,
+            {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}},
+            {"venv": venv_path, "pkg": pkg_path},
+            {"owner": {}}, {"bind": "bind"})
+
+        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
+        name_file = os.path.join(data_base, "myset", "id", "name.json")
+        assert os.path.exists(name_file)
+        with open(name_file) as f:
+            import json
+            assert json.load(f) == {"name": "__test__"}
+
+    @patch('app.job_runner.job_lib.send_completion')
+    @patch('app.job_runner.subprocess.run')
+    @patch('app.lib.sets.subprocess.check_call')
+    @patch('app.lib.pyops.ServiceListener')
+    def test_run_testdebug_materialises_under_debug_src_with_test_symlink(self, mock_listener, mock_check_call, mock_run, mock_send, tmp_path, mock_conf):
+        """testdebug uses debug's materialisation root (.debug/src/) — so
+        the path-mapping in VSIX (`./.debug/src` ↔ workspace pyops dir)
+        stays valid for both kinds. A `.test` symlink to `.debug` is added
+        so any tooling that walks the canonical test-sources path also
+        resolves into the same tree."""
+        from app.job_runner import main as run
+        mock_listener.return_value = Mock()
+        mock_check_call.return_value = None
+        mock_run.return_value = Mock(returncode=0)
+        data_base = os.path.join(tmp_path, "data")
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
+
+        libs = [{"filename": "other::shared", "code": "X = 1\n"}]
+        run("id", "owner", "myset", "my_task", "testdebug", "", "pass\n", libs, "/tmp/pyops/runner.sock", 0, None,
+            {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}},
+            {"venv": venv_path, "pkg": pkg_path},
+            {"owner": {}}, {"bind": "bind"})
+
+        ws = os.path.join(data_base, "myset", "id")
+        assert os.path.exists(os.path.join(ws, ".debug", "src", "myset", "task", "my_task.py"))
+        assert os.path.exists(os.path.join(ws, ".debug", "src", "other", "library", "shared.py"))
+        # .test must be a symlink (not a directory copy) pointing at .debug
+        test_link = os.path.join(ws, ".test")
+        assert os.path.islink(test_link), f".test must be a symlink, got {os.readlink(test_link) if os.path.lexists(test_link) else '<missing>'}"
+        assert os.readlink(test_link) == ".debug"
+        # And it must resolve so tooling that walks `.test/src/...` finds the same files
+        assert os.path.exists(os.path.join(ws, ".test", "src", "myset", "task", "my_task.py"))
+
+    @patch('app.job_runner.job_lib.send_completion')
+    @patch('app.lib.sets.subprocess.check_call')
+    @patch('subprocess.run')
+    @patch('app.lib.pyops.ServiceListener')
+    @patch('time.sleep')
+    def test_run_testdebug_no_retry(self, mock_sleep, mock_listener, mock_run, mock_check_call, mock_send, tmp_path, mock_conf):
+        """testdebug inherits debug's "no retry" contract — a single
+        failed exec terminates the job; the operator is the loop."""
+        mock_run.return_value = Mock(returncode=0, stdout="pip==24.2\n")
+        mock_check_call.return_value = None
+        from app.job_runner import main as run
+        mock_listener.return_value = Mock()
+        data_base = os.path.join(tmp_path, "data")
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
+        mock_sleep.return_value = None
+
+        with patch('builtins.exec', side_effect=Exception("testdebug fail")):
+            run("id", "owner", "set", "name", "testdebug", "", "raise Exception", [], "/tmp/pyops/runner.sock", 0, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {}}, {"bind": "bind"})
+
+        assert mock_sleep.call_count == 0
+        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "failed", "detail": ANY})
+
+    @patch('app.job_runner.job_lib.send_completion')
+    @patch('app.job_runner.subprocess.run')
+    @patch('app.lib.sets.subprocess.check_call')
+    @patch('app.lib.pyops.ServiceListener')
     def test_run_draft_success(self, mock_listener, mock_check_call, mock_run, mock_send, tmp_path, mock_conf):
         from app.job_runner import main as run
         mock_listener.return_value = None  # For non-service

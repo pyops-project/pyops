@@ -136,7 +136,7 @@ def _start(args) -> int:
         param = _compose_debug_param(port=lease.port, user_param=user_param)
         overrides = build_overrides(args.overrides_dir, args.set)
         body = {
-            "set": args.set, "name": args.name, "kind": "debug",
+            "set": args.set, "name": args.name, "kind": args.kind,
             "param": param, "drop_done": False, "max_retries": 0,
         }
         if overrides is not None:
@@ -161,10 +161,10 @@ def _start(args) -> int:
             pass  # best-effort
 
         emit(args, {"job_id": job_id, "set": args.set, "name": args.name,
-                    "port": lease.port,
+                    "kind": args.kind, "port": lease.port,
                     "host": _host_of(profile.url)},
              id_field="job_id",
-             human=f"debug job {job_id} enqueued ({args.set}::{args.name}, "
+             human=f"{args.kind} job {job_id} enqueued ({args.set}::{args.name}, "
                    f"pdb on {_host_of(profile.url)}:{lease.port}); "
                    f"attach via `pyopsctl debug attach {job_id}`")
         return 0
@@ -502,6 +502,11 @@ def register(subparsers, parents):
                            help="enqueue a debug job (remote-pdb bootstrap in param)",
                            parents=parents)
     start.add_argument("set"); start.add_argument("name")
+    start.add_argument("--kind", choices=["debug", "testdebug"], default="debug",
+                       help="debug (default): production codepath under "
+                            "pdb. testdebug: __name__=__test__ block under "
+                            "pdb (sources still under .debug/src/ + a "
+                            ".test symlink)")
     start.add_argument("--param", metavar="TEXT", default=None,
                        help="user param appended after the pdb bootstrap")
     start.add_argument("--param-file", metavar="PATH", default=None)

@@ -55,7 +55,7 @@ def setup_execution_environment(venv_path: str, pkg_path: str, setname: str, wor
 
 def setup_job_globals(owner: str, setspace: str, workspace: str, web_bind: str, job_id: str, kind: str, setname: str, name: str) -> dict:
     """Create the globals dict for job execution"""
-    if kind in ("service", "debug", "draft"):
+    if kind in ("service", "debug", "draft", "testdebug"):
         listener = pyops.ServiceListener(owner, job_id)
     else:
         listener = None
@@ -179,8 +179,8 @@ def execute_job_code(param: str, compiled_code, compiled_libs, glob: dict, job_t
         if 'listener' in glob and glob['listener']:
             glob['listener'].close()
 
-def run_debug_job(job_id: str, owner: str, setname: str, name: str, param: str, code: str, libs: list[dict[str, str]], runner_sock_path: str, overrides: str | None = None):
-    """Executes debug job in isolated workspace with file-based compilation.
+def run_debug_job(job_id: str, owner: str, setname: str, name: str, param: str, code: str, libs: list[dict[str, str]], runner_sock_path: str, overrides: str | None = None, kind: str = "debug"):
+    """Executes debug-family job in isolated workspace with file-based compilation.
 
     pyops itself no longer injects a debugger. The client (VSIX,
     pyopsctl, or any other operator surface) writes the debugger
@@ -194,6 +194,16 @@ def run_debug_job(job_id: str, owner: str, setname: str, name: str, param: str, 
       • the `running` transition fires after `exec(param)` returns, so
         consumers polling job state see ready := "debugger bootstrap
         finished" without pyops knowing which debugger is in play.
+
+    `kind` selects the variant:
+      • "debug" (default): __name__ stays "__main__"; production
+        codepath under the debugger.
+      • "testdebug": __name__ is set to "__test__" so the
+        `if __name__ == "__test__":` block runs under the debugger.
+        Source materialisation root is the same (.debug/src/) — a
+        `.test` symlink is added to the workspace so any tooling that
+        looks up the canonical "test sources" path also finds the
+        same tree.
     """
     data_jobs = os.path.join(_project_root, _conf_data["jobs"])
     venv_path = os.path.join(_project_root, _conf_runner["venv"])
@@ -210,7 +220,7 @@ def run_debug_job(job_id: str, owner: str, setname: str, name: str, param: str, 
         # Step 2: Execution environment setup
         stdout_file, stderr_file = setup_execution_environment(venv_path, pkg_path, setname, workspace, logging.DEBUG)
 
-        logger.debug(f"{os.getpid():<10}start debug job({job_id})")
+        logger.debug(f"{os.getpid():<10}start {kind} job({job_id})")
 
         # Step 3: Main execution with redirected output
         with redirect_stdout(stdout_file):
@@ -238,6 +248,19 @@ def run_debug_job(job_id: str, owner: str, setname: str, name: str, param: str, 
                     # audit trail for "which source produced this output".
                     debug_src_dir = os.path.join(workspace, ".debug", "src")
                     os.makedirs(debug_src_dir, exist_ok=True)
+
+                    # testdebug: alias .test → .debug so tooling that
+                    # expects the test-kind materialisation root also
+                    # resolves. zipstream follows symlinks (treats as
+                    # copy), so the workspace download still works —
+                    # just with duplicated content under both roots.
+                    if kind == "testdebug":
+                        test_link = os.path.join(workspace, ".test")
+                        try:
+                            if not os.path.lexists(test_link):
+                                os.symlink(".debug", test_link)
+                        except OSError as ex:
+                            logger.warning(f"testdebug {job_id}: could not create .test symlink: {ex}")
 
                     main_task_dir = os.path.join(debug_src_dir, setname, "task")
                     os.makedirs(main_task_dir, exist_ok=True)
@@ -269,11 +292,17 @@ def run_debug_job(job_id: str, owner: str, setname: str, name: str, param: str, 
                         with open(lib_file, 'r') as f:
                             compiled_libs.append(compile(f.read(), lib_file, 'exec'))
 
-                    glob = setup_job_globals(owner, setspace, workspace, web_bind, job_id, "debug", setname, name)
+                    glob = setup_job_globals(owner, setspace, workspace, web_bind, job_id, kind, setname, name)
+                    if kind == "testdebug":
+                        # testdebug runs the `__test__` block of the
+                        # scriptlet (matching kind=test semantics) but
+                        # under a debugger — so __name__ flips before
+                        # the param block's `breakpoint()` triggers.
+                        glob["__name__"] = "__test__"
 
                     info_handler, warn_handler = setup_logging(logging.DEBUG, stdout_file, stderr_file)
 
-                    execute_job_code(param, compiled_code, compiled_libs, glob, "debug", job_id, runner_sock_path)
+                    execute_job_code(param, compiled_code, compiled_libs, glob, kind, job_id, runner_sock_path)
 
                 finally:
                     # Remove logging handlers before exiting redirect scope
@@ -285,13 +314,13 @@ def run_debug_job(job_id: str, owner: str, setname: str, name: str, param: str, 
 
     except json.JSONDecodeError as e:
         # Handle JSON parsing errors (overrides parsing)
-        error_msg = f"Invalid overrides for debug job {job_id}: {e}\n{traceback.format_exc()}"
+        error_msg = f"Invalid overrides for {kind} job {job_id}: {e}\n{traceback.format_exc()}"
         logger.error(error_msg)
         job_lib.send_completion(runner_sock_path, {"id": job_id, "state": "failed", "detail": error_msg})
 
     except Exception as e:
         # Catch-all for workspace/environment setup errors and any other unexpected errors
-        error_msg = f"Error executing debug job {job_id}\n{traceback.format_exc()}"
+        error_msg = f"Error executing {kind} job {job_id}\n{traceback.format_exc()}"
         logger.error(error_msg)
         job_lib.send_completion(runner_sock_path, {"id": job_id, "state": "failed", "detail": error_msg})
 
@@ -303,7 +332,7 @@ def run_debug_job(job_id: str, owner: str, setname: str, name: str, param: str, 
         if stderr_file:
             stderr_file.flush()
             stderr_file.close()
-        logger.debug(f"{os.getpid():<10}end debug job({job_id})")
+        logger.debug(f"{os.getpid():<10}end {kind} job({job_id})")
 
 def run_test_job(job_id: str, owner: str, setname: str, name: str, param: str, code: str, libs: list[dict[str, str]], runner_sock_path: str, overrides: str | None = None):
     """Executes a kind=test job.
@@ -673,8 +702,11 @@ def main(job_id: str, owner: str, setname: str, name: str, kind: str, param: str
         raw["log"] = conf_log
     files_lib.Config.init_from_dict(raw)
 
-    if kind == "debug":
-        run_debug_job(job_id, owner, setname, name, param, code, libs, runner_sock_path, overrides)
+    if kind in ("debug", "testdebug"):
+        # testdebug is a debug-family job (file-based source
+        # materialisation under .debug/src/, no retry, listener) with
+        # __name__=__test__ overlaid — see run_debug_job's docstring.
+        run_debug_job(job_id, owner, setname, name, param, code, libs, runner_sock_path, overrides, kind=kind)
     elif kind == "draft":
         run_draft_job(job_id, owner, setname, name, param, code, libs, runner_sock_path)
     elif kind == "test":
