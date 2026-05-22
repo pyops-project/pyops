@@ -413,6 +413,15 @@ graph TD
 | `listener` | `pyops.ServiceListener(owner, job_id)` (service/debug/draft/testdebug) |
 | `data` | `SetData(setname, repo_path)` — set-scoped YAML/JSON I/O with shared/exclusive locks; see "Set Data" |
 
+`__name__` is overlaid by `run_test_job` (`'__test__'`) and by `run_debug_job` (`'__test__'` when `kind=testdebug`, `'__main__'` otherwise) before exec; every other kind keeps the default `'__main__'`. The classes a scriptlet's libraries define inherit `__module__` from that value at exec time.
+
+To keep `importlib`-based deserialisers (`Vortex.from_dict` and any other library that round-trips class identity by `(__module__, __name__)`) working when those classes need to be reloaded inside the same job, `execute_job_code` calls `_register_user_module(glob)` after libraries are exec'd and before the main code runs. Two registration paths:
+
+- When `glob['__name__']` is unique to the job (today: `'__test__'`, set by `kind=test` / `kind=testdebug`), the helper wraps `glob` in a fresh `types.ModuleType(name)` and registers it in `sys.modules`.
+- When the name is already there (kind=task / service / debug / draft all keep `'__main__'`, which the running interpreter owns as `job_runner.py`), the helper stamps the user's non-dunder, non-conflicting globals onto the existing `__main__.__dict__`. Runner-owned bindings (`logger`, `job_lib`, stdlib imports) stay intact; user names that collide drop on the floor — practical collisions are stdlib re-imports like `os`/`time` that point to the same object either way.
+
+Either path makes `importlib.import_module(glob['__name__']) + getattr(mod, ClassName)` resolve every directive-merged class, regardless of kind.
+
 #### Output Isolation
 
 All job output is redirected to per-job files in the workspace:

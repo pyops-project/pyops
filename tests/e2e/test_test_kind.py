@@ -279,6 +279,142 @@ class TestKindTestLifecycle:
         assert "4 passed" in stdout, f"expected 4 passes, got:\n{stdout}"
         pyops_server.assert_no_unexpected_errors()
 
+    def test_kind_test_user_class_resolvable_via_importlib_under_test_name(self, api, pyops_server, set_factory, commit_set, e2e_env):
+        """End-to-end coverage for the runner's sys.modules registration
+        (`_register_user_module`): directive-merged classes have
+        `__module__ == '__test__'` and any `importlib.import_module(...)`
+        based deserialiser (e.g. `Vortex.from_dict`) must be able to
+        resolve them. The task body imports `'__test__'` and looks up a
+        class defined in a directive-loaded library — round-trip
+        guarantee for `kind=test`."""
+        set_factory(SET)
+        api.put("/scriptlet/inventory/item",
+                json={"set": SET, "name": "user_lib", "type": "library"})
+        api.post("/scriptlet/inventory/draft",
+                 json={"set": SET, "name": "user_lib",
+                       "code": "class RoundtripCls:\n    payload = 4242\n"})
+        api.put("/scriptlet/inventory/item",
+                json={"set": SET, "name": "rt_task", "type": "task"})
+        api.post("/scriptlet/inventory/draft",
+                 json={"set": SET, "name": "rt_task",
+                       "code": "#!{::user_lib}\n"
+                               "\n"
+                               "if __name__ == '__test__':\n"
+                               "    import importlib, os, json\n"
+                               "    mod = importlib.import_module('__test__')\n"
+                               "    cls = getattr(mod, 'RoundtripCls')\n"
+                               "    open(os.path.join(workspace, 'roundtrip.json'), 'w').write(\n"
+                               "        json.dumps({'payload': cls.payload, 'same_obj': cls is RoundtripCls}))\n"})
+        commit_set(SET, "add roundtrip task")
+
+        r = api.put("/scriptlet/job/item",
+                    json={"set": SET, "name": "rt_task", "drop_done": False,
+                          "max_retries": 0, "param": "", "kind": "test"})
+        assert r.status_code == 200, f"enqueue failed: {r.status_code} {r.text}"
+        job_id = r.json()["job"]
+        job = _wait_for_job(api, job_id)
+        assert job["state"] == "done", f"failed: {job.get('detail')}"
+        marker = e2e_env["data_dir"] / "jobs" / SET / job_id / "roundtrip.json"
+        assert marker.is_file(), f"task did not write roundtrip marker: {marker}"
+        import json
+        payload = json.loads(marker.read_text())
+        assert payload["payload"] == 4242
+        assert payload["same_obj"] is True
+        pyops_server.assert_no_unexpected_errors()
+
+    def test_kind_test_reads_drafted_library_not_committed(self, api, pyops_server, set_factory, commit_set, e2e_env):
+        """Regression for the `loadLib` unstaged-set fix. Before the
+        alignment with `loadJob`, `kind=test` excluded `test` /
+        `testdebug` from the unstaged-read set, so a drafted library
+        was invisible — the test ran against the library's committed
+        snapshot. Drafts a library with `MARK = 'drafted_value'` on
+        top of a committed `MARK = 'committed_value'` and asserts the
+        kind=test job sees the drafted version."""
+        set_factory(SET)
+        api.put("/scriptlet/inventory/item",
+                json={"set": SET, "name": "version_lib", "type": "library"})
+        api.post("/scriptlet/inventory/draft",
+                 json={"set": SET, "name": "version_lib",
+                       "code": "MARK = 'committed_value'\n"})
+        api.put("/scriptlet/inventory/item",
+                json={"set": SET, "name": "checker", "type": "task"})
+        api.post("/scriptlet/inventory/draft",
+                 json={"set": SET, "name": "checker",
+                       "code": "#!{::version_lib}\n"
+                               "\n"
+                               "if __name__ == '__test__':\n"
+                               "    import os, json\n"
+                               "    open(os.path.join(workspace, 'mark.json'), 'w').write(\n"
+                               "        json.dumps({'mark': MARK}))\n"})
+        commit_set(SET, "add version_lib + checker (committed_value)")
+
+        # Now draft over the lib with a new value (no commit) and run
+        # the kind=test job — must observe the unstaged value.
+        api.post("/scriptlet/inventory/draft",
+                 json={"set": SET, "name": "version_lib",
+                       "code": "MARK = 'drafted_value'\n"})
+
+        r = api.put("/scriptlet/job/item",
+                    json={"set": SET, "name": "checker", "drop_done": False,
+                          "max_retries": 0, "param": "", "kind": "test"})
+        assert r.status_code == 200, f"enqueue failed: {r.status_code} {r.text}"
+        job_id = r.json()["job"]
+        job = _wait_for_job(api, job_id)
+        assert job["state"] == "done", f"failed: {job.get('detail')}"
+        marker = e2e_env["data_dir"] / "jobs" / SET / job_id / "mark.json"
+        assert marker.is_file()
+        import json
+        payload = json.loads(marker.read_text())
+        assert payload["mark"] == "drafted_value", (
+            f"kind=test loaded committed lib instead of drafted; got {payload}"
+        )
+        pyops_server.assert_no_unexpected_errors()
+
+    def test_kind_draft_user_class_resolvable_via_main_importlib(self, api, pyops_server, set_factory, commit_set, e2e_env):
+        """Complement to test_kind_test_user_class_resolvable_via_importlib_under_test_name:
+        kind=draft (and the other __name__='__main__' kinds) need the
+        same importlib-resolution guarantee for directive-merged
+        classes. The runner stamps the user's classes onto
+        sys.modules['__main__'] (which already exists as job_runner.py)
+        so getattr resolves them without breaking the runner's own
+        bindings. Regression: cami::causal_service crashed on draft
+        start with a persisted realm because CamiServiceVortex wasn't
+        reachable via importlib.import_module('__main__')."""
+        set_factory(SET)
+        api.put("/scriptlet/inventory/item",
+                json={"set": SET, "name": "user_lib_draft", "type": "library"})
+        api.post("/scriptlet/inventory/draft",
+                 json={"set": SET, "name": "user_lib_draft",
+                       "code": "class DraftCls:\n    payload = 9001\n"})
+        api.put("/scriptlet/inventory/item",
+                json={"set": SET, "name": "draft_rt_task", "type": "task"})
+        api.post("/scriptlet/inventory/draft",
+                 json={"set": SET, "name": "draft_rt_task",
+                       "code": "#!{::user_lib_draft}\n"
+                               "\n"
+                               "if __name__ == '__main__':\n"
+                               "    import importlib, os, json\n"
+                               "    mod = importlib.import_module('__main__')\n"
+                               "    cls = getattr(mod, 'DraftCls')\n"
+                               "    open(os.path.join(workspace, 'roundtrip.json'), 'w').write(\n"
+                               "        json.dumps({'payload': cls.payload, 'same_obj': cls is DraftCls}))\n"})
+        commit_set(SET, "add draft roundtrip task")
+
+        r = api.put("/scriptlet/job/item",
+                    json={"set": SET, "name": "draft_rt_task", "drop_done": False,
+                          "max_retries": 0, "param": "", "kind": "draft"})
+        assert r.status_code == 200, f"enqueue failed: {r.status_code} {r.text}"
+        job_id = r.json()["job"]
+        job = _wait_for_job(api, job_id)
+        assert job["state"] == "done", f"failed: {job.get('detail')}"
+        marker = e2e_env["data_dir"] / "jobs" / SET / job_id / "roundtrip.json"
+        assert marker.is_file(), f"task did not write roundtrip marker: {marker}"
+        import json
+        payload = json.loads(marker.read_text())
+        assert payload["payload"] == 9001
+        assert payload["same_obj"] is True
+        pyops_server.assert_no_unexpected_errors()
+
     def test_manager_ui_test_button_enqueues_kind_test(self, e2e_page, api, pyops_server, set_factory, commit_set, e2e_env):
         """Clicking the new 'science' button in the Manager UI on a
         task scriptlet enqueues a kind=test job. Round-trip proof that

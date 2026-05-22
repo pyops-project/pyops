@@ -238,6 +238,124 @@ class TestExecution:
     @patch('app.job_runner.subprocess.run')
     @patch('app.lib.sets.subprocess.check_call')
     @patch('app.lib.pyops.ServiceListener')
+    def test_run_test_user_module_registered_in_sys_modules(self, mock_listener, mock_check_call, mock_run, mock_send, tmp_path, mock_conf):
+        """kind=test exec'ing libs into glob with __name__='__test__'
+        leaves directive-merged classes with __module__='__test__'.
+        Without the runner's sys.modules registration, their
+        round-trip through importlib (e.g. Vortex.from_dict) breaks.
+
+        Drives a kind=test job whose library defines a class and
+        whose main code does `importlib.import_module(__name__)`
+        plus `getattr(...)` to fetch that class. Class must be
+        resolved and identity-equal to the version in `glob`."""
+        from app.job_runner import main as run
+        import sys
+        sys.modules.pop("__test__", None)
+
+        mock_listener.return_value = None
+        mock_check_call.return_value = None
+        mock_run.return_value = Mock(returncode=0)
+        data_base = os.path.join(tmp_path, "data")
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
+
+        # Library defines a class; main code resolves it via importlib
+        # and writes a marker confirming the round-trip succeeded.
+        libs = [{"filename": "myset::lib_one",
+                 "code": "class UserCls:\n    label = 'directive_merged'\n"}]
+        code = (
+            "import importlib, os, json\n"
+            "mod = importlib.import_module(__name__)\n"
+            "cls = getattr(mod, 'UserCls')\n"
+            "open(os.path.join(workspace, 'roundtrip.json'), 'w').write("
+            "    json.dumps({'cls_label': cls.label, 'same_obj': cls is UserCls}))\n"
+        )
+
+        try:
+            run("id", "owner", "myset", "my_task", "test", "", code, libs,
+                "/tmp/pyops/runner.sock", 0, None,
+                {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}},
+                {"venv": venv_path, "pkg": pkg_path},
+                {"owner": {}}, {"bind": "bind"})
+
+            mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
+            marker = os.path.join(data_base, "myset", "id", "roundtrip.json")
+            assert os.path.exists(marker), "main code did not write its marker — importlib roundtrip failed"
+            with open(marker) as f:
+                import json
+                payload = json.load(f)
+            assert payload["cls_label"] == "directive_merged"
+            assert payload["same_obj"] is True
+        finally:
+            sys.modules.pop("__test__", None)
+
+    @patch('app.job_runner.job_lib.send_completion')
+    @patch('app.job_runner.subprocess.run')
+    @patch('app.lib.sets.subprocess.check_call')
+    @patch('app.lib.pyops.ServiceListener')
+    def test_run_draft_user_class_resolves_via_main_module(self, mock_listener, mock_check_call, mock_run, mock_send, tmp_path, mock_conf):
+        """kind=draft (and the other __name__='__main__' kinds:
+        task / service / debug) ALSO need importlib resolution to
+        work for directive-merged classes. The runner's existing
+        `sys.modules['__main__']` is `job_runner.py`, so the registration
+        stamps the user's classes ONTO that existing module rather than
+        replacing it.
+
+        Drives a kind=draft job whose library defines a class and
+        whose main code resolves it via importlib + getattr. Regression
+        coverage for the round-trip failure in cami::causal_service
+        on first start with a persisted realm."""
+        from app.job_runner import main as run
+        import sys
+        sentinel_attrs = ["UserClsDraft", "user_marker_draft"]
+        existing_main = sys.modules["__main__"]
+        for k in sentinel_attrs:
+            existing_main.__dict__.pop(k, None)
+
+        mock_listener.return_value = Mock()
+        mock_check_call.return_value = None
+        mock_run.return_value = Mock(returncode=0)
+        data_base = os.path.join(tmp_path, "data")
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
+
+        libs = [{"filename": "myset::lib_one",
+                 "code": "class UserClsDraft:\n    label = 'main_module_merged'\n"}]
+        code = (
+            "import importlib, os, json\n"
+            "mod = importlib.import_module(__name__)\n"
+            "cls = getattr(mod, 'UserClsDraft')\n"
+            "open(os.path.join(workspace, 'roundtrip.json'), 'w').write("
+            "    json.dumps({'cls_label': cls.label, 'same_obj': cls is UserClsDraft, 'module': __name__}))\n"
+        )
+
+        try:
+            run("id", "owner", "myset", "my_task", "draft", "", code, libs,
+                "/tmp/pyops/runner.sock", 0, None,
+                {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}},
+                {"venv": venv_path, "pkg": pkg_path},
+                {"owner": {}}, {"bind": "bind"})
+
+            mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
+            marker = os.path.join(data_base, "myset", "id", "roundtrip.json")
+            assert os.path.exists(marker), "main code did not write its marker — main-module roundtrip failed"
+            with open(marker) as f:
+                import json
+                payload = json.load(f)
+            # kind=draft keeps __name__='__main__', and the class found
+            # via importlib must be the same object as the directive-
+            # loaded UserClsDraft sitting in the task's glob.
+            assert payload["cls_label"] == "main_module_merged"
+            assert payload["same_obj"] is True
+            assert payload["module"] == "__main__"
+        finally:
+            for k in sentinel_attrs:
+                existing_main.__dict__.pop(k, None)
+
+    @patch('app.job_runner.job_lib.send_completion')
+    @patch('app.job_runner.subprocess.run')
+    @patch('app.lib.sets.subprocess.check_call')
+    @patch('app.lib.pyops.ServiceListener')
     def test_run_testdebug_sets_name_to_test(self, mock_listener, mock_check_call, mock_run, mock_send, tmp_path, mock_conf):
         """kind=testdebug runs the body with __name__='__test__' just like
         kind=test — the hybrid kind's whole point is "test semantics under

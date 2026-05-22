@@ -424,6 +424,60 @@ def _scan_set_subdir(set_name: str, repo: str, subdir: str,
     return out
 
 
+def _per_set_dirty_paths(repo: str) -> set:
+    """One `git status --porcelain --untracked-files=all` per set, parsed
+    into the set of repo-relative paths that are unstaged (modified,
+    staged-but-uncommitted, or untracked). Used by `list_scriptlets` to
+    stamp `has_unstaged` on every entry in a single shell-out per set
+    instead of one `has_unstaged_changes` call per scriptlet — saves N
+    subprocesses for a set with N files.
+
+    Failure (no `.git`, transient lock, ...) yields an empty set; the
+    listing then simply shows every entry as clean, which is no worse
+    than the pre-3.3.0 behaviour of not exposing the flag at all."""
+    try:
+        output = subprocess.check_output(
+            ['git', 'status', '--porcelain', '--untracked-files=all'],
+            cwd=repo,
+        ).decode('utf-8', errors='ignore')
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return set()
+    paths = set()
+    for line in output.splitlines():
+        # Porcelain v1: "XY <path>" — two status chars + space + path.
+        if len(line) < 3:
+            continue
+        rest = line[3:]
+        # Renames carry both ends ("old -> new"); mark both as dirty so
+        # either name lookup catches them.
+        if " -> " in rest:
+            old, new = rest.split(" -> ", 1)
+            paths.add(old.strip())
+            paths.add(new.strip())
+        else:
+            paths.add(rest.strip())
+    return paths
+
+
+def _stamp_has_unstaged(entries: List[Dict[str, str]], repo: str, dirty_paths: set) -> None:
+    """Mutate each entry in `entries` to set `has_unstaged` based on the
+    pre-computed `dirty_paths` set for the entry's repo. Resolves the
+    on-disk path via `get_file_path` for typed entries and via the
+    `ext` field for `data` entries (where the on-disk extension may be
+    yaml / yml / json)."""
+    for e in entries:
+        if e["type"] == "data" and "ext" in e:
+            file_path = os.path.join(repo, "data", f"{e['name']}.{e['ext']}")
+        else:
+            try:
+                file_path = get_file_path(repo, e["name"], e["type"])
+            except ValueError:
+                e["has_unstaged"] = False
+                continue
+        rel = os.path.relpath(file_path, repo)
+        e["has_unstaged"] = rel in dirty_paths
+
+
 def list_scriptlets() -> List[Dict[str, str]]:
     """Lists all scriptlets across repos.
 
@@ -432,9 +486,13 @@ def list_scriptlets() -> List[Dict[str, str]]:
       - `docs/*.md`
       - `data/*.{yaml,yml,json}` (with `ext` field)
 
+    Every entry carries `has_unstaged: bool` so the Manager UI can
+    distinguish drafts from committed revisions without a follow-up
+    status call per row.
+
     Returns:
-        List[Dict]: [{"set", "name", "type"[, "ext"]}, ...] sorted by
-            (set, name).
+        List[Dict]: [{"set", "name", "type", "has_unstaged"[, "ext"]}, ...]
+            sorted by (set, name).
     """
     git_base = get_git_base()
     sets = [d for d in os.listdir(git_base)
@@ -444,11 +502,15 @@ def list_scriptlets() -> List[Dict[str, str]]:
     scriptlets: List[Dict[str, str]] = []
     for set_name in sorted(sets):
         repo = get_repo_path(set_name)
-        scriptlets += _scan_set_top_level(set_name, repo)
-        scriptlets += _scan_set_subdir(set_name, repo, "docs", (".md",))
-        scriptlets += _scan_set_subdir(set_name, repo, "data",
-                                       (".yaml", ".yml", ".json"),
-                                       include_ext=True)
+        dirty_paths = _per_set_dirty_paths(repo)
+        set_entries: List[Dict[str, str]] = []
+        set_entries += _scan_set_top_level(set_name, repo)
+        set_entries += _scan_set_subdir(set_name, repo, "docs", (".md",))
+        set_entries += _scan_set_subdir(set_name, repo, "data",
+                                        (".yaml", ".yml", ".json"),
+                                        include_ext=True)
+        _stamp_has_unstaged(set_entries, repo, dirty_paths)
+        scriptlets += set_entries
 
     return sorted(scriptlets, key=lambda x: (x["set"], x["name"]))
 

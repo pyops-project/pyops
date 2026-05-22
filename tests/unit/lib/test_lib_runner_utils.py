@@ -232,6 +232,35 @@ class TestLoadUtils:
             mock_read_content.assert_called_once_with('data/git/set', 'name', 'task', committed=True)
             assert result == 'lib code'
 
+    @pytest.mark.parametrize("kind,committed", [
+        # Iterate-on-local-code kinds: must read unstaged so a freshly
+        # drafted library is the one tests/debug/draft actually run.
+        ("debug", False),
+        ("draft", False),
+        ("test", False),
+        ("testdebug", False),
+        # Production kinds: read the committed copy.
+        ("task", True),
+        ("service", True),
+    ])
+    def test_load_lib_kind_controls_unstaged_read(self, mock_git_ops, kind, committed):
+        """`loadLib` must mirror `loadJob`'s unstaged-set
+        (`debug`/`draft`/`test`/`testdebug`). Older revisions excluded
+        `test`/`testdebug` here, which caused a `kind=test` job that
+        depends on a drafted library (the common iterate-on-local-tests
+        case) to load the library's committed snapshot — silently
+        running the test against the wrong code.
+
+        Only the `committed=` arg matters here; the conftest's mock
+        `infer_type_from_filename` maps `*.py` → `'task'`."""
+        from app.lib import job
+        mock_git_ops.read_content.return_value = 'lib code'
+        with patch('os.listdir', return_value=['name.py']):
+            job.loadLib("set", "name", kind, mock_git_ops)
+        mock_git_ops.read_content.assert_called_once_with(
+            'data/git/set', 'name', 'task', committed=committed,
+        )
+
     def test_load_lib_no_file(self, mock_git_ops):
         from app.lib import job
         mock_read_content = mock_git_ops.read_content

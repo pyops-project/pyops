@@ -78,6 +78,27 @@ Three additive set capabilities plus a public-namespace rename:
   the resolved IDs are pre-registered, so production libraries that
   happen to share their stem with a stdlib module (`os.py`, ...)
   cannot accidentally shadow the stdlib for tests doing `import os`.
+- **Importlib resolution for directive-merged classes across all
+  kinds.** `execute_job_code` calls a new `_register_user_module(glob)`
+  helper after libraries are exec'd and before the main code runs.
+  Two paths: when `glob['__name__']` is unique (today: `'__test__'`
+  from kind=test / kind=testdebug), wrap `glob` into a fresh
+  `types.ModuleType` and register it in `sys.modules`. When the name
+  is already there (kind=task / service / debug / draft all keep
+  `'__main__'`, owned by `job_runner.py`), stamp the user's
+  non-dunder, non-conflicting globals onto the existing
+  `__main__.__dict__` — leaves runner-owned bindings (`logger`,
+  `job_lib`, stdlib imports) intact. Either way, directive-merged
+  classes (`@vortex`, `@composite`, ...) — which inherit
+  `__module__` from `glob['__name__']` at exec time — become
+  resolvable via `importlib.import_module(__module__) + getattr()`,
+  so `Vortex.from_dict` and any other library that round-trips
+  class identity by `(__module__, __name__)` works inside the same
+  job regardless of kind. The motivating regression was
+  `cami::causal_service` crashing on draft start with a persisted
+  realm because `CamiServiceVortex.__module__` was `__main__` but
+  the runner's own `__main__` (job_runner.py) didn't carry the
+  symbol.
 
 ### Added
 - `app/lib/data.py` — `SetData` API for set-scoped YAML/JSON I/O
@@ -137,6 +158,22 @@ Three additive set capabilities plus a public-namespace rename:
   break the bridge. Production-library files outside the resolved
   node IDs are not pre-registered, so they cannot shadow stdlib
   modules like `os`.
+- `app/job_runner.execute_job_code` calls a new
+  `_register_user_module(glob)` after the library exec phase and
+  before the main code runs. Two paths now: when `glob['__name__']`
+  is unique to the job (today: `'__test__'` from kind=test /
+  testdebug), the helper wraps `glob` in a fresh
+  `types.ModuleType(name)` and registers it in `sys.modules`. When
+  the name is already there (kind=task / service / debug / draft
+  keep `'__main__'`), it stamps the user's non-dunder, non-conflicting
+  globals onto the existing `__main__.__dict__` — leaves runner-owned
+  bindings intact. Either way, directive-merged classes become
+  reachable via `importlib.import_module(__module__) + getattr()`,
+  so `Vortex.from_dict` and equivalent round-trip-by-identity
+  patterns work for every kind. Without this,
+  `cami::causal_service` (and any other service persisting a realm
+  with @vortex classes from its libraries) failed on draft start
+  with `AttributeError: module '__main__' has no attribute …`.
 - Manager UI and task editor gain a **Run as Test** button (material
   `science` icon, info-blue) next to the existing Run-as-Draft. Both
   PUT `kind=test`. Operators can now invoke `kind=test` jobs from the
@@ -156,6 +193,36 @@ Three additive set capabilities plus a public-namespace rename:
 - Inventory `code_get` previously globbed only the top level of a
   set's working tree; multi-markdown / data files were unreadable
   via the WebUI editor as a result.
+- `app/lib/job.loadLib` excluded `kind=test` and `kind=testdebug`
+  from the unstaged-read set; `loadJob` (in `app/runner.py`)
+  included them. The mismatch made a `kind=test` job that depends
+  on a drafted library run against the library's committed snapshot,
+  silently testing the wrong code. Aligned `loadLib` to the same
+  set `("debug", "draft", "test", "testdebug")`.
+- `app/pyops/set_clone.task.py` baked HTTPS credentials into the
+  cloned set's origin URL (`https://user:token@host/path.git`) and
+  then wrote the same credentials to `.git/credentials`. Token
+  rotation by editing `.git/credentials` had no effect because git
+  resolves the password from the URL first; the helper's lookup
+  never fired. After clone, set_clone now rewrites origin to the
+  credential-free URL via `git remote set-url`, so the credential
+  helper becomes the single source of truth. Plus a migration hook
+  in `app/pyops/set.library.normalize_origin_url`, called by
+  `set_commit_drafts` (before push) and `set_pull` (before fetch),
+  that strips embedded HTTPS credentials from any legacy set's
+  origin URL on the next push / pull. Idempotent for already-clean
+  origins and a no-op for SSH / file:// schemes.
+- `app/lib/git.list_scriptlets` now stamps `has_unstaged: bool` on
+  every entry by running one `git status --porcelain` per set and
+  matching scriptlet file paths against the dirty set. The Manager
+  UI (`app/sites/scriptlet/manager.html`) renders the flag as a
+  per-row icon (`check` / `change_history`, success / warning colour)
+  so the operator distinguishes drafts from committed revisions at a
+  glance — pre-3.3.0 the row markup carried no draft signal at all
+  and the only way to tell was opening the editor or hitting
+  `/scriptlet/inventory/status` per row. The icon carries
+  `data-testid="scriptlet-status-{set}-{name}"` and
+  `data-status="clean" | "dirty"` for tooling.
 
 ### CI / Docs
 - `pyyaml` added to the runner's image (`Dockerfile`) and the four
@@ -172,6 +239,12 @@ Three additive set capabilities plus a public-namespace rename:
   Python imports apply only to stdlib / venv packages. Outdated
   guidance about importing production libs via
   `from production_lib import …` removed.
+- `docs/insights_app.md` "Job Globals" section gained a paragraph
+  on the `__name__` overlay per kind and the new
+  `_register_user_module` registration that makes
+  `importlib.import_module(glob['__name__'])` resolve to the job's
+  exec dict for the kinds where that name is unique
+  (`'__test__'`).
 
 ## [3.2.0] — 2026-05-19
 

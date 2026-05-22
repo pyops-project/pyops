@@ -112,6 +112,103 @@ class TestInventoryStatus:
         pyops_server.assert_no_unexpected_errors()
 
 
+class TestInventoryListHasUnstaged:
+    """GET /scriptlet/inventory/list now stamps `has_unstaged` per entry
+    so the Manager UI can distinguish dirty drafts from committed
+    revisions in a single call (was previously a per-row /status
+    follow-up that the UI didn't actually make)."""
+
+    def test_committed_scriptlet_listed_clean(self, api, pyops_server, set_factory, commit_set):
+        _setup_task(api, set_factory, commit_set)
+        r = api.get("/scriptlet/inventory/list")
+        assert r.status_code == 200
+        entry = next(e for e in r.json() if e["set"] == SET and e["name"] == TASK)
+        assert entry["has_unstaged"] is False
+        pyops_server.assert_no_unexpected_errors()
+
+    def test_dirty_scriptlet_listed_with_has_unstaged_true(self, api, pyops_server, set_factory, commit_set):
+        _setup_task(api, set_factory, commit_set)
+        # Draft over the committed version — has_unstaged must flip.
+        r = api.post(
+            "/scriptlet/inventory/draft",
+            json={"set": SET, "name": TASK, "code": DRAFT_CODE},
+        )
+        assert r.status_code == 200
+
+        r = api.get("/scriptlet/inventory/list")
+        assert r.status_code == 200
+        entry = next(e for e in r.json() if e["set"] == SET and e["name"] == TASK)
+        assert entry["has_unstaged"] is True
+        pyops_server.assert_no_unexpected_errors()
+
+    def test_mixed_dirty_and_clean_in_same_set(self, api, pyops_server, set_factory, commit_set):
+        """One committed, one drafted-over, one brand-new untracked:
+        the listing must reflect all three states in a single response."""
+        _setup_task(api, set_factory, commit_set, task_name="committed_one")
+        _setup_task(api, set_factory, commit_set, task_name="dirty_one")
+        # Make dirty_one dirty.
+        r = api.post(
+            "/scriptlet/inventory/draft",
+            json={"set": SET, "name": "dirty_one", "code": DRAFT_CODE},
+        )
+        assert r.status_code == 200
+        # Create untracked_one as a brand-new draft (never committed).
+        r = api.put(
+            "/scriptlet/inventory/item",
+            json={"set": SET, "name": "untracked_one", "type": "task"},
+        )
+        assert r.status_code == 200
+        r = api.post(
+            "/scriptlet/inventory/draft",
+            json={"set": SET, "name": "untracked_one", "code": DRAFT_CODE},
+        )
+        assert r.status_code == 200
+
+        r = api.get("/scriptlet/inventory/list")
+        by_name = {e["name"]: e for e in r.json() if e["set"] == SET}
+        assert by_name["committed_one"]["has_unstaged"] is False
+        assert by_name["dirty_one"]["has_unstaged"] is True
+        assert by_name["untracked_one"]["has_unstaged"] is True
+        pyops_server.assert_no_unexpected_errors()
+
+
+class TestManagerUiStatusIcon:
+    """The Manager UI surfaces `has_unstaged` from the list endpoint
+    as a per-row icon (check for synced, change_history for unstaged
+    draft) so the operator distinguishes drafts from committed
+    revisions at a glance — the bug this whole class regresses against
+    was: pre-3.3.0 the row markup carried no draft signal at all."""
+
+    def test_manager_renders_clean_icon_for_committed_scriptlet(
+        self, e2e_page, api, pyops_server, set_factory, commit_set, e2e_env
+    ):
+        _setup_task(api, set_factory, commit_set)
+        e2e_page.locator('[data-testid="menu-link-scriptlet_manager"]').click()
+        frame = e2e_page.frame_locator('[data-testid="content-frame"]')
+        icon = frame.locator(f'[data-testid="scriptlet-status-{SET}-{TASK}"]')
+        icon.wait_for(state="visible", timeout=15_000)
+        assert icon.get_attribute("data-status") == "clean"
+
+    def test_manager_renders_dirty_icon_for_drafted_scriptlet(
+        self, e2e_page, api, pyops_server, set_factory, commit_set, e2e_env
+    ):
+        _setup_task(api, set_factory, commit_set)
+        r = api.post(
+            "/scriptlet/inventory/draft",
+            json={"set": SET, "name": TASK, "code": DRAFT_CODE},
+        )
+        assert r.status_code == 200
+
+        e2e_page.locator('[data-testid="menu-link-scriptlet_manager"]').click()
+        frame = e2e_page.frame_locator('[data-testid="content-frame"]')
+        icon = frame.locator(f'[data-testid="scriptlet-status-{SET}-{TASK}"]')
+        icon.wait_for(state="visible", timeout=15_000)
+        # The manager refreshes every 10s; wait for the dirty state
+        # (the initial render may catch the pre-draft list payload).
+        icon.locator(":scope[data-status='dirty']").wait_for(state="attached", timeout=15_000)
+        assert icon.get_attribute("data-status") == "dirty"
+
+
 class TestInventoryDraftRoundtrip:
     """POST /inventory/draft saves draft; GET /inventory/code returns it; DELETE rolls back."""
 

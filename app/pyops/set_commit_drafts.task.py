@@ -75,6 +75,12 @@ def main():
             remotes = []
         count = len(dirty.splitlines())
         if remotes:
+            # Migration: pre-3.3.0 clones may carry embedded HTTPS
+            # credentials in origin's URL. Strip them so push relies
+            # on .git/credentials via the credential helper, making
+            # token rotation effective. No-op for clean / non-HTTPS
+            # origins.
+            normalize_origin_url(target)
             run_cmd(["git", "push"], cwd=target)
             print(f"\nCommitted and pushed {count} file(s) to {remotes[0]}.", flush=True)
         else:

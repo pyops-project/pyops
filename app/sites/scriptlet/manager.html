@@ -119,10 +119,30 @@
                 return actions;
             }
 
-            function genScriptletRowContent(set, name, type) {
+            function genStatusIcon(set, name, has_unstaged) {
+                // `has_unstaged` flag is stamped by `git.list_scriptlets()`
+                // against `git status --porcelain` per set. Visual parity
+                // with the VSIX manager tree: ✓ for synced, ⚠ for unstaged
+                // (draft / new / modified). Tested via the
+                // `scriptlet-status-{set}-{name}` testid + `data-status`.
+                if (has_unstaged) {
+                    return `<span class="material-icons-round text-warning align-middle me-1" `
+                        + `title="unstaged draft (not committed)" `
+                        + `style="font-size:1.1em" `
+                        + `data-testid="scriptlet-status-${set}-${name}" `
+                        + `data-status="dirty">change_history</span>`;
+                }
+                return `<span class="material-icons-round text-success align-middle me-1" `
+                    + `title="synced (committed)" `
+                    + `style="font-size:1.1em" `
+                    + `data-testid="scriptlet-status-${set}-${name}" `
+                    + `data-status="clean">check</span>`;
+            }
+
+            function genScriptletRowContent(set, name, type, has_unstaged) {
                 return `
                     <th scope="row">${set}</th>
-                    <th scope="row">${name}</th>
+                    <th scope="row">${genStatusIcon(set, name, has_unstaged)}${name}</th>
                     <td>${type}</td>
                     <td>${genActions(set, name, type)}</td>
                 `;
@@ -134,8 +154,8 @@
                 return `${set}::${name}`;
             }
 
-            function genScriptletItem(set, name, type) {
-                return `<tr data-set="${set}" data-name="${name}" data-testid="scriptlet-row-${set}-${name}">${genScriptletRowContent(set, name, type)}</tr>`;
+            function genScriptletItem(set, name, type, has_unstaged) {
+                return `<tr data-set="${set}" data-name="${name}" data-testid="scriptlet-row-${set}-${name}">${genScriptletRowContent(set, name, type, has_unstaged)}</tr>`;
             }
 
             function refreshList() {
@@ -157,9 +177,9 @@
                             const key = `${i.set}::${i.name}`;
                             newKeys.add(key);
                             if(existingRows[key]) {
-                                $(existingRows[key]).html(genScriptletRowContent(i.set, i.name, i.type));
+                                $(existingRows[key]).html(genScriptletRowContent(i.set, i.name, i.type, i.has_unstaged));
                             } else {
-                                const newRowHtml = genScriptletItem(i.set, i.name, i.type);
+                                const newRowHtml = genScriptletItem(i.set, i.name, i.type, i.has_unstaged);
                                 let inserted = false;
                                 tbody.find("tr").each(function() {
                                     const existingKey = getRowKey(this);

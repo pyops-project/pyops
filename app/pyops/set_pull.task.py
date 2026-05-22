@@ -37,6 +37,13 @@ def main():
             print("No remote configured — nothing to pull.", flush=True)
             return
 
+        # Migration: pre-3.3.0 clones may carry embedded HTTPS
+        # credentials in origin's URL. Strip them so future fetch /
+        # push operations consult .git/credentials via the credential
+        # helper, making token rotation effective. No-op for clean /
+        # non-HTTPS origins.
+        normalize_origin_url(target)
+
         # Refuse to reset if currently on a tag — preserves the pinned state.
         try:
             tags = _check(["git", "tag", "-l"], target)

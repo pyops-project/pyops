@@ -382,16 +382,80 @@ class TestListAndUnique:
              patch('os.path.isdir', side_effect=isdir_side_effect), \
              patch('app.lib.git.get_repo_path', return_value=str(tmp_path / 'repo')):
             result = git.list_scriptlets()
+            # Every entry carries `has_unstaged` (False here — mock_subprocess
+            # returns empty `git status --porcelain` output).
             expected = [
-                {'set': 'set1', 'name': 'script', 'type': 'task'},
-                {'set': 'set1', 'name': 'view', 'type': 'view'},
-                {'set': 'set1', 'name': 'README', 'type': 'markdown'},
-                {'set': 'set1', 'name': 'intro', 'type': 'markdown'},
-                {'set': 'set1', 'name': 'api', 'type': 'markdown'},
+                {'set': 'set1', 'name': 'script', 'type': 'task', 'has_unstaged': False},
+                {'set': 'set1', 'name': 'view', 'type': 'view', 'has_unstaged': False},
+                {'set': 'set1', 'name': 'README', 'type': 'markdown', 'has_unstaged': False},
+                {'set': 'set1', 'name': 'intro', 'type': 'markdown', 'has_unstaged': False},
+                {'set': 'set1', 'name': 'api', 'type': 'markdown', 'has_unstaged': False},
             ]
             for e in expected:
                 assert e in result
             assert len(result) == len(expected)
+
+    def test_list_scriptlets_stamps_has_unstaged_for_dirty_files(self, tmp_path, mock_files_conf):
+        """When `git status --porcelain` lists a file, its scriptlet
+        entry must carry `has_unstaged=True`; clean entries stay False.
+        Drives the dirty-set parse + path-match logic in one shot."""
+        def listdir_side_effect(path):
+            if '.cache/git' in path:
+                return ['set1']
+            if path.endswith('docs') or '/docs' in path:
+                return []
+            return ['clean.task.py', 'dirty.task.py']
+
+        with patch('os.listdir', side_effect=listdir_side_effect), \
+             patch('os.path.exists', return_value=True), \
+             patch('os.path.isdir', return_value=True), \
+             patch('app.lib.git.get_repo_path', return_value=str(tmp_path / 'repo')), \
+             patch('subprocess.check_output',
+                   return_value=b" M dirty.task.py\n"):
+            result = git.list_scriptlets()
+            statuses = {e['name']: e['has_unstaged'] for e in result}
+            assert statuses == {'dirty': True, 'clean': False}
+
+    def test_list_scriptlets_handles_porcelain_rename(self, tmp_path, mock_files_conf):
+        """Renamed entries (`R  old -> new`) flag both endpoints as
+        dirty so a UI lookup by either current or previous name shows
+        the warning."""
+        def listdir_side_effect(path):
+            if '.cache/git' in path:
+                return ['set1']
+            if path.endswith('docs') or '/docs' in path:
+                return []
+            return ['new_name.task.py']
+
+        with patch('os.listdir', side_effect=listdir_side_effect), \
+             patch('os.path.exists', return_value=True), \
+             patch('os.path.isdir', return_value=True), \
+             patch('app.lib.git.get_repo_path', return_value=str(tmp_path / 'repo')), \
+             patch('subprocess.check_output',
+                   return_value=b"R  old_name.task.py -> new_name.task.py\n"):
+            result = git.list_scriptlets()
+            assert any(e['name'] == 'new_name' and e['has_unstaged'] for e in result)
+
+    def test_list_scriptlets_git_status_failure_yields_clean(self, tmp_path, mock_files_conf):
+        """If `git status` errors (locked repo, no .git, …), the dirty
+        set is empty and every entry shows as clean rather than the
+        listing 500-ing. Worst case: a brief window where the Manager
+        UI under-reports drafts; the operator triggers refresh."""
+        def listdir_side_effect(path):
+            if '.cache/git' in path:
+                return ['set1']
+            if path.endswith('docs') or '/docs' in path:
+                return []
+            return ['x.task.py']
+
+        with patch('os.listdir', side_effect=listdir_side_effect), \
+             patch('os.path.exists', return_value=True), \
+             patch('os.path.isdir', return_value=True), \
+             patch('app.lib.git.get_repo_path', return_value=str(tmp_path / 'repo')), \
+             patch('subprocess.check_output',
+                   side_effect=subprocess.CalledProcessError(128, ["git", "status"])):
+            result = git.list_scriptlets()
+            assert result == [{'set': 'set1', 'name': 'x', 'type': 'task', 'has_unstaged': False}]
 
     def test_check_name_unique(self, mock_repo):
         with patch('os.listdir', return_value=[]):

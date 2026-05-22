@@ -355,6 +355,47 @@ class TestSetsPullViaController:
         _assert_failed(job, "not found")
         pyops_server.assert_no_unexpected_errors(allow=["not found", "set_pull"])
 
+    def test_pull_migrates_legacy_embedded_credentials_origin(self, api, pyops_server, bare_remote, e2e_env, set_factory):
+        """End-to-end coverage for the embedded-credentials migration:
+        sets cloned by the pre-3.3.0 set_clone left origin's URL as
+        `https://user:pass@host/path.git`, which silently defeats
+        credential rotation. set_pull now runs normalize_origin_url
+        before any fetch/ls-remote, so any legacy set migrates to the
+        credential-free form on the next pull.
+
+        The setup uses a real file:// bare remote for the clone, then
+        manually overwrites origin to the embedded-credentials form
+        before triggering pull. The pull job itself will fail to fetch
+        from the bogus host, but the normalisation runs first — assert
+        on the post-job origin URL."""
+        _service_ready(api)
+        url = f"file://{bare_remote}"
+        _assert_done(_run(api, "POST", "/controller/pyops/sets/clone", {"url": url}))
+        set_dir = Path(e2e_env["data_dir"]) / "git" / "remote_repo"
+
+        dirty_url = "https://bot:t0k3n@example.invalid/group/remote_repo.git"
+        subprocess.run(
+            ["git", "remote", "set-url", "origin", dirty_url],
+            cwd=set_dir, check=True, capture_output=True,
+        )
+
+        # Pull will fail (example.invalid unreachable), but normalize_origin_url
+        # runs before any fetch — origin must end up credential-free regardless.
+        _run(api, "POST", "/controller/pyops/sets/pull/remote_repo")
+
+        normalised = subprocess.check_output(
+            ["git", "remote", "get-url", "origin"], cwd=set_dir, text=True,
+        ).strip()
+        assert normalised == "https://example.invalid/group/remote_repo.git", (
+            f"set_pull did not strip embedded credentials from origin; "
+            f"got {normalised!r}"
+        )
+        # The intentionally-bogus host makes the fetch step log a connection
+        # / DNS failure; that's expected, not a regression.
+        pyops_server.assert_no_unexpected_errors(
+            allow=["example.invalid", "Could not resolve", "fatal", "set_pull"],
+        )
+
     def test_pull_cloned_set_picks_up_remote_changes(self, api, pyops_server, bare_remote, e2e_env, tmp_path, set_factory):
         _service_ready(api)
         url = f"file://{bare_remote}"

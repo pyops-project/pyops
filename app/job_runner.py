@@ -2,6 +2,7 @@ import signal, time, os, sys, re
 import traceback
 import subprocess
 import json
+import types
 from datetime import datetime, timedelta
 from io import TextIOWrapper
 import threading
@@ -117,6 +118,63 @@ def setup_logging(log_level: int, stdout_file, stderr_file):
 
     return info_handler, warn_handler
 
+def _register_user_module(glob: dict) -> None:
+    """Make the job's exec dict importable via
+    `importlib.import_module(glob['__name__'])`.
+
+    pyops exec's user code into a custom dict that Python's import
+    machinery does not link to `sys.modules` on its own. Directive-
+    merged classes (every `#!{set::name}` library's top-level
+    `class …:` statements) therefore have `__module__ == glob['__name__']`
+    but `importlib.import_module(__module__)` would return some other
+    module (or fail entirely) — breaking `Vortex.from_dict` /
+    `Branch.from_dict` and any other library that round-trips class
+    identity by `(__module__, __name__)`.
+
+    Two cases for the registration target:
+
+    - `glob['__name__']` is unique to the job (today: `'__test__'` set
+      by `run_test_job` / `run_debug_job(kind='testdebug')`). Wrap
+      `glob` in a fresh `types.ModuleType` and register it.
+
+    - `glob['__name__']` is `'__main__'` (every other kind:
+      `task` / `service` / `debug` / `draft`). The running interpreter
+      already has `sys.modules['__main__']` pointing at
+      `job_runner.py` itself; replacing it would break the runner's
+      post-exec finalisation code that still reads module-level
+      globals (`logger`, `job_lib`, ...). Instead, stamp the user's
+      non-dunder names onto the existing `__main__.__dict__`,
+      skipping any name the runner already owns so directive-merged
+      classes become reachable via `getattr(sys.modules['__main__'], …)`
+      without clobbering the runner's own bindings.
+
+    Snapshot copy: called after library exec, before main code exec —
+    the typical point where directive-merged classes are settled.
+    The job runs in its own subprocess (see `runner.py`'s
+    `subprocess.Popen` spawn), so the `sys.modules` mutation is
+    process-local."""
+    name = glob.get('__name__')
+    if not name:
+        return
+    if name in sys.modules:
+        target = sys.modules[name].__dict__
+        for key, value in glob.items():
+            if key.startswith('_'):
+                continue
+            if key in target:
+                # Preserve runner-owned bindings (`logger`, `job_lib`,
+                # stdlib imports, ...). Same-named user globals just
+                # don't override them — practical collisions are
+                # imports like `os` or `time` which point to the same
+                # stdlib module either way.
+                continue
+            target[key] = value
+        return
+    mod = types.ModuleType(name)
+    mod.__dict__.update(glob)
+    sys.modules[name] = mod
+
+
 def execute_job_code(param: str, compiled_code, compiled_libs, glob: dict, job_type: str, job_id: str, runner_sock_path: str, max_retries: int = 0):
     """Execute code with appropriate retry/error handling based on job_type.
 
@@ -128,6 +186,11 @@ def execute_job_code(param: str, compiled_code, compiled_libs, glob: dict, job_t
     breakpoint), so `running` corresponds to "debugger attached and
     paused at first stop" without the runner needing to know which
     debugger was used.
+
+    After libraries are exec'd into `glob` and before the main code
+    runs, `_register_user_module` snapshots `glob` into `sys.modules`
+    under `glob['__name__']` so directive-merged classes round-trip
+    through `importlib`-based deserialisers (see helper docstring).
     """
     running_sent = False
 
@@ -149,6 +212,7 @@ def execute_job_code(param: str, compiled_code, compiled_libs, glob: dict, job_t
                     _signal_running()
                     for cl in compiled_libs:
                         exec(cl, glob)
+                    _register_user_module(glob)
                     exec(compiled_code, glob)
                     job_lib.send_completion(runner_sock_path, {"id": job_id, "state": "done", "detail": None})
                     break
@@ -169,6 +233,7 @@ def execute_job_code(param: str, compiled_code, compiled_libs, glob: dict, job_t
             _signal_running()
             for cl in compiled_libs:
                 exec(cl, glob)
+            _register_user_module(glob)
             exec(compiled_code, glob)
             job_lib.send_completion(runner_sock_path, {"id": job_id, "state": "done", "detail": None})
     except Exception:

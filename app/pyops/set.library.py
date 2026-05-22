@@ -104,3 +104,43 @@ def status(label):
     """Header line in the task transcript, matches the visual style the
     Pyops update.log uses so the operator's tail looks consistent."""
     print(f"\n=== {label} ===", flush=True)
+
+
+def normalize_origin_url(set_dir):
+    """Strip embedded HTTPS user:pass@ credentials from `origin`'s URL.
+
+    Pre-3.3.0 `set_clone` left credentials baked into the remote URL
+    (`https://user:token@host/path.git`), which silently defeats
+    credential rotation: editing `.git/credentials` later has no
+    effect because git resolves the password from the URL first.
+
+    Called from `set_commit_drafts` and `set_pull` so any set still
+    carrying the embedded form migrates to the clean URL on the next
+    push or pull. Idempotent: no-op when origin is already clean,
+    not HTTPS, or no remote at all. Credentials remain available
+    through the `credential.helper` configured by `set_clone`.
+
+    Returns the new (or unchanged) origin URL, or `None` when no
+    remote is configured."""
+    import re
+    import urllib.parse
+
+    try:
+        current = subprocess.check_output(
+            ["git", "remote", "get-url", "origin"],
+            cwd=set_dir, text=True, stderr=subprocess.DEVNULL,
+        ).strip()
+    except subprocess.CalledProcessError:
+        return None  # no origin configured
+
+    if not re.match(r"^https?://[^/]+:[^/]*@", current):
+        return current  # already credential-free, or non-HTTPS
+
+    parsed = urllib.parse.urlparse(current)
+    host = parsed.hostname or ""
+    if parsed.port:
+        host = f"{host}:{parsed.port}"
+    clean = parsed._replace(netloc=host).geturl()
+    run_cmd(["git", "remote", "set-url", "origin", clean], cwd=set_dir)
+    print(f"normalised origin URL (stripped embedded credentials): {clean}", flush=True)
+    return clean
