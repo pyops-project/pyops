@@ -47,12 +47,16 @@ TASK_BODY = (
 )
 
 # Test classes live in libraries; pytest collects from the materialised
-# library file (`.test/src/{set}/library/tests_lib.py`), importing it as
-# a regular Python module. Test methods see what's defined in that file
-# plus what it explicitly imports — NOT what the task body's exec
-# scope contains. So production code being tested goes here too (or in
-# a sibling library imported with a plain `import` statement, since the
-# materialised library directory is on pytest's sys.path).
+# library file (`.test/src/{set}/library/tests_lib.py`). The
+# `pyops::pytest` helper pre-registers that file in `sys.modules` with
+# the calling task's exec globals seeded into the module dict — so
+# test methods see every pyops-injected and directive-merged symbol
+# (`setname`, `workspace`, `data`, library classes / helpers, …) by
+# bare name, same as the task body. Classical Python imports inside
+# test files are still required for stdlib / venv-installed packages
+# (pytest, framework libs); they never run for pyops-side content
+# because pyops symbols are not `sys.modules` entries to begin with.
+# See `app/pyops/pytest.library.py` "Namespace contract" section.
 GREEN_LIB = (
     "def double(x):\n"
     "    return x * 2\n"
@@ -208,6 +212,71 @@ class TestKindTestLifecycle:
         # And it must resolve: walking through .test/src/ hits the same files.
         assert (ws / ".test" / "src" / SET / "library" / "tests_lib.py").is_file()
 
+        pyops_server.assert_no_unexpected_errors()
+
+    def test_kind_test_namespace_bridge_exposes_task_scope_to_tests(self, api, pyops_server, set_factory, commit_set, e2e_env):
+        """End-to-end coverage for the pyops::pytest namespace bridge:
+        test bodies reference pyops-injected globals (`setname`,
+        `workspace`) and directive-merged production helpers
+        (`shared_constant`, `multiply`) by bare name — no classical
+        `from X import Y` for pyops-side content. Asserts the test
+        run passes and produces pytest pass markers."""
+        set_factory(SET)
+        # Production library: provides a function + constant that the
+        # test bodies will read by bare name via the namespace bridge.
+        api.put("/scriptlet/inventory/item",
+                json={"set": SET, "name": "shared_lib", "type": "library"})
+        api.post("/scriptlet/inventory/draft",
+                 json={"set": SET, "name": "shared_lib",
+                       "code": "shared_constant = 41\n\n"
+                               "def multiply(a, b):\n"
+                               "    return a * b\n"})
+        # Test library: NO directive imports of shared_lib, NO classical
+        # imports of shared_constant / multiply. References them by bare
+        # name; only works if the namespace bridge fires.
+        api.put("/scriptlet/inventory/item",
+                json={"set": SET, "name": "bridge_tests", "type": "library"})
+        api.post("/scriptlet/inventory/draft",
+                 json={"set": SET, "name": "bridge_tests",
+                       "code": "class TestBridge:\n"
+                               "    def test_directive_merged_constant(self):\n"
+                               "        assert shared_constant == 41\n"
+                               "\n"
+                               "    def test_directive_merged_function(self):\n"
+                               "        assert multiply(6, 7) == 42\n"
+                               "\n"
+                               "    def test_pyops_injected_setname(self):\n"
+                               "        assert setname == '" + SET + "'\n"
+                               "\n"
+                               "    def test_pyops_injected_workspace_isdir(self):\n"
+                               "        import os\n"
+                               "        assert os.path.isdir(workspace)\n"})
+        # Task: pulls both shared_lib + bridge_tests via directives; the
+        # __test__ block then runs pytest_run with the bridge fixture.
+        api.put("/scriptlet/inventory/item",
+                json={"set": SET, "name": "bridge_task", "type": "task"})
+        api.post("/scriptlet/inventory/draft",
+                 json={"set": SET, "name": "bridge_task",
+                       "code": "#!{::shared_lib}\n"
+                               "#!{::bridge_tests}\n"
+                               "#!{pyops::pytest}\n"
+                               "\n"
+                               "if __name__ == '__test__':\n"
+                               "    pytest_run(test_sets=['TestBridge'])\n"})
+        commit_set(SET, "add bridge task + libs")
+
+        r = api.put("/scriptlet/job/item",
+                    json={"set": SET, "name": "bridge_task", "drop_done": False,
+                          "max_retries": 0, "param": "", "kind": "test"})
+        assert r.status_code == 200, f"enqueue failed: {r.status_code} {r.text}"
+        job_id = r.json()["job"]
+        job = _wait_for_job(api, job_id)
+        assert job["state"] == "done", f"namespace bridge failed: {job.get('detail')}"
+        stdout = (e2e_env["data_dir"] / "jobs" / SET / job_id / "stdout.log").read_text()
+        # All four tests must pass — proves bare-name access to both
+        # directive-merged symbols (shared_constant, multiply) and
+        # pyops-injected globals (setname, workspace).
+        assert "4 passed" in stdout, f"expected 4 passes, got:\n{stdout}"
         pyops_server.assert_no_unexpected_errors()
 
     def test_manager_ui_test_button_enqueues_kind_test(self, e2e_page, api, pyops_server, set_factory, commit_set, e2e_env):

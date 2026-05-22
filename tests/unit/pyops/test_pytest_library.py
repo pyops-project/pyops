@@ -145,3 +145,89 @@ class TestPytestRunValidation:
     def test_non_list_raises(self, lib):
         with pytest.raises(ValueError, match="non-empty list"):
             lib["pytest_run"]("TestX")
+
+
+class TestSeedTestModules:
+    """Verifies the namespace-bridge function in isolation: pre-register
+    a synthetic test file in sys.modules with a seed dict + exec the
+    file body against it. Asserts the file body sees the seeded
+    symbols (so module-level decorators / class bodies resolve them
+    by bare name) and that the resulting module ends up in
+    sys.modules with both the seed and the file's own definitions."""
+
+    def test_seeds_caller_globals_into_module(self, lib, tmp_path):
+        test_file = tmp_path / "stub_tests.py"
+        test_file.write_text(
+            # Refers to `injected_value` by bare name — only resolvable
+            # if the seed lands in module globals before this exec runs.
+            "captured = injected_value * 2\n"
+            "class TestStub:\n"
+            "    def test_ok(self): pass\n"
+        )
+        seed = {"injected_value": 7}
+        import sys
+        sys.modules.pop("stub_tests", None)
+        try:
+            registered = lib["_seed_test_modules"]([str(test_file)], seed)
+            assert registered == ["stub_tests"]
+            mod = sys.modules["stub_tests"]
+            assert mod.injected_value == 7
+            assert mod.captured == 14
+            assert mod.__file__ == str(test_file)
+            assert hasattr(mod, "TestStub")
+        finally:
+            sys.modules.pop("stub_tests", None)
+
+    def test_dunder_entries_are_not_seeded(self, lib, tmp_path):
+        """`__name__`, `__builtins__`, `__file__` etc. must remain the
+        synthesised module's own — otherwise the test file's exec
+        would clobber its own identity with the caller's."""
+        test_file = tmp_path / "name_tests.py"
+        test_file.write_text("captured_name = __name__\n")
+        seed = {"__name__": "caller_module", "__builtins__": None, "regular": 1}
+        import sys
+        sys.modules.pop("name_tests", None)
+        try:
+            lib["_seed_test_modules"]([str(test_file)], seed)
+            mod = sys.modules["name_tests"]
+            assert mod.captured_name == "name_tests"
+            assert mod.regular == 1
+        finally:
+            sys.modules.pop("name_tests", None)
+
+    def test_skip_if_already_registered(self, lib, tmp_path):
+        """Re-entry safety: if the stem is already in sys.modules
+        (e.g. from a previous pytest_run in the same job), leave it
+        alone and exclude it from the returned list."""
+        test_file = tmp_path / "already_tests.py"
+        test_file.write_text("counter = counter + 1\n")
+        import sys
+        import types
+        existing = types.ModuleType("already_tests")
+        existing.counter = 99
+        sys.modules["already_tests"] = existing
+        try:
+            registered = lib["_seed_test_modules"]([str(test_file)], {"counter": 0})
+            assert registered == []
+            # Existing module unchanged — counter was 99 and exec did not run.
+            assert sys.modules["already_tests"].counter == 99
+        finally:
+            sys.modules.pop("already_tests", None)
+
+    def test_production_lib_filenames_not_pre_registered(self, lib, tmp_path):
+        """Only files explicitly passed in are touched — sibling
+        production libraries that happen to share their stem with a
+        stdlib / venv module (e.g. `os.py`) must NOT be pre-registered
+        from this function so a test's `import os` keeps resolving to
+        the stdlib."""
+        test_file = tmp_path / "consumer_tests.py"
+        test_file.write_text("class TestNoop:\n    def test_pass(self): pass\n")
+        import sys
+        sys_os_before = sys.modules["os"]
+        sys.modules.pop("consumer_tests", None)
+        try:
+            lib["_seed_test_modules"]([str(test_file)], {})
+            assert sys.modules["os"] is sys_os_before
+            assert "consumer_tests" in sys.modules
+        finally:
+            sys.modules.pop("consumer_tests", None)

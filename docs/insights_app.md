@@ -550,17 +550,21 @@ The `state=running` ZMQ completion fires the first time `exec(param)` returns su
 
 Authors who want pytest invoke it themselves — typically via the bundled helper `pyops::pytest` (see "Sets Management and the `pyops` set"). The helper resolves `test_sets` strings (`'TestX'` or `'TestX::method'`) by AST-scanning the materialised library tree, invokes `pytest.main()` programmatically with the resolved node IDs, and auto-attaches `pytest-cov` flags + a `[paths]`-mapped `.coveragerc` whenever `import pytest_cov` succeeds (i.e. the author has `#!pytest-cov` somewhere in the import graph). Authors who want a different test framework, plain `assert` statements, or a custom coverage flow skip the import and write whatever they need in the `__test__` block — pyops never inspects the body.
 
+**Namespace bridge — pyops symbols in test bodies.** Because pyops's directive merge does its work in the task's exec globals (`#!{set::name}` libraries' top-level symbols + pyops-injected `setname` / `workspace` / `data` / `listener` / `control` / `gitspace` / ...), and pytest's import machinery would otherwise create a fresh empty namespace for each materialised test file, `pyops::pytest.pytest_run` captures `sys._getframe(1).f_globals` and pre-registers each file referenced by the resolved test-set node IDs as a `sys.modules` entry whose `__dict__` is seeded with that namespace. The test file then exec's into the seeded dict, so module-level code (decorators, class bodies, fixture factories, helpers) and test methods alike resolve pyops-side symbols by bare name. **Test files never write `from X import Y` for symbols carried by the directive merge** — classical imports are valid only for stdlib / venv-installed packages, which are reached through `sys.modules` independent of the bridge. Only files referenced by the resolved test-set IDs are pre-registered, so production-library files in the same materialised dir (e.g. a set whose `os` library materialises as `os.py`) cannot shadow stdlib modules.
+
+The convention is that `pytest_run` is called directly from the `if __name__ == "__test__":` block. Wrapping the call in a helper function would shift the captured frame to the helper's locals and break the bridge.
+
 Typical shape:
 
 ```python
 # my_task.task.py
-#!pytest                      # pip install pytest
 #!pytest-cov                  # optional — turns on coverage automatically
+#!{::shared_lib}              # production helpers used by both task body + tests
 #!{::unit_tests}              # test library in same set
-#!{pyops::pytest}             # the helper described above
+#!{pyops::pytest}             # the helper described above (transitively installs pytest)
 
 def do_work(x):
-    return x * 2
+    return multiply(x, 2)     # `multiply` directive-merged from shared_lib
 
 if __name__ == "__main__":
     do_work(input_value)
@@ -574,6 +578,21 @@ if __name__ == "__test__":
         ],
         args=["-v"],
     )
+```
+
+```python
+# unit_tests.library.py — no `from shared_lib import multiply` line;
+# `multiply` lands in this file's exec namespace via the bridge.
+import pytest                  # stdlib / venv → classical import is fine
+
+class TestWork:
+    def test_doubles(self):
+        assert multiply(3, 2) == 6
+
+    def test_workspace_visible(self):
+        # pyops-injected globals are seeded the same way
+        import os
+        assert os.path.isdir(workspace)
 ```
 
 The router accepts `kind=test` via `PUT /scriptlet/job/item`; `loadJob` reads unstaged content for `kind in ("debug", "draft", "test", "testdebug")`, matching the "operator iterating on local code" use case for all four preview/diagnostic kinds.

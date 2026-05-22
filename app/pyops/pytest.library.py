@@ -21,6 +21,13 @@
 #                    flag is passed the library's coverage defaults
 #                    are suppressed entirely.
 #
+# Convention: `pytest_run` must be called directly from the task's
+# `if __name__ == "__test__":` block. The implementation reads the
+# caller's `f_globals` (one frame up) to obtain the task's
+# directive-merged namespace — wrapping the call in a helper function
+# would shift that frame to the helper's locals and break the
+# namespace bridge.
+#
 # Coverage is auto-added iff `import pytest_cov` succeeds — i.e. the
 # author put `#!pytest-cov` (or equivalent) in the task's directives.
 # When enabled, `.test/.coveragerc` is written on the fly with a
@@ -31,10 +38,58 @@
 # library sources under `.test/src/{setname}/library/*.py`. Pyops's
 # run_test_job writes those files verbatim from the imported `#!{...}`
 # libraries, so line numbers + class names match the source tree.
+#
+# Namespace contract — pyops symbols in test files:
+#
+# The pyops directive model merges every `#!{set::name}` library's
+# top-level symbols into the consuming task's exec globals; the same
+# is true of pyops's own injected globals (`setname`, `workspace`,
+# `data`, `listener`, `control`, `gitspace`, ...). `pytest_run`
+# captures that full namespace via `sys._getframe(1).f_globals` and
+# pre-registers each materialised test library file in `sys.modules`
+# with the namespace seeded into the module's `__dict__` before the
+# file body runs. The test file then exec's into the seeded dict, so
+# test classes / fixtures / module-level decorators reference any
+# pyops-injected or directive-merged symbol by bare name — the same
+# semantics as the task body itself — and never need a classical
+# `from X import Y` for pyops-side content.
+#
+# Classical imports inside test files are still valid and necessary
+# for anything reached via Python's import machinery (stdlib, the
+# per-set venv, framework packages installed via `#!<pip-pkg>` /
+# `#!<git-url>` directives). The bridge applies only to symbols
+# carried by the directive merge — which by design do not exist as
+# `sys.modules` entries.
+#
+# Only files referenced by the resolved test-set node IDs are
+# pre-registered. Production-library files in the materialised tree
+# (e.g. `system::os` materialised as `os.py`) are not touched, so
+# they cannot accidentally shadow stdlib or framework modules when a
+# test does `import os` for stdlib reasons.
+#
+# Namespace contract — pyops directive symbols in test files:
+#
+# `pytest_run` captures the calling task's exec namespace (where every
+# `#!{set::name}` directive has already merged its library's top-level
+# symbols) and pre-registers each materialised test library file in
+# `sys.modules` with those symbols seeded into the module's __dict__
+# before the file body runs. The test file then exec's into the seeded
+# dict, so test classes / fixtures / module-level decorators reference
+# any directive-merged symbol by bare name — same semantics as the
+# task body itself — without classical `from X import Y` boilerplate
+# and without forcing pyops library names to dodge stdlib / framework
+# collisions (`system::os`, `system::causal`, ...).
+#
+# `pytest.main(node_ids)` then runs pytest collection; pytest's default
+# import path machinery returns the pre-registered module from
+# `sys.modules` rather than re-importing the file fresh, so the
+# already-seeded namespace survives into test execution.
 
 import ast
 import os
 import sys
+import types
+import types
 
 
 _VENV_BASE_KEY = "venv"
@@ -199,10 +254,52 @@ def _subprocess_coverage_pth():
             pass
 
 
+def _seed_test_modules(test_files, caller_globals):
+    """Pre-register each test library file as a Python module in
+    `sys.modules`, seeded with the caller task's directive-merged
+    namespace (everything non-dunder in `caller_globals`).
+
+    The seeded dict is exec'd against the test file source, so
+    module-level references inside the test file (decorators, class
+    bodies, fixture factories, helpers) resolve against the task's
+    namespace exactly as the task body itself would.
+
+    Only the files in `test_files` — derived from the resolved test-set
+    node IDs — are pre-registered. Production-library files that happen
+    to share their stem with a stdlib / venv module (e.g. a set whose
+    `os` library materialises as `os.py`) are not touched, so a test's
+    `import os` continues to resolve to the stdlib module.
+
+    Skips test files whose stem is already in `sys.modules`, keeping
+    `pytest_run` idempotent when invoked more than once in the same
+    job (re-entry, retries, manual repeat).
+
+    Returns the list of stems pre-registered — primarily for tests
+    that need to verify the bridge fired."""
+    seed = {k: v for k, v in caller_globals.items() if not k.startswith('__')}
+    registered = []
+    for file_path in test_files:
+        stem = os.path.splitext(os.path.basename(file_path))[0]
+        if stem in sys.modules:
+            continue
+        mod = types.ModuleType(stem)
+        mod.__file__ = file_path
+        mod.__dict__.update(seed)
+        with open(file_path, 'r', encoding='utf-8') as f:
+            source = f.read()
+        exec(compile(source, file_path, 'exec'), mod.__dict__)
+        sys.modules[stem] = mod
+        registered.append(stem)
+    return registered
+
+
 def pytest_run(test_sets, args=None):
     """Invoke pytest programmatically on `test_sets`.
 
-    See module docstring for the full contract."""
+    See module docstring for the full contract — in particular the
+    "Namespace contract" section, which spells out why this function
+    must be called directly from a task's `if __name__ == "__test__":`
+    block and not via a helper indirection."""
     import pytest
 
     if not isinstance(test_sets, (list, tuple)) or not test_sets:
@@ -210,6 +307,14 @@ def pytest_run(test_sets, args=None):
 
     index = _scan_classes()
     node_ids = _resolve_node_ids(list(test_sets), index)
+
+    # Seed the test files referenced by the resolved node IDs with the
+    # calling task's directive-merged + pyops-injected namespace so
+    # test bodies can reference pyops symbols by bare name. See the
+    # "Namespace contract" section of this module's docstring.
+    caller_globals = sys._getframe(1).f_globals
+    test_files = sorted({fp for fp, _methods in (index[entry.split('::')[0]] for entry in test_sets)})
+    _seed_test_modules(test_files, caller_globals)
 
     extra_args = list(args or [])
     pytest_args = list(node_ids) + ["-p", "no:cacheprovider", "--no-header"]

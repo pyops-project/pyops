@@ -62,6 +62,22 @@ Three additive set capabilities plus a public-namespace rename:
   both delegating to a shared `startDebugFamilyJob` helper.
   `DebugService.enqueueDebugJob(..., kind='debug' | 'testdebug')`.
   Attach treats `kind in ("debug", "testdebug")` identically.
+- **`pyops::pytest` namespace bridge.** `pytest_run` captures the
+  calling task's `f_globals` (every `#!{set::name}` library's
+  top-level symbol + pyops-injected globals like `setname` /
+  `workspace` / `data` / `listener` / `control`) and pre-registers
+  each materialised test file referenced by the resolved test-set
+  node IDs as a `sys.modules` entry with that namespace seeded into
+  the module dict before the file body runs. Pytest's import then
+  finds the pre-registered module and uses it as-is, so test classes
+  / fixtures / module-level decorators reference pyops-side symbols
+  by bare name — the same semantics as the task body itself. Test
+  files never write `from <set-lib> import <symbol>` for pyops
+  content; classical imports remain valid only for stdlib / venv
+  packages, which live in `sys.modules` independently. Only files in
+  the resolved IDs are pre-registered, so production libraries that
+  happen to share their stem with a stdlib module (`os.py`, ...)
+  cannot accidentally shadow the stdlib for tests doing `import os`.
 
 ### Added
 - `app/lib/data.py` — `SetData` API for set-scoped YAML/JSON I/O
@@ -109,6 +125,18 @@ Three additive set capabilities plus a public-namespace rename:
 - `pyops::pytest` pulls in pytest itself via a `#!pytest` directive at
   the top of its library file — consumers of `#!{pyops::pytest}` no
   longer need their own `#!pytest` line.
+- `pyops::pytest.pytest_run` captures the calling task's `f_globals`
+  via `sys._getframe(1)` and pre-registers each materialised test file
+  it is about to invoke pytest against as a `sys.modules` entry whose
+  `__dict__` is seeded with that namespace, so test bodies reference
+  pyops-side symbols (directive-merged libraries + injected globals
+  like `setname` / `workspace`) by bare name. Test files no longer
+  carry `from <set-lib> import <symbol>` for pyops content. Convention:
+  call `pytest_run` directly from `if __name__ == "__test__":` — a
+  helper wrapper would shift the captured frame off the task and
+  break the bridge. Production-library files outside the resolved
+  node IDs are not pre-registered, so they cannot shadow stdlib
+  modules like `os`.
 - Manager UI and task editor gain a **Run as Test** button (material
   `science` icon, info-blue) next to the existing Run-as-Draft. Both
   PUT `kind=test`. Operators can now invoke `kind=test` jobs from the
@@ -138,6 +166,12 @@ Three additive set capabilities plus a public-namespace rename:
   `README.md`, and the project-root `CLAUDE.md` are all updated to
   reflect the new set/file layout, the new `pyops` namespace, the
   `data` and `test` features, and the corrected directive syntax.
+- `docs/insights_app.md` "Test Jobs" and `docs/pyops_guide.md`
+  "Writing Tests" sections rewritten to document the namespace
+  bridge: test bodies use bare names for pyops content, classical
+  Python imports apply only to stdlib / venv packages. Outdated
+  guidance about importing production libs via
+  `from production_lib import …` removed.
 
 ## [3.2.0] — 2026-05-19
 

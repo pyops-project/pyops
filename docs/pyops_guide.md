@@ -103,18 +103,51 @@ if __name__ == "__test__":
     )
 ```
 
-Test libraries hold the pytest classes. Production code that the
-classes need either lives in the test library too (simplest) or in a
-sibling library imported with a plain Python `import` — pytest's
-default import mode prepends the materialised library directory to
-`sys.path`, so `from production_lib import do_work` works:
+Test libraries hold the pytest classes. Production code those classes
+need is reached the same way every pyops scriptlet reaches its
+directive-merged content: by bare name. `pytest_run` captures the
+calling task's `f_globals` (one frame up — that's why the convention
+is to call it directly from the `__test__` block, never through a
+helper) and pre-registers each materialised test file in
+`sys.modules` with that namespace seeded into the module's `__dict__`
+before the file body runs. So the test library can reference any
+symbol the task pulled in via `#!{set::name}` directives, plus
+pyops-injected globals (`setname`, `workspace`, `data`, `listener`,
+`control`, `gitspace`, ...), by bare name. **Classical
+`from production_lib import do_work` inside test files is wrong for
+pyops-side content** — it would imply that the production library
+sits in `sys.modules` as a Python module, which is not what the
+directive merge produces and would also push pyops library authors
+to dodge stdlib / framework module names. Classical imports remain
+valid (and necessary) for stdlib and venv-installed packages
+(`pytest`, framework libs installed via `#!<pip-pkg>` / git
+directives) — those reach `sys.modules` independently of the pyops
+directive merge.
 
 ```python
-# unit_tests.library.py
-import pytest
+# my_task.task.py
+#!pytest-cov                # optional — turns on coverage automatically
+#!{::shared_lib}            # production helpers visible to both task body + tests
+#!{::unit_tests}            # test classes live in libraries
+#!{pyops::pytest}           # the helper; transitively installs pytest
 
-def double(x):
-    return x * 2
+def work_with(x):
+    return double(x)         # `double` directive-merged from shared_lib
+
+if __name__ == "__main__":
+    work_with(input_value)
+
+if __name__ == "__test__":
+    pytest_run(
+        test_sets=["TestWork", "TestEdge::test_zero"],
+        args=["-v"],
+    )
+```
+
+```python
+# unit_tests.library.py — no `from shared_lib import double` line;
+# `double` lands here via the pyops::pytest namespace bridge.
+import pytest               # stdlib / venv → classical import is fine
 
 class TestWork:
     def test_doubles(self):
@@ -129,6 +162,12 @@ class TestEdge:
 
     def test_negative(self):
         assert double(-2) == -4
+
+class TestEnv:
+    def test_workspace_visible(self):
+        # pyops-injected globals are seeded by the bridge too
+        import os
+        assert os.path.isdir(workspace)
 
 @pytest.fixture
 def shared_thing():
