@@ -205,6 +205,8 @@ Request flow for a mutating action (e.g. clone):
 4. The modal polls `/scriptlet/job/item?id=<id>` and tails the job's stdout/stderr.
 5. The `set_clone.task.py` task runs in the runner, acquires `set_install_lock(name)`, performs the git operation, exits — runner finishes the job, drop_done auto-removes the row.
 
+HTTPS credentials never live in the origin URL. `set_clone.task.py` does a `git remote set-url` after clone to strip any `user:token@host` prefix the operator passed in, leaving the `.git/credentials` helper as the single source of truth — token rotation by editing that file actually takes effect. Legacy sets cloned by pre-3.3.0 pyops have the credentials baked into the URL; `set.library.normalize_origin_url(repo_path)` runs from `set_commit_drafts` (before push) and `set_pull` (before fetch) to rewrite those origins on the next mutating operation. Idempotent for already-clean URLs and a no-op for SSH / file:// schemes.
+
 The `pyops` set is a fixed bundle: the git lib resolves the set name `"pyops"` to `<project_root>/app/pyops/` with direct filesystem reads, no `.git` initialised in there. `list_sets()` (filesystem walk done by `data.task.py`) hides `pyops`; the inventory router and the `set_remove` task refuse to touch it. The `pyops::*` library namespace is reachable from any user scriptlet via the `#!{pyops::name}` directive — the library code is exec'd into the importing job's globals exactly like a same-set library, but the source lives with the pyops application.
 
 Runner-side primitives in `app/lib/sets.py` (still used directly by the runner and by `set_install_lock` callers):
@@ -388,7 +390,7 @@ graph TD
     B --> C["run_task_job / run_service_job / run_debug_job / run_draft_job"]
     C --> D["setup_workspace(data_jobs, set, job_id) idempotent"]
     D --> E["setup_execution_environment → stdout.log/stderr.log in 'a' mode"]
-    E --> F["with redirect_stdout/redirect_stderr"]
+    E --> F["with _redirect_job_io (os.dup2 fd1/fd2)"]
     F --> H["compile code objects (installs already done in job_setup.py)"]
     H --> I["setup_job_globals → setup_logging"]
     I --> J["execute_job_code → exec(param/libs/code)"]
@@ -424,13 +426,16 @@ Either path makes `importlib.import_module(glob['__name__']) + getattr(mod, Clas
 
 #### Output Isolation
 
-All job output is redirected to per-job files in the workspace:
+All job output is redirected to per-job files in the workspace via a
+file-descriptor-level redirect, not just a Python-object swap:
 
-- `setup_execution_environment()` opens `stdout.log` and `stderr.log`
-- `run_*_job()` wraps execution in `with redirect_stdout(stdout_file): with redirect_stderr(stderr_file):`
-- `setup_logging()` adds handlers pointing to `sys.stdout`/`sys.stderr` (which are redirected)
-- `process_install_lines()` subprocesses use `stdout=stdout_file, stderr=stderr_file`
-- `finally:` block flushes and closes files
+- `setup_execution_environment()` opens `stdout.log` and `stderr.log` in `'a'` mode.
+- `run_*_job()` wraps execution in `with _redirect_job_io(stdout_file, stderr_file):`. The helper (defined in `job_runner.py`) uses `os.dup2` to rewire fd1 / fd2 to the log files, and additionally swaps `sys.stdout` / `sys.stderr` so Python-level callers see the file objects too. Saved fds plus the original `sys.stdout` / `sys.stderr` are restored in `finally` — including after an exception inside the block.
+- This catches *every* writer, not just Python's `print` / `sys.stdout.write`. Child processes inherit fd1 / fd2 by default and write into the job log files automatically; C-extension / native code (HF tqdm download bars, transformers, torch native code) writing to fd1 / fd2 directly is captured the same way. The earlier `contextlib.redirect_stdout` / `redirect_stderr` only swapped the Python objects and lost everything that went through the fds — those bytes ended up in the gunicorn worker's real stdout/stderr instead.
+- Streaming behaviour is preserved: `setup_execution_environment` opens both log files with `buffering=1` (line-buffered), so `print(...)` flushes per newline, and `os.write(1, ...)` / `os.write(2, ...)` / subprocess writes go straight through the kernel fd with no Python-level buffer in between. Operators can `tail -f stdout.log` on long-running jobs and see output as it happens; the redirect helper does not change this.
+- `setup_logging()` adds handlers pointing to `sys.stdout` / `sys.stderr` (which are also redirected, so logging.* still works as expected).
+- `process_install_lines()` subprocesses use `stdout=stdout_file, stderr=stderr_file` explicitly — install logs run before the redirect helper is in scope.
+- The outer `finally:` block flushes and closes the log files.
 
 #### Error Handling
 
@@ -808,7 +813,7 @@ flowchart TD
     B --> C["runner.py: StreamHandler(sys.stdout/stderr)"]
     C --> D["Gunicorn: unified stdout/stderr stream"]
     B --> E["Spawn job_setup.py → execv → job_runner.py, stdout=sys.stdout stderr=sys.stderr"]
-    E --> F["job_runner: redirect_stdout/stderr → stdout.log/stderr.log"]
+    E --> F["job_runner: _redirect_job_io (os.dup2 fd1/fd2) → stdout.log/stderr.log"]
     F --> G["Job workspace: isolated per-job output files"]
 ```
 

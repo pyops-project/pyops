@@ -1895,3 +1895,119 @@ class TestDebugOverridesResolution(TestLoggingCapture):
                 text=True
             )
 
+
+class TestStdoutStderrRedirect:
+    """Regression coverage for fd-level stdout/stderr redirect inside
+    `_redirect_job_io`. The 3.3.0 fix replaces
+    `contextlib.redirect_stdout` / `redirect_stderr` (Python-level
+    only) with `os.dup2`-based file-descriptor redirection so:
+      - subprocess output (no `stdout=`/`stderr=` kw) lands in the job
+        log files via inherited fds
+      - C-extension / native writers (torch, transformers tqdm, …) that
+        write directly to fd1 / fd2 also land in the log files
+    The pre-3.3.0 behaviour wrote those bytes to the gunicorn worker's
+    real stdout/stderr instead — they never showed up in the job's
+    stdout.log / stderr.log."""
+
+    @patch('app.job_runner.job_lib.send_completion')
+    @patch('app.job_runner.subprocess.run')
+    @patch('app.lib.sets.subprocess.check_call')
+    @patch('app.lib.pyops.ServiceListener')
+    def test_task_fd_writes_land_in_log_files(self, mock_listener, mock_check_call, mock_run, mock_send, tmp_path, mock_conf):
+        """`os.write(1, ...)` and `os.write(2, ...)` from the scriptlet
+        body must reach the per-job stdout.log / stderr.log under the
+        workspace, not the gunicorn worker's real fds."""
+        from app.job_runner import main as run
+        mock_listener.return_value = None
+        mock_check_call.return_value = None
+        mock_run.return_value = Mock(returncode=0)
+        data_base = os.path.join(tmp_path, "data")
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
+
+        code = (
+            "import os\n"
+            "os.write(1, b'native-stdout-marker\\n')\n"
+            "os.write(2, b'native-stderr-marker\\n')\n"
+        )
+        run("id", "owner", "myset", "my_task", "task", "", code, [],
+            "/tmp/pyops/runner.sock", 0, None,
+            {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}},
+            {"venv": venv_path, "pkg": pkg_path},
+            {"owner": {}}, {"bind": "bind"})
+
+        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
+        ws = os.path.join(data_base, "myset", "id")
+        stdout_log = os.path.join(ws, "stdout.log")
+        stderr_log = os.path.join(ws, "stderr.log")
+        assert "native-stdout-marker" in open(stdout_log).read()
+        assert "native-stderr-marker" in open(stderr_log).read()
+
+    @patch('app.job_runner.job_lib.send_completion')
+    @patch('app.job_runner.subprocess.run')
+    @patch('app.lib.sets.subprocess.check_call')
+    @patch('app.lib.pyops.ServiceListener')
+    def test_task_subprocess_output_lands_in_log_files(self, mock_listener, mock_check_call, mock_run, mock_send, tmp_path, mock_conf):
+        """A child process spawned without explicit stdout/stderr capture
+        inherits the redirected fds. This is the practical motivator
+        — HF download progress bars come from tqdm writing through C
+        code to fd2, and modern transformers / torch shell out to
+        helpers that do the same.
+
+        Uses `os.system` (libc-level fork/exec, no subprocess module)
+        so the test isn't tripped by the `subprocess.run` mock applied
+        on this class for installs/bootstrap."""
+        from app.job_runner import main as run
+        mock_listener.return_value = None
+        mock_check_call.return_value = None
+        mock_run.return_value = Mock(returncode=0)
+        data_base = os.path.join(tmp_path, "data")
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
+
+        code = (
+            "import os\n"
+            "os.system('echo subproc-stdout-marker; "
+            "echo subproc-stderr-marker >&2')\n"
+        )
+        run("id", "owner", "myset", "my_task", "task", "", code, [],
+            "/tmp/pyops/runner.sock", 0, None,
+            {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}},
+            {"venv": venv_path, "pkg": pkg_path},
+            {"owner": {}}, {"bind": "bind"})
+
+        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
+        ws = os.path.join(data_base, "myset", "id")
+        assert "subproc-stdout-marker" in open(os.path.join(ws, "stdout.log")).read()
+        assert "subproc-stderr-marker" in open(os.path.join(ws, "stderr.log")).read()
+
+    @patch('app.job_runner.job_lib.send_completion')
+    @patch('app.job_runner.subprocess.run')
+    @patch('app.lib.sets.subprocess.check_call')
+    @patch('app.lib.pyops.ServiceListener')
+    def test_draft_fd_writes_land_in_log_files(self, mock_listener, mock_check_call, mock_run, mock_send, tmp_path, mock_conf):
+        """Same guarantee for kind=draft, which goes through a separate
+        runner branch (run_draft_job) — every redirect call site must
+        carry the fix."""
+        from app.job_runner import main as run
+        mock_listener.return_value = Mock()
+        mock_check_call.return_value = None
+        mock_run.return_value = Mock(returncode=0)
+        data_base = os.path.join(tmp_path, "data")
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
+
+        code = (
+            "import os\n"
+            "os.write(2, b'draft-fd2-marker\\n')\n"
+        )
+        run("id", "owner", "myset", "my_task", "draft", "", code, [],
+            "/tmp/pyops/runner.sock", 0, None,
+            {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}},
+            {"venv": venv_path, "pkg": pkg_path},
+            {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
+
+        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
+        ws = os.path.join(data_base, "myset", "id")
+        assert "draft-fd2-marker" in open(os.path.join(ws, "stderr.log")).read()
+

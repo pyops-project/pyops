@@ -176,7 +176,7 @@ def shared_thing():
 
 Fixtures, monkeypatch, and `@pytest.fixture` all work — pyops invokes the real pytest API.
 
-Enqueue: `pyopsctl job run myset my_task --kind test`, or `PUT /scriptlet/job/item` with `kind=test`, or via the manager UI (no dedicated button — copy a task's job-create payload and change `kind`).
+Enqueue: `pyopsctl job run myset my_task --kind test`, or `PUT /scriptlet/job/item` with `kind=test`, or via the manager UI's **Run as Test** button (material `science` icon, info-blue, sits next to **Run as Draft** on every task row and inside the task editor).
 
 ## Set-Scoped Data
 

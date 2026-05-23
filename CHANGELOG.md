@@ -7,7 +7,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 from 3.0.0 onward.
 
-## [3.3.0] — 2026-05-21
+## [3.3.0] — 2026-05-23
 
 Three additive set capabilities plus a public-namespace rename:
 
@@ -223,6 +223,35 @@ Three additive set capabilities plus a public-namespace rename:
   `/scriptlet/inventory/status` per row. The icon carries
   `data-testid="scriptlet-status-{set}-{name}"` and
   `data-status="clean" | "dirty"` for tooling.
+- `app/job_runner` now redirects job stdout / stderr at the file-
+  descriptor level via `os.dup2` (new `_redirect_job_io` context
+  manager) instead of `contextlib.redirect_stdout` /
+  `redirect_stderr`. The previous Python-level redirect only swapped
+  `sys.stdout` / `sys.stderr` and missed everything that wrote
+  directly to fd1 / fd2: child processes inheriting the parent's
+  fds, C-extension and native writers (HF tqdm download bars,
+  transformers, torch native code). Those bytes used to land in the
+  gunicorn worker's real stdout/stderr; with 3.3.0 they reach the
+  per-job `stdout.log` / `stderr.log` like in pyops 2.1. Applied at
+  all five job-kind sites (task, service, debug, test/testdebug,
+  draft); `sys.stdout` / `sys.stderr` and the saved fds are restored
+  in `finally` even on exception inside the block. Streaming
+  behaviour preserved: log files stay opened with `buffering=1`
+  (line-buffered) by `setup_execution_environment`, so `print(...)`
+  flushes per newline and fd-level writes hit the file immediately
+  — operators can `tail -f stdout.log` on long-running jobs.
+  Regression coverage in `TestRedirectJobIo` includes three
+  streaming tests (print / fd-write / subprocess all visible to a
+  separate reader before the `with` block exits).
+- `app/pyops/sets_job.js` job-tail modal (used by every action on
+  the Sets controller — clone, create, pull, switch, remove,
+  update-deps, commit-drafts) now scales to ~95vw / 95vh instead
+  of Bootstrap's fixed `modal-lg`. Modal body is a flex column so
+  the stdout / stderr panes grow proportionally with the viewport
+  (3 : 1 split, stdout dominant); both panes scroll independently
+  on overflow. Verbose jobs like `set_update_deps` against a
+  large set are now readable without scrolling through a narrow
+  column.
 
 ### CI / Docs
 - `pyyaml` added to the runner's image (`Dockerfile`) and the four

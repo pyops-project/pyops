@@ -20,7 +20,7 @@ from app.lib import job as job_lib
 from app.lib.data import SetData
 
 import logging
-from contextlib import redirect_stdout, redirect_stderr
+from contextlib import contextmanager
 logger = logging.getLogger(__name__)
 
 _project_root = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
@@ -101,6 +101,55 @@ def setup_job_globals(owner: str, setspace: str, workspace: str, web_bind: str, 
             "log": _conf_log,
         }
     return glob
+
+@contextmanager
+def _redirect_job_io(stdout_file, stderr_file):
+    """File-descriptor-level redirect of stdout/stderr to the per-job
+    log files for the duration of `with`.
+
+    Replaces the Python-level `contextlib.redirect_stdout` /
+    `redirect_stderr` pair the runner used previously. Those only
+    swap `sys.stdout` / `sys.stderr` objects, which is fine for
+    plain `print` and `logging.StreamHandler(sys.stderr)` — but
+    anything writing to fd1 / fd2 directly bypasses them:
+
+    - `subprocess.run(...)` without `stdout=` / `stderr=` overrides
+      inherits the parent's fd1 / fd2 and writes to gunicorn's
+      output, not the job's `stdout.log` / `stderr.log`.
+    - C-extensions like `torch`, native libraries pulled by
+      `transformers`, `huggingface_hub`'s tqdm progress bars when
+      they fall back to `os.write(2, ...)` — all go to fd2 raw.
+
+    `os.dup2` rewires the kernel-level file descriptors so every
+    writer lands in the job log. `sys.stdout` / `sys.stderr` are
+    also swapped to the file objects so any code that grabbed a
+    reference to them before this block still writes into the
+    file — single-source-of-truth for the rest of the job."""
+    stdout_file.flush()
+    stderr_file.flush()
+    saved_fd_1 = os.dup(1)
+    saved_fd_2 = os.dup(2)
+    saved_sys_stdout = sys.stdout
+    saved_sys_stderr = sys.stderr
+    try:
+        os.dup2(stdout_file.fileno(), 1)
+        os.dup2(stderr_file.fileno(), 2)
+        sys.stdout = stdout_file
+        sys.stderr = stderr_file
+        yield
+    finally:
+        try:
+            sys.stdout.flush()
+            sys.stderr.flush()
+        except Exception:
+            pass
+        sys.stdout = saved_sys_stdout
+        sys.stderr = saved_sys_stderr
+        os.dup2(saved_fd_1, 1)
+        os.dup2(saved_fd_2, 2)
+        os.close(saved_fd_1)
+        os.close(saved_fd_2)
+
 
 def setup_logging(log_level: int, stdout_file, stderr_file):
     """Configure logging handlers for stdout/stderr and return them for cleanup"""
@@ -288,94 +337,93 @@ def run_debug_job(job_id: str, owner: str, setname: str, name: str, param: str, 
         logger.debug(f"{os.getpid():<10}start {kind} job({job_id})")
 
         # Step 3: Main execution with redirected output
-        with redirect_stdout(stdout_file):
-            with redirect_stderr(stderr_file):
-                try:
-                    # Apply overrides for debug kind
-                    if overrides:
-                        override_dict = json.loads(overrides)
-                        if f"{setname}::{name}" in override_dict:
-                            code = override_dict[f"{setname}::{name}"]
-                        for lib in libs:
-                            if lib["filename"] in override_dict:
-                                lib["code"] = override_dict[lib["filename"]]
-
-                    # Installs (pip/git directives) ran in job_setup.py before
-                    # the os.execv into this interpreter — site.py has already
-                    # picked up any new .pth files at startup, so editable
-                    # installs are importable from here on.
-
-                    # Materialise scriptlet bodies under .debug/src/ as a
-                    # standards-compliant Python module layout so any
-                    # source-path-mapping debugger (debugpy / gdb's python-
-                    # gdb.py / lldb / ...) can map {set}::{name} ↔ file
-                    # without per-debugger plumbing. Also serves as the
-                    # audit trail for "which source produced this output".
-                    debug_src_dir = os.path.join(workspace, ".debug", "src")
-                    os.makedirs(debug_src_dir, exist_ok=True)
-
-                    # testdebug: alias .test → .debug so tooling that
-                    # expects the test-kind materialisation root also
-                    # resolves. zipstream follows symlinks (treats as
-                    # copy), so the workspace download still works —
-                    # just with duplicated content under both roots.
-                    if kind == "testdebug":
-                        test_link = os.path.join(workspace, ".test")
-                        try:
-                            if not os.path.lexists(test_link):
-                                os.symlink(".debug", test_link)
-                        except OSError as ex:
-                            logger.warning(f"testdebug {job_id}: could not create .test symlink: {ex}")
-
-                    main_task_dir = os.path.join(debug_src_dir, setname, "task")
-                    os.makedirs(main_task_dir, exist_ok=True)
-
-                    if param:
-                        param_file = os.path.join(main_task_dir, "param.py")
-                        with open(param_file, 'w') as f:
-                            f.write(param)
-
-                    code_file = os.path.join(main_task_dir, f"{name}.py")
-                    with open(code_file, 'w') as f:
-                        f.write(code)
-
-                    lib_files = []
+        with _redirect_job_io(stdout_file, stderr_file):
+            try:
+                # Apply overrides for debug kind
+                if overrides:
+                    override_dict = json.loads(overrides)
+                    if f"{setname}::{name}" in override_dict:
+                        code = override_dict[f"{setname}::{name}"]
                     for lib in libs:
-                        lib_set, lib_name = lib["filename"].split("::")
-                        lib_dir = os.path.join(debug_src_dir, lib_set, "library")
-                        os.makedirs(lib_dir, exist_ok=True)
-                        lib_file = os.path.join(lib_dir, f"{lib_name}.py")
-                        with open(lib_file, 'w') as f:
-                            f.write(lib["code"])
-                        lib_files.append(lib_file)
+                        if lib["filename"] in override_dict:
+                            lib["code"] = override_dict[lib["filename"]]
 
-                    with open(code_file, 'r') as f:
-                        compiled_code = compile(f.read(), code_file, 'exec')
+                # Installs (pip/git directives) ran in job_setup.py before
+                # the os.execv into this interpreter — site.py has already
+                # picked up any new .pth files at startup, so editable
+                # installs are importable from here on.
 
-                    compiled_libs = []
-                    for lib_file in lib_files:
-                        with open(lib_file, 'r') as f:
-                            compiled_libs.append(compile(f.read(), lib_file, 'exec'))
+                # Materialise scriptlet bodies under .debug/src/ as a
+                # standards-compliant Python module layout so any
+                # source-path-mapping debugger (debugpy / gdb's python-
+                # gdb.py / lldb / ...) can map {set}::{name} ↔ file
+                # without per-debugger plumbing. Also serves as the
+                # audit trail for "which source produced this output".
+                debug_src_dir = os.path.join(workspace, ".debug", "src")
+                os.makedirs(debug_src_dir, exist_ok=True)
 
-                    glob = setup_job_globals(owner, setspace, workspace, web_bind, job_id, kind, setname, name)
-                    if kind == "testdebug":
-                        # testdebug runs the `__test__` block of the
-                        # scriptlet (matching kind=test semantics) but
-                        # under a debugger — so __name__ flips before
-                        # the param block's `breakpoint()` triggers.
-                        glob["__name__"] = "__test__"
+                # testdebug: alias .test → .debug so tooling that
+                # expects the test-kind materialisation root also
+                # resolves. zipstream follows symlinks (treats as
+                # copy), so the workspace download still works —
+                # just with duplicated content under both roots.
+                if kind == "testdebug":
+                    test_link = os.path.join(workspace, ".test")
+                    try:
+                        if not os.path.lexists(test_link):
+                            os.symlink(".debug", test_link)
+                    except OSError as ex:
+                        logger.warning(f"testdebug {job_id}: could not create .test symlink: {ex}")
 
-                    info_handler, warn_handler = setup_logging(logging.DEBUG, stdout_file, stderr_file)
+                main_task_dir = os.path.join(debug_src_dir, setname, "task")
+                os.makedirs(main_task_dir, exist_ok=True)
 
-                    execute_job_code(param, compiled_code, compiled_libs, glob, kind, job_id, runner_sock_path)
+                if param:
+                    param_file = os.path.join(main_task_dir, "param.py")
+                    with open(param_file, 'w') as f:
+                        f.write(param)
 
-                finally:
-                    # Remove logging handlers before exiting redirect scope
-                    root = logging.getLogger()
-                    if info_handler:
-                        root.removeHandler(info_handler)
-                    if warn_handler:
-                        root.removeHandler(warn_handler)
+                code_file = os.path.join(main_task_dir, f"{name}.py")
+                with open(code_file, 'w') as f:
+                    f.write(code)
+
+                lib_files = []
+                for lib in libs:
+                    lib_set, lib_name = lib["filename"].split("::")
+                    lib_dir = os.path.join(debug_src_dir, lib_set, "library")
+                    os.makedirs(lib_dir, exist_ok=True)
+                    lib_file = os.path.join(lib_dir, f"{lib_name}.py")
+                    with open(lib_file, 'w') as f:
+                        f.write(lib["code"])
+                    lib_files.append(lib_file)
+
+                with open(code_file, 'r') as f:
+                    compiled_code = compile(f.read(), code_file, 'exec')
+
+                compiled_libs = []
+                for lib_file in lib_files:
+                    with open(lib_file, 'r') as f:
+                        compiled_libs.append(compile(f.read(), lib_file, 'exec'))
+
+                glob = setup_job_globals(owner, setspace, workspace, web_bind, job_id, kind, setname, name)
+                if kind == "testdebug":
+                    # testdebug runs the `__test__` block of the
+                    # scriptlet (matching kind=test semantics) but
+                    # under a debugger — so __name__ flips before
+                    # the param block's `breakpoint()` triggers.
+                    glob["__name__"] = "__test__"
+
+                info_handler, warn_handler = setup_logging(logging.DEBUG, stdout_file, stderr_file)
+
+                execute_job_code(param, compiled_code, compiled_libs, glob, kind, job_id, runner_sock_path)
+
+            finally:
+                # Remove logging handlers before exiting redirect scope
+                root = logging.getLogger()
+                if info_handler:
+                    root.removeHandler(info_handler)
+                if warn_handler:
+                    root.removeHandler(warn_handler)
 
     except json.JSONDecodeError as e:
         # Handle JSON parsing errors (overrides parsing)
@@ -432,73 +480,72 @@ def run_test_job(job_id: str, owner: str, setname: str, name: str, param: str, c
 
         logger.debug(f"{os.getpid():<10}start test job({job_id})")
 
-        with redirect_stdout(stdout_file):
-            with redirect_stderr(stderr_file):
-                try:
-                    if overrides:
-                        override_dict = json.loads(overrides)
-                        if f"{setname}::{name}" in override_dict:
-                            code = override_dict[f"{setname}::{name}"]
-                        for lib in libs:
-                            if lib["filename"] in override_dict:
-                                lib["code"] = override_dict[lib["filename"]]
-
-                    # Materialise under .test/src/ in the same shape as
-                    # .debug/src/ — keeps the on-disk audit trail of "what
-                    # source produced this test run" consistent and lets
-                    # pytest-cov / coverage.py / debuggers map file paths
-                    # to readable canonical names via their own
-                    # `[paths]` / source-map configuration.
-                    test_src_dir = os.path.join(workspace, ".test", "src")
-                    os.makedirs(test_src_dir, exist_ok=True)
-
-                    main_task_dir = os.path.join(test_src_dir, setname, "task")
-                    os.makedirs(main_task_dir, exist_ok=True)
-
-                    if param:
-                        param_file = os.path.join(main_task_dir, "param.py")
-                        with open(param_file, 'w') as f:
-                            f.write(param)
-
-                    code_file = os.path.join(main_task_dir, f"{name}.py")
-                    with open(code_file, 'w') as f:
-                        f.write(code)
-
-                    lib_files = []
+        with _redirect_job_io(stdout_file, stderr_file):
+            try:
+                if overrides:
+                    override_dict = json.loads(overrides)
+                    if f"{setname}::{name}" in override_dict:
+                        code = override_dict[f"{setname}::{name}"]
                     for lib in libs:
-                        lib_set, lib_name = lib["filename"].split("::")
-                        lib_dir = os.path.join(test_src_dir, lib_set, "library")
-                        os.makedirs(lib_dir, exist_ok=True)
-                        lib_file = os.path.join(lib_dir, f"{lib_name}.py")
-                        with open(lib_file, 'w') as f:
-                            f.write(lib["code"])
-                        lib_files.append(lib_file)
+                        if lib["filename"] in override_dict:
+                            lib["code"] = override_dict[lib["filename"]]
 
-                    with open(code_file, 'r') as f:
-                        compiled_code = compile(f.read(), code_file, 'exec')
+                # Materialise under .test/src/ in the same shape as
+                # .debug/src/ — keeps the on-disk audit trail of "what
+                # source produced this test run" consistent and lets
+                # pytest-cov / coverage.py / debuggers map file paths
+                # to readable canonical names via their own
+                # `[paths]` / source-map configuration.
+                test_src_dir = os.path.join(workspace, ".test", "src")
+                os.makedirs(test_src_dir, exist_ok=True)
 
-                    compiled_libs = []
-                    for lib_file in lib_files:
-                        with open(lib_file, 'r') as f:
-                            compiled_libs.append(compile(f.read(), lib_file, 'exec'))
+                main_task_dir = os.path.join(test_src_dir, setname, "task")
+                os.makedirs(main_task_dir, exist_ok=True)
 
-                    glob = setup_job_globals(owner, setspace, workspace, web_bind, job_id, "test", setname, name)
-                    # The whole point of kind=test: switch __name__ so a
-                    # task scriptlet can gate test setup with
-                    # `if __name__ == "__test__":` in the same file as
-                    # its production `if __name__ == "__main__":` block.
-                    glob["__name__"] = "__test__"
+                if param:
+                    param_file = os.path.join(main_task_dir, "param.py")
+                    with open(param_file, 'w') as f:
+                        f.write(param)
 
-                    info_handler, warn_handler = setup_logging(logging.DEBUG, stdout_file, stderr_file)
+                code_file = os.path.join(main_task_dir, f"{name}.py")
+                with open(code_file, 'w') as f:
+                    f.write(code)
 
-                    execute_job_code(param, compiled_code, compiled_libs, glob, "test", job_id, runner_sock_path)
+                lib_files = []
+                for lib in libs:
+                    lib_set, lib_name = lib["filename"].split("::")
+                    lib_dir = os.path.join(test_src_dir, lib_set, "library")
+                    os.makedirs(lib_dir, exist_ok=True)
+                    lib_file = os.path.join(lib_dir, f"{lib_name}.py")
+                    with open(lib_file, 'w') as f:
+                        f.write(lib["code"])
+                    lib_files.append(lib_file)
 
-                finally:
-                    root = logging.getLogger()
-                    if info_handler:
-                        root.removeHandler(info_handler)
-                    if warn_handler:
-                        root.removeHandler(warn_handler)
+                with open(code_file, 'r') as f:
+                    compiled_code = compile(f.read(), code_file, 'exec')
+
+                compiled_libs = []
+                for lib_file in lib_files:
+                    with open(lib_file, 'r') as f:
+                        compiled_libs.append(compile(f.read(), lib_file, 'exec'))
+
+                glob = setup_job_globals(owner, setspace, workspace, web_bind, job_id, "test", setname, name)
+                # The whole point of kind=test: switch __name__ so a
+                # task scriptlet can gate test setup with
+                # `if __name__ == "__test__":` in the same file as
+                # its production `if __name__ == "__main__":` block.
+                glob["__name__"] = "__test__"
+
+                info_handler, warn_handler = setup_logging(logging.DEBUG, stdout_file, stderr_file)
+
+                execute_job_code(param, compiled_code, compiled_libs, glob, "test", job_id, runner_sock_path)
+
+            finally:
+                root = logging.getLogger()
+                if info_handler:
+                    root.removeHandler(info_handler)
+                if warn_handler:
+                    root.removeHandler(warn_handler)
 
     except json.JSONDecodeError as e:
         error_msg = f"Invalid overrides for test job {job_id}: {e}\n{traceback.format_exc()}"
@@ -540,35 +587,34 @@ def run_draft_job(job_id: str, owner: str, setname: str, name: str, param: str, 
         logger.debug(f"{os.getpid():<10}start draft job({job_id})")
 
         # Step 3: Main execution with redirected output
-        with redirect_stdout(stdout_file):
-            with redirect_stderr(stderr_file):
-                try:
-                    # Installs ran in job_setup.py before os.execv into here.
+        with _redirect_job_io(stdout_file, stderr_file):
+            try:
+                # Installs ran in job_setup.py before os.execv into here.
 
-                    # Compile code objects with custom filenames for accurate tracebacks
-                    code_filename = f"{setname}/task/{name}.py"
-                    compiled_code = compile(code, code_filename, 'exec')
+                # Compile code objects with custom filenames for accurate tracebacks
+                code_filename = f"{setname}/task/{name}.py"
+                compiled_code = compile(code, code_filename, 'exec')
 
-                    # Compile libs with generated subdirectory filenames for debugger mapping
-                    compiled_libs = []
-                    for lib in libs:
-                        lib_name = lib["filename"].split('::')[1]
-                        lib_filename = f"{setname}/library/{lib_name}.py"
-                        compiled_libs.append(compile(lib["code"], lib_filename, 'exec'))
+                # Compile libs with generated subdirectory filenames for debugger mapping
+                compiled_libs = []
+                for lib in libs:
+                    lib_name = lib["filename"].split('::')[1]
+                    lib_filename = f"{setname}/library/{lib_name}.py"
+                    compiled_libs.append(compile(lib["code"], lib_filename, 'exec'))
 
-                    glob = setup_job_globals(owner, setspace, workspace, web_bind, job_id, "draft", setname, name)
+                glob = setup_job_globals(owner, setspace, workspace, web_bind, job_id, "draft", setname, name)
 
-                    info_handler, warn_handler = setup_logging(logging.INFO, stdout_file, stderr_file)
+                info_handler, warn_handler = setup_logging(logging.INFO, stdout_file, stderr_file)
 
-                    execute_job_code(param, compiled_code, compiled_libs, glob, "draft", job_id, runner_sock_path)
+                execute_job_code(param, compiled_code, compiled_libs, glob, "draft", job_id, runner_sock_path)
 
-                finally:
-                    # Remove logging handlers before exiting redirect scope
-                    root = logging.getLogger()
-                    if info_handler:
-                        root.removeHandler(info_handler)
-                    if warn_handler:
-                        root.removeHandler(warn_handler)
+            finally:
+                # Remove logging handlers before exiting redirect scope
+                root = logging.getLogger()
+                if info_handler:
+                    root.removeHandler(info_handler)
+                if warn_handler:
+                    root.removeHandler(warn_handler)
 
     except subprocess.CalledProcessError as e:
         # Defensive: directive installs run in job_setup.py, but any
@@ -614,35 +660,34 @@ def run_task_job(job_id: str, owner: str, setname: str, name: str, param: str, c
         logger.debug(f"{os.getpid():<10}start task job({job_id})")
 
         # Step 3: Main execution with redirected output
-        with redirect_stdout(stdout_file):
-            with redirect_stderr(stderr_file):
-                try:
-                    # Installs ran in job_setup.py before os.execv into here.
+        with _redirect_job_io(stdout_file, stderr_file):
+            try:
+                # Installs ran in job_setup.py before os.execv into here.
 
-                    # Compile code objects with custom filenames for accurate tracebacks
-                    code_filename = f"{setname}/task/{name}.py"
-                    compiled_code = compile(code, code_filename, 'exec')
+                # Compile code objects with custom filenames for accurate tracebacks
+                code_filename = f"{setname}/task/{name}.py"
+                compiled_code = compile(code, code_filename, 'exec')
 
-                    # Compile libs with generated subdirectory filenames for debugger mapping
-                    compiled_libs = []
-                    for lib in libs:
-                        lib_name = lib["filename"].split('::')[1]
-                        lib_filename = f"{setname}/library/{lib_name}.py"
-                        compiled_libs.append(compile(lib["code"], lib_filename, 'exec'))
+                # Compile libs with generated subdirectory filenames for debugger mapping
+                compiled_libs = []
+                for lib in libs:
+                    lib_name = lib["filename"].split('::')[1]
+                    lib_filename = f"{setname}/library/{lib_name}.py"
+                    compiled_libs.append(compile(lib["code"], lib_filename, 'exec'))
 
-                    glob = setup_job_globals(owner, setspace, workspace, web_bind, job_id, "task", setname, name)
+                glob = setup_job_globals(owner, setspace, workspace, web_bind, job_id, "task", setname, name)
 
-                    info_handler, warn_handler = setup_logging(logging.INFO, stdout_file, stderr_file)
+                info_handler, warn_handler = setup_logging(logging.INFO, stdout_file, stderr_file)
 
-                    execute_job_code(param, compiled_code, compiled_libs, glob, "task", job_id, runner_sock_path, max_retries)
+                execute_job_code(param, compiled_code, compiled_libs, glob, "task", job_id, runner_sock_path, max_retries)
 
-                finally:
-                    # Remove logging handlers before exiting redirect scope
-                    root = logging.getLogger()
-                    if info_handler:
-                        root.removeHandler(info_handler)
-                    if warn_handler:
-                        root.removeHandler(warn_handler)
+            finally:
+                # Remove logging handlers before exiting redirect scope
+                root = logging.getLogger()
+                if info_handler:
+                    root.removeHandler(info_handler)
+                if warn_handler:
+                    root.removeHandler(warn_handler)
 
     except subprocess.CalledProcessError as e:
         # Defensive: directive installs run in job_setup.py, but any
@@ -688,35 +733,34 @@ def run_service_job(job_id: str, owner: str, setname: str, name: str, param: str
         logger.debug(f"{os.getpid():<10}start service job({job_id})")
 
         # Step 3: Main execution with redirected output
-        with redirect_stdout(stdout_file):
-            with redirect_stderr(stderr_file):
-                try:
-                    # Installs ran in job_setup.py before os.execv into here.
+        with _redirect_job_io(stdout_file, stderr_file):
+            try:
+                # Installs ran in job_setup.py before os.execv into here.
 
-                    # Compile code objects with custom filenames for accurate tracebacks
-                    code_filename = f"{setname}/task/{name}.py"
-                    compiled_code = compile(code, code_filename, 'exec')
+                # Compile code objects with custom filenames for accurate tracebacks
+                code_filename = f"{setname}/task/{name}.py"
+                compiled_code = compile(code, code_filename, 'exec')
 
-                    # Compile libs with generated subdirectory filenames for debugger mapping
-                    compiled_libs = []
-                    for lib in libs:
-                        lib_name = lib["filename"].split('::')[1]
-                        lib_filename = f"{setname}/library/{lib_name}.py"
-                        compiled_libs.append(compile(lib["code"], lib_filename, 'exec'))
+                # Compile libs with generated subdirectory filenames for debugger mapping
+                compiled_libs = []
+                for lib in libs:
+                    lib_name = lib["filename"].split('::')[1]
+                    lib_filename = f"{setname}/library/{lib_name}.py"
+                    compiled_libs.append(compile(lib["code"], lib_filename, 'exec'))
 
-                    glob = setup_job_globals(owner, setspace, workspace, web_bind, job_id, "service", setname, name)
+                glob = setup_job_globals(owner, setspace, workspace, web_bind, job_id, "service", setname, name)
 
-                    info_handler, warn_handler = setup_logging(logging.INFO, stdout_file, stderr_file)
+                info_handler, warn_handler = setup_logging(logging.INFO, stdout_file, stderr_file)
 
-                    execute_job_code(param, compiled_code, compiled_libs, glob, "service", job_id, runner_sock_path)
+                execute_job_code(param, compiled_code, compiled_libs, glob, "service", job_id, runner_sock_path)
 
-                finally:
-                    # Remove logging handlers before exiting redirect scope
-                    root = logging.getLogger()
-                    if info_handler:
-                        root.removeHandler(info_handler)
-                    if warn_handler:
-                        root.removeHandler(warn_handler)
+            finally:
+                # Remove logging handlers before exiting redirect scope
+                root = logging.getLogger()
+                if info_handler:
+                    root.removeHandler(info_handler)
+                if warn_handler:
+                    root.removeHandler(warn_handler)
 
     except subprocess.CalledProcessError as e:
         # Defensive: directive installs run in job_setup.py, but any
