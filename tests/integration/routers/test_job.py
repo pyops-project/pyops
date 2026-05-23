@@ -45,13 +45,36 @@ class TestJobRouter:
             job2 = Job(id=str(uuid.uuid4().hex), owner="testuser", set="default", name="task2", kind="task", state="running", param="{}")
             session.add_all([job1, job2])
             session.commit()
-        
+
         response = mock_client.get("/scriptlet/job/list", headers={"X-User": "testuser"})
         assert response.status_code == 200
         data = response.json()
         assert len(data) == 2
         assert any(j["state"] == "todo" for j in data)
         assert any(j["state"] == "running" for j in data)
+
+    def test_get_job_list_includes_set_and_name(self, mock_client, mock_db, test_temp_dir, patch_tempfile, mock_datetime):
+        """Regression: `/scriptlet/job/list` must include the `set` and
+        `name` columns. Pre-3.3.0 the endpoint omitted both, so
+        `pyopsctl job list --set <name>` (and the table's set/name
+        columns) silently rendered empty even when matching jobs
+        existed."""
+        with Session(get_db_engine()) as session:
+            job1 = Job(id=str(uuid.uuid4().hex), owner="testuser", set="cami", name="causal_service", kind="service", state="running", param="{}")
+            job2 = Job(id=str(uuid.uuid4().hex), owner="testuser", set="myset", name="other", kind="task", state="done", param="{}")
+            session.add_all([job1, job2])
+            session.commit()
+
+        response = mock_client.get("/scriptlet/job/list", headers={"X-User": "testuser"})
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) == 2
+        cami_rows = [j for j in data if j.get("set") == "cami"]
+        assert len(cami_rows) == 1, f"--set cami filter must hit; got {data!r}"
+        assert cami_rows[0]["name"] == "causal_service"
+        myset_rows = [j for j in data if j.get("name") == "other"]
+        assert len(myset_rows) == 1
+        assert myset_rows[0]["set"] == "myset"
 
     def test_get_job_list_filter_states(self, mock_client, mock_db, test_temp_dir, patch_tempfile, mock_datetime):
         with Session(get_db_engine()) as session:

@@ -43,6 +43,8 @@ async def list_get():
     try:
         with Session(get_db_engine()) as session:
             stmt = select(Job.id,
+                          Job.set,
+                          Job.name,
                           Job.start,
                           Job.end,
                           Job.kind,

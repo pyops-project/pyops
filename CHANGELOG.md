@@ -252,6 +252,14 @@ Three additive set capabilities plus a public-namespace rename:
   on overflow. Verbose jobs like `set_update_deps` against a
   large set are now readable without scrolling through a narrow
   column.
+- `/scriptlet/job/list` now includes `set` and `name` columns in
+  every row. Pre-3.3.0 the SELECT omitted both, so
+  `pyopsctl job list --set <name>` (and the table's set / name
+  columns) silently rendered empty even when matching jobs
+  existed — the CLI filters `row.get("set") == args.set` which
+  never matched because the field wasn't there. Regression
+  coverage in `tests/integration/routers/test_job.py` and
+  `tests/pyopsctl/unit/test_commands_job.py`.
 
 ### CI / Docs
 - `pyyaml` added to the runner's image (`Dockerfile`) and the four

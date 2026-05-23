@@ -112,6 +112,44 @@ def test_run_kind_test_overrides_dir_missing_set_yields_empty_map(tmp_path):
     assert body["overrides"] == {}
 
 
+def test_list_filter_by_set_matches_rows_with_set_field():
+    """Regression: `pyopsctl job list --set <name>` filters on
+    `row.get("set") == args.set`. That match only works if the server
+    actually returns the `set` field — pre-3.3.0 the
+    `/scriptlet/job/list` SELECT omitted it, so every `--set`
+    invocation silently returned zero rows even when the job existed.
+
+    Mocks the API response with `set` / `name` fields populated (the
+    post-fix shape) and asserts the CLI keeps the matching row.
+    """
+    rows = [
+        {"id": "j1", "set": "cami", "name": "causal_service", "kind": "service", "state": "running", "owner": "u"},
+        {"id": "j2", "set": "myset", "name": "other",          "kind": "task",    "state": "done",    "owner": "u"},
+    ]
+    from pyopsctl import __main__ as cli
+    from pyopsctl.config import Profile
+    profile = Profile(name="t", url="http://server", user="u", api_key="",
+                      debug_ports=())
+    client_mock = MagicMock()
+    client_mock.__enter__ = MagicMock(return_value=client_mock)
+    client_mock.__exit__ = MagicMock(return_value=False)
+    client_mock.get.return_value = rows
+    emitted = []
+    with patch("pyopsctl.commands.job.load", return_value=profile), \
+         patch("pyopsctl.commands.job.Client", return_value=client_mock), \
+         patch("pyopsctl.commands.job.emit",
+               side_effect=lambda args, data, **kw: emitted.append(data)):
+        cli.main(["job", "list", "--set", "cami", "--json"])
+
+    client_mock.get.assert_called_with("/scriptlet/job/list")
+    assert emitted, "emit not called"
+    filtered = emitted[0]
+    assert len(filtered) == 1, f"--set filter must keep cami row only; got {filtered!r}"
+    assert filtered[0]["id"] == "j1"
+    assert filtered[0]["set"] == "cami"
+    assert filtered[0]["name"] == "causal_service"
+
+
 def test_run_param_file_combines_with_overrides(tmp_path):
     """--param-file and --overrides-dir coexist: param gets the file
     body, overrides get the working-copy scriptlets."""
