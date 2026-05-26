@@ -480,6 +480,8 @@ For each `#!` line:
 - **git**: clones to `data/pkg/{set}/{repo}/` or `checkout`s the requested branch on existing; `git pull` only on the upgrade path; then `pip install -e` (with optional `--upgrade`)
 - **library**: skipped (handled by `process_imports`)
 
+Note: the per-job path here is strictly offline — no `git fetch`, no `git pull`, no pip index lookups. The Update Dependencies path lives in a separate code path (`app/pyops/set_update_deps.task._install_git`); see the "Update Dependencies" section below for the network-touching logic, including the `git fetch --prune --tags origin` step that runs before checkout so directive branch flips resolve cleanly.
+
 Installs run inside `job_setup.py` — before `os.execv` into `job_runner.py`. By the time user code attempts an `import`, the second interpreter has already loaded every `.pth` file via `site.py`.
 
 #### "Update Dependencies" — set-level operator action
@@ -488,12 +490,12 @@ UI button → `POST /controller/pyops/sets/update_deps` (via the jslib modal) �
 
 1. Acquires `set_install_lock(name)` for the full duration; running jobs in the same set queue behind, other sets are unaffected.
 2. Upgrades pyops core deps: `pip install --upgrade pip setuptools wheel` then `pip install --upgrade pyzmq msgpack psutil requests`. Two calls because pip cannot upgrade itself in the same invocation that installs other packages (certifi vendor path issue).
-3. Walks `data/git/{name}/*.py` for `#!`-prefixed install directives. Each directive is annotated with `source` (file basename) and `mtime` (filesystem mtime, so unstaged edits count — git commit time would miss them).
+3. Walks `data/git/{name}/*.py` for `#!`-prefixed install directives and follows `#!{set::name}` library-include directives transitively (cycle-safe via a `set::name` seen-set), the same way the per-job directive processor (`process_imports`) builds a job's effective install graph. A cami task that only declares `#!{system::causal}` therefore lands `causal.py`'s git directive (which textually lives in `system/causal.library.py`) in cami's effective directive list — Update Dependencies for cami clones / fetches / checkouts `causal.py` into `data/pkg/cami/causal.py/` the same way the per-job processor would. Each directive is annotated with `source` (basename of the file the directive textually appears in — the included library, not the top-level scriptlet) and `mtime` (filesystem mtime, so unstaged edits count — git commit time would miss them).
 4. **Conflict resolution**: aggregate by canonical pip package name (PEP 503 normalized) and git URL.
    - All scriptlets agree on the spec/branch → use the unified spec.
    - Any disagreement → **newest-mtime-wins**. Logged via `logger.warning(...)` and recorded in the conflict list.
    - This pre-empts pip resolve failures from impossible-constraint situations like `>=2.0` AND `<1.5` — pip only ever sees the survivor spec.
-5. Reconstructs synthetic `#!` lines from the survivors and feeds them to `process_install_lines(upgrade=True)` — same code path as the job-time installs, just in upgrade mode.
+5. Installs the survivors via two helpers local to the task — `_install_pip` (plain `pip install --upgrade --upgrade-strategy eager <spec>`) and `_install_git`. The git helper, on an existing local clone, runs `git fetch --prune --tags origin` *before* `git checkout {branch}` / `git pull`. The fetch is what makes a directive change that introduces a remote branch added after the original clone (e.g. flipping from `main` to a new feature branch) resolve cleanly — without it, the checkout would fail with `pathspec '{branch}' did not match` because the local clone has no ref for it, and the operator's only recourse used to be a manual `git fetch` in `data/pkg/{name}/{repo}`. Per-job installs (`process_install_lines`) stay strictly offline; only this path touches the network.
 6. Writes `data/venv/{name}/.update_warnings.json` with the conflict summary (always; empty conflicts overwrite a previous warning state). Kept under `<venv_base>` rather than inside the set's git tree on purpose — the git tree is user content, the warnings file is pyops runtime state, and operators were getting untracked-file noise in their set repos otherwise.
 7. Returns the summary as the HTTP response.
 

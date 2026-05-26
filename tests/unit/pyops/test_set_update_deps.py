@@ -265,3 +265,197 @@ class TestScanSetDirectives:
 
     def test_nonexistent_set_returns_empty(self, task):
         assert task["_scan"]("never_existed") == ([], [])
+
+
+class TestScanTransitiveLibraryIncludes:
+    """`_scan(name)` must follow `#!{set::name}` library-include
+    directives recursively, the same way `process_imports` does at
+    per-job time. Cami's regression scenario: cami's task only
+    declares `#!{system::causal}` (a library include); the actual
+    git directive for `causal.py` lives inside
+    `system/causal.library.py`. Per-job correctly clones causal.py
+    into `data/pkg/cami/causal.py` via the transitive walk. Update-
+    Dependencies for cami used to skip the include and never see
+    the causal.py directive -- so cami's pkg/causal.py drifted
+    while update-deps cami reported "0 conflict(s)" successfully."""
+
+    def test_resolves_cross_set_library_include(self, task):
+        tmp = task["_tmp_path"]
+        cami_dir = tmp / "data" / "git" / "cami"
+        system_dir = tmp / "data" / "git" / "system"
+        cami_dir.mkdir(parents=True)
+        system_dir.mkdir(parents=True)
+        (cami_dir / "service.task.py").write_text(
+            "#!torch\n"
+            "#!{system::causal}\n"
+        )
+        (system_dir / "causal.library.py").write_text(
+            "#!https://git.ralph.or.at/causal/causal.py.git main\n"
+            "#!pyzmq\n"
+        )
+
+        pip, git = task["_scan"]("cami")
+
+        # The cami-direct pip directive AND the system-via-include pips
+        # are both present.
+        pip_pkgs = {d["pkg"] for d in pip}
+        assert pip_pkgs == {"torch", "pyzmq"}, pip_pkgs
+        assert len(git) == 1
+        assert git[0]["url"] == "https://git.ralph.or.at/causal/causal.py.git"
+        assert git[0]["branch"] == "main"
+        # Source attribution points at the file where the directive
+        # textually appears (the included library), not the top-level
+        # scriptlet.
+        assert git[0]["source"] == "causal.library.py", git[0]["source"]
+
+    def test_resolves_same_set_library_include(self, task):
+        """`#!{::name}` resolves against the current set, matching the
+        per-job parser. A library inside the same set can carry
+        further pip / git directives that count toward the set's
+        effective install graph."""
+        tmp = task["_tmp_path"]
+        myset_dir = tmp / "data" / "git" / "myset"
+        myset_dir.mkdir(parents=True)
+        (myset_dir / "task1.task.py").write_text(
+            "#!{::shared}\n"
+            "#!requests\n"
+        )
+        (myset_dir / "shared.library.py").write_text(
+            "#!numpy==2.0.0\n"
+        )
+
+        pip, _git = task["_scan"]("myset")
+        pkgs = {d["pkg"] for d in pip}
+        assert pkgs == {"requests", "numpy"}, pkgs
+
+    def test_transitive_cycle_does_not_loop(self, task):
+        """Cycle: A includes B, B includes A. Walk must terminate."""
+        tmp = task["_tmp_path"]
+        myset_dir = tmp / "data" / "git" / "myset"
+        myset_dir.mkdir(parents=True)
+        (myset_dir / "alpha.task.py").write_text("#!{::beta}\n#!pkg-a\n")
+        (myset_dir / "beta.library.py").write_text("#!{::alpha}\n#!pkg-b\n")
+
+        pip, _git = task["_scan"]("myset")
+        pkgs = sorted(d["pkg"] for d in pip)
+        # Each directive appears exactly once despite the cycle.
+        assert pkgs == ["pkg-a", "pkg-b"], pkgs
+
+    def test_missing_library_silently_skipped(self, task):
+        """Update-Dependencies isn't the right place to surface a
+        broken library reference -- the per-job directive processor
+        would. Missing libs are skipped so the operator can still
+        update the rest of the set's deps."""
+        tmp = task["_tmp_path"]
+        myset_dir = tmp / "data" / "git" / "myset"
+        myset_dir.mkdir(parents=True)
+        (myset_dir / "t.task.py").write_text(
+            "#!{::nonexistent}\n"
+            "#!requests\n"
+        )
+
+        pip, _git = task["_scan"]("myset")
+        pkgs = {d["pkg"] for d in pip}
+        assert pkgs == {"requests"}, pkgs
+
+    def test_transitive_chain_two_hops(self, task):
+        """Cross-set chain A -> B -> C is fully walked."""
+        tmp = task["_tmp_path"]
+        for s in ("a", "b", "c"):
+            (tmp / "data" / "git" / s).mkdir(parents=True)
+        (tmp / "data" / "git" / "a" / "t.task.py").write_text("#!{b::lib1}\n")
+        (tmp / "data" / "git" / "b" / "lib1.library.py").write_text("#!{c::lib2}\n")
+        (tmp / "data" / "git" / "c" / "lib2.library.py").write_text(
+            "#!https://far.git deep_branch\n"
+        )
+
+        _pip, gits = task["_scan"]("a")
+        assert len(gits) == 1
+        assert gits[0]["url"] == "https://far.git"
+        assert gits[0]["branch"] == "deep_branch"
+
+
+class TestInstallGitFetchBeforeCheckout:
+    """`_install_git` is the per-directive git install path used by
+    Update Dependencies. On an existing local clone, it must
+    `git fetch --prune --tags origin` *before* the `git checkout
+    <branch>` / `git pull` so a directive change that flips from
+    `main` to a remote branch added after the original clone
+    resolves on the next Update-Dependencies run. Pre-3.3.0 the
+    operator had to do a manual `git fetch` in the package dir."""
+
+    def test_existing_repo_fetches_before_checkout_and_pull(self, task, monkeypatch):
+        from unittest.mock import patch
+        calls = []
+
+        def fake_run_cmd(cmd, cwd=None, **_kw):
+            calls.append((tuple(cmd), cwd))
+
+        # Skip the os.path.exists branch in _install_git by faking it
+        # to True (the "existing clone" case).
+        with patch.object(task["os"].path, "exists", return_value=True), \
+             patch.dict(task, {"run_cmd": fake_run_cmd}):
+            task["_install_git"](
+                "/venv/bin/pip",
+                {"url": "https://repo.git", "branch": "fix"},
+                "myset",
+            )
+
+        git_cmds = [c[0] for c in calls if c[0] and c[0][0] == "git"]
+        ops = [c[1] for c in git_cmds if len(c) > 1]
+        # Order must be fetch -> checkout -> pull.
+        fetch_idx = next((i for i, c in enumerate(git_cmds) if c[1] == "fetch"), None)
+        ckout_idx = next((i for i, c in enumerate(git_cmds) if c[1] == "checkout"), None)
+        pull_idx = next((i for i, c in enumerate(git_cmds) if c[1] == "pull"), None)
+        assert fetch_idx is not None, f"git fetch missing: {git_cmds}"
+        assert ckout_idx is not None, f"git checkout missing: {git_cmds}"
+        assert pull_idx is not None, f"git pull missing: {git_cmds}"
+        assert fetch_idx < ckout_idx < pull_idx, (
+            "Update-Dependencies must fetch first so a new remote "
+            f"branch is locally known before checkout; got order "
+            f"{git_cmds[fetch_idx]}, {git_cmds[ckout_idx]}, {git_cmds[pull_idx]}"
+        )
+
+    def test_existing_repo_fetch_uses_prune_and_tags(self, task):
+        from unittest.mock import patch
+        calls = []
+
+        def fake_run_cmd(cmd, cwd=None, **_kw):
+            calls.append(tuple(cmd))
+
+        with patch.object(task["os"].path, "exists", return_value=True), \
+             patch.dict(task, {"run_cmd": fake_run_cmd}):
+            task["_install_git"](
+                "/venv/bin/pip",
+                {"url": "https://repo.git"},  # no branch argument
+                "myset",
+            )
+
+        fetches = [c for c in calls if c and c[:2] == ("git", "fetch")]
+        assert len(fetches) == 1, f"exactly one git fetch expected: {fetches}"
+        fetch = fetches[0]
+        assert "--prune" in fetch, fetch
+        assert "--tags" in fetch, fetch
+        assert "origin" in fetch, fetch
+
+    def test_initial_clone_does_not_fetch(self, task):
+        """On the initial clone, `git clone` already gets everything
+        from origin -- a follow-up fetch would be wasteful."""
+        from unittest.mock import patch
+        calls = []
+
+        def fake_run_cmd(cmd, cwd=None, **_kw):
+            calls.append(tuple(cmd))
+
+        with patch.object(task["os"].path, "exists", return_value=False), \
+             patch.dict(task, {"run_cmd": fake_run_cmd}):
+            task["_install_git"](
+                "/venv/bin/pip",
+                {"url": "https://repo.git", "branch": "main"},
+                "myset",
+            )
+
+        assert any(c[:2] == ("git", "clone") for c in calls), f"git clone expected: {calls}"
+        assert not any(c[:2] == ("git", "fetch") for c in calls), (
+            f"git fetch must not run on initial clone: {calls}"
+        )

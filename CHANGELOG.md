@@ -260,6 +260,42 @@ Three additive set capabilities plus a public-namespace rename:
   never matched because the field wasn't there. Regression
   coverage in `tests/integration/routers/test_job.py` and
   `tests/pyopsctl/unit/test_commands_job.py`.
+- `app/pyops/set_update_deps.task` now matches the per-job directive
+  processor's transitive semantics and refreshes git clones in two
+  ways. Pre-3.3.0 it had two gaps that compounded into "Update
+  Dependencies looks clean but transitive deps drift silently":
+  1. `_install_git` went straight to `git checkout <branch>` /
+     `git pull` against an existing local clone, so a directive flip
+     from `main` to a freshly-created remote branch hit
+     `pathspec 'newbranch' did not match any file(s)` — the local
+     clone had no ref for it. Operators had to `git fetch` by hand
+     in `data/pkg/<set>/<repo>`, bypassing the pyops-managed
+     lifecycle. Fix: run `git fetch --prune --tags origin` ahead of
+     the checkout when the clone already exists.
+  2. `_scan(name)` only walked `data/git/{name}/*.py`, treating
+     `#!{set::name}` library-include directives as "not a git
+     directive" (line 73's `or "::" in rest: continue`). The per-job
+     processor (`process_imports`) follows includes recursively, so
+     a cami task that says `#!{system::causal}` correctly clones
+     `causal.py` into `data/pkg/cami/causal.py/` from the directive
+     that lives in `system/causal.library.py`. Update-Dependencies
+     for cami silently skipped the include and never reported the
+     transitive deps — operator ran "update cami", got "0
+     conflict(s)" back, but cami's pkg/causal.py was untouched and
+     stayed at whatever ref it was cloned with. Fix: `_scan` now
+     follows `#!{set::name}` includes transitively (cross-set and
+     same-set), cycle-safe via a per-(set,name) seen set, with
+     directives attributed to the file they textually appear in.
+  Per-job installs (`app/lib/job.process_install_lines`) stay
+  strictly offline as before; only the explicit Update-Dependencies
+  action touches the network. Regression coverage:
+  `tests/unit/pyops/test_set_update_deps.py::TestInstallGitFetchBeforeCheckout`
+  (fetch ordering / flags / no-fetch on initial clone) and
+  `TestScanTransitiveLibraryIncludes` (cross-set + same-set
+  resolution, cycle protection, missing-lib skip, multi-hop chain)
+  plus the real-git integration suite at
+  `tests/integration/test_set_update_deps_fetch.py` (branch-flip +
+  tag-pickup against a temp bare remote).
 
 ### CI / Docs
 - `pyyaml` added to the runner's image (`Dockerfile`) and the four
