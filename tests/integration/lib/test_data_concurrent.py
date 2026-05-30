@@ -106,11 +106,12 @@ def test_shared_read_does_not_block_other_reads(repo):
 
 def test_exclusive_write_blocks_read(repo):
     """A write holding LOCK_EX must block a concurrent read until it
-    releases. We approximate this by running the writer in a subprocess
-    that sleeps inside its `with` block, then asserting the reader saw
-    the post-write state."""
+    releases. The writer subprocess signals on stdout the moment it
+    holds the exclusive lock; the reader only starts after that
+    handshake -- a fixed sleep here races under load (the cold-start
+    writer may not own the lock yet, so the reader reads the pre-write
+    value)."""
     import threading
-    import time
     from app.lib.data import SetData
     sd = SetData("myset", repo)
     with sd.write("state", format="json") as s:
@@ -123,12 +124,15 @@ def test_exclusive_write_blocks_read(repo):
         from app.lib.data import SetData
         sd = SetData("myset", {repo!r})
         with sd.write("state", format="json") as s:
+            print("LOCKED", flush=True)
             time.sleep(0.5)
             s["v"] = 42
     """)
-    writer = subprocess.Popen([sys.executable, "-c", writer_script])
-    # Brief delay so the writer is inside its with-block before we try to read.
-    time.sleep(0.1)
+    writer = subprocess.Popen([sys.executable, "-c", writer_script], stdout=subprocess.PIPE)
+    # Block until the writer confirms it holds LOCK_EX (deterministic
+    # handshake instead of a fixed sleep that flakes under load).
+    ready = writer.stdout.readline()
+    assert ready.strip() == b"LOCKED", f"writer never signalled lock acquisition (got {ready!r})"
     read_value = None
 
     def read_after_writer():
