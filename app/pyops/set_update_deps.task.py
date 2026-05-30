@@ -251,7 +251,8 @@ def main():
 
     with install_lock(name):
         pip_bin = _ensure_venv(name)
-        run_cmd([pip_bin, "install", "--upgrade", "pip", "setuptools", "wheel"])
+        # pin setuptools <82 for package compatibility.
+        run_cmd([pip_bin, "install", "--upgrade", "pip", "setuptools<82", "wheel"])
         run_cmd([pip_bin, "install", "--upgrade", *CORE_DEPS])
 
         pips, gits = _scan(name)
