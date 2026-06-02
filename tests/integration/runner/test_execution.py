@@ -965,9 +965,11 @@ logging.error('ERROR message')
     @patch('app.lib.job.send_completion')
     def test_run_debug_no_debugger_injection(self, mock_send, mock_run, mock_listener, mock_check_call, mock_sets_check_call, mock_conf, tmp_path):
         """Regression: pyops no longer imports or starts a debugger.
-        run_debug_job materialises sources, runs the user's param + libs +
-        code, sends `state=running` after param, and `state=done` at the
-        end — same code path as task/service/draft minus retries."""
+        run_debug_job materialises sources, runs libs then param, sends
+        `state=running` once param returns, then runs the main code and
+        sends `state=done` — same code path as service/draft/test minus
+        retries. (Task-kind keeps the older "param before libs" order
+        because of its retry-loop contract.)"""
         mock_run.side_effect = [Mock(returncode=0, stdout=""), Mock(returncode=0)]
         mock_sets_check_call.return_value = None
         from app.job_runner import main as run
@@ -987,7 +989,11 @@ logging.error('ERROR message')
             {"owner": {}},
             {"bind": "127.0.0.1:8000"})
 
-        # state=running fires after exec(param), state=done at the end.
+        # For service / draft / debug / test, state=running fires after
+        # exec(libs) and exec(param) have both returned. The assertion is
+        # the same shape as before (running observed, terminal=done) — the
+        # change is purely in where in the boot sequence the flip happens,
+        # not in how many or which completions are sent.
         sent_states = [c.args[1]["state"] for c in mock_send.call_args_list]
         assert "running" in sent_states
         assert sent_states[-1] == "done"

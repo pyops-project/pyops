@@ -236,6 +236,21 @@ def execute_job_code(param: str, compiled_code, compiled_libs, glob: dict, job_t
     paused at first stop" without the runner needing to know which
     debugger was used.
 
+    Sequence position of the flip differs by kind:
+      • task: `exec(param) → state=running → exec(libs) → exec(code)`
+        on the first retry attempt; subsequent attempts re-run the same
+        steps without re-signalling (the `running_sent` guard makes the
+        flip a one-shot). Param-before-libs is load-bearing — task
+        authors use param to set env / config that libs then read.
+      • service / draft / debug / test: `exec(libs) → exec(param) →
+        state=running → exec(code)`. Libraries do the heavy I/O
+        (torch, transformers, …) and finish during `loading`; the
+        controller-proxy still 503s on requests that arrive too early.
+        Once libs are imported, exec(param) runs — for debug this
+        blocks at `wait_for_client + breakpoint` until the client
+        attaches and issues `continue`, so the flip to `running` still
+        means "debugger bootstrap finished" exactly as before.
+
     After libraries are exec'd into `glob` and before the main code
     runs, `_register_user_module` snapshots `glob` into `sys.modules`
     under `glob['__name__']` so directive-merged classes round-trip
@@ -275,13 +290,21 @@ def execute_job_code(param: str, compiled_code, compiled_libs, glob: dict, job_t
                         job_lib.send_completion(runner_sock_path, {"id": job_id, "state": "failed", "detail": error_msg})
                         break
         else:
-            # Service and debug jobs - no retry
-            # Execute param once before execution
+            # Service / draft / debug / test — no retry. Libraries
+            # first (heavy imports run during state=loading), then
+            # param (debugger bootstrap for debug; usually empty for
+            # the others — `wait_for_client + breakpoint` blocks until
+            # the client attaches and issues continue), then flip to
+            # running, then the main code. `exec(param) → running` is
+            # preserved verbatim from the previous contract; only the
+            # position of `exec(libs)` moves to before param so the
+            # 5-10s library-import window happens during loading
+            # rather than during a misleading "running".
+            for cl in compiled_libs:
+                exec(cl, glob)
             if param:
                 exec(param, glob)
             _signal_running()
-            for cl in compiled_libs:
-                exec(cl, glob)
             _register_user_module(glob)
             exec(compiled_code, glob)
             job_lib.send_completion(runner_sock_path, {"id": job_id, "state": "done", "detail": None})

@@ -321,7 +321,7 @@ graph TD
 ```
 
 - `loadJob(job_id)`: fetches from DB, sets state `loading`, returns owner, set, name, kind, param, code, overrides, max_retries
-- `assignJob(job_id, pid)`: sets pid + start timestamp on the row. **Does not** change state — the job process flips `loading` → `running` itself, via a `state=running` ZMQ completion message after its `exec(param)` returns. See `markRunning`.
+- `assignJob(job_id, pid)`: sets pid + start timestamp on the row. **Does not** change state — the job process flips `loading` → `running` itself, via a `state=running` ZMQ completion message at the kind-specific boundary (task: after `exec(param)` on the first retry attempt; service / draft / debug / test: after `exec(libs)` + `exec(param)` both return). See `markRunning` and the `state=running` subsection below.
 - `markRunning(job_id)`: flips `loading` → `running` on the param-done signal from the job process. Honours the same terminal-state CASE protection as `finishJob`, so a cancel that committed before the signal arrived survives.
 - `finishJob(job_id, state, detail)`: atomic UPDATE with CAS — preserves any committed `cancel`/`cancelling` state, otherwise applies the supplied state; service jobs with drop_done and state "done" immediately get re-targeted to "remove"; if `old_pid` is set, spawns a daemon `terminate_job_processes` thread to clean up the process tree
 - `postTerm(job_id, killed=False)`: if state "remove" → delete job + workspace; else → set state "cancelled" with end/pid cleared
@@ -359,7 +359,7 @@ After `_shutdown_job_processes` returns, the runner drains any final ZMQ events,
 
 #### Debug Spawn
 
-Debug jobs spawn exactly like every other kind — no special readiness probe, no port allocation, no debugger-specific cleanup. The runner doesn't import or know about any debugger. The only debug-specific behaviour lives in `run_debug_job` (file materialisation under `.debug/src/`, `kind in ("debug", "testdebug")` overrides) and in the job lifecycle (no retry, no execution timeout). The client's `param` block is what brings a debugger up (`debugpy.listen()`, `gdbserver --attach $$ :<port>`, ...); the `state=running` ZMQ completion that flips `loading` → `running` fires after that param block returns, so consumers polling job state observe ready := "debugger bootstrap finished". `kind=testdebug` reuses `run_debug_job` with `__name__='__test__'` overlaid — see "Testdebug Jobs (Hybrid)" below.
+Debug jobs spawn exactly like every other kind — no special readiness probe, no port allocation, no debugger-specific cleanup. The runner doesn't import or know about any debugger. The only debug-specific behaviour lives in `run_debug_job` (file materialisation under `.debug/src/`, `kind in ("debug", "testdebug")` overrides) and in the job lifecycle (no retry, no execution timeout). The client's `param` block is what brings a debugger up (`debugpy.listen()`, `gdbserver --attach $$ :<port>`, ...); the `state=running` ZMQ completion that flips `loading` → `running` fires after that param block returns. For debug-kind specifically that's after the client has attached AND issued the first `continue` past `debugpy.breakpoint()`, so consumers polling job state observe ready := "debugger bootstrap finished and stepped past first stop". Library imports complete during `loading` (before `exec(param)` runs) so the debugger attaches to a fully-initialised library namespace rather than racing the import stack. `kind=testdebug` reuses `run_debug_job` with `__name__='__test__'` overlaid — see "Testdebug Jobs (Hybrid)" below.
 
 ### Job Setup (`app/job_setup.py`)
 
@@ -515,7 +515,7 @@ Debug jobs are launched by the runner with `kind="debug"`. **pyops does not impo
 1. Apply overrides: if `{set}::{name}` is present in the `overrides` dict, swap its body; same for any library entry that matches. Overrides are the "operator is iterating on local code that may not be committed yet" mechanism and stay with `kind=debug`.
 2. Materialise `.debug/src/{set}/task/{name}.py`, `.debug/src/{set}/task/param.py` (if param present), and `.debug/src/{set}/library/{lib}.py` for each lib. Standards-compliant directory layout, no `__init__.py` required — debugpy/gdb-python/lldb do path lookup, not import. The layout is also the audit trail for "which source produced this output".
 3. Compile from the on-disk files (not from in-memory strings) so frame `source.path` reports `.debug/src/...` and debuggers can map line numbers cleanly.
-4. `execute_job_code(...)` runs `exec(param, glob)` → sends `state=running` (the `loading → running` flip) → `exec(libs)` → `exec(code)` → `state=done` / `failed`.
+4. `execute_job_code(...)` runs `exec(libs)` → `exec(param, glob)` → sends `state=running` (the `loading → running` flip) → `exec(code)` → `state=done` / `failed`. Library imports finish during `loading`, so for debug-kind the debugger bootstrap in `param` attaches to a fully-initialised library namespace, and for service / draft / test the controller-proxy only sees `state=running` once `exec(libs)` has actually returned. (Task-kind keeps the inverted order — `exec(param)` then `state=running` then `exec(libs)` then `exec(code)`, inside a retry loop — because task authors use param as config-prelude that libs read.)
 
 The param block is where debug-kind diverges from the other kinds in behaviour: for `kind=debug`, clients put their debugger bootstrap there. Typical shapes:
 
@@ -539,7 +539,7 @@ subprocess.Popen(["gdbserver", "--attach", ":2345", str(os.getpid())],
                  preexec_fn=_preexec)
 ```
 
-The param author is responsible for picking a port (client-side per-user pool) and for ensuring any spawned debugger-server process dies with the job process. pyops's only invariant is: when `exec(param)` returns, the job is "running" — whatever that means for the chosen debugger.
+The param author is responsible for picking a port (client-side per-user pool) and for ensuring any spawned debugger-server process dies with the job process. pyops's only invariant is: when `exec(param)` returns, the job is "running" — whatever that means for the chosen debugger. For non-task kinds `exec(libs)` has already completed by that point, so the debugger attaches to a populated namespace; for task `exec(libs)` happens after the flip, since task-kind retries re-run param-then-libs together.
 
 #### Retry behaviour
 
@@ -549,7 +549,12 @@ The param author is responsible for picking a port (client-side per-user pool) a
 
 #### `state=running` for all kinds
 
-The `state=running` ZMQ completion fires the first time `exec(param)` returns successfully, before libs/code start. `assignJob` no longer flips the row to running on spawn; the job process owns that transition. This makes `running` mean the same thing across kinds — for task/service/draft/test it's "param executed, real work starting"; for debug it's "debugger bootstrap finished, attach window open" — without pyops having to probe anything debugger-specific.
+The `state=running` ZMQ completion fires the first time `exec(param)` returns successfully. `assignJob` no longer flips the row to running on spawn; the job process owns that transition. The *sequence position* of the flip is kind-aware so library-import time lands on the right side of the readiness line:
+
+- **task**: `exec(param)` → `state=running` → `exec(libs)` → `exec(code)`, inside the retry loop. Task authors use param as config-prelude that libs read, so param must execute first; the `running_sent` guard makes the flip a one-shot across retries.
+- **service / draft / debug / test**: `exec(libs)` → `exec(param)` → `state=running` → `exec(code)`. Libraries (`#!{set::lib}` directives) do the heavy I/O — for cami-shaped services that's torch + transformers, 5-10 s — so running them during `loading` keeps the controller-proxy honest. For debug, `exec(param)` is the debugger bootstrap (`debugpy.listen + wait_for_client + breakpoint`), which blocks until the client attaches and continues past the first stop; the flip to `running` fires right after that point so consumers polling job state still observe `running` := "debugger bootstrap finished".
+
+Either way `running` means "real work about to start" — for task that's `exec(libs)` and `exec(code)` next; for service it's `exec(code)` (which is typically `service.run(listener)` — the ticker loop starts within microseconds of the flip); for debug it's user code stepped under the debugger.
 
 ### Test Jobs
 
@@ -560,7 +565,7 @@ The `state=running` ZMQ completion fires the first time `exec(param)` returns su
 1. Apply overrides (same mechanism as `kind=debug` — VSIX / pyopsctl can run uncommitted local code via the `overrides` dict).
 2. Materialise scriptlet sources under `workspace/.test/src/{set}/(task|library)/<name>.py` so coverage / debuggers / log paths refer to canonical file paths. Verbatim copy of the source; line numbers match the editor view.
 3. Compile from the materialised files (so `frame.f_code.co_filename` points at `.test/src/...`).
-4. Exec the task body in globals with `__name__ = "__test__"`. `state=running` ZMQ flip fires after `exec(param)` returns (matches every other kind).
+4. Exec the task body in globals with `__name__ = "__test__"`. `state=running` ZMQ flip fires after `exec(libs)` and `exec(param)` both return (matches every other non-task kind; task-kind keeps the inverted param-then-libs order because of its retry loop).
 5. Exit derived from the body's outcome: clean return → `done`, exception → `failed` with traceback in `detail`.
 6. No retry, no execution timeout — same lifecycle policy as `kind=debug`.
 

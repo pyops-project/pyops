@@ -296,6 +296,29 @@ Three additive set capabilities plus a public-namespace rename:
   plus the real-git integration suite at
   `tests/integration/test_set_update_deps_fetch.py` (branch-flip +
   tag-pickup against a temp bare remote).
+- `app/job_runner.execute_job_code` now runs `exec(libs)` BEFORE
+  `exec(param)` for `kind` in `("service", "draft", "debug", "test",
+  "testdebug")` — task-kind keeps the inverted order because of its
+  retry-loop contract. Library imports pulled in by `#!{set::lib}`
+  directives can be heavy (cami's `llm_workers` pulls in `torch` +
+  `transformers` through `causal.vortex.asyncio.llm.hf`, taking
+  5-10 s on first import); the previous order ran those imports
+  AFTER `_signal_running()` had already fired, so the row read
+  `state=running` while the service's zmq listener was bound but
+  not yet polled. Controller-proxy `ServiceClient.recv()` blocked
+  on the first HTTP request through the warmup window, gunicorn
+  worker_timeout (300 s by default) eventually killed the worker,
+  and the operator saw `Empty reply from server`. After the fix the
+  library import window lands during `state=loading`; `state=running`
+  fires after `exec(param)` returns (preserving the debug-kind
+  semantics verbatim — `exec(param)` is still the last step before
+  the flip, so for kind=debug `running` still means "debugger
+  attached + first continue issued"). Docs in `docs/insights_app.md`
+  and `docs/insights_vsix.md` rephrased to be kind-aware:
+  task fires after `exec(param)`; non-task fires after
+  `exec(libs)` + `exec(param)` have both returned. Regression
+  coverage updated at
+  `tests/integration/runner/test_execution.py::test_run_debug_no_debugger_injection`.
 
 ### CI / Docs
 - `pyyaml` added to the runner's image (`Dockerfile`) and the four
