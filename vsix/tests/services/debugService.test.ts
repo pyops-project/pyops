@@ -290,6 +290,40 @@ describe('DebugService', () => {
       const body = JSON.parse(mockApiClient.fetch.mock.calls[0][1].body);
       expect(body.overrides).toEqual(testOverrides);
     });
+
+    it('defaults kind to "debug" when not specified (backwards compat)', async () => {
+      // F5-driven and the older `pyops.startDebugJob` command path
+      // both omit the kind argument. They must keep landing on
+      // kind=debug — the testdebug variant is opt-in.
+      mockApiClient.fetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ job: 'job-default-debug' }),
+      });
+
+      await service.enqueueDebugJob('testset', 'testscript');
+
+      const body = JSON.parse(mockApiClient.fetch.mock.calls[0][1].body);
+      expect(body.kind).toBe('debug');
+    });
+
+    it('passes kind=testdebug through to the PUT body when requested', async () => {
+      // The pyops.startTestDebugJob command path supplies
+      // kind='testdebug'. The bootstrap, port lease, attach, and
+      // pathMappings stay byte-for-byte identical with kind=debug
+      // — the only wire-level difference is this string.
+      mockApiClient.fetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ job: 'job-td' }),
+      });
+
+      const result = await service.enqueueDebugJob('testset', 'testscript', {}, 'testdebug');
+
+      expect(result).toEqual({ jobId: 'job-td', port: 5678 });
+      const body = JSON.parse(mockApiClient.fetch.mock.calls[0][1].body);
+      expect(body.kind).toBe('testdebug');
+      // Bootstrap composition stays the same — debugpy.listen on the leased port.
+      expect(body.param).toContain('debugpy.listen(("0.0.0.0", 5678)');
+    });
   });
 
   describe('getDebugHost', () => {

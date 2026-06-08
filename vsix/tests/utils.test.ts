@@ -35,6 +35,28 @@ describe('utils', () => {
     it('returns py for service type', () => {
       expect(inferExt('service')).toBe('py');
     });
+
+    describe('data type', () => {
+      it('defaults to yaml without hint', () => {
+        expect(inferExt('data')).toBe('yaml');
+      });
+
+      it('returns yaml for explicit yaml hint', () => {
+        expect(inferExt('data', 'yaml')).toBe('yaml');
+      });
+
+      it('returns yml for yml hint (passthrough — both are YAML on disk)', () => {
+        expect(inferExt('data', 'yml')).toBe('yml');
+      });
+
+      it('returns json for explicit json hint', () => {
+        expect(inferExt('data', 'json')).toBe('json');
+      });
+
+      it('falls back to yaml for unknown hint', () => {
+        expect(inferExt('data', 'xml')).toBe('yaml');
+      });
+    });
   });
 
 

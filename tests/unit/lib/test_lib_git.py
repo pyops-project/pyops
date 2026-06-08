@@ -60,11 +60,12 @@ def mock_logging():
 class TestPullIfNeeded:
     def test_pull_happy_path(self, mock_repo, mock_subprocess, mock_files_conf, mock_logging, mock_fcntl):
         mock_run, mock_check = mock_subprocess
-        # Calls: _check remote, direct check_output tag, _check status, _check branch, _check pre, _check ls-remote, run fetch, _check post, _check log, _check ls-tree
+        # Calls (after the pull() reorg): _check remote, direct check_output tag,
+        # _check branch, _check pre, _check ls-remote, run fetch, _check post,
+        # _check log, _check ls-tree
         mock_check.side_effect = [
             b'origin\n',  # remote _check
             b'',  # tag direct
-            b'',  # status _check
             b'main\n',  # branch _check
             b'abc123\n',  # pre _check
             b'def456\n',  # ls-remote _check
@@ -95,11 +96,10 @@ class TestPullIfNeeded:
 
     def test_pull_no_changes(self, mock_repo, mock_subprocess, mock_files_conf, mock_logging):
         mock_run, mock_check = mock_subprocess
-        # Calls: _check remote, direct tag, _check status, _check branch, _check pre, _check ls-remote (match), no fetch
+        # Calls: _check remote, direct tag, _check branch, _check pre, _check ls-remote (match), no fetch
         mock_check.side_effect = [
             b'origin\n',  # remote
             b'',  # tag
-            b'',  # status
             b'main\n',  # branch
             b'abc123\n',  # pre
             b'abc123\n',  # ls-remote
@@ -204,11 +204,10 @@ class TestPullIfNeeded:
 
     def test_pull_new_file_failure(self, mock_repo, mock_subprocess, mock_files_conf, mock_logging):
         mock_run, mock_check = mock_subprocess
-        # Calls: _check remote, direct tag, _check status, _check branch, _check pre, run fetch, _check post, _check log, _check ls-tree
+        # Calls: _check remote, direct tag, _check branch, _check pre, _check ls-remote, run fetch, _check post, _check log, _check ls-tree
         mock_check.side_effect = [
             b'origin\n',  # remote
             b'',  # tag
-            b'',  # status
             b'main\n',  # branch
             b'abc123\n',  # pre
             b'def456\n',  # ls-remote
@@ -233,7 +232,6 @@ class TestPullIfNeeded:
         mock_check.side_effect = [
             b'origin\n',  # remote
             b'',  # tag
-            b'',  # status
             b'main\n',  # branch
             b'abc123\n',  # pre_head
             b'abc123 abc123\n',  # ls-remote --heads origin main
@@ -246,15 +244,13 @@ class TestPullIfNeeded:
 
     def test_pull_skip_fetch_mismatch(self, mock_repo, mock_subprocess, mock_files_conf, mock_logging):
         mock_run, mock_check = mock_subprocess
-        # Calls: _check remote, direct tag, _check status, _check branch, _check pre, _check ls-remote, run fetch, _check post, _check log, _check ls-tree
+        # Calls: _check remote, direct tag, _check branch, _check pre, _check ls-remote, run fetch, _check post, _check log, _check ls-tree
         mock_check.side_effect = [
             b'origin\n',  # remote
             b'',  # tag
-            b'',  # status
             b'main\n',  # branch
             b'abc123\n',  # pre
             b'def456 def456\n',  # ls-remote different
-            b'',  # status again? No, after fetch no status
             b'def456\n',  # post
             b'new commit msg\n',  # log
             b'file1.py\n',  # ls-tree
@@ -266,11 +262,10 @@ class TestPullIfNeeded:
 
     def test_pull_skip_fetch_lsremote_error(self, mock_repo, mock_subprocess, mock_files_conf, mock_logging):
         mock_run, mock_check = mock_subprocess
-        # Calls: _check remote, direct tag, _check status, _check branch, _check pre, _check ls-remote fails, run fetch, _check post, _check log, _check ls-tree
+        # Calls: _check remote, direct tag, _check branch, _check pre, _check ls-remote fails, run fetch, _check post, _check log, _check ls-tree
         mock_check.side_effect = [
             b'origin\n',  # remote
             b'',  # tag
-            b'',  # status
             b'main\n',  # branch
             b'abc123\n',  # pre
             subprocess.CalledProcessError(1, [], output=b''),  # ls-remote fails
@@ -329,6 +324,11 @@ class TestRepoPathAndFiles:
         file_path = git.get_file_path(mock_repo, name, type_)
         assert expected in os.path.basename(file_path)
 
+    def test_get_file_path_docs_markdown(self, mock_repo):
+        # Non-README markdown goes under docs/{name}.md
+        file_path = git.get_file_path(mock_repo, "intro", "markdown")
+        assert file_path.endswith(os.path.join("docs", "intro.md"))
+
     @pytest.mark.parametrize('type_, name', [('invalid', 'script')])
     def test_get_file_path_invalid_type(self, mock_repo, type_, name):
         with pytest.raises(ValueError):
@@ -339,6 +339,8 @@ class TestRepoPathAndFiles:
         ('view.html', 'view'),
         ('README.md', 'README'),
         ('mylib.js', 'mylib'),
+        ('docs/intro.md', 'intro'),
+        ('docs/api_reference.md', 'api_reference'),
     ])
     def test_get_name_from_file(self, filename, expected):
         assert git.get_name_from_file(filename) == expected
@@ -348,6 +350,8 @@ class TestRepoPathAndFiles:
         ('view.html', 'view'),
         ('README.md', 'markdown'),
         ('mylib.js', 'jslibrary'),
+        ('docs/intro.md', 'markdown'),
+        ('docs/api_reference.md', 'markdown'),
     ])
     def test_infer_type_from_filename(self, filename, expected):
         assert git.infer_type_from_filename(filename) == expected
@@ -359,26 +363,99 @@ class TestRepoPathAndFiles:
 
 class TestListAndUnique:
     def test_list_scriptlets(self, tmp_path, mock_files_conf, mock_subprocess):
-        # Mock sets dir with repos
+        # Mock sets dir with repos + per-path listing (top-level vs docs/)
         def listdir_side_effect(path):
             if '.cache/git' in path:
                 return ['set1']
-            else:
-                return ['script.task.py', 'view.html', 'README.md', 'invalid.txt']
+            if path.endswith('docs') or '/docs' in path:
+                return ['intro.md', 'api.md', 'irrelevant.txt']
+            return ['script.task.py', 'view.html', 'README.md', 'invalid.txt']
+
+        def isdir_side_effect(path):
+            # Treat repo and docs subdir as directories; everything else
+            # (specific files we don't care about) is irrelevant since the
+            # other code paths don't call isdir on them here.
+            return True
+
         with patch('os.listdir', side_effect=listdir_side_effect), \
              patch('os.path.exists', return_value=True), \
-             patch('os.path.isdir', return_value=True), \
+             patch('os.path.isdir', side_effect=isdir_side_effect), \
              patch('app.lib.git.get_repo_path', return_value=str(tmp_path / 'repo')):
             result = git.list_scriptlets()
-            assert len(result) == 3
-            # Adjust for sorted sets; expect set1 first
+            # Every entry carries `has_unstaged` (False here — mock_subprocess
+            # returns empty `git status --porcelain` output).
             expected = [
-                {'set': 'set1', 'name': 'script', 'type': 'task'},
-                {'set': 'set1', 'name': 'view', 'type': 'view'},
-                {'set': 'set1', 'name': 'README', 'type': 'markdown'}
+                {'set': 'set1', 'name': 'script', 'type': 'task', 'has_unstaged': False},
+                {'set': 'set1', 'name': 'view', 'type': 'view', 'has_unstaged': False},
+                {'set': 'set1', 'name': 'README', 'type': 'markdown', 'has_unstaged': False},
+                {'set': 'set1', 'name': 'intro', 'type': 'markdown', 'has_unstaged': False},
+                {'set': 'set1', 'name': 'api', 'type': 'markdown', 'has_unstaged': False},
             ]
             for e in expected:
                 assert e in result
+            assert len(result) == len(expected)
+
+    def test_list_scriptlets_stamps_has_unstaged_for_dirty_files(self, tmp_path, mock_files_conf):
+        """When `git status --porcelain` lists a file, its scriptlet
+        entry must carry `has_unstaged=True`; clean entries stay False.
+        Drives the dirty-set parse + path-match logic in one shot."""
+        def listdir_side_effect(path):
+            if '.cache/git' in path:
+                return ['set1']
+            if path.endswith('docs') or '/docs' in path:
+                return []
+            return ['clean.task.py', 'dirty.task.py']
+
+        with patch('os.listdir', side_effect=listdir_side_effect), \
+             patch('os.path.exists', return_value=True), \
+             patch('os.path.isdir', return_value=True), \
+             patch('app.lib.git.get_repo_path', return_value=str(tmp_path / 'repo')), \
+             patch('subprocess.check_output',
+                   return_value=b" M dirty.task.py\n"):
+            result = git.list_scriptlets()
+            statuses = {e['name']: e['has_unstaged'] for e in result}
+            assert statuses == {'dirty': True, 'clean': False}
+
+    def test_list_scriptlets_handles_porcelain_rename(self, tmp_path, mock_files_conf):
+        """Renamed entries (`R  old -> new`) flag both endpoints as
+        dirty so a UI lookup by either current or previous name shows
+        the warning."""
+        def listdir_side_effect(path):
+            if '.cache/git' in path:
+                return ['set1']
+            if path.endswith('docs') or '/docs' in path:
+                return []
+            return ['new_name.task.py']
+
+        with patch('os.listdir', side_effect=listdir_side_effect), \
+             patch('os.path.exists', return_value=True), \
+             patch('os.path.isdir', return_value=True), \
+             patch('app.lib.git.get_repo_path', return_value=str(tmp_path / 'repo')), \
+             patch('subprocess.check_output',
+                   return_value=b"R  old_name.task.py -> new_name.task.py\n"):
+            result = git.list_scriptlets()
+            assert any(e['name'] == 'new_name' and e['has_unstaged'] for e in result)
+
+    def test_list_scriptlets_git_status_failure_yields_clean(self, tmp_path, mock_files_conf):
+        """If `git status` errors (locked repo, no .git, …), the dirty
+        set is empty and every entry shows as clean rather than the
+        listing 500-ing. Worst case: a brief window where the Manager
+        UI under-reports drafts; the operator triggers refresh."""
+        def listdir_side_effect(path):
+            if '.cache/git' in path:
+                return ['set1']
+            if path.endswith('docs') or '/docs' in path:
+                return []
+            return ['x.task.py']
+
+        with patch('os.listdir', side_effect=listdir_side_effect), \
+             patch('os.path.exists', return_value=True), \
+             patch('os.path.isdir', return_value=True), \
+             patch('app.lib.git.get_repo_path', return_value=str(tmp_path / 'repo')), \
+             patch('subprocess.check_output',
+                   side_effect=subprocess.CalledProcessError(128, ["git", "status"])):
+            result = git.list_scriptlets()
+            assert result == [{'set': 'set1', 'name': 'x', 'type': 'task', 'has_unstaged': False}]
 
     def test_check_name_unique(self, mock_repo):
         with patch('os.listdir', return_value=[]):
@@ -574,49 +651,49 @@ class TestStatusAndRollback:
         assert result is True
 
 
-class TestInternalSetResolver:
+class TestPyopsSetResolver:
     """get_repo_path / read_content special-case for the pyops-managed
-    internal set: resolves to <project_root>/app/internal/ (not data/git/),
+    `pyops` set: resolves to <project_root>/app/pyops/ (not data/git/),
     no .git init, direct FS reads."""
 
-    def test_get_repo_path_internal_returns_app_internal(self, tmp_path):
-        fake_internal = tmp_path / "app" / "internal"
-        fake_internal.mkdir(parents=True)
-        with patch.object(files, "internal_set_path", str(fake_internal)):
-            result = git.get_repo_path("internal")
-        assert result == str(fake_internal)
+    def test_get_repo_path_pyops_returns_app_pyops(self, tmp_path):
+        fake_pyops = tmp_path / "app" / "pyops"
+        fake_pyops.mkdir(parents=True)
+        with patch.object(files, "bundled_set_path", str(fake_pyops)):
+            result = git.get_repo_path("pyops")
+        assert result == str(fake_pyops)
 
-    def test_get_repo_path_internal_raises_if_missing(self, tmp_path):
-        missing = tmp_path / "app" / "internal_missing"
-        with patch.object(files, "internal_set_path", str(missing)):
+    def test_get_repo_path_pyops_raises_if_missing(self, tmp_path):
+        missing = tmp_path / "app" / "pyops_missing"
+        with patch.object(files, "bundled_set_path", str(missing)):
             with pytest.raises(git.GitNotFoundError):
-                git.get_repo_path("internal")
+                git.get_repo_path("pyops")
 
-    def test_get_repo_path_internal_skips_git_init(self, tmp_path):
-        fake_internal = tmp_path / "app" / "internal"
-        fake_internal.mkdir(parents=True)
-        with patch.object(files, "internal_set_path", str(fake_internal)), \
+    def test_get_repo_path_pyops_skips_git_init(self, tmp_path):
+        fake_pyops = tmp_path / "app" / "pyops"
+        fake_pyops.mkdir(parents=True)
+        with patch.object(files, "bundled_set_path", str(fake_pyops)), \
              patch("app.lib.git._call") as mock_call:
-            git.get_repo_path("internal")
-        # Internal never gets `git init` / commit dance
+            git.get_repo_path("pyops")
+        # Pyops set never gets `git init` / commit dance
         mock_call.assert_not_called()
-        assert not (fake_internal / ".git").exists()
+        assert not (fake_pyops / ".git").exists()
 
-    def test_read_content_internal_direct_fs_read(self, tmp_path):
-        fake_internal = tmp_path / "app" / "internal"
-        fake_internal.mkdir(parents=True)
-        (fake_internal / "set_clone.task.py").write_text("print('hi')\n")
-        with patch.object(files, "internal_set_path", str(fake_internal)):
-            # committed=True/strict=True are intentionally ignored for internal
-            content = git.read_content(str(fake_internal), "set_clone", "task", committed=True, strict=True)
+    def test_read_content_pyops_direct_fs_read(self, tmp_path):
+        fake_pyops = tmp_path / "app" / "pyops"
+        fake_pyops.mkdir(parents=True)
+        (fake_pyops / "set_clone.task.py").write_text("print('hi')\n")
+        with patch.object(files, "bundled_set_path", str(fake_pyops)):
+            # committed=True/strict=True are intentionally ignored for the pyops set
+            content = git.read_content(str(fake_pyops), "set_clone", "task", committed=True, strict=True)
         assert content == "print('hi')\n"
 
-    def test_read_content_internal_missing_raises_filenotfound(self, tmp_path):
-        fake_internal = tmp_path / "app" / "internal"
-        fake_internal.mkdir(parents=True)
-        with patch.object(files, "internal_set_path", str(fake_internal)):
+    def test_read_content_pyops_missing_raises_filenotfound(self, tmp_path):
+        fake_pyops = tmp_path / "app" / "pyops"
+        fake_pyops.mkdir(parents=True)
+        with patch.object(files, "bundled_set_path", str(fake_pyops)):
             with pytest.raises(FileNotFoundError):
-                git.read_content(str(fake_internal), "no_such", "task", committed=False)
+                git.read_content(str(fake_pyops), "no_such", "task", committed=False)
 
 
 # Additional edge cases can be added as needed

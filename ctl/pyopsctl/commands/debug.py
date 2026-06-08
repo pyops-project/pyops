@@ -22,6 +22,7 @@ from pyopsctl import ports
 from pyopsctl.client import Client, HTTPError
 from pyopsctl.config import load
 from pyopsctl.output import emit, emit_composite, emit_error
+from pyopsctl.overrides import build_overrides
 from pyopsctl.session import client as session_client
 from pyopsctl.session import daemon as session_daemon
 from pyopsctl.session import paths as session_paths
@@ -62,23 +63,6 @@ def _resolve_user_param(args) -> str | None:
         with open(args.param_file, encoding="utf-8") as f:
             return f.read()
     return None
-
-
-def _build_overrides(overrides_dir: str | None, set_name: str) -> dict[str, str] | None:
-    if not overrides_dir:
-        return None
-    set_dir = os.path.join(overrides_dir, set_name)
-    if not os.path.isdir(set_dir):
-        return {}
-    result: dict[str, str] = {}
-    for entry in sorted(os.listdir(set_dir)):
-        if not entry.endswith(".py"):
-            continue
-        stem = entry.split(".", 1)[0]
-        path = os.path.join(set_dir, entry)
-        with open(path, encoding="utf-8") as f:
-            result[f"{set_name}::{stem}"] = f.read()
-    return result
 
 
 def _host_of(url: str) -> str:
@@ -150,9 +134,9 @@ def _start(args) -> int:
             return 4
 
         param = _compose_debug_param(port=lease.port, user_param=user_param)
-        overrides = _build_overrides(args.overrides_dir, args.set)
+        overrides = build_overrides(args.overrides_dir, args.set)
         body = {
-            "set": args.set, "name": args.name, "kind": "debug",
+            "set": args.set, "name": args.name, "kind": args.kind,
             "param": param, "drop_done": False, "max_retries": 0,
         }
         if overrides is not None:
@@ -177,10 +161,10 @@ def _start(args) -> int:
             pass  # best-effort
 
         emit(args, {"job_id": job_id, "set": args.set, "name": args.name,
-                    "port": lease.port,
+                    "kind": args.kind, "port": lease.port,
                     "host": _host_of(profile.url)},
              id_field="job_id",
-             human=f"debug job {job_id} enqueued ({args.set}::{args.name}, "
+             human=f"{args.kind} job {job_id} enqueued ({args.set}::{args.name}, "
                    f"pdb on {_host_of(profile.url)}:{lease.port}); "
                    f"attach via `pyopsctl debug attach {job_id}`")
         return 0
@@ -518,6 +502,11 @@ def register(subparsers, parents):
                            help="enqueue a debug job (remote-pdb bootstrap in param)",
                            parents=parents)
     start.add_argument("set"); start.add_argument("name")
+    start.add_argument("--kind", choices=["debug", "testdebug"], default="debug",
+                       help="debug (default): production codepath under "
+                            "pdb. testdebug: __name__=__test__ block under "
+                            "pdb (sources still under .debug/src/ + a "
+                            ".test symlink)")
     start.add_argument("--param", metavar="TEXT", default=None,
                        help="user param appended after the pdb bootstrap")
     start.add_argument("--param-file", metavar="PATH", default=None)

@@ -32,8 +32,8 @@ def main():
         name = name[:-4]
     if not name:
         raise ValueError(f"Empty repo name inferred from URL: {url}")
-    if name == "internal":
-        raise ValueError("'internal' is reserved for pyops-managed scriptlets")
+    if name == "pyops":
+        raise ValueError("'pyops' is reserved for pyops-managed scriptlets")
 
     git_base = _git_base()
     target = os.path.join(git_base, name)
@@ -51,7 +51,15 @@ def main():
         os.makedirs(git_base, exist_ok=True)
         run_cmd(["git", "clone", clone_url, name], cwd=git_base)
 
-        if username and password:
+        if username and password and parsed.scheme == "https":
+            # Rewrite origin to the credential-free URL so future
+            # operations resolve credentials via the helper file
+            # below — not from the URL itself. Leaving the embedded
+            # form in `.git/config` makes credential rotation a no-op:
+            # editing `.git/credentials` does nothing because git still
+            # consults the URL's `user:pass@…` first. The clean form
+            # forces a credential-helper lookup every time.
+            run_cmd(["git", "remote", "set-url", "origin", url], cwd=target)
             cred_path = os.path.join(target, ".git", "credentials")
             with open(cred_path, "w") as f:
                 f.write(f"https://{username}:{password}@{parsed.netloc}\n")

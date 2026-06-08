@@ -154,6 +154,295 @@ class TestExecution:
         mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "failed", "detail": ANY})
 
     @patch('app.job_runner.job_lib.send_completion')
+    @patch('app.lib.sets.subprocess.check_call')
+    @patch('subprocess.run')
+    @patch('app.lib.pyops.ServiceListener')
+    @patch('time.sleep')
+    def test_run_test_no_retry(self, mock_sleep, mock_listener, mock_run, mock_check_call, mock_send, tmp_path, mock_conf):
+        """kind=test mirrors debug's no-retry contract — a single
+        failed exec terminates the job."""
+        mock_run.return_value = Mock(returncode=0, stdout="pip==24.2\n")
+        mock_check_call.return_value = None
+        from app.job_runner import main as run
+        mock_listener.return_value = Mock()
+        data_base = os.path.join(tmp_path, "data")
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
+        mock_sleep.return_value = None
+
+        with patch('builtins.exec', side_effect=Exception("test fail")):
+            run("id", "owner", "set", "name", "test", "", "raise Exception", [], "/tmp/pyops/runner.sock", 0, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {}}, {"bind": "bind"})
+
+        assert mock_sleep.call_count == 0
+        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "failed", "detail": ANY})
+
+    @patch('app.job_runner.job_lib.send_completion')
+    @patch('app.job_runner.subprocess.run')
+    @patch('app.lib.sets.subprocess.check_call')
+    @patch('app.lib.pyops.ServiceListener')
+    def test_run_test_sets_name_to_test(self, mock_listener, mock_check_call, mock_run, mock_send, tmp_path, mock_conf):
+        """kind=test must execute the task body with __name__='__test__'
+        so the same *.task.py can gate test logic from production logic
+        via the standard idiom."""
+        from app.job_runner import main as run
+        mock_listener.return_value = None
+        mock_check_call.return_value = None
+        mock_run.return_value = Mock(returncode=0)
+        data_base = os.path.join(tmp_path, "data")
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
+
+        code = (
+            "import os, json\n"
+            "open(os.path.join(workspace, 'name.json'), 'w').write(json.dumps({'name': __name__}))\n"
+        )
+        run("id", "owner", "myset", "my_task", "test", "", code, [], "/tmp/pyops/runner.sock", 0, None,
+            {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}},
+            {"venv": venv_path, "pkg": pkg_path},
+            {"owner": {}}, {"bind": "bind"})
+
+        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
+        name_file = os.path.join(data_base, "myset", "id", "name.json")
+        assert os.path.exists(name_file), f"expected workspace artefact at {name_file}"
+        with open(name_file) as f:
+            import json
+            assert json.load(f) == {"name": "__test__"}
+
+    @patch('app.job_runner.job_lib.send_completion')
+    @patch('app.job_runner.subprocess.run')
+    @patch('app.lib.sets.subprocess.check_call')
+    @patch('app.lib.pyops.ServiceListener')
+    def test_run_test_materialises_source_under_test_src(self, mock_listener, mock_check_call, mock_run, mock_send, tmp_path, mock_conf):
+        """kind=test writes scriptlet bodies under .test/src/{set}/...
+        so coverage / debugger source-path mapping can resolve canonical
+        names."""
+        from app.job_runner import main as run
+        mock_listener.return_value = None
+        mock_check_call.return_value = None
+        mock_run.return_value = Mock(returncode=0)
+        data_base = os.path.join(tmp_path, "data")
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
+
+        libs = [{"filename": "other::shared", "code": "X = 1\n"}]
+        run("id", "owner", "myset", "my_task", "test", "", "pass\n", libs, "/tmp/pyops/runner.sock", 0, None,
+            {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}},
+            {"venv": venv_path, "pkg": pkg_path},
+            {"owner": {}}, {"bind": "bind"})
+
+        ws = os.path.join(data_base, "myset", "id")
+        assert os.path.exists(os.path.join(ws, ".test", "src", "myset", "task", "my_task.py"))
+        assert os.path.exists(os.path.join(ws, ".test", "src", "other", "library", "shared.py"))
+
+    @patch('app.job_runner.job_lib.send_completion')
+    @patch('app.job_runner.subprocess.run')
+    @patch('app.lib.sets.subprocess.check_call')
+    @patch('app.lib.pyops.ServiceListener')
+    def test_run_test_user_module_registered_in_sys_modules(self, mock_listener, mock_check_call, mock_run, mock_send, tmp_path, mock_conf):
+        """kind=test exec'ing libs into glob with __name__='__test__'
+        leaves directive-merged classes with __module__='__test__'.
+        Without the runner's sys.modules registration, their
+        round-trip through importlib (e.g. Vortex.from_dict) breaks.
+
+        Drives a kind=test job whose library defines a class and
+        whose main code does `importlib.import_module(__name__)`
+        plus `getattr(...)` to fetch that class. Class must be
+        resolved and identity-equal to the version in `glob`."""
+        from app.job_runner import main as run
+        import sys
+        sys.modules.pop("__test__", None)
+
+        mock_listener.return_value = None
+        mock_check_call.return_value = None
+        mock_run.return_value = Mock(returncode=0)
+        data_base = os.path.join(tmp_path, "data")
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
+
+        # Library defines a class; main code resolves it via importlib
+        # and writes a marker confirming the round-trip succeeded.
+        libs = [{"filename": "myset::lib_one",
+                 "code": "class UserCls:\n    label = 'directive_merged'\n"}]
+        code = (
+            "import importlib, os, json\n"
+            "mod = importlib.import_module(__name__)\n"
+            "cls = getattr(mod, 'UserCls')\n"
+            "open(os.path.join(workspace, 'roundtrip.json'), 'w').write("
+            "    json.dumps({'cls_label': cls.label, 'same_obj': cls is UserCls}))\n"
+        )
+
+        try:
+            run("id", "owner", "myset", "my_task", "test", "", code, libs,
+                "/tmp/pyops/runner.sock", 0, None,
+                {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}},
+                {"venv": venv_path, "pkg": pkg_path},
+                {"owner": {}}, {"bind": "bind"})
+
+            mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
+            marker = os.path.join(data_base, "myset", "id", "roundtrip.json")
+            assert os.path.exists(marker), "main code did not write its marker — importlib roundtrip failed"
+            with open(marker) as f:
+                import json
+                payload = json.load(f)
+            assert payload["cls_label"] == "directive_merged"
+            assert payload["same_obj"] is True
+        finally:
+            sys.modules.pop("__test__", None)
+
+    @patch('app.job_runner.job_lib.send_completion')
+    @patch('app.job_runner.subprocess.run')
+    @patch('app.lib.sets.subprocess.check_call')
+    @patch('app.lib.pyops.ServiceListener')
+    def test_run_draft_user_class_resolves_via_main_module(self, mock_listener, mock_check_call, mock_run, mock_send, tmp_path, mock_conf):
+        """kind=draft (and the other __name__='__main__' kinds:
+        task / service / debug) ALSO need importlib resolution to
+        work for directive-merged classes. The runner's existing
+        `sys.modules['__main__']` is `job_runner.py`, so the registration
+        stamps the user's classes ONTO that existing module rather than
+        replacing it.
+
+        Drives a kind=draft job whose library defines a class and
+        whose main code resolves it via importlib + getattr. Regression
+        coverage for the round-trip failure in cami::causal_service
+        on first start with a persisted realm."""
+        from app.job_runner import main as run
+        import sys
+        sentinel_attrs = ["UserClsDraft", "user_marker_draft"]
+        existing_main = sys.modules["__main__"]
+        for k in sentinel_attrs:
+            existing_main.__dict__.pop(k, None)
+
+        mock_listener.return_value = Mock()
+        mock_check_call.return_value = None
+        mock_run.return_value = Mock(returncode=0)
+        data_base = os.path.join(tmp_path, "data")
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
+
+        libs = [{"filename": "myset::lib_one",
+                 "code": "class UserClsDraft:\n    label = 'main_module_merged'\n"}]
+        code = (
+            "import importlib, os, json\n"
+            "mod = importlib.import_module(__name__)\n"
+            "cls = getattr(mod, 'UserClsDraft')\n"
+            "open(os.path.join(workspace, 'roundtrip.json'), 'w').write("
+            "    json.dumps({'cls_label': cls.label, 'same_obj': cls is UserClsDraft, 'module': __name__}))\n"
+        )
+
+        try:
+            run("id", "owner", "myset", "my_task", "draft", "", code, libs,
+                "/tmp/pyops/runner.sock", 0, None,
+                {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}},
+                {"venv": venv_path, "pkg": pkg_path},
+                {"owner": {}}, {"bind": "bind"})
+
+            mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
+            marker = os.path.join(data_base, "myset", "id", "roundtrip.json")
+            assert os.path.exists(marker), "main code did not write its marker — main-module roundtrip failed"
+            with open(marker) as f:
+                import json
+                payload = json.load(f)
+            # kind=draft keeps __name__='__main__', and the class found
+            # via importlib must be the same object as the directive-
+            # loaded UserClsDraft sitting in the task's glob.
+            assert payload["cls_label"] == "main_module_merged"
+            assert payload["same_obj"] is True
+            assert payload["module"] == "__main__"
+        finally:
+            for k in sentinel_attrs:
+                existing_main.__dict__.pop(k, None)
+
+    @patch('app.job_runner.job_lib.send_completion')
+    @patch('app.job_runner.subprocess.run')
+    @patch('app.lib.sets.subprocess.check_call')
+    @patch('app.lib.pyops.ServiceListener')
+    def test_run_testdebug_sets_name_to_test(self, mock_listener, mock_check_call, mock_run, mock_send, tmp_path, mock_conf):
+        """kind=testdebug runs the body with __name__='__test__' just like
+        kind=test — the hybrid kind's whole point is "test semantics under
+        a debugger". The debug-style source materialisation under
+        .debug/src/ is asserted by the next test."""
+        from app.job_runner import main as run
+        mock_listener.return_value = Mock()
+        mock_check_call.return_value = None
+        mock_run.return_value = Mock(returncode=0)
+        data_base = os.path.join(tmp_path, "data")
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
+
+        code = (
+            "import os, json\n"
+            "open(os.path.join(workspace, 'name.json'), 'w').write(json.dumps({'name': __name__}))\n"
+        )
+        run("id", "owner", "myset", "my_task", "testdebug", "", code, [], "/tmp/pyops/runner.sock", 0, None,
+            {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}},
+            {"venv": venv_path, "pkg": pkg_path},
+            {"owner": {}}, {"bind": "bind"})
+
+        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
+        name_file = os.path.join(data_base, "myset", "id", "name.json")
+        assert os.path.exists(name_file)
+        with open(name_file) as f:
+            import json
+            assert json.load(f) == {"name": "__test__"}
+
+    @patch('app.job_runner.job_lib.send_completion')
+    @patch('app.job_runner.subprocess.run')
+    @patch('app.lib.sets.subprocess.check_call')
+    @patch('app.lib.pyops.ServiceListener')
+    def test_run_testdebug_materialises_under_debug_src_with_test_symlink(self, mock_listener, mock_check_call, mock_run, mock_send, tmp_path, mock_conf):
+        """testdebug uses debug's materialisation root (.debug/src/) — so
+        the path-mapping in VSIX (`./.debug/src` ↔ workspace pyops dir)
+        stays valid for both kinds. A `.test` symlink to `.debug` is added
+        so any tooling that walks the canonical test-sources path also
+        resolves into the same tree."""
+        from app.job_runner import main as run
+        mock_listener.return_value = Mock()
+        mock_check_call.return_value = None
+        mock_run.return_value = Mock(returncode=0)
+        data_base = os.path.join(tmp_path, "data")
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
+
+        libs = [{"filename": "other::shared", "code": "X = 1\n"}]
+        run("id", "owner", "myset", "my_task", "testdebug", "", "pass\n", libs, "/tmp/pyops/runner.sock", 0, None,
+            {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}},
+            {"venv": venv_path, "pkg": pkg_path},
+            {"owner": {}}, {"bind": "bind"})
+
+        ws = os.path.join(data_base, "myset", "id")
+        assert os.path.exists(os.path.join(ws, ".debug", "src", "myset", "task", "my_task.py"))
+        assert os.path.exists(os.path.join(ws, ".debug", "src", "other", "library", "shared.py"))
+        # .test must be a symlink (not a directory copy) pointing at .debug
+        test_link = os.path.join(ws, ".test")
+        assert os.path.islink(test_link), f".test must be a symlink, got {os.readlink(test_link) if os.path.lexists(test_link) else '<missing>'}"
+        assert os.readlink(test_link) == ".debug"
+        # And it must resolve so tooling that walks `.test/src/...` finds the same files
+        assert os.path.exists(os.path.join(ws, ".test", "src", "myset", "task", "my_task.py"))
+
+    @patch('app.job_runner.job_lib.send_completion')
+    @patch('app.lib.sets.subprocess.check_call')
+    @patch('subprocess.run')
+    @patch('app.lib.pyops.ServiceListener')
+    @patch('time.sleep')
+    def test_run_testdebug_no_retry(self, mock_sleep, mock_listener, mock_run, mock_check_call, mock_send, tmp_path, mock_conf):
+        """testdebug inherits debug's "no retry" contract — a single
+        failed exec terminates the job; the operator is the loop."""
+        mock_run.return_value = Mock(returncode=0, stdout="pip==24.2\n")
+        mock_check_call.return_value = None
+        from app.job_runner import main as run
+        mock_listener.return_value = Mock()
+        data_base = os.path.join(tmp_path, "data")
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
+        mock_sleep.return_value = None
+
+        with patch('builtins.exec', side_effect=Exception("testdebug fail")):
+            run("id", "owner", "set", "name", "testdebug", "", "raise Exception", [], "/tmp/pyops/runner.sock", 0, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {}}, {"bind": "bind"})
+
+        assert mock_sleep.call_count == 0
+        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "failed", "detail": ANY})
+
+    @patch('app.job_runner.job_lib.send_completion')
     @patch('app.job_runner.subprocess.run')
     @patch('app.lib.sets.subprocess.check_call')
     @patch('app.lib.pyops.ServiceListener')
@@ -485,7 +774,7 @@ class TestExecution:
             assert result.end == now
             assert result.pid is None
 
-    @patch('app.runner.INTERNAL_ESSENTIAL_SERVICES', [])
+    @patch('app.runner.PYOPS_ESSENTIAL_SERVICES', [])
     @patch('app.runner.lib_runner.enqueue')
     @patch('app.runner.lib_runner.find')
     def test_schedule_reenqueues_service_excluding_cancelled(self, mock_find, mock_enqueue, mock_conf, mock_db, mock_croniter):
@@ -676,9 +965,11 @@ logging.error('ERROR message')
     @patch('app.lib.job.send_completion')
     def test_run_debug_no_debugger_injection(self, mock_send, mock_run, mock_listener, mock_check_call, mock_sets_check_call, mock_conf, tmp_path):
         """Regression: pyops no longer imports or starts a debugger.
-        run_debug_job materialises sources, runs the user's param + libs +
-        code, sends `state=running` after param, and `state=done` at the
-        end — same code path as task/service/draft minus retries."""
+        run_debug_job materialises sources, runs libs then param, sends
+        `state=running` once param returns, then runs the main code and
+        sends `state=done` — same code path as service/draft/test minus
+        retries. (Task-kind keeps the older "param before libs" order
+        because of its retry-loop contract.)"""
         mock_run.side_effect = [Mock(returncode=0, stdout=""), Mock(returncode=0)]
         mock_sets_check_call.return_value = None
         from app.job_runner import main as run
@@ -698,7 +989,11 @@ logging.error('ERROR message')
             {"owner": {}},
             {"bind": "127.0.0.1:8000"})
 
-        # state=running fires after exec(param), state=done at the end.
+        # For service / draft / debug / test, state=running fires after
+        # exec(libs) and exec(param) have both returned. The assertion is
+        # the same shape as before (running observed, terminal=done) — the
+        # change is purely in where in the boot sequence the flip happens,
+        # not in how many or which completions are sent.
         sent_states = [c.args[1]["state"] for c in mock_send.call_args_list]
         assert "running" in sent_states
         assert sent_states[-1] == "done"
@@ -1605,4 +1900,120 @@ class TestDebugOverridesResolution(TestLoggingCapture):
                 stderr=mock_stderr,
                 text=True
             )
+
+
+class TestStdoutStderrRedirect:
+    """Regression coverage for fd-level stdout/stderr redirect inside
+    `_redirect_job_io`. The 3.3.0 fix replaces
+    `contextlib.redirect_stdout` / `redirect_stderr` (Python-level
+    only) with `os.dup2`-based file-descriptor redirection so:
+      - subprocess output (no `stdout=`/`stderr=` kw) lands in the job
+        log files via inherited fds
+      - C-extension / native writers (torch, transformers tqdm, …) that
+        write directly to fd1 / fd2 also land in the log files
+    The pre-3.3.0 behaviour wrote those bytes to the gunicorn worker's
+    real stdout/stderr instead — they never showed up in the job's
+    stdout.log / stderr.log."""
+
+    @patch('app.job_runner.job_lib.send_completion')
+    @patch('app.job_runner.subprocess.run')
+    @patch('app.lib.sets.subprocess.check_call')
+    @patch('app.lib.pyops.ServiceListener')
+    def test_task_fd_writes_land_in_log_files(self, mock_listener, mock_check_call, mock_run, mock_send, tmp_path, mock_conf):
+        """`os.write(1, ...)` and `os.write(2, ...)` from the scriptlet
+        body must reach the per-job stdout.log / stderr.log under the
+        workspace, not the gunicorn worker's real fds."""
+        from app.job_runner import main as run
+        mock_listener.return_value = None
+        mock_check_call.return_value = None
+        mock_run.return_value = Mock(returncode=0)
+        data_base = os.path.join(tmp_path, "data")
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
+
+        code = (
+            "import os\n"
+            "os.write(1, b'native-stdout-marker\\n')\n"
+            "os.write(2, b'native-stderr-marker\\n')\n"
+        )
+        run("id", "owner", "myset", "my_task", "task", "", code, [],
+            "/tmp/pyops/runner.sock", 0, None,
+            {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}},
+            {"venv": venv_path, "pkg": pkg_path},
+            {"owner": {}}, {"bind": "bind"})
+
+        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
+        ws = os.path.join(data_base, "myset", "id")
+        stdout_log = os.path.join(ws, "stdout.log")
+        stderr_log = os.path.join(ws, "stderr.log")
+        assert "native-stdout-marker" in open(stdout_log).read()
+        assert "native-stderr-marker" in open(stderr_log).read()
+
+    @patch('app.job_runner.job_lib.send_completion')
+    @patch('app.job_runner.subprocess.run')
+    @patch('app.lib.sets.subprocess.check_call')
+    @patch('app.lib.pyops.ServiceListener')
+    def test_task_subprocess_output_lands_in_log_files(self, mock_listener, mock_check_call, mock_run, mock_send, tmp_path, mock_conf):
+        """A child process spawned without explicit stdout/stderr capture
+        inherits the redirected fds. This is the practical motivator
+        — HF download progress bars come from tqdm writing through C
+        code to fd2, and modern transformers / torch shell out to
+        helpers that do the same.
+
+        Uses `os.system` (libc-level fork/exec, no subprocess module)
+        so the test isn't tripped by the `subprocess.run` mock applied
+        on this class for installs/bootstrap."""
+        from app.job_runner import main as run
+        mock_listener.return_value = None
+        mock_check_call.return_value = None
+        mock_run.return_value = Mock(returncode=0)
+        data_base = os.path.join(tmp_path, "data")
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
+
+        code = (
+            "import os\n"
+            "os.system('echo subproc-stdout-marker; "
+            "echo subproc-stderr-marker >&2')\n"
+        )
+        run("id", "owner", "myset", "my_task", "task", "", code, [],
+            "/tmp/pyops/runner.sock", 0, None,
+            {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}},
+            {"venv": venv_path, "pkg": pkg_path},
+            {"owner": {}}, {"bind": "bind"})
+
+        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
+        ws = os.path.join(data_base, "myset", "id")
+        assert "subproc-stdout-marker" in open(os.path.join(ws, "stdout.log")).read()
+        assert "subproc-stderr-marker" in open(os.path.join(ws, "stderr.log")).read()
+
+    @patch('app.job_runner.job_lib.send_completion')
+    @patch('app.job_runner.subprocess.run')
+    @patch('app.lib.sets.subprocess.check_call')
+    @patch('app.lib.pyops.ServiceListener')
+    def test_draft_fd_writes_land_in_log_files(self, mock_listener, mock_check_call, mock_run, mock_send, tmp_path, mock_conf):
+        """Same guarantee for kind=draft, which goes through a separate
+        runner branch (run_draft_job) — every redirect call site must
+        carry the fix."""
+        from app.job_runner import main as run
+        mock_listener.return_value = Mock()
+        mock_check_call.return_value = None
+        mock_run.return_value = Mock(returncode=0)
+        data_base = os.path.join(tmp_path, "data")
+        venv_path = os.path.join(tmp_path, "venv")
+        pkg_path = os.path.join(tmp_path, "pkg")
+
+        code = (
+            "import os\n"
+            "os.write(2, b'draft-fd2-marker\\n')\n"
+        )
+        run("id", "owner", "myset", "my_task", "draft", "", code, [],
+            "/tmp/pyops/runner.sock", 0, None,
+            {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}},
+            {"venv": venv_path, "pkg": pkg_path},
+            {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
+
+        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
+        ws = os.path.join(data_base, "myset", "id")
+        assert "draft-fd2-marker" in open(os.path.join(ws, "stderr.log")).read()
 

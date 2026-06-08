@@ -15,6 +15,7 @@ import time
 from pyopsctl.client import Client
 from pyopsctl.config import load
 from pyopsctl.output import emit, emit_bytes
+from pyopsctl.overrides import build_overrides
 
 TERMINAL_STATES = {"done", "failed", "cancelled", "remove", "removed"}
 
@@ -109,6 +110,14 @@ def _run(args):
         "drop_done": args.drop_done,
         "max_retries": args.max_retries,
     }
+    if args.overrides_dir is not None:
+        if args.kind not in ("debug", "test"):
+            raise SystemExit(
+                "pyopsctl: --overrides-dir is only honored for --kind debug|test"
+            )
+        overrides = build_overrides(args.overrides_dir, args.set)
+        if overrides is not None:
+            body["overrides"] = overrides
     with Client(load(args), timeout=args.timeout) as c:
         resp = c.put("/scriptlet/job/item", json_body=body)
         # `runner.enqueue` returns the job ID string; the endpoint wraps it as
@@ -192,13 +201,17 @@ def register(subparsers, parents):
     vw.add_argument("--stream", choices=["stdout", "stderr", "both"], default="both")
     vw.set_defaults(func=_view)
 
-    rn = sub.add_parser("run", help="enqueue a task or service job", parents=parents)
+    rn = sub.add_parser("run", help="enqueue a job (task/service/debug/draft/test)", parents=parents)
     rn.add_argument("set"); rn.add_argument("name")
-    rn.add_argument("--kind", choices=["task", "service"], default="task")
+    rn.add_argument("--kind", choices=["task", "service", "debug", "draft", "test"], default="task")
     rn.add_argument("--param", metavar="TEXT", default=None,
                     help="param to pass to the scriptlet")
     rn.add_argument("--param-file", metavar="PATH", default=None,
                     help="read --param from a file")
+    rn.add_argument("--overrides-dir", metavar="DIR", default=None,
+                    help="ship local working-copy scriptlets as overrides "
+                         "(walks DIR/<set>/*.py); only honored for "
+                         "--kind debug|test")
     rn.add_argument("--drop-done", action="store_true",
                     help="auto-delete the row when it reaches `done` (default: keep)")
     rn.add_argument("--max-retries", type=int, default=0)

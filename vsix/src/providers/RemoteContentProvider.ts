@@ -28,7 +28,7 @@ export class RemoteContentProvider implements vscode.TextDocumentContentProvider
     }
 }
 
-export function getLanguageId(type: string): string | undefined {
+export function getLanguageId(type: string, ext?: string): string | undefined {
     switch (type) {
         case 'task':
         case 'library':
@@ -40,6 +40,10 @@ export function getLanguageId(type: string): string | undefined {
             return 'markdown';
         case 'jslibrary':
             return 'javascript';
+        case 'data':
+            if (ext === 'json') return 'json';
+            // yaml is the default for new data files; yml folds in too
+            return 'yaml';
         default:
             return undefined;
     }
@@ -50,7 +54,8 @@ export function registerRemoteLanguageModeSetter(): vscode.Disposable {
         if (document.uri.scheme === 'pyops-remote') {
             const params = new URLSearchParams(document.uri.query);
             const type = params.get('type');
-            const languageId = type ? getLanguageId(type) : undefined;
+            const ext = params.get('ext') || undefined;
+            const languageId = type ? getLanguageId(type, ext) : undefined;
             if (languageId) {
                 vscode.languages.setTextDocumentLanguage(document, languageId);
             }

@@ -132,6 +132,62 @@ def test_break_continue_hits_user_bp_with_locals_evaluate_step(
         run_ctl(pyopsctl_bin, "debug", "stop", job_id, check=False)
 
 
+TESTDEBUG_SCRIPTLET = """\
+if __name__ == '__test__':
+    import os, json
+    open(os.path.join(workspace, 'mode.json'), 'w').write(json.dumps({'mode': __name__}))
+    x = 42
+    y = x + 1
+"""
+
+
+def test_testdebug_attach_continue_runs_test_block_and_completes(
+    pyopsctl_bin, run_ctl, pyops_server_for_ctl, pyops_set,
+):
+    """End-to-end testdebug under a real remote-pdb: start with
+    --kind testdebug, attach, continue past the bootstrap set_trace(),
+    let the scriptlet's `__test__` block run to completion, and verify
+    the workspace artefact proves __name__ flipped. The whole flow
+    must work without any of the existing debug/attach scaffolding
+    knowing about testdebug specifically — kind is just a tag at the
+    enqueue site."""
+    _create(run_ctl, pyopsctl_bin, pyops_set, "scr_td")
+    # Override the body with one that gates on __test__.
+    run_ctl(pyopsctl_bin, "scriptlet", "draft", pyops_set, "scr_td",
+            "--stdin", input_text=TESTDEBUG_SCRIPTLET)
+
+    started = json.loads(run_ctl(
+        pyopsctl_bin, "debug", "start", pyops_set, "scr_td",
+        "--kind", "testdebug", "--json"
+    ).stdout.strip())
+    job_id = started["job_id"]
+    assert started["kind"] == "testdebug"
+
+    try:
+        attached = _attach(run_ctl, pyopsctl_bin, job_id)
+        assert attached["state"] == "stopped", attached
+        # Let the __test__ block execute and the job end. continue
+        # may surface the program-terminated signal directly.
+        run_ctl(pyopsctl_bin, "debug", "continue", "--json", check=False)
+        # Poll the job until it's terminal.
+        import time
+        deadline = time.time() + 30
+        final = None
+        while time.time() < deadline:
+            row = json.loads(run_ctl(
+                pyopsctl_bin, "job", "view", job_id, "--json",
+            ).stdout.strip())
+            if row["state"] in ("done", "failed", "cancelled"):
+                final = row
+                break
+            time.sleep(0.5)
+        assert final is not None and final["state"] == "done", final
+    finally:
+        run_ctl(pyopsctl_bin, "debug", "detach", "--job-id", job_id,
+                check=False)
+        run_ctl(pyopsctl_bin, "debug", "stop", job_id, check=False)
+
+
 def test_source_returns_full_scriptlet_text(
     pyopsctl_bin, run_ctl, pyops_server_for_ctl, pyops_set,
 ):

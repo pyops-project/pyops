@@ -20,7 +20,7 @@ test:
     - python3 -m venv .venv
     - source .venv/bin/activate
     - pip install --upgrade pip
-    - pip install psutil fastapi uvicorn sqlalchemy pyzmq msgpack croniter jedi requests zipstream-ng gunicorn pytest httpx pytest-cov debugpy
+    - pip install psutil fastapi uvicorn sqlalchemy pyzmq msgpack croniter jedi requests zipstream-ng gunicorn pyyaml pytest httpx pytest-cov debugpy
   script:
     - source .venv/bin/activate
     - ./test.sh
@@ -43,7 +43,7 @@ test:e2e:
     - python3 -m venv .venv
     - source .venv/bin/activate
     - pip install --upgrade pip
-    - pip install psutil fastapi uvicorn sqlalchemy pyzmq msgpack croniter jedi requests zipstream-ng gunicorn pytest httpx pytest-cov debugpy pytest-playwright pytest-base-url
+    - pip install psutil fastapi uvicorn sqlalchemy pyzmq msgpack croniter jedi requests zipstream-ng gunicorn pyyaml pytest httpx pytest-cov debugpy pytest-playwright pytest-base-url
     - playwright install --with-deps chromium
   script:
     - source .venv/bin/activate
@@ -68,7 +68,7 @@ test:vsix_integration:
     - python3 -m venv .venv
     - source .venv/bin/activate
     - pip install --upgrade pip
-    - pip install psutil fastapi uvicorn sqlalchemy pyzmq msgpack croniter jedi requests zipstream-ng gunicorn debugpy
+    - pip install psutil fastapi uvicorn sqlalchemy pyzmq msgpack croniter jedi requests zipstream-ng gunicorn pyyaml debugpy
     # Setup VSIX
     - npm config set cache $NPM_CACHE_DIR
     - cd vsix && npm ci && cd ..
@@ -127,7 +127,7 @@ test:pyopsctl:
     - python3 -m venv .venv --system-site-packages
     - source .venv/bin/activate
     - pip install --upgrade pip
-    - pip install psutil fastapi uvicorn sqlalchemy pyzmq msgpack croniter jedi requests zipstream-ng gunicorn pytest httpx pytest-cov debugpy
+    - pip install psutil fastapi uvicorn sqlalchemy pyzmq msgpack croniter jedi requests zipstream-ng gunicorn pyyaml pytest httpx pytest-cov debugpy
   script:
     - source .venv/bin/activate
     # E2E pyopsctl tests run in `test:e2e`. This stage covers
@@ -273,7 +273,13 @@ test:pyopsctl:install:
 verify:version_bumped:
   stage: build
   needs: []
-  image: alpine/git
+  # alpine/git defaults its ENTRYPOINT to `git`, so the GitLab runner's
+  # `sh -c '...'` script trampoline ends up as `git sh -c '...'` and dies
+  # with `git: 'sh' is not a git command`. Clearing the entrypoint lets
+  # the runner exec `sh` itself; `git` is still on PATH from the image.
+  image:
+    name: alpine/git
+    entrypoint: [""]
   before_script:
     - apk add --no-cache grep
   script:

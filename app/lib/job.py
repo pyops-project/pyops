@@ -102,7 +102,16 @@ def install_git_repo(pip_path: str, repo_dir: str, stdout_file, stderr_file, upg
     return result
 
 def loadLib(set: str, name: str, kind: str, git_module):
-    """Loads library code from Git (unstaged if kind=="debug" or "draft", else committed)."""
+    """Loads library code from Git (unstaged for the iterate-on-local-code
+    kinds — debug, draft, test, testdebug — else committed).
+
+    The unstaged set must match `loadJob`'s in `app/runner.py`. When the
+    operator drafts a library and then enqueues a `kind=test` job
+    against a task that depends on that library, the library has to
+    be picked up from the working tree, not from HEAD; otherwise the
+    test runs against the wrong code path and either passes false
+    (committed lib + new test) or fails false (new lib + committed
+    test)."""
     logger.debug(f"loadLib(set={set}, name={name}, kind={kind})")
     repo = git_module.get_repo_path(set)
     files_list = [f for f in os.listdir(repo) if f.startswith(f"{name}.") and f.endswith('.py')]
@@ -110,7 +119,7 @@ def loadLib(set: str, name: str, kind: str, git_module):
         raise Exception(f"Scriptlet {set}::{name} not existing")
     filename = files_list[0]
     type_ = git_module.infer_type_from_filename(filename)
-    committed = kind not in ("debug", "draft")
+    committed = kind not in ("debug", "draft", "test", "testdebug")
     code = git_module.read_content(repo, name, type_, committed=committed)
     return code
 
@@ -187,7 +196,7 @@ def process_install_lines(lines, venv_path: str, pkg_path: str, set: str, job_id
             arg1 = parts[0].strip()
             arg2 = parts[1].strip() if len(parts) > 1 else None
             if '://' in arg1 or arg1.startswith('git@'):
-                # Mirrors app/internal/set_update_deps.task.py::_install_git
+                # Mirrors app/pyops/set_update_deps.task.py::_install_git
                 # so both paths land in the same directory. Strip a trailing
                 # `.git` only — the package is reached via `pip install -e`
                 # which resolves the name from setup.py/pyproject.toml, so

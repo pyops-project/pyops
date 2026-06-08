@@ -82,7 +82,8 @@ Displays scriptlet sets with their scriptlets. Each refresh:
 interface ScriptletInfo {
     set: string;
     name: string;
-    type: string;            // 'task' | 'service' | 'library' | 'controller' | 'view' | 'markdown' | 'jslibrary'
+    type: string;            // 'task' | 'service' | 'library' | 'controller' | 'view' | 'markdown' | 'jslibrary' | 'data'
+    ext?: string;            // for type='data': 'yaml' | 'yml' | 'json' — picked by which file exists server-side
     isLocalOnly?: boolean;
 }
 ```
@@ -98,7 +99,7 @@ interface ScriptletInfo {
 **Context menu visibility** (from `package.json` `when` clauses):
 - `resetLocalFromRemote`, `diffLocalRemote` — excluded from `-local` items
 - `writeLocalToRemoteDraft`, `deleteScriptlet` — available on all `pyopsItem-*` including `-local`
-- `startDebugJob`, `stopDebugJob` — available on `/^pyopsItem-task(-local)?$/`
+- `startDebugJob`, `startTestDebugJob`, `stopDebugJob` — available on `/^pyopsItem-task(-local)?$/`
 
 ### JobsTreeDataProvider
 
@@ -109,7 +110,7 @@ Lists jobs grouped by state, sorted by `start` timestamp descending. Fetches `GE
 ```typescript
 interface Job {
     id: string;
-    kind: string;            // 'task' | 'service' | 'debug' | 'draft'
+    kind: string;            // 'task' | 'service' | 'debug' | 'draft' | 'test' | 'testdebug'
     name: string;
     set: string;
     owner?: string;
@@ -125,7 +126,7 @@ interface Job {
 
 ## File Type Mapping (`src/utils.ts`)
 
-`inferExt(type: string): string`:
+`inferExt(type: string, hint?: string): string`:
 
 | Type | Extension |
 |------|-----------|
@@ -133,13 +134,17 @@ interface Job {
 | `view` | `.html` |
 | `markdown` | `.md` |
 | `jslibrary` | `.js` |
+| `data` (hint='json') | `.json` |
+| `data` (hint='yaml'/'yml'/missing) | `.yaml` |
 | unknown | `.py` (fallback) |
+
+For `type='data'`, the second argument is the `ScriptletInfo.ext` field reported by the server — used so the local mirror filename matches the remote on-disk format.
 
 ---
 
 ## Remote Content Provider (`src/providers/RemoteContentProvider.ts`)
 
-Serves `pyops-remote://{set}/{name}?type={type}` URIs. Content is decoded from the URI fragment (base64). Language mode is set via `registerRemoteLanguageModeSetter()`:
+Serves `pyops-remote://{set}/{name}?type={type}&ext={ext}` URIs. Content is decoded from the URI fragment (base64). Language mode is set via `registerRemoteLanguageModeSetter()`:
 
 | Type | Language ID |
 |------|-------------|
@@ -147,6 +152,8 @@ Serves `pyops-remote://{set}/{name}?type={type}` URIs. Content is decoded from t
 | `view` | `html` |
 | `markdown` | `markdown` |
 | `jslibrary` | `javascript` |
+| `data` (ext='json') | `json` |
+| `data` (ext='yaml'/'yml'/missing) | `yaml` |
 
 Used by `diffLocalRemote` to show the remote version read-only in the VSCode diff editor.
 
@@ -230,7 +237,7 @@ into the program's own thread so the DAP endpoint dies with the program.
 |--------|-------------|
 | `static buildOverrides(set, workspaceRoot)` | Walks `{localPyopsDir}/pyops/{set}/*.py`; returns `{ {set}::{name}: code }` overrides dict + debugpy path mappings |
 | `static composeDebugpyBootstrap(port)` | Returns the `#!pip debugpy` + `debugpy.listen((host, port), in_process_debug_adapter=True)` + `wait_for_client()` + `breakpoint()` block written into `param` |
-| `enqueueDebugJob(set, name, overrides)` | Leases a port, composes bootstrap, `PUT /scriptlet/job/item kind=debug`, rebinds the lease to the real job id on success / releases on failure; returns `{jobId, port}` |
+| `enqueueDebugJob(set, name, overrides, kind='debug')` | Leases a port, composes bootstrap, `PUT /scriptlet/job/item kind={kind}`, rebinds the lease to the real job id on success / releases on failure; returns `{jobId, port}`. `kind` defaults to `'debug'`; pass `'testdebug'` for the hybrid debug-under-test-namespace variant (server flips `__name__='__test__'` before exec(param)). |
 | `leasePort(jobIdHint)` / `releasePort(port)` / `rebindLease(port, jobId)` | Static in-memory port lease table (shared across `DebugService` instances within one VSCode session) |
 | `findPortForJob(jobId)` | Reverse lookup; used by `pyops.attachDebugJob` since `/debug/port` is gone |
 | `getDebugHost()` | Parses hostname from `pyops.serverUrl`; falls back to `'localhost'` |
@@ -279,15 +286,15 @@ Full debug lifecycle connects VSIX, PyOps server, and the runner:
 
 ### Enqueue with Overrides
 
-`PUT /scriptlet/job/item` with `kind="debug"` skips `git.read_content` existence check if `overrides["{set}::{name}"]` is present — enables local-only debug jobs without a committed remote scriptlet.
+`PUT /scriptlet/job/item` with `kind` in `("debug", "test", "testdebug")` skips `git.read_content` existence check if `overrides["{set}::{name}"]` is present — enables local-only debug-family / test jobs without a committed remote scriptlet.
 
 ### Runner Override Injection
 
-`app/runner.py loadJob()` parses `job.overrides` as JSON regardless of kind; if the dict contains a `"{set}::{name}"` key, the runner skips the `os.listdir`/`git.read_content` repo lookup and uses `override_dict[main_key]` as the scriptlet body. Missing key falls back to `git.read_content`; invalid JSON aborts the job. `committed=False` for `kind` in `("debug", "draft")` so the fallback reads the unstaged working tree, matching what `writeLocalToRemoteDraft` would have shipped.
+`app/runner.py loadJob()` parses `job.overrides` as JSON regardless of kind; if the dict contains a `"{set}::{name}"` key, the runner skips the `os.listdir`/`git.read_content` repo lookup and uses `override_dict[main_key]` as the scriptlet body. Missing key falls back to `git.read_content`; invalid JSON aborts the job. `committed=False` for `kind` in `("debug", "draft", "test", "testdebug")` so the fallback reads the unstaged working tree, matching what `writeLocalToRemoteDraft` would have shipped.
 
 ### Debugger bootstrap (client-composed)
 
-`app/job_runner.py run_debug_job()` no longer injects a debugger. The runner's only debug-specific contributions are (a) source materialisation under `.debug/src/<set>/{task,library}/<name>.py` for path-mapping debuggers, (b) no execution timeout, no retry. VSIX puts the bootstrap on the wire via `DebugService.composeDebugpyBootstrap(port)`. The `running` state transition is universal across kinds and fires when `exec(param)` returns, which for debug jobs happens after VSCode lets debugpy proceed past `wait_for_client()`. Polling `state=running` for "debugger ready to attach" would deadlock — the correct readiness signal is the TCP listener accepting a connection, which `pyops.startDebugJob` polls before calling `vscode.debug.startDebugging`.
+`app/job_runner.py run_debug_job()` no longer injects a debugger and now also services `kind=testdebug` via a `kind=` parameter. The runner's only debug-specific contributions are (a) source materialisation under `.debug/src/<set>/{task,library}/<name>.py` for path-mapping debuggers — same root for both `kind=debug` and `kind=testdebug`, so the same `pathMappings` in VSIX (`./.debug/src ↔ workspaceFolder/pyops`) covers both, (b) no execution timeout, no retry. `kind=testdebug` overlays `__name__='__test__'` in the exec globals and adds a `.test → .debug` symlink in the workspace. VSIX puts the bootstrap on the wire via `DebugService.composeDebugpyBootstrap(port)`. The `running` state transition fires when `exec(param)` returns, which for debug/testdebug happens after VSCode lets debugpy proceed past `wait_for_client()` and the operator steps past `debugpy.breakpoint()`. Library imports for the non-task kinds (including debug/testdebug) complete during `loading` — `exec(libs)` runs before `exec(param)` — so by the time VSIX attaches the debugger sees a fully-initialised library namespace rather than the import stack of an in-flight `import torch` or `import transformers`. Polling `state=running` for "debugger ready to attach" would still deadlock — the correct readiness signal is the TCP listener accepting a connection, which `pyops.startDebugJob` / `pyops.startTestDebugJob` polls before calling `vscode.debug.startDebugging`.
 
 ### Session lifecycle (DebugSessionWatcher)
 
@@ -299,7 +306,7 @@ Full debug lifecycle connects VSIX, PyOps server, and the runner:
 ### Attach Debug Command (`pyops.attachDebugJob`)
 
 Title bar button in `pyops-manager` panel:
-1. `JobService.listJobs()` — filters `kind="debug"` and `state` in `["running", "dequeued"]`
+1. `JobService.listJobs()` — filters `kind in ("debug", "testdebug")` and `state` in `["running", "dequeued"]` (the same one-active-interactive-per-owner set the server-side gate enforces, so at most one row matches)
 2. Requires exactly one matching job; warns on zero or multiple
 3. `DebugService.findPortForJob(jobId)` — reverse-lookup from the in-process lease table (the server has no `/debug/port` route)
 4. `vscode.debug.startDebugging()` — debugpy attach to `host:{port}`, `justMyCode: false`, `jobId` in config for the watcher
@@ -322,7 +329,8 @@ All commands registered in `extension.ts`. 20 total:
 | `pyops.diffLocalRemote` | Open VSCode diff: remote vs local |
 | `pyops.deleteScriptlet` | Delete remote + local scriptlet |
 | `pyops.openLocalFile` | Open local scriptlet file in editor |
-| `pyops.startDebugJob` | Enqueue debug job with local overrides, launch debugger |
+| `pyops.startDebugJob` | Enqueue debug job (kind='debug') with local overrides, launch debugger |
+| `pyops.startTestDebugJob` | Enqueue testdebug job (kind='testdebug') with local overrides, launch debugger; same flow as `startDebugJob` with `__name__='__test__'` on the server side |
 | `pyops.stopDebugJob` | Stop active debug job |
 | `pyops.attachDebugJob` | Attach debugger to existing running debug job |
 | `pyops.refreshMonitor` | Refresh Monitor tree |
@@ -356,7 +364,7 @@ Coverage targets: branches 80%, functions 80%, lines 90%, statements 80%.
 | `services/AuthService.test.ts` | `setupAuth` prompts and storage |
 | `services/JobService.test.ts` | CRUD operations, bulk cancel/delete, `viewJob` polling with stdout/stderr updates, terminal state transitions, error handling, undefined provider handling, timer cleanup |
 | `services/ScriptletService.test.ts` | Local/remote sync, network error handling, `existsSync` filesystem branches, multi-step error scenarios |
-| `services/DebugService.test.ts` | `buildOverrides`, `composeDebugpyBootstrap` (in-process-adapter required, port plugged verbatim), port lease/release/rebind/`findPortForJob`, `enqueueDebugJob` success-lease-rebind / HTTP-fail-releases / network-exception / empty-pool / overrides passthrough, `getDebugHost` |
+| `services/DebugService.test.ts` | `buildOverrides`, `composeDebugpyBootstrap` (in-process-adapter required, port plugged verbatim), port lease/release/rebind/`findPortForJob`, `enqueueDebugJob` success-lease-rebind / HTTP-fail-releases / network-exception / empty-pool / overrides passthrough / kind defaults to `'debug'` / `kind='testdebug'` flows through, `getDebugHost` |
 | `services/debugSessionWatcher.test.ts` | Ignores no-jobId sessions, polls cadence + endpoint, terminal-state stop (incl. 404), transient HTTP / network error retry, `cancel`, idempotent `watch`, `dispose` |
 | `services/DebugOutputMonitor.test.ts` | Start/stop monitoring, incremental stdout/stderr append, channel display, stop on terminal states, error log fetch |
 | `services/RefreshTimerManager.test.ts` | `ensureRunning`, `stopIfRunning` |

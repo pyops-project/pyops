@@ -85,20 +85,93 @@ def _parse_directives(text):
     return out
 
 
+_LIB_INCLUDE_RE = re.compile(r"^\s*#!\{([a-zA-Z0-9_-]*)::([a-zA-Z0-9_-]+)\}")
+
+
+def _find_lib_path(set_, name):
+    """Resolve a `set::name` library include to its file path in the
+    working tree. Returns None if the lib doesn't exist (the per-job
+    directive processor would raise, but for update-deps we silently
+    skip — the resolver only needs to see the directives that *are*
+    declared)."""
+    set_dir = _set_dir(set_)
+    if not os.path.isdir(set_dir):
+        return None
+    for entry in os.listdir(set_dir):
+        if entry.startswith(f"{name}.") and entry.endswith(".py"):
+            return os.path.join(set_dir, entry)
+    return None
+
+
 def _scan(name):
+    """Walks the set's scriptlets *and* recursively the libraries they
+    `#!{set::name}`-include, collecting every pip / git directive in
+    the effective install graph.
+
+    Per-job (`process_imports` in `app/lib/job.py`) follows the
+    library-include chain transitively when it builds a job's install
+    plan -- so a `cami` task that says `#!{system::causal}` lands the
+    `causal.py` git directive (which lives in
+    `system/causal.library.py`) in cami's own `data/pkg/cami/` clone.
+    Update-Dependencies has to match that contract: an operator
+    running "update cami" must see the same effective directive
+    graph, otherwise cami's transitive deps drift while system's
+    own deps look fresh.
+
+    Cycle-safe via `seen` keyed by `set::name`. Each directive is
+    attributed to the file it textually appears in (the included
+    library, not the top-level scriptlet) so conflict diagnostics
+    point at the source of truth."""
     pips, gits = [], []
+    seen = set()
+    seen_paths = set()
+
+    def _walk_text(text, owning_set, source, mtime):
+        for d in _parse_directives(text):
+            d["source"] = source
+            d["mtime"] = mtime
+            (pips if d["kind"] == "pip" else gits).append(d)
+        for line in text.splitlines():
+            m = _LIB_INCLUDE_RE.match(line)
+            if not m:
+                continue
+            inc_set = m.group(1) or owning_set
+            inc_name = m.group(2)
+            key = f"{inc_set}::{inc_name}"
+            if key in seen:
+                continue
+            seen.add(key)
+            lib_path = _find_lib_path(inc_set, inc_name)
+            if lib_path is None or lib_path in seen_paths:
+                continue
+            seen_paths.add(lib_path)
+            try:
+                with open(lib_path, "r", encoding="utf-8") as f:
+                    lib_text = f.read()
+            except OSError:
+                continue
+            _walk_text(lib_text, inc_set,
+                       source=os.path.basename(lib_path),
+                       mtime=os.path.getmtime(lib_path))
+
     for path in _scriptlet_files(name):
+        # A library file in the set dir gets reached twice -- once via
+        # `_scriptlet_files` enumeration here, once via a sibling
+        # scriptlet's `#!{::name}` include. The include path runs
+        # first if the sibling sorts before the library file, leaving
+        # this iteration to skip via `seen_paths`. Without the skip,
+        # the library's directives would land in the resolver twice.
+        if path in seen_paths:
+            continue
         try:
             with open(path, "r", encoding="utf-8") as f:
                 text = f.read()
         except OSError:
             continue
-        mtime = os.path.getmtime(path)
-        source = os.path.basename(path)
-        for d in _parse_directives(text):
-            d["source"] = source
-            d["mtime"] = mtime
-            (pips if d["kind"] == "pip" else gits).append(d)
+        seen_paths.add(path)
+        _walk_text(text, name,
+                   source=os.path.basename(path),
+                   mtime=os.path.getmtime(path))
     return pips, gits
 
 
@@ -143,6 +216,15 @@ def _install_git(pip_bin, directive, name):
         repo_name = repo_name[:-4]
     repo_dir = os.path.join(_pkg_dir(name), repo_name)
     if os.path.exists(os.path.join(repo_dir, ".git")):
+        # Fetch first so branches added to the remote after the
+        # original clone become locally known. Without this, a
+        # directive change that flips from `main` to a new feature
+        # branch produces `git checkout <newbranch>` failures on
+        # every Update-Dependencies run -- the operator's only
+        # recourse used to be a manual `git fetch` in the package
+        # dir. `--prune` keeps stale remote refs from piling up,
+        # `--tags` for tag-pinned releases.
+        run_cmd(["git", "fetch", "--prune", "--tags", "origin"], cwd=repo_dir)
         if branch:
             run_cmd(["git", "checkout", branch], cwd=repo_dir)
         run_cmd(["git", "pull"], cwd=repo_dir)
@@ -158,8 +240,8 @@ def _install_git(pip_bin, directive, name):
 def main():
     if not name:
         raise ValueError("name is required")
-    if name == "internal":
-        raise ValueError("'internal' is pyops-managed; updates flow via pyops deployment, not this task")
+    if name == "pyops":
+        raise ValueError("'pyops' is pyops-managed; updates flow via pyops deployment, not this task")
 
     set_dir = _set_dir(name)
     if not os.path.exists(set_dir):
@@ -169,7 +251,8 @@ def main():
 
     with install_lock(name):
         pip_bin = _ensure_venv(name)
-        run_cmd([pip_bin, "install", "--upgrade", "pip", "setuptools", "wheel"])
+        # pin setuptools <82 for package compatibility.
+        run_cmd([pip_bin, "install", "--upgrade", "pip", "setuptools<82", "wheel"])
         run_cmd([pip_bin, "install", "--upgrade", *CORE_DEPS])
 
         pips, gits = _scan(name)

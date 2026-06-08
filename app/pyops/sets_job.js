@@ -1,7 +1,13 @@
-// JS library: pyops-internal job launcher with a live-log modal.
+// JS library: sets-management job launcher with a live-log modal.
 //
-// Usage from any internal-set view:
-//     runInternalJob(url, method, params, title)
+// Drives the Sets controller view's set-management actions (clone /
+// create / pull / switch / remove / update-deps / commit-drafts), each
+// of which enqueues a `pyops::set_<op>` task and runs it asynchronously
+// while this modal polls /scriptlet/job/item for stdout/stderr and
+// the terminal state.
+//
+// Usage from any sets-management view:
+//     runSetsJob(url, method, params, title)
 //         .then(({ ok, state, detail }) => { ... });
 //
 // Sequence:
@@ -31,20 +37,26 @@
         modalEl.setAttribute("tabindex", "-1");
         modalEl.setAttribute("data-bs-backdrop", "static");
         modalEl.setAttribute("data-bs-keyboard", "false");
-        modalEl.setAttribute("data-testid", "internal-job-modal");
+        modalEl.setAttribute("data-testid", "sets-job-modal");
+        // Dialog scales to ~95vw / 95vh so verbose jobs (pyops::set_*
+        // operations, in particular set_update_deps emitting hundreds
+        // of lines) stay readable. Modal-body is a flex column so
+        // stdout / stderr panes grow proportionally as the dialog
+        // grows; flex 3:1 keeps stdout dominant while leaving stderr
+        // visible. Both panes scroll independently on overflow.
         modalEl.innerHTML = `
-            <div class="modal-dialog modal-lg modal-dialog-scrollable">
-                <div class="modal-content">
+            <div class="modal-dialog modal-xl modal-dialog-scrollable modal-dialog-centered" style="max-width:95vw;height:95vh;margin:2.5vh auto;">
+                <div class="modal-content" style="height:100%;">
                     <div class="modal-header">
-                        <h5 class="modal-title" data-testid="internal-job-title">Operation</h5>
-                        <span class="badge bg-secondary ms-2" data-testid="internal-job-state">starting…</span>
+                        <h5 class="modal-title" data-testid="sets-job-title">Operation</h5>
+                        <span class="badge bg-secondary ms-2" data-testid="sets-job-state">starting…</span>
                     </div>
-                    <div class="modal-body p-0">
-                        <pre data-testid="internal-job-stdout" style="margin:0;padding:1rem;max-height:50vh;overflow:auto;white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:0.85rem;"></pre>
-                        <pre data-testid="internal-job-stderr" style="margin:0;padding:1rem;max-height:25vh;overflow:auto;white-space:pre-wrap;color:#dc3545;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:0.85rem;"></pre>
+                    <div class="modal-body p-0 d-flex flex-column" style="overflow:hidden;">
+                        <pre data-testid="sets-job-stdout" style="margin:0;padding:1rem;flex:3 1 0;overflow:auto;white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:0.85rem;"></pre>
+                        <pre data-testid="sets-job-stderr" style="margin:0;padding:1rem;flex:1 1 0;overflow:auto;white-space:pre-wrap;color:#dc3545;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:0.85rem;border-top:1px solid #dee2e6;"></pre>
                     </div>
                     <div class="modal-footer">
-                        <button type="button" class="btn btn-primary" data-bs-dismiss="modal" disabled data-testid="internal-job-close">Close</button>
+                        <button type="button" class="btn btn-primary" data-bs-dismiss="modal" disabled data-testid="sets-job-close">Close</button>
                     </div>
                 </div>
             </div>
@@ -78,13 +90,13 @@
         if (nearBottom) pre.scrollTop = pre.scrollHeight;
     }
 
-    window.runInternalJob = function runInternalJob(url, method, params, title) {
+    window.runSetsJob = function runSetsJob(url, method, params, title) {
         const el = ensureModal();
-        const titleEl = el.querySelector('[data-testid="internal-job-title"]');
-        const stateEl = el.querySelector('[data-testid="internal-job-state"]');
-        const outEl = el.querySelector('[data-testid="internal-job-stdout"]');
-        const errEl = el.querySelector('[data-testid="internal-job-stderr"]');
-        const closeBtn = el.querySelector('[data-testid="internal-job-close"]');
+        const titleEl = el.querySelector('[data-testid="sets-job-title"]');
+        const stateEl = el.querySelector('[data-testid="sets-job-state"]');
+        const outEl = el.querySelector('[data-testid="sets-job-stdout"]');
+        const errEl = el.querySelector('[data-testid="sets-job-stderr"]');
+        const closeBtn = el.querySelector('[data-testid="sets-job-close"]');
 
         titleEl.textContent = title || "Operation";
         outEl.textContent = "";

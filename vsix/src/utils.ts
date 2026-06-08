@@ -24,7 +24,7 @@ export function appendIncrementalOutput(
     }
 }
 
-export function inferExt(type: string): string {
+export function inferExt(type: string, hint?: string): string {
     switch (type) {
         case 'task':
         case 'service':
@@ -37,6 +37,14 @@ export function inferExt(type: string): string {
             return 'md';
         case 'jslibrary':
             return 'js';
+        case 'data':
+            // Data files can be yaml or json on disk. The server tags
+            // each entry with the actual extension; the client passes
+            // it as `hint` so naming + syntax mode line up with remote.
+            if (hint === 'json' || hint === 'yaml' || hint === 'yml') {
+                return hint;
+            }
+            return 'yaml';
         default:
             return '';
     }

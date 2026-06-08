@@ -7,6 +7,341 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 from 3.0.0 onward.
 
+## [3.3.0] — 2026-05-23
+
+Three additive set capabilities plus a public-namespace rename:
+
+- **`pyops` set as public library namespace** (was `internal`). Until
+  3.3.0 the bundled set was implementation-internal and user
+  scriptlets never imported from it. Starting with 3.3.0 the bundle is
+  a published library namespace authors are expected to import from
+  via `#!{pyops::name}` — starting with `pyops::pytest`. URL moves
+  from `/controller/internal/sets` to `/controller/pyops/sets`. No
+  compat alias — clean break, nothing user-authored referenced
+  `internal::*`.
+- **Multi-page markdown per set.** `data/git/{set}/docs/{name}.md`
+  joins the long-standing `README.md` at the top level. Authors can
+  ship multi-page documentation alongside scriptlets; the docs/
+  subdir keeps free-named markdown out of the scriptlet-name
+  namespace. `list_scriptlets` walks both locations; `pull`'s
+  working-tree restore picks `docs/*.md` up alongside the existing
+  `.py/.html/.js/README` set.
+- **Set-scoped YAML/JSON data with shared/exclusive locks.** Tasks
+  and libraries in the same set can read/write small structured
+  files under `data/git/{set}/data/{name}.{yaml,yml,json}` via the
+  new `data` global (peer of `control` and `listener`). Shared
+  `fcntl.flock` on read, exclusive on write, per-file lock files;
+  unrelated data files in the same set don't serialise; different
+  sets run fully in parallel by construction. Cross-set access
+  raises; name-uniqueness across formats prevents
+  `config.yaml`/`config.json` coexisting.
+- **Test kind.** A `*.task.py` file can act as both production task
+  and its own test suite, gated by `if __name__ == "__main__":` /
+  `if __name__ == "__test__":`. Pyops core stays pytest-agnostic —
+  the kind dispatch sets `__name__` to `"__test__"`, materialises
+  source under `.test/src/{set}/`, exec's. The new `pyops::pytest`
+  library does the work: AST-scan-driven class/method-id resolution
+  (no filesystem discovery), programmatic `pytest.main()` against
+  the named test classes, auto-attached coverage when `pytest-cov`
+  is in the import graph, `.coveragerc` with `[paths]` mapping back
+  to canonical source paths. Authors who want a different test
+  framework skip the import and put whatever they need in
+  `__test__`.
+- **Testdebug kind (hybrid).** Run the scriptlet's `__test__` block
+  under a debugger. Server adds `kind="testdebug"` to the Literal
+  union; `run_debug_job` services it via a `kind=` parameter and
+  flips `glob["__name__"] = "__test__"` before `exec(param)`.
+  Sources materialise under `.debug/src/` (same root as `kind=debug`,
+  so VSIX/pyopsctl path-mappings keep working unchanged); a
+  `.test → .debug` symlink is added in the workspace so tooling
+  that walks the canonical "test sources" path resolves too. The
+  one-active-interactive-per-owner gate in `app/lib/runner.py` is
+  shared between `debug` and `testdebug`. Client surfaces:
+  `pyopsctl debug start --kind testdebug` (default `debug`); VSIX
+  `pyops.startTestDebugJob` command alongside `pyops.startDebugJob`,
+  both delegating to a shared `startDebugFamilyJob` helper.
+  `DebugService.enqueueDebugJob(..., kind='debug' | 'testdebug')`.
+  Attach treats `kind in ("debug", "testdebug")` identically.
+- **`pyops::pytest` namespace bridge.** `pytest_run` captures the
+  calling task's `f_globals` (every `#!{set::name}` library's
+  top-level symbol + pyops-injected globals like `setname` /
+  `workspace` / `data` / `listener` / `control`) and pre-registers
+  each materialised test file referenced by the resolved test-set
+  node IDs as a `sys.modules` entry with that namespace seeded into
+  the module dict before the file body runs. Pytest's import then
+  finds the pre-registered module and uses it as-is, so test classes
+  / fixtures / module-level decorators reference pyops-side symbols
+  by bare name — the same semantics as the task body itself. Test
+  files never write `from <set-lib> import <symbol>` for pyops
+  content; classical imports remain valid only for stdlib / venv
+  packages, which live in `sys.modules` independently. Only files in
+  the resolved IDs are pre-registered, so production libraries that
+  happen to share their stem with a stdlib module (`os.py`, ...)
+  cannot accidentally shadow the stdlib for tests doing `import os`.
+- **Importlib resolution for directive-merged classes across all
+  kinds.** `execute_job_code` calls a new `_register_user_module(glob)`
+  helper after libraries are exec'd and before the main code runs.
+  Two paths: when `glob['__name__']` is unique (today: `'__test__'`
+  from kind=test / kind=testdebug), wrap `glob` into a fresh
+  `types.ModuleType` and register it in `sys.modules`. When the name
+  is already there (kind=task / service / debug / draft all keep
+  `'__main__'`, owned by `job_runner.py`), stamp the user's
+  non-dunder, non-conflicting globals onto the existing
+  `__main__.__dict__` — leaves runner-owned bindings (`logger`,
+  `job_lib`, stdlib imports) intact. Either way, directive-merged
+  classes (`@vortex`, `@composite`, ...) — which inherit
+  `__module__` from `glob['__name__']` at exec time — become
+  resolvable via `importlib.import_module(__module__) + getattr()`,
+  so `Vortex.from_dict` and any other library that round-trips
+  class identity by `(__module__, __name__)` works inside the same
+  job regardless of kind. The motivating regression was
+  `cami::causal_service` crashing on draft start with a persisted
+  realm because `CamiServiceVortex.__module__` was `__main__` but
+  the runner's own `__main__` (job_runner.py) didn't carry the
+  symbol.
+
+### Added
+- `app/lib/data.py` — `SetData` API for set-scoped YAML/JSON I/O
+  with shared/exclusive locks and atomic writes.
+- `app/pyops/pytest.library.py` — public `#!{pyops::pytest}`
+  helper for programmatic pytest invocation in `kind=test` jobs.
+- `app/sites/scriptlet/editor_data.html` — Ace-based editor for
+  `data/*.{yaml,yml,json}` files with mode switching by extension.
+  Routed at `/scriptlet/editor_data`.
+- `data` type to the Manager's create dialog, `Markdown` already
+  listed but now creates either `README.md` or `docs/{name}.md`
+  depending on the chosen name (the "README only" restriction is
+  gone).
+- VSIX: `data` type in the Manager tree, with the on-disk extension
+  (`yaml` | `yml` | `json`) propagating through `ScriptletInfo.ext`
+  → `ScriptletTreeItem.scriptletExt` → `inferExt()` (local mirror
+  filename matches remote format) → `pyops-remote://` diff URI's
+  `?ext=...` query param → `RemoteContentProvider`'s language-mode
+  setter (correct syntax highlighting). VSIX `CreateScriptletCommand`
+  offers `Data` and accepts non-README markdown names.
+- pyopsctl: `--type data` accepted by `scriptlet create`;
+  `--kind {test,debug,draft,testdebug}` accepted by `job run`;
+  `--overrides-dir DIR` accepted by `job run` when paired with
+  `--kind {test,debug,testdebug}` (ships the working-copy
+  scriptlets via `overrides`, mirroring the `debug start` path).
+  `debug start --kind {debug,testdebug}` switches the kind tag
+  in the body; everything else (port lease, bootstrap composition,
+  attach, source-path resolution) is unchanged.
+- E2E tests for the three new features plus the testdebug hybrid
+  (`tests/e2e/test_multi_markdown.py`, `test_set_data.py`,
+  `test_test_kind.py` — testdebug coverage added);
+  `tests/pyopsctl/e2e/test_debug_actual_debugging.py` exercises a
+  real-pdb attach + continue + verify-completion against a
+  `kind=testdebug` job.
+
+### Changed
+- Directory rename `app/internal/` → `app/pyops/`. URL
+  `/controller/internal/sets` → `/controller/pyops/sets`. JSlib
+  `internal_job.js` → `sets_job.js` with global `runSetsJob` and test
+  IDs `internal-job-*` → `sets-job-*`. The role-describing identifiers
+  in code use the `bundled_*` prefix (`BUNDLED_SET_NAME`,
+  `bundled_set_path`, `is_bundled_set`, `_reject_if_bundled`) so the
+  question "is this the application-bundled set?" doesn't read as "is
+  this a pyops set?" (every set is — the project's name is pyops).
+- `pyops::pytest` pulls in pytest itself via a `#!pytest` directive at
+  the top of its library file — consumers of `#!{pyops::pytest}` no
+  longer need their own `#!pytest` line.
+- `pyops::pytest.pytest_run` captures the calling task's `f_globals`
+  via `sys._getframe(1)` and pre-registers each materialised test file
+  it is about to invoke pytest against as a `sys.modules` entry whose
+  `__dict__` is seeded with that namespace, so test bodies reference
+  pyops-side symbols (directive-merged libraries + injected globals
+  like `setname` / `workspace`) by bare name. Test files no longer
+  carry `from <set-lib> import <symbol>` for pyops content. Convention:
+  call `pytest_run` directly from `if __name__ == "__test__":` — a
+  helper wrapper would shift the captured frame off the task and
+  break the bridge. Production-library files outside the resolved
+  node IDs are not pre-registered, so they cannot shadow stdlib
+  modules like `os`.
+- `app/job_runner.execute_job_code` calls a new
+  `_register_user_module(glob)` after the library exec phase and
+  before the main code runs. Two paths now: when `glob['__name__']`
+  is unique to the job (today: `'__test__'` from kind=test /
+  testdebug), the helper wraps `glob` in a fresh
+  `types.ModuleType(name)` and registers it in `sys.modules`. When
+  the name is already there (kind=task / service / debug / draft
+  keep `'__main__'`), it stamps the user's non-dunder, non-conflicting
+  globals onto the existing `__main__.__dict__` — leaves runner-owned
+  bindings intact. Either way, directive-merged classes become
+  reachable via `importlib.import_module(__module__) + getattr()`,
+  so `Vortex.from_dict` and equivalent round-trip-by-identity
+  patterns work for every kind. Without this,
+  `cami::causal_service` (and any other service persisting a realm
+  with @vortex classes from its libraries) failed on draft start
+  with `AttributeError: module '__main__' has no attribute …`.
+- Manager UI and task editor gain a **Run as Test** button (material
+  `science` icon, info-blue) next to the existing Run-as-Draft. Both
+  PUT `kind=test`. Operators can now invoke `kind=test` jobs from the
+  WebUI without `pyopsctl` / API.
+- The directive-syntax line in `docs/insights_app.md` is corrected:
+  `#!{set::name}` with mandatory `::` (an empty `set` means current
+  set, e.g. `#!{::lib}`), replacing the earlier
+  `#!{[set::]name}` text that read the `::` as optional.
+- Inventory routes (`code_get`, `draft_post`, `item_del`,
+  `draft_del`) now use `git.list_scriptlet_files` for type
+  resolution so they find `docs/*.md` and `data/*.{yaml,yml,json}`
+  alongside top-level scriptlets.
+- The Manager UI's create modal lists `Markdown` and `Data (YAML)`
+  in addition to Task/Library/Controller/View.
+
+### Fixed
+- Inventory `code_get` previously globbed only the top level of a
+  set's working tree; multi-markdown / data files were unreadable
+  via the WebUI editor as a result.
+- `app/lib/job.loadLib` excluded `kind=test` and `kind=testdebug`
+  from the unstaged-read set; `loadJob` (in `app/runner.py`)
+  included them. The mismatch made a `kind=test` job that depends
+  on a drafted library run against the library's committed snapshot,
+  silently testing the wrong code. Aligned `loadLib` to the same
+  set `("debug", "draft", "test", "testdebug")`.
+- `app/pyops/set_clone.task.py` baked HTTPS credentials into the
+  cloned set's origin URL (`https://user:token@host/path.git`) and
+  then wrote the same credentials to `.git/credentials`. Token
+  rotation by editing `.git/credentials` had no effect because git
+  resolves the password from the URL first; the helper's lookup
+  never fired. After clone, set_clone now rewrites origin to the
+  credential-free URL via `git remote set-url`, so the credential
+  helper becomes the single source of truth. Plus a migration hook
+  in `app/pyops/set.library.normalize_origin_url`, called by
+  `set_commit_drafts` (before push) and `set_pull` (before fetch),
+  that strips embedded HTTPS credentials from any legacy set's
+  origin URL on the next push / pull. Idempotent for already-clean
+  origins and a no-op for SSH / file:// schemes.
+- `app/lib/git.list_scriptlets` now stamps `has_unstaged: bool` on
+  every entry by running one `git status --porcelain` per set and
+  matching scriptlet file paths against the dirty set. The Manager
+  UI (`app/sites/scriptlet/manager.html`) renders the flag as a
+  per-row icon (`check` / `change_history`, success / warning colour)
+  so the operator distinguishes drafts from committed revisions at a
+  glance — pre-3.3.0 the row markup carried no draft signal at all
+  and the only way to tell was opening the editor or hitting
+  `/scriptlet/inventory/status` per row. The icon carries
+  `data-testid="scriptlet-status-{set}-{name}"` and
+  `data-status="clean" | "dirty"` for tooling.
+- `app/job_runner` now redirects job stdout / stderr at the file-
+  descriptor level via `os.dup2` (new `_redirect_job_io` context
+  manager) instead of `contextlib.redirect_stdout` /
+  `redirect_stderr`. The previous Python-level redirect only swapped
+  `sys.stdout` / `sys.stderr` and missed everything that wrote
+  directly to fd1 / fd2: child processes inheriting the parent's
+  fds, C-extension and native writers (HF tqdm download bars,
+  transformers, torch native code). Those bytes used to land in the
+  gunicorn worker's real stdout/stderr; with 3.3.0 they reach the
+  per-job `stdout.log` / `stderr.log` like in pyops 2.1. Applied at
+  all five job-kind sites (task, service, debug, test/testdebug,
+  draft); `sys.stdout` / `sys.stderr` and the saved fds are restored
+  in `finally` even on exception inside the block. Streaming
+  behaviour preserved: log files stay opened with `buffering=1`
+  (line-buffered) by `setup_execution_environment`, so `print(...)`
+  flushes per newline and fd-level writes hit the file immediately
+  — operators can `tail -f stdout.log` on long-running jobs.
+  Regression coverage in `TestRedirectJobIo` includes three
+  streaming tests (print / fd-write / subprocess all visible to a
+  separate reader before the `with` block exits).
+- `app/pyops/sets_job.js` job-tail modal (used by every action on
+  the Sets controller — clone, create, pull, switch, remove,
+  update-deps, commit-drafts) now scales to ~95vw / 95vh instead
+  of Bootstrap's fixed `modal-lg`. Modal body is a flex column so
+  the stdout / stderr panes grow proportionally with the viewport
+  (3 : 1 split, stdout dominant); both panes scroll independently
+  on overflow. Verbose jobs like `set_update_deps` against a
+  large set are now readable without scrolling through a narrow
+  column.
+- `/scriptlet/job/list` now includes `set` and `name` columns in
+  every row. Pre-3.3.0 the SELECT omitted both, so
+  `pyopsctl job list --set <name>` (and the table's set / name
+  columns) silently rendered empty even when matching jobs
+  existed — the CLI filters `row.get("set") == args.set` which
+  never matched because the field wasn't there. Regression
+  coverage in `tests/integration/routers/test_job.py` and
+  `tests/pyopsctl/unit/test_commands_job.py`.
+- `app/pyops/set_update_deps.task` now matches the per-job directive
+  processor's transitive semantics and refreshes git clones in two
+  ways. Pre-3.3.0 it had two gaps that compounded into "Update
+  Dependencies looks clean but transitive deps drift silently":
+  1. `_install_git` went straight to `git checkout <branch>` /
+     `git pull` against an existing local clone, so a directive flip
+     from `main` to a freshly-created remote branch hit
+     `pathspec 'newbranch' did not match any file(s)` — the local
+     clone had no ref for it. Operators had to `git fetch` by hand
+     in `data/pkg/<set>/<repo>`, bypassing the pyops-managed
+     lifecycle. Fix: run `git fetch --prune --tags origin` ahead of
+     the checkout when the clone already exists.
+  2. `_scan(name)` only walked `data/git/{name}/*.py`, treating
+     `#!{set::name}` library-include directives as "not a git
+     directive" (line 73's `or "::" in rest: continue`). The per-job
+     processor (`process_imports`) follows includes recursively, so
+     a cami task that says `#!{system::causal}` correctly clones
+     `causal.py` into `data/pkg/cami/causal.py/` from the directive
+     that lives in `system/causal.library.py`. Update-Dependencies
+     for cami silently skipped the include and never reported the
+     transitive deps — operator ran "update cami", got "0
+     conflict(s)" back, but cami's pkg/causal.py was untouched and
+     stayed at whatever ref it was cloned with. Fix: `_scan` now
+     follows `#!{set::name}` includes transitively (cross-set and
+     same-set), cycle-safe via a per-(set,name) seen set, with
+     directives attributed to the file they textually appear in.
+  Per-job installs (`app/lib/job.process_install_lines`) stay
+  strictly offline as before; only the explicit Update-Dependencies
+  action touches the network. Regression coverage:
+  `tests/unit/pyops/test_set_update_deps.py::TestInstallGitFetchBeforeCheckout`
+  (fetch ordering / flags / no-fetch on initial clone) and
+  `TestScanTransitiveLibraryIncludes` (cross-set + same-set
+  resolution, cycle protection, missing-lib skip, multi-hop chain)
+  plus the real-git integration suite at
+  `tests/integration/test_set_update_deps_fetch.py` (branch-flip +
+  tag-pickup against a temp bare remote).
+- `app/job_runner.execute_job_code` now runs `exec(libs)` BEFORE
+  `exec(param)` for `kind` in `("service", "draft", "debug", "test",
+  "testdebug")` — task-kind keeps the inverted order because of its
+  retry-loop contract. Library imports pulled in by `#!{set::lib}`
+  directives can be heavy (cami's `llm_workers` pulls in `torch` +
+  `transformers` through `causal.vortex.asyncio.llm.hf`, taking
+  5-10 s on first import); the previous order ran those imports
+  AFTER `_signal_running()` had already fired, so the row read
+  `state=running` while the service's zmq listener was bound but
+  not yet polled. Controller-proxy `ServiceClient.recv()` blocked
+  on the first HTTP request through the warmup window, gunicorn
+  worker_timeout (300 s by default) eventually killed the worker,
+  and the operator saw `Empty reply from server`. After the fix the
+  library import window lands during `state=loading`; `state=running`
+  fires after `exec(param)` returns (preserving the debug-kind
+  semantics verbatim — `exec(param)` is still the last step before
+  the flip, so for kind=debug `running` still means "debugger
+  attached + first continue issued"). Docs in `docs/insights_app.md`
+  and `docs/insights_vsix.md` rephrased to be kind-aware:
+  task fires after `exec(param)`; non-task fires after
+  `exec(libs)` + `exec(param)` have both returned. Regression
+  coverage updated at
+  `tests/integration/runner/test_execution.py::test_run_debug_no_debugger_injection`.
+
+### CI / Docs
+- `pyyaml` added to the runner's image (`Dockerfile`) and the four
+  pip-install lines in `.gitlab-ci.yml`.
+- Insights kept in lockstep: `docs/insights_app.md`,
+  `docs/insights_vsix.md`, `docs/insights_ctl.md`, plus
+  `docs/overview.md`, `docs/pyops_guide.md`, `docs/pyops_rules.md`,
+  `README.md`, and the project-root `CLAUDE.md` are all updated to
+  reflect the new set/file layout, the new `pyops` namespace, the
+  `data` and `test` features, and the corrected directive syntax.
+- `docs/insights_app.md` "Test Jobs" and `docs/pyops_guide.md`
+  "Writing Tests" sections rewritten to document the namespace
+  bridge: test bodies use bare names for pyops content, classical
+  Python imports apply only to stdlib / venv packages. Outdated
+  guidance about importing production libs via
+  `from production_lib import …` removed.
+- `docs/insights_app.md` "Job Globals" section gained a paragraph
+  on the `__name__` overlay per kind and the new
+  `_register_user_module` registration that makes
+  `importlib.import_module(glob['__name__'])` resolve to the job's
+  exec dict for the kinds where that name is unique
+  (`'__test__'`).
+
 ## [3.2.0] — 2026-05-19
 
 Three debug-flow bugs and a vendored JS lib refresh:

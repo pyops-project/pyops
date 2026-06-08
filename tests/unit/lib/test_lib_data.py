@@ -1,0 +1,175 @@
+"""Unit tests for app/lib/data.py — the set-scoped YAML/JSON facade.
+
+Coverage focus: write/read round-trip per format, lock semantics (shared
+vs exclusive), cross-format name uniqueness, escape-attempt rejection,
+gitignore append. Concurrent-process lock behaviour is exercised
+end-to-end in tests/integration/test_data_concurrent.py.
+"""
+import json
+import os
+
+import pytest
+
+
+@pytest.fixture
+def repo(tmp_path):
+    p = tmp_path / "myset"
+    p.mkdir()
+    (p / ".gitignore").write_text("*.bck\n")
+    return str(p)
+
+
+class TestRoundTrip:
+    def test_yaml_write_then_read(self, repo):
+        from app.lib.data import SetData
+        sd = SetData("myset", repo)
+        with sd.write("config", format="yaml") as c:
+            c["threshold"] = 42
+            c["nested"] = {"a": 1}
+        with sd.read("config") as c:
+            assert c == {"threshold": 42, "nested": {"a": 1}}
+
+    def test_json_write_then_read(self, repo):
+        from app.lib.data import SetData
+        sd = SetData("myset", repo)
+        with sd.write("state", format="json") as s:
+            s["last_run"] = 12345
+        with sd.read("state") as s:
+            assert s == {"last_run": 12345}
+        # And the file on disk is real JSON.
+        with open(os.path.join(repo, "data", "state.json")) as f:
+            assert json.load(f) == {"last_run": 12345}
+
+    def test_yml_alias_writes_yaml(self, repo):
+        from app.lib.data import SetData
+        sd = SetData("myset", repo)
+        with sd.write("aliased", format="yml") as c:
+            c["x"] = 1
+        # Stored as .yaml on disk (the writer normalises yml → yaml)
+        assert os.path.isfile(os.path.join(repo, "data", "aliased.yaml"))
+
+    def test_existing_file_keeps_format(self, repo):
+        from app.lib.data import SetData
+        sd = SetData("myset", repo)
+        with sd.write("cfg", format="json") as c:
+            c["x"] = 1
+        # Second write without format uses the existing .json
+        with sd.write("cfg") as c:
+            c["x"] = 2
+        with sd.read("cfg") as c:
+            assert c == {"x": 2}
+
+    def test_write_requires_format_for_new_file(self, repo):
+        from app.lib.data import SetData
+        sd = SetData("myset", repo)
+        with pytest.raises(ValueError):
+            with sd.write("brand_new") as _:
+                pass
+
+
+class TestNameUniqueness:
+    def test_cross_format_collision_rejected(self, repo):
+        from app.lib.data import SetData
+        sd = SetData("myset", repo)
+        with sd.write("config", format="yaml") as c:
+            c["x"] = 1
+        with pytest.raises(FileExistsError):
+            with sd.write("config", format="json") as c:
+                c["x"] = 2
+
+    def test_check_data_name_unique(self, repo):
+        from app.lib.data import SetData, check_data_name_unique
+        sd = SetData("myset", repo)
+        assert check_data_name_unique(repo, "fresh") is True
+        with sd.write("fresh", format="yaml") as c:
+            c["x"] = 1
+        assert check_data_name_unique(repo, "fresh") is False
+
+
+class TestEscapeRejection:
+    @pytest.mark.parametrize("bad_name", [
+        "../other", "/abs", "sub/dir", "..", ".hidden", "with\\bs",
+    ])
+    def test_invalid_names_rejected_on_read(self, repo, bad_name):
+        from app.lib.data import SetData
+        sd = SetData("myset", repo)
+        with pytest.raises(ValueError):
+            with sd.read(bad_name) as _:
+                pass
+
+    @pytest.mark.parametrize("bad_name", [
+        "../other", "/abs", "sub/dir", "..", ".hidden",
+    ])
+    def test_invalid_names_rejected_on_write(self, repo, bad_name):
+        from app.lib.data import SetData
+        sd = SetData("myset", repo)
+        with pytest.raises(ValueError):
+            with sd.write(bad_name, format="yaml") as _:
+                pass
+
+
+class TestList:
+    def test_list_empty(self, repo):
+        from app.lib.data import SetData
+        sd = SetData("myset", repo)
+        assert sd.list() == []
+
+    def test_list_sorted(self, repo):
+        from app.lib.data import SetData
+        sd = SetData("myset", repo)
+        with sd.write("zebra", format="yaml") as c:
+            c["x"] = 1
+        with sd.write("alpha", format="json") as c:
+            c["x"] = 2
+        with sd.write("bravo", format="yaml") as c:
+            c["x"] = 3
+        assert sd.list() == ["alpha", "bravo", "zebra"]
+
+    def test_list_skips_lock_sidecars(self, repo):
+        from app.lib.data import SetData
+        sd = SetData("myset", repo)
+        with sd.write("a", format="yaml") as c:
+            c["x"] = 1
+        # The .a.lock sidecar exists alongside a.yaml; list() must ignore it
+        assert os.path.isfile(os.path.join(repo, "data", ".a.lock"))
+        assert sd.list() == ["a"]
+
+
+class TestGitignore:
+    def test_gitignore_appends_lock_pattern(self, repo):
+        from app.lib.data import SetData
+        sd = SetData("myset", repo)
+        with sd.write("cfg", format="yaml") as c:
+            c["x"] = 1
+        with open(os.path.join(repo, ".gitignore")) as f:
+            content = f.read()
+        assert "data/.*.lock" in content
+
+    def test_gitignore_idempotent(self, repo):
+        from app.lib.data import SetData
+        sd = SetData("myset", repo)
+        # Trigger ensure_gitignore twice
+        with sd.write("a", format="yaml") as c:
+            c["x"] = 1
+        with sd.write("b", format="yaml") as c:
+            c["x"] = 1
+        with open(os.path.join(repo, ".gitignore")) as f:
+            content = f.read()
+        # The entry appears exactly once
+        assert content.count("data/.*.lock") == 1
+
+
+class TestRoundTripInsideWrite:
+    """Mutating the yielded dict inside a `with data.write(...) as obj:`
+    block must persist on close — that's the whole point of the context
+    manager API."""
+
+    def test_in_place_mutation_persists(self, repo):
+        from app.lib.data import SetData
+        sd = SetData("myset", repo)
+        with sd.write("cfg", format="yaml") as c:
+            c["a"] = 1
+        with sd.write("cfg") as c:
+            c["b"] = 2  # In-place mutation
+        with sd.read("cfg") as c:
+            assert c == {"a": 1, "b": 2}

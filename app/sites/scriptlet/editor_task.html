@@ -135,6 +135,7 @@
                         } else {
                             $("#btn_cancel").attr("disabled", "disabled");
                             $("#btn_run").removeAttr("disabled");
+                            $("#btn_test").removeAttr("disabled");
 
                             console.debug("poll", d.state);
                             if(d.state == "done")
@@ -152,27 +153,26 @@
                 console.debug(`cancel()`)
                 $("#btn_cancel").attr("disabled", "disabled")
                 $("#btn_run").removeAttr("disabled")
+                $("#btn_test").removeAttr("disabled")
                 fetch(`/scriptlet/job/cancel?id=${job_id}`);
                 console.debug("cancel", job_id);
             }
 
-            function run() {
-                console.debug(`run()`);
-
+            function _enqueueWithKind(kind, label) {
                 out.setValue(""); errout.setValue("");
                 out.scrollToLine(Number.POSITIVE_INFINITY)
                 errout.scrollToLine(Number.POSITIVE_INFINITY)
 
                 save();
-                
+
                 const data = {
                     "set": set,
                     "name": name,
                     "drop_done": false,
                     "param": param.getValue(),
-                    "kind": "draft"
+                    "kind": kind
                 };
-                
+
                 fetch(`/scriptlet/job/item`, {
                     method: "PUT",
                     headers: {
@@ -182,16 +182,27 @@
                 }).then(async (r)=>{
                     if(r.ok) {
                         const d = await r.json();
-                        console.debug("run", d.job);
+                        console.debug(label, d.job);
 
                         job_id = d.job
                         $("#btn_run").attr("disabled", "disabled")
+                        $("#btn_test").attr("disabled", "disabled")
                         $("#btn_cancel").removeAttr("disabled")
 
                         poll();
                     } else
                         console.error(await r.text());
                 }).catch((e)=>console.error(e.toString()));
+            }
+
+            function run() {
+                console.debug(`run()`);
+                _enqueueWithKind("draft", "run");
+            }
+
+            function runAsTest() {
+                console.debug(`runAsTest()`);
+                _enqueueWithKind("test", "test");
             }
 
             function fontSizeChanged() {
@@ -358,8 +369,13 @@
                     </button>
                 </li>
                 <li class="nav-item m-1">
-                    <button id="btn_run" type="button" class="btn btn-success" onclick="run()" data-testid="editor-run">
+                    <button id="btn_run" type="button" class="btn btn-success" onclick="run()" title="Run draft (kind=draft)" data-testid="editor-run">
                         <span class="material-icons-round">play_arrow</span>
+                    </button>
+                </li>
+                <li class="nav-item m-1">
+                    <button id="btn_test" type="button" class="btn btn-info" onclick="runAsTest()" title="Run as test (kind=test)" data-testid="editor-test">
+                        <span class="material-icons-round">science</span>
                     </button>
                 </li>
                 <li class="nav-item m-1">

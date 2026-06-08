@@ -219,13 +219,16 @@ exclusive) supply an optional preamble that runs **after** pdb is
 attached and paused at the bootstrap's `set_trace()` — i.e. the
 operator sees it only after issuing `continue`.
 
-`_build_overrides(overrides_dir, set_name)` walks
+`pyopsctl.overrides.build_overrides(overrides_dir, set_name)` walks
 `overrides_dir/<set>/*.py` and returns a `dict[str, str]` keyed by
 `"<set>::<name>"` — the same shape the server enforces via
 `^[a-zA-Z0-9_-]+::[a-zA-Z0-9_-]+$` in
 `app/routers/scriptlet/job.py`. Returns `None` (not `{}`) when no
 override dir is given, so the JSON body omits the `overrides` key
 entirely and the server reads from the per-set git working tree.
+Shared between `debug start` and `job run --kind test|debug` (the two
+client paths that ship local working-copy bodies); the server consumes
+the same map regardless of which verb produced it.
 
 `_poll_until_running(c, job_id, timeout=60.0, interval=0.5)` is the
 shared poll loop for `--wait-running` and `debug attach`. Under the
@@ -274,17 +277,29 @@ The 3.1.0 scope hits these pyops endpoints:
 `PUT /scriptlet/inventory/item` (create, working-tree only),
 `POST /scriptlet/inventory/draft` (draft write, no commit),
 `DELETE /scriptlet/inventory/item` (working-tree only). Commit + push
-is exclusively the internal `set_commit_drafts` task — invoked via the
+is exclusively the `pyops::set_commit_drafts` task — invoked via the
 Sets view's "Commit drafts" button or by enqueuing the task directly.
 
 **job** — `GET /scriptlet/job/list`, `GET /scriptlet/job/item`,
 `PUT /scriptlet/job/item`, `DELETE /scriptlet/job/item`,
-`GET /scriptlet/job/cancel`, `GET /scriptlet/job/download`.
+`GET /scriptlet/job/cancel`, `GET /scriptlet/job/download`. The
+`PUT` body of `job run` accepts `--overrides-dir DIR` when paired
+with `--kind test|debug`; the CLI then calls the shared
+`pyopsctl.overrides.build_overrides()` and ships the resulting
+`{set::name: body}` map in the `overrides` JSON key, letting the
+operator iterate on local edits without committing first.
 
-**debug** — `PUT /scriptlet/job/item` (with `kind=debug`), plus the
+**debug** — `PUT /scriptlet/job/item` (with `kind` in `{"debug", "testdebug"}`, selected via `debug start --kind {debug,testdebug}`; default is `debug`), plus the
 job list/item/cancel endpoints above. The debug session runs
 client-side against the remote-pdb listener the param's bootstrap
-opened; no server endpoint mediates the debugger wire.
+opened; no server endpoint mediates the debugger wire. `--kind testdebug`
+yields the hybrid that materialises sources under `.debug/src/` (same as
+debug) but runs the scriptlet with `__name__='__test__'` — useful for
+stepping through a task's `if __name__ == "__test__":` block under pdb.
+Subverbs (`attach`, `state`, `stack`, `continue`, `break set/list/remove`,
+`step*`, `terminate`, `detach`) are kind-agnostic: they operate on the
+remote-pdb wire and resolve sources against the same `.debug/src/`
+layout regardless of which kind started the job.
 
 **monitoring** — `GET /health`, `GET /health/failed`,
 `GET /metrics`, `GET /version`.
@@ -326,10 +341,16 @@ unit/
   test_ports.py                # port-lease store: pool, stale reclaim
   test_pdb_client.py           # PdbClient prompt reader + response parsers
   test_human_output.py         # vertical state-dump renderer
-  test_commands_debug.py       # argparse wiring → request body shape
+  test_commands_debug.py       # argparse wiring → request body shape (incl. --kind testdebug)
+  test_commands_job.py         # job-run override path: --kind test + --overrides-dir
 integration/
   test_smoke.py                # version/config check/health/metrics
-  test_debug_flow.py           # composed-param shape against a real server
+  test_debug_flow.py           # composed-param shape against a real server (debug + testdebug)
+e2e/
+  test_debug_actual_debugging.py  # real-pdb attach/step/locals/evaluate (debug + testdebug)
+  test_debug_client_attach.py
+  test_debug_detach_reattach.py
+  test_debug_interactive_session.py
 ```
 
 The shared server fixture starts a fresh pyops in a new process group

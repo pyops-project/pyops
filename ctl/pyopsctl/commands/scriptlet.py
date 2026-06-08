@@ -156,7 +156,7 @@ def register(subparsers, parents):
     cr.add_argument("set"); cr.add_argument("name")
     cr.add_argument("--kind", required=True,
                     choices=["task", "service", "schedule", "controller", "view",
-                             "library", "markdown", "jslibrary"],
+                             "library", "markdown", "jslibrary", "data"],
                     help="scriptlet type (passed as `type` to the API)")
     cr.set_defaults(func=_create)
 

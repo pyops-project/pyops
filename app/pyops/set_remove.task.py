@@ -17,8 +17,8 @@ import shutil
 def main():
     if not name:
         raise ValueError("name is required")
-    if name == "internal":
-        raise ValueError("'internal' is pyops-managed and cannot be removed")
+    if name == "pyops":
+        raise ValueError("'pyops' is pyops-managed and cannot be removed")
 
     target = _set_dir(name)
     if not os.path.exists(target):

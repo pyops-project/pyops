@@ -2,7 +2,7 @@
   "name": "pyops",
   "displayName": "PyOps",
   "description": "VSCodium extension for integrating with PyOps server",
-  "version": "3.2.0",
+  "version": "3.3.0",
   "publisher": "pyops-team",
   "license": "AGPL-3.0-only",
   "repository": {
@@ -72,6 +72,12 @@
         "title": "Start Debug Job",
         "category": "PyOps",
         "icon": "$(play)"
+      },
+      {
+        "command": "pyops.startTestDebugJob",
+        "title": "Start Test-Debug Job",
+        "category": "PyOps",
+        "icon": "$(debug-alt)"
       },
       {
         "command": "pyops.stopDebugJob",
@@ -193,17 +199,22 @@
       "view/item/context": [
         {
           "command": "pyops.resetLocalFromRemote",
-          "when": "view == 'pyops-manager' && viewItem =~ /^pyopsItem-(task|service|library|controller|view|markdown|jslibrary)$/ && pyops.hasValidConfig",
+          "when": "view == 'pyops-manager' && viewItem =~ /^pyopsItem-(task|service|library|controller|view|markdown|jslibrary|data)$/ && pyops.hasValidConfig",
           "group": "navigation"
         },
         {
           "command": "pyops.writeLocalToRemoteDraft",
-          "when": "view == 'pyops-manager' && viewItem =~ /^pyopsItem-(task|service|library|controller|view|markdown|jslibrary)(-local)?$/ && pyops.hasValidConfig",
+          "when": "view == 'pyops-manager' && viewItem =~ /^pyopsItem-(task|service|library|controller|view|markdown|jslibrary|data)(-local)?$/ && pyops.hasValidConfig",
           "group": "navigation"
         },
 
         {
           "command": "pyops.startDebugJob",
+          "when": "view == 'pyops-manager' && viewItem =~ /^pyopsItem-task(-local)?$/ && pyops.hasValidConfig",
+          "group": "navigation"
+        },
+        {
+          "command": "pyops.startTestDebugJob",
           "when": "view == 'pyops-manager' && viewItem =~ /^pyopsItem-task(-local)?$/ && pyops.hasValidConfig",
           "group": "navigation"
         },
@@ -214,12 +225,12 @@
         },
         {
           "command": "pyops.diffLocalRemote",
-          "when": "view == 'pyops-manager' && viewItem =~ /^pyopsItem-(task|service|library|controller|view|markdown|jslibrary)$/ && pyops.hasValidConfig",
+          "when": "view == 'pyops-manager' && viewItem =~ /^pyopsItem-(task|service|library|controller|view|markdown|jslibrary|data)$/ && pyops.hasValidConfig",
           "group": "navigation"
         },
         {
           "command": "pyops.deleteScriptlet",
-          "when": "view == 'pyops-manager' && viewItem =~ /^pyopsItem-(task|service|library|controller|view|markdown|jslibrary)(-local)?$/ && pyops.hasValidConfig",
+          "when": "view == 'pyops-manager' && viewItem =~ /^pyopsItem-(task|service|library|controller|view|markdown|jslibrary|data)(-local)?$/ && pyops.hasValidConfig",
           "group": "navigation"
         },
 

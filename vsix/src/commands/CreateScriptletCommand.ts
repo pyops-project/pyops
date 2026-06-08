@@ -15,7 +15,8 @@ export class CreateScriptletCommand {
             { label: 'Controller', description: 'Python controller' },
             { label: 'View', description: 'HTML view template' },
             { label: 'JS Library', description: 'JavaScript library module' },
-            { label: 'Markdown', description: 'Markdown document (README only)' }
+            { label: 'Markdown', description: 'Markdown document (README.md or docs/<name>.md)' },
+            { label: 'Data', description: 'YAML data file under data/<name>.yaml' }
         ];
         const typePick = await vscode.window.showQuickPick(types, { placeHolder: 'Select scriptlet type' });
         if (!typePick) return;
@@ -78,11 +79,6 @@ export class CreateScriptletCommand {
                 }
                 outputChannel.appendLine(`[Create Scriptlet] Selected unique name: ${name}`);
 
-                if (typeLower === 'markdown' && name !== 'README') {
-                    vscode.window.showErrorMessage('Markdown only allowed for README');
-                    return;
-                }
-
                 outputChannel.appendLine(`[Create Scriptlet] Creating local ${typeLower} '${set}::${name}'...`);
                 const workspaceRoot = vscode.workspace.workspaceFolders![0].uri.fsPath;
                 const localPyopsDir = pyopsConfig.get('localPyopsDir', 'pyops') as string;
@@ -96,6 +92,9 @@ export class CreateScriptletCommand {
                 if (ext === 'py') {
                     template = 'pass';
                 }
+                // type=data files start empty (no `{}` flow-mapping
+                // placeholder) — matches the server-side initial_content
+                // for type=data; see app/routers/scriptlet/inventory.py.
                 fs.writeFileSync(localPath, template);
                 outputChannel.appendLine(`[Create Scriptlet] Created local file: ${localPath}`);
                 managerTreeProvider.refresh();

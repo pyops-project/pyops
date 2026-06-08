@@ -1,6 +1,6 @@
-"""Integration tests for the pyops-internal set bundle.
+"""Integration tests for the pyops-managed set bundle.
 
-Verifies that app/internal/ is reachable through the existing pyops
+Verifies that app/pyops/ is reachable through the existing pyops
 mechanisms (scriptlet enumeration, controller, jslib endpoint) without
 relying on a running runner / data service. The service-driven sub-task
 flow is covered by E2E in tests/e2e/.
@@ -14,16 +14,16 @@ from app.web import app
 from app.lib import files
 
 
-INTERNAL_DIR = files.internal_set_path
+PYOPS_SET_DIR = files.bundled_set_path
 client = TestClient(app)
 
 
 def _path(name):
-    return os.path.join(INTERNAL_DIR, name)
+    return os.path.join(PYOPS_SET_DIR, name)
 
 
-class TestInternalSetBundlePresent:
-    """Sanity: the files we ship under app/internal/ exist and parse."""
+class TestPyopsSetBundlePresent:
+    """Sanity: the files we ship under app/pyops/ exist and parse."""
 
     @pytest.mark.parametrize("filename", [
         "sets.controller.py",
@@ -39,9 +39,9 @@ class TestInternalSetBundlePresent:
     ])
     def test_python_scriptlet_parses(self, filename, tmp_path):
         path = _path(filename)
-        assert os.path.exists(path), f"missing internal scriptlet: {path}"
+        assert os.path.exists(path), f"missing pyops-set scriptlet: {path}"
         # Compile to a tmp file so pyops's source tree stays clean
-        # (avoids littering app/internal/ with .pyc artefacts that
+        # (avoids littering app/pyops/ with .pyc artefacts that
         # later test runs would mis-parse).
         py_compile.compile(path, cfile=str(tmp_path / "out.pyc"), doraise=True)
 
@@ -54,15 +54,15 @@ class TestInternalSetBundlePresent:
         assert os.path.exists(_path(filename))
 
     def test_jslibrary_present(self):
-        assert os.path.exists(_path("internal_job.js"))
+        assert os.path.exists(_path("sets_job.js"))
 
 
-class TestInternalControllerRoute:
-    """GET /controller/internal/sets executes the controller and stitches
+class TestPyopsControllerRoute:
+    """GET /controller/pyops/sets executes the controller and stitches
     head/menu/body view content into the wrapper HTML."""
 
     def test_controller_renders_sets_page(self, mock_conf):
-        r = client.get("/controller/internal/sets")
+        r = client.get("/controller/pyops/sets")
         assert r.status_code == 200
         html = r.text
         # Body content carried over from the body view
@@ -74,36 +74,36 @@ class TestInternalControllerRoute:
         assert 'data-testid="sets-clone"' in html
         assert 'data-testid="sets-create"' in html
         # Head view loads the jslib via the standard pyops endpoint
-        assert "/scriptlet/jslib/internal/internal_job" in html
+        assert "/scriptlet/jslib/pyops/sets_job" in html
         # {{SET}} / {{NAME}} substitution applied in apiCall + button handlers
-        assert "/controller/internal/sets/" in html
+        assert "/controller/pyops/sets/" in html
         assert "{{SET}}" not in html
         assert "{{NAME}}" not in html
 
 
-class TestInternalJslibRoute:
-    """The internal_job.js library is served via the same jslib endpoint
-    user-set JS libraries use — set='internal', name='internal_job'."""
+class TestPyopsJslibRoute:
+    """The sets_job.js library is served via the same jslib endpoint
+    user-set JS libraries use — set='pyops', name='sets_job'."""
 
     def test_jslibrary_served(self):
         r = client.get(
-            "/scriptlet/jslib/internal/internal_job",
+            "/scriptlet/jslib/pyops/sets_job",
             params={"committed": False},
         )
         assert r.status_code == 200
         assert r.headers["content-type"].startswith("application/javascript")
-        # Exposes the runInternalJob global
-        assert "runInternalJob" in r.text
+        # Exposes the runSetsJob global
+        assert "runSetsJob" in r.text
 
 
-class TestInternalControllerProxyNeedsRunningService:
-    """The controller-proxy path /controller/internal/sets/<rest> requires
-    a running `internal::data` service. Without it, the proxy returns an
+class TestPyopsControllerProxyNeedsRunningService:
+    """The controller-proxy path /controller/pyops/sets/<rest> requires
+    a running `pyops::data` service. Without it, the proxy returns an
     error payload — exercising the routing wiring without booting a real
     runner."""
 
     def test_proxy_returns_503_when_service_not_running(self, mock_db):
-        r = client.get("/controller/internal/sets/list")
+        r = client.get("/controller/pyops/sets/list")
         # controller_proxy returns 503 with a structured {"error": "..."}
         # payload when the bound service isn't running yet (avoids a
         # traceback in the server log for every warmup poll).

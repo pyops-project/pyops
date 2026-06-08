@@ -21,12 +21,12 @@ PyOps is an execution platform for Python operations scriptlets, licensed under 
 - **Status**: Status bar shows connection (requires valid `pyops.serverUrl`).
 
 VSIX provides pyops-container in sidebar/activitybar:
-- **pyops-manager**: Sets > type folders (task/service/library/controller/view/markdown/jslibrary) > scriptlets; icons: ✓ synced, ⚠ unsynced/draft/local-only; contextValues pyopsItem-{type}(-local).
+- **pyops-manager**: Sets > type folders (task/service/library/controller/view/markdown/jslibrary/data) > scriptlets; icons: ✓ synced, ⚠ unsynced/draft/local-only; contextValues pyopsItem-{type}(-local). Markdown supports multiple pages: top-level `README.md` plus any number of free-named `docs/{name}.md`. Data files (yaml/json) live under `data/{name}.{yaml,yml,json}` and round-trip through the standard sync/diff/draft flow.
   Right-click: Reset Local from Remote, Write Local to Remote Draft, Diff Local Remote, Delete Scriptlet; Start/Stop Debug Job (tasks). Per-file commit/push is gone — commit the whole set's draft changeset at once via the Sets view.
   Titlebar: Refresh Manager, Create Scriptlet, Attach to Debug Job.
 - **pyops-monitor**: Jobs by state; right-click: Copy Job Param, Cancel/Download/Delete/View Job.
   Titlebar: Refresh Monitor, Cancel All Jobs, Delete All Done/Canceled, Delete All Failed/Killed.
-- Sets Manager: Open http://{pyops.serverUrl}/controller/internal/sets for clone/switch/remove.
+- Sets Manager: Open http://{pyops.serverUrl}/controller/pyops/sets for clone/switch/remove.
 
 Local `pyops/` mirrors remote files for editing (create opens file; upload/save syncs changes). Local-only scriptlets (created locally without remote counterpart) can be synced to remote via "Write Local to Remote Draft", which auto-creates the remote scriptlet if it doesn't exist.
 
@@ -41,13 +41,14 @@ Examples:
 - View: "Enhance body.html with Bootstrap table for job list, AJAX GET to /jobs via apiCall, populate rows with Material Icons."
 - Library: "Generate a Python library scriptlet with shared functions, e.g., data processing utilities, for import in other scriptlets."
 - JS Library: "Create a JavaScript library scriptlet with utility functions, e.g., `function apiCall(type, path, params, callback) { /* REST AJAX implementation */ }` for use in views."
-- Markdown: "Write a markdown scriptlet for documentation or README content."
+- Markdown: "Write a markdown scriptlet for documentation. Use `README` as name for the set's top-level README.md, or any other name for a `docs/{name}.md` page."
+- Data: "Create a YAML data file scriptlet with `threshold: 42`, `enabled: true`, and a `defaults` section. Tasks/libraries read it via `with data.read('config') as cfg:`."
 
 Cline outputs full file content; paste/replace in editor, then save via VSIX. Iterate prompts for refinements (e.g., "Add validation to previous code").
 
 ## VSIX Workflow
 
-- **Create Scriptlet**: pyops-manager titlebar > Create Scriptlet (prompts for set/type/name); opens local `pyops/{set}/{type}/{name}.{ext}` (.py for task/service/library/controller, .html for view, .md for markdown, .js for jslibrary).
+- **Create Scriptlet**: pyops-manager titlebar > Create Scriptlet (prompts for set/type/name); opens local `pyops/{set}/{type}/{name}.{ext}` (.py for task/service/library/controller, .html for view, .md for markdown, .js for jslibrary, .yaml for data). The server stores markdown as `docs/{name}.md` (or `README.md` if name=README) and data as `data/{name}.{yaml,json}`; the per-type subdir layout is a client-side convention.
 - **Edit/Generate**: Use VSCode/Cline to code. Edit local file.
 - **Sync**: Right-click > Reset Local from Remote (download draft), Write Local to Remote Draft (upload — unstaged). To commit + push, open the Sets view and click "Commit drafts" on the set; a modal previews the porcelain status and accepts an optional commit message.
 - **Diff**: Right-click > Diff Local Remote.
@@ -77,9 +78,127 @@ view or `pyopsctl job view <id>`.
 
 Controllers: `debug=True` uses unstaged/draft code (preview).
 
+## Writing Tests
+
+Tests are a peer of debug: enqueue any `*.task.py` with `kind=test` and pyops sets `__name__='__test__'`, materialises sources under `.test/src/<set>/{task,library}/<name>.py`, then exec's. The same file can serve as both production task and its own test suite via the `__main__` / `__test__` idiom — no retry, no timeout, same source-path-mapping shape as debug.
+
+Pyops core is pytest-agnostic. The bundled `pyops::pytest` library encapsulates the common pattern: AST-driven class/method-id resolution against the materialised library tree, programmatic `pytest.main()` invocation, auto-attached coverage when `pytest-cov` is in the import graph, `[paths]`-mapped `.coveragerc` so reports reference canonical source.
+
+```python
+# my_task.task.py
+#!pytest-cov                # optional — turns on coverage automatically
+#!{::unit_tests}            # test classes live in libraries
+#!{pyops::pytest}           # the helper; transitively installs pytest
+
+def do_work(x):
+    return x * 2
+
+if __name__ == "__main__":
+    do_work(input_value)
+
+if __name__ == "__test__":
+    pytest_run(
+        test_sets=["TestWork", "TestEdge::test_zero"],
+        args=["-v"],
+    )
+```
+
+Test libraries hold the pytest classes. Production code those classes
+need is reached the same way every pyops scriptlet reaches its
+directive-merged content: by bare name. `pytest_run` captures the
+calling task's `f_globals` (one frame up — that's why the convention
+is to call it directly from the `__test__` block, never through a
+helper) and pre-registers each materialised test file in
+`sys.modules` with that namespace seeded into the module's `__dict__`
+before the file body runs. So the test library can reference any
+symbol the task pulled in via `#!{set::name}` directives, plus
+pyops-injected globals (`setname`, `workspace`, `data`, `listener`,
+`control`, `gitspace`, ...), by bare name. **Classical
+`from production_lib import do_work` inside test files is wrong for
+pyops-side content** — it would imply that the production library
+sits in `sys.modules` as a Python module, which is not what the
+directive merge produces and would also push pyops library authors
+to dodge stdlib / framework module names. Classical imports remain
+valid (and necessary) for stdlib and venv-installed packages
+(`pytest`, framework libs installed via `#!<pip-pkg>` / git
+directives) — those reach `sys.modules` independently of the pyops
+directive merge.
+
+```python
+# my_task.task.py
+#!pytest-cov                # optional — turns on coverage automatically
+#!{::shared_lib}            # production helpers visible to both task body + tests
+#!{::unit_tests}            # test classes live in libraries
+#!{pyops::pytest}           # the helper; transitively installs pytest
+
+def work_with(x):
+    return double(x)         # `double` directive-merged from shared_lib
+
+if __name__ == "__main__":
+    work_with(input_value)
+
+if __name__ == "__test__":
+    pytest_run(
+        test_sets=["TestWork", "TestEdge::test_zero"],
+        args=["-v"],
+    )
+```
+
+```python
+# unit_tests.library.py — no `from shared_lib import double` line;
+# `double` lands here via the pyops::pytest namespace bridge.
+import pytest               # stdlib / venv → classical import is fine
+
+class TestWork:
+    def test_doubles(self):
+        assert double(3) == 6
+
+    def test_zero(self):
+        assert double(0) == 0
+
+class TestEdge:
+    def test_zero(self):
+        assert double(0) == 0
+
+    def test_negative(self):
+        assert double(-2) == -4
+
+class TestEnv:
+    def test_workspace_visible(self):
+        # pyops-injected globals are seeded by the bridge too
+        import os
+        assert os.path.isdir(workspace)
+
+@pytest.fixture
+def shared_thing():
+    return {"key": "value"}
+```
+
+Fixtures, monkeypatch, and `@pytest.fixture` all work — pyops invokes the real pytest API.
+
+Enqueue: `pyopsctl job run myset my_task --kind test`, or `PUT /scriptlet/job/item` with `kind=test`, or via the manager UI's **Run as Test** button (material `science` icon, info-blue, sits next to **Run as Draft** on every task row and inside the task editor).
+
+## Set-Scoped Data
+
+Tasks and libraries in the same set can read/write small structured files under `data/git/{set}/data/{name}.{yaml,yml,json}` via the `data` global (peer of `control` and `listener`, injected into every scriptlet's namespace).
+
+```python
+with data.read("config") as cfg:        # shared lock — concurrent reads run in parallel
+    threshold = cfg["threshold"]
+
+with data.write("state") as st:         # exclusive lock — blocks readers and other writers
+    st["last_run"] = time.time()
+
+data.list()                              # ['config', 'state']
+```
+
+Format is detected by file extension. On first create, `data.write("name", format="yaml")` or `format="json"` is required. Existing files keep their format; a name is unique across formats (`config.yaml` and `config.json` can't coexist). Cross-set access raises — there is no API surface that accepts another set name.
+
+Files are versioned alongside scriptlets; runtime writes show as unstaged changes foldable into the standard draft-commit flow. Per-file flocks live alongside the data files under `data/.{name}.lock` and are gitignored automatically.
+
 ## Full Workflow Example
 
-1. **Clone Set**: Browser to http://localhost:8000/controller/internal/sets > Add (name="myops", URL=git@github.com/user/myops.git, branch=main).
+1. **Clone Set**: Browser to http://localhost:8000/controller/pyops/sets > Add (name="myops", URL=git@github.com/user/myops.git, branch=main).
 2. **Create Components**:
    - pyops-manager titlebar > Create Scriptlet (set="myops", type="service", name="myservice"); opens pyops/myops/service/myservice.py; use Cline to generate code.
    - Create controller/mycontroller.py (globals: set="myops" service="myservice" ...).
@@ -224,7 +343,7 @@ Every command accepts the global flags: `--profile NAME`, `--server URL`,
 - `pyopsctl scriptlet status SET NAME`
 - `pyopsctl scriptlet repo-status SET`
 - `pyopsctl scriptlet get-code SET NAME`
-- `pyopsctl scriptlet create SET NAME --kind {task|service|schedule|controller|view|library|markdown|jslibrary}`
+- `pyopsctl scriptlet create SET NAME --kind {task|service|schedule|controller|view|library|markdown|jslibrary|data}`
 - `pyopsctl scriptlet draft SET NAME [--file PATH | --stdin]`
 - `pyopsctl scriptlet delete SET NAME`
 - `pyopsctl scriptlet diff SET NAME [--local-file PATH]`
@@ -233,7 +352,7 @@ Every command accepts the global flags: `--profile NAME`, `--server URL`,
 
 - `pyopsctl job list [--state S] [--owner U] [--set X] [--name Y]`
 - `pyopsctl job view ID [--follow] [--stream stdout|stderr|both]`
-- `pyopsctl job run SET NAME [--kind task|service] [--param TEXT | --param-file PATH] [--drop-done] [--max-retries N]`
+- `pyopsctl job run SET NAME [--kind task|service|debug|draft|test] [--param TEXT | --param-file PATH] [--drop-done] [--max-retries N]`
 - `pyopsctl job cancel ID`
 - `pyopsctl job delete ID`
 - `pyopsctl job download ID [--out PATH]`
@@ -352,7 +471,7 @@ pyopsctl scriptlet diff  myset myscript --local-file myscript.task.py
 `draft` writes the working-tree copy without committing. Use `diff`
 first to see what's about to change. Commit + push the whole set's
 draft changeset at once via the Sets view's "Commit drafts" button (or
-`pyopsctl job run internal set_commit_drafts --param 'name="myset"; message="..."'`
+`pyopsctl job run pyops set_commit_drafts --param 'name="myset"; message="..."'`
 if you'd rather drive it from the CLI).
 
 **Run a task and follow it:**
@@ -417,15 +536,15 @@ pyopsctl job clean --state done
 Set lifecycle (clone, create, pull, switch, remove, update-deps) and
 schedule CRUD still go through the WebUI (Sets Manager below;
 `/scriptlet/schedule/*` for schedules). The set flows can be invoked
-from the CLI by running the internal task scriptlets directly (e.g.
-`pyopsctl job run internal set_clone --param '<json>'`), but the param
+from the CLI by running the pyops-set task scriptlets directly (e.g.
+`pyopsctl job run pyops set_clone --param '<json>'`), but the param
 schema isn't part of pyopsctl's documented surface yet.
 
 ## Sets Manager
 
-PyOps UI: http://{pyops.serverUrl}/controller/internal/sets
+PyOps UI: http://{pyops.serverUrl}/controller/pyops/sets
 
-The Sets view is itself a pyops scriptlet — a controller backed by the `internal::data` service. Each action (clone, create, pull, switch, remove, update-deps) enqueues a `set_*` task with `drop_done=true`; a modal polls the job and tails its stdout/stderr live until terminal state.
+The Sets view is itself a pyops scriptlet — a controller backed by the `pyops::data` service. Each action (clone, create, pull, switch, remove, update-deps) enqueues a `set_*` task with `drop_done=true`; a modal polls the job and tails its stdout/stderr live until terminal state.
 
 - List sets/branch; auto-refresh.
 - Add: clone (name, Git URL/branch, git name/email, username/password).

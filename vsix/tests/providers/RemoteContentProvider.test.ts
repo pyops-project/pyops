@@ -66,6 +66,24 @@ describe('getLanguageId', () => {
   it('returns undefined for service type', () => {
     expect(getLanguageId('service')).toBeUndefined();
   });
+
+  describe('data type', () => {
+    it('defaults to yaml without ext hint', () => {
+      expect(getLanguageId('data')).toBe('yaml');
+    });
+
+    it('returns yaml for yaml ext', () => {
+      expect(getLanguageId('data', 'yaml')).toBe('yaml');
+    });
+
+    it('returns yaml for yml ext (alias)', () => {
+      expect(getLanguageId('data', 'yml')).toBe('yaml');
+    });
+
+    it('returns json for json ext', () => {
+      expect(getLanguageId('data', 'json')).toBe('json');
+    });
+  });
 });
 
 describe('registerRemoteLanguageModeSetter', () => {
@@ -142,5 +160,47 @@ describe('registerRemoteLanguageModeSetter', () => {
     callback(mockDocument);
 
     expect(mockVscode.languages.setTextDocumentLanguage).not.toHaveBeenCalled();
+  });
+
+  it('sets json language for data type with ext=json in query', () => {
+    const mockVscode = require('vscode');
+    registerRemoteLanguageModeSetter();
+
+    const mockDocument = {
+      uri: { scheme: 'pyops-remote', query: '?type=data&ext=json' },
+    };
+
+    const callback = mockVscode.workspace.onDidOpenTextDocument.mock.calls[0][0];
+    callback(mockDocument);
+
+    expect(mockVscode.languages.setTextDocumentLanguage).toHaveBeenCalledWith(mockDocument, 'json');
+  });
+
+  it('sets yaml language for data type with ext=yaml in query', () => {
+    const mockVscode = require('vscode');
+    registerRemoteLanguageModeSetter();
+
+    const mockDocument = {
+      uri: { scheme: 'pyops-remote', query: '?type=data&ext=yaml' },
+    };
+
+    const callback = mockVscode.workspace.onDidOpenTextDocument.mock.calls[0][0];
+    callback(mockDocument);
+
+    expect(mockVscode.languages.setTextDocumentLanguage).toHaveBeenCalledWith(mockDocument, 'yaml');
+  });
+
+  it('defaults to yaml for data type without ext in query', () => {
+    const mockVscode = require('vscode');
+    registerRemoteLanguageModeSetter();
+
+    const mockDocument = {
+      uri: { scheme: 'pyops-remote', query: '?type=data' },
+    };
+
+    const callback = mockVscode.workspace.onDidOpenTextDocument.mock.calls[0][0];
+    callback(mockDocument);
+
+    expect(mockVscode.languages.setTextDocumentLanguage).toHaveBeenCalledWith(mockDocument, 'yaml');
   });
 });

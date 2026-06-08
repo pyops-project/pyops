@@ -51,8 +51,11 @@
                     <button type="button" onclick="onEditTask('${set}', '${name}')" class="btn btn-warning p-0" data-testid="scriptlet-edit-${set}-${name}">
                         <span class="material-icons-round">edit</span>
                     </button>
-                    <button type="button" onclick="onRunDraftTask('${set}', '${name}')" class="btn btn-success p-0" data-testid="scriptlet-run-${set}-${name}">
+                    <button type="button" onclick="onRunDraftTask('${set}', '${name}')" class="btn btn-success p-0" title="Run draft (kind=draft)" data-testid="scriptlet-run-${set}-${name}">
                         <span class="material-icons-round">play_arrow</span>
+                    </button>
+                    <button type="button" onclick="onRunTestTask('${set}', '${name}')" class="btn btn-info p-0" title="Run as test (kind=test)" data-testid="scriptlet-test-${set}-${name}">
+                        <span class="material-icons-round">science</span>
                     </button>
                 `
             }
@@ -90,6 +93,17 @@
                 `
             }
 
+            function genDataActions(set, name) {
+                return `
+                    <button type="button" onclick="del('${set}', '${name}')" class="btn btn-danger p-0" data-testid="scriptlet-delete-${set}-${name}">
+                        <span class="material-icons-round">delete</span>
+                    </button>
+                    <button type="button" onclick="onEditData('${set}', '${name}')" class="btn btn-warning p-0" data-testid="scriptlet-edit-${set}-${name}">
+                        <span class="material-icons-round">edit</span>
+                    </button>
+                `
+            }
+
             function genActions(set, name, type) {
                 let actions = "";
                 if(type == "task")
@@ -100,13 +114,35 @@
                     actions = genViewActions(set, name);
                 else if(type == "markdown")
                     actions = genMdActions(set, name);
+                else if(type == "data")
+                    actions = genDataActions(set, name);
                 return actions;
             }
 
-            function genScriptletRowContent(set, name, type) {
+            function genStatusIcon(set, name, has_unstaged) {
+                // `has_unstaged` flag is stamped by `git.list_scriptlets()`
+                // against `git status --porcelain` per set. Visual parity
+                // with the VSIX manager tree: ✓ for synced, ⚠ for unstaged
+                // (draft / new / modified). Tested via the
+                // `scriptlet-status-{set}-{name}` testid + `data-status`.
+                if (has_unstaged) {
+                    return `<span class="material-icons-round text-warning align-middle me-1" `
+                        + `title="unstaged draft (not committed)" `
+                        + `style="font-size:1.1em" `
+                        + `data-testid="scriptlet-status-${set}-${name}" `
+                        + `data-status="dirty">change_history</span>`;
+                }
+                return `<span class="material-icons-round text-success align-middle me-1" `
+                    + `title="synced (committed)" `
+                    + `style="font-size:1.1em" `
+                    + `data-testid="scriptlet-status-${set}-${name}" `
+                    + `data-status="clean">check</span>`;
+            }
+
+            function genScriptletRowContent(set, name, type, has_unstaged) {
                 return `
                     <th scope="row">${set}</th>
-                    <th scope="row">${name}</th>
+                    <th scope="row">${genStatusIcon(set, name, has_unstaged)}${name}</th>
                     <td>${type}</td>
                     <td>${genActions(set, name, type)}</td>
                 `;
@@ -118,8 +154,8 @@
                 return `${set}::${name}`;
             }
 
-            function genScriptletItem(set, name, type) {
-                return `<tr data-set="${set}" data-name="${name}" data-testid="scriptlet-row-${set}-${name}">${genScriptletRowContent(set, name, type)}</tr>`;
+            function genScriptletItem(set, name, type, has_unstaged) {
+                return `<tr data-set="${set}" data-name="${name}" data-testid="scriptlet-row-${set}-${name}">${genScriptletRowContent(set, name, type, has_unstaged)}</tr>`;
             }
 
             function refreshList() {
@@ -141,9 +177,9 @@
                             const key = `${i.set}::${i.name}`;
                             newKeys.add(key);
                             if(existingRows[key]) {
-                                $(existingRows[key]).html(genScriptletRowContent(i.set, i.name, i.type));
+                                $(existingRows[key]).html(genScriptletRowContent(i.set, i.name, i.type, i.has_unstaged));
                             } else {
-                                const newRowHtml = genScriptletItem(i.set, i.name, i.type);
+                                const newRowHtml = genScriptletItem(i.set, i.name, i.type, i.has_unstaged);
                                 let inserted = false;
                                 tbody.find("tr").each(function() {
                                     const existingKey = getRowKey(this);
@@ -229,6 +265,33 @@
                 });
             }
 
+            function onRunTestTask(set, name) {
+                console.debug("onRunTestTask", set, name);
+                fetch("/scriptlet/job/item", {
+                    method: "PUT",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        set: set,
+                        name: name,
+                        drop_done: false,
+                        param: "",
+                        kind: "test",
+                    }),
+                }).then(async (r) => {
+                    if (r.ok) {
+                        const d = await r.json();
+                        console.debug("run test", d.job);
+                    } else {
+                        const t = await r.text();
+                        console.error("run test failed", r.status, t);
+                        alert(`Failed to enqueue test for ${set}/${name}: ${t}`);
+                    }
+                }).catch((e) => {
+                    console.error("run test error", e.toString());
+                    alert(`Failed to enqueue test for ${set}/${name}: ${e}`);
+                });
+            }
+
             function onEditLibrary(set, name) {
                 console.debug("onEdit", set, name);
 
@@ -239,6 +302,11 @@
                 console.debug("onEdit", set, name);
 
                 window.open(`${window.location.origin}/scriptlet/editor_view?set=${set}&name=${name}`,`PyOps - View Editor ${set}/${name}`,"titlebar=no,toolbar=no,menubar=no,scrollbars=no");
+            }
+
+            function onEditData(set, name) {
+                console.debug("onEdit", set, name);
+                window.open(`${window.location.origin}/scriptlet/editor_data?set=${set}&name=${name}`,`PyOps - Data Editor ${set}/${name}`,"titlebar=no,toolbar=no,menubar=no,scrollbars=no");
             }
 
             function onEditMd(set, name) {
@@ -394,10 +462,8 @@
                                 <option value="library">Library</option>
                                 <option value="controller">Controller</option>
                                 <option value="view">View</option>
-                                <!--
-                                <option value="model">Model</option>
-                                <option value="view">View</option>
-                                -->
+                                <option value="markdown">Markdown</option>
+                                <option value="data">Data (YAML)</option>
                             </select>
                         </div>
                     </div>

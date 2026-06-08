@@ -547,7 +547,7 @@ async def menu():
                 {
                     "id": "scriptlet_sets",
                     "name": "Sets",
-                    "path": "/controller/internal/sets",
+                    "path": "/controller/pyops/sets",
                     "default": False
                 },
             ]

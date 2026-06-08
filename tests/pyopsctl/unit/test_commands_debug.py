@@ -95,6 +95,50 @@ def test_debug_start_param_file_reads_from_disk(tmp_path):
     assert param.startswith("#!pip remote-pdb\n")
 
 
+def test_debug_start_default_kind_is_debug(tmp_path):
+    """No --kind → body carries kind=debug. Preserves the pre-testdebug
+    contract: existing operator muscle memory and any CI scripts that
+    invoke `pyopsctl debug start` without --kind stay unchanged."""
+    rc, c = _run_pyopsctl(
+        ["debug", "start", "myset", "myscript", "--json"],
+        _profile(debug_ports=(45679,)),
+        tmp_lease_dir=tmp_path,
+    )
+    assert rc == 0
+    body = c.put.call_args.kwargs["json_body"]
+    assert body["kind"] == "debug"
+
+
+def test_debug_start_kind_testdebug_passes_through(tmp_path):
+    """--kind testdebug → body kind=testdebug. The bootstrap, port
+    lease, and attach flow are identical to kind=debug — only the
+    server-side kind tag changes (which flips __name__ to __test__)."""
+    rc, c = _run_pyopsctl(
+        ["debug", "start", "myset", "myscript",
+         "--kind", "testdebug", "--json"],
+        _profile(debug_ports=(45679,)),
+        tmp_lease_dir=tmp_path,
+    )
+    assert rc == 0
+    body = c.put.call_args.kwargs["json_body"]
+    assert body["kind"] == "testdebug"
+    # Bootstrap is unchanged — pdb still binds the leased port.
+    assert "RemotePdb('0.0.0.0', 45679).set_trace()" in body["param"]
+
+
+def test_debug_start_unknown_kind_rejected(tmp_path):
+    """argparse rejects anything outside {debug, testdebug} — the
+    --kind choices list is the client-side gate (server validates
+    independently via the Literal in app/routers/scriptlet/job.py)."""
+    with pytest.raises(SystemExit):
+        _run_pyopsctl(
+            ["debug", "start", "myset", "myscript",
+             "--kind", "bogus", "--json"],
+            _profile(debug_ports=(45679,)),
+            tmp_lease_dir=tmp_path,
+        )
+
+
 def test_debug_start_overrides_dir_walks_set_subdir(tmp_path):
     set_dir = tmp_path / "myset"
     set_dir.mkdir()

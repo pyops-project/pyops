@@ -15,14 +15,18 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _reject_if_internal(set_name: str) -> None:
-    """Block write operations against the pyops-managed internal set —
-    its scriptlets ship with the application source and are versioned
-    via the pyops repo, not via the inventory API."""
-    if files.is_internal_set(set_name):
+def _reject_if_bundled(set_name: str) -> None:
+    """Block write operations against the bundled set.
+
+    The bundled set's scriptlets ship with the application source and
+    are versioned via the pyops repo, not via the inventory API — so
+    PUT/POST/DELETE on it would either silently no-op (working tree
+    only) or, worse, mutate files git considers part of the
+    application's own history."""
+    if files.is_bundled_set(set_name):
         raise HTTPException(
             status_code=HTTP_400_BAD_REQUEST,
-            detail=f"Set '{set_name}' is pyops-managed and not editable via the API.",
+            detail=f"Set '{set_name}' is bundled with pyops and not editable via the API.",
         )
 
 class CreateArgument(BaseModel):
@@ -52,21 +56,28 @@ async def item_put(cr: CreateArgument, user: str = Depends(get_current_user)):
     Creates a new Scriptlet
     """
     try:
-        _reject_if_internal(cr.set)
+        _reject_if_bundled(cr.set)
         git_base = git.get_git_base()
         potential_repo = os.path.join(git_base, cr.set)
         if not os.path.exists(os.path.join(potential_repo, '.git')):
             raise HTTPException(status_code=HTTP_400_BAD_REQUEST, detail="Set does not exist")
 
-        if cr.type == "markdown" and cr.name != "README":
-            raise HTTPException(400, "Markdown only for README.")
-
         if cr.type == "view":
             initial_content = '<div class="container">\n  <!-- View content here -->\n</div>'
         elif cr.type == "jslibrary":
             initial_content = "// JS Library\n"
+        elif cr.type == "markdown":
+            # README (top-level) gets a heading; docs/<name>.md starts blank
+            initial_content = f"# {cr.set}\n" if cr.name == "README" else ""
+        elif cr.type == "data":
+            # New YAML files start empty rather than `{}`: empty parses
+            # to None / {} via yaml.safe_load (see app/lib/data.py
+            # `_deserialise`), and unlike `{}` it lets the author start
+            # typing block-style entries without removing a flow-mapping
+            # placeholder first.
+            initial_content = ""
         else:
-            initial_content = "" if cr.type == "markdown" else "pass\n"
+            initial_content = "pass\n"
 
         await run_in_executor(
             git.create_scriptlet,
@@ -94,10 +105,11 @@ async def draft_post(sa: SaveArgument):
     Use for auto-save; follow with /item POST for explicit save.
     """
     try:
-        _reject_if_internal(sa.set)
+        _reject_if_bundled(sa.set)
         repo = await run_in_executor(git.get_repo_path, sa.set)
-        # Infer type from existing file.
-        files = [f for f in os.listdir(repo) if f.startswith(f"{sa.name}.") and f.endswith(('.py', '.html', '.md', '.js'))]
+        # Infer type from existing file. Searches top-level + docs/ + data/
+        # so markdown and data files round-trip through the same routes.
+        files = await run_in_executor(git.list_scriptlet_files, repo, sa.name)
         if not files:
             raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Scriptlet {}::{} not existing".format(sa.set, sa.name))
         filename = files[0]  # Assume unique.
@@ -120,9 +132,9 @@ async def item_del(set: str, name: str, user: str = Depends(get_current_user)):
     The deletion is folded into the next set-wide `commit_drafts` batch.
     """
     try:
-        _reject_if_internal(set)
+        _reject_if_bundled(set)
         repo = await run_in_executor(git.get_repo_path, set)
-        files = [f for f in os.listdir(repo) if f.startswith(f"{name}.") and f.endswith(('.py', '.html', '.md', '.js'))]
+        files = await run_in_executor(git.list_scriptlet_files, repo, name)
         if not files:
             raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Scriptlet {}::{} not existing".format(set, name))
         filename = files[0]
@@ -145,9 +157,9 @@ async def draft_del(set: str = Query(..., description="Set"), name: str = Query(
     Returns 204 on full success (content match); raises on fail.
     """
     try:
-        _reject_if_internal(set)
+        _reject_if_bundled(set)
         repo = await run_in_executor(git.get_repo_path, set)
-        files = [f for f in os.listdir(repo) if f.startswith(f"{name}.") and f.endswith(('.py', '.html', '.md', '.js'))]
+        files = await run_in_executor(git.list_scriptlet_files, repo, name)
         if not files:
             raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail=f"Scriptlet {set}::{name} not existing")
         filename = files[0]
@@ -194,13 +206,22 @@ async def draft_del(set: str = Query(..., description="Set"), name: str = Query(
 async def code_get(set: str, name: str):
     try:
         repo = await run_in_executor(git.get_repo_path, set)
-        files = [f for f in os.listdir(repo) if f.startswith(f"{name}.") and f.endswith(('.py', '.html', '.md', '.js'))]
+        # list_scriptlet_files walks top-level + docs/ + data/ so markdown
+        # pages under docs/ and yaml/json data files round-trip through
+        # the same endpoint as Python scriptlets.
+        files = await run_in_executor(git.list_scriptlet_files, repo, name)
         if not files:
             raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Scriptlet {}::{} not existing".format(set, name))
         filename = files[0]
         type_ = git.infer_type_from_filename(filename)
         content = await run_in_executor(git.read_content, repo, name, type_, committed=False)
-        return {"code": content}
+        # For data files, expose the actual on-disk extension so the
+        # editor (and other clients) can pick the right syntax mode.
+        # The filename is `data/{name}.{ext}` here per list_scriptlet_files.
+        response: dict = {"code": content, "type": type_}
+        if type_ == "data":
+            response["ext"] = os.path.splitext(filename)[1].lstrip(".")
+        return response
     except git.GitNotFoundError as ex:
         raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail=str(ex))
     except HTTPException as ex:

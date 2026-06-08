@@ -23,8 +23,8 @@ def main():
         raise ValueError("name is required")
     if not branch:
         raise ValueError("branch is required")
-    if name == "internal":
-        raise ValueError("'internal' is pyops-managed; branch switching is not supported")
+    if name == "pyops":
+        raise ValueError("'pyops' is pyops-managed; branch switching is not supported")
 
     target = _set_dir(name)
     if not os.path.exists(target):

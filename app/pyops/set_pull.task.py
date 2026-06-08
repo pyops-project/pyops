@@ -20,8 +20,8 @@ def _check(cmd, cwd):
 def main():
     if not name:
         raise ValueError("name is required")
-    if name == "internal":
-        raise ValueError("'internal' is not pullable")
+    if name == "pyops":
+        raise ValueError("'pyops' is not pullable")
 
     target = _set_dir(name)
     if not os.path.exists(target):
@@ -36,6 +36,13 @@ def main():
         if not remotes:
             print("No remote configured — nothing to pull.", flush=True)
             return
+
+        # Migration: pre-3.3.0 clones may carry embedded HTTPS
+        # credentials in origin's URL. Strip them so future fetch /
+        # push operations consult .git/credentials via the credential
+        # helper, making token rotation effective. No-op for clean /
+        # non-HTTPS origins.
+        normalize_origin_url(target)
 
         # Refuse to reset if currently on a tag — preserves the pinned state.
         try:

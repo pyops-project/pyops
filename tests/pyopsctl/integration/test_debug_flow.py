@@ -50,6 +50,22 @@ def test_debug_start_param_carries_pdb_bootstrap(
     assert row.get("kind") == "debug"
 
 
+def test_debug_start_kind_testdebug_round_trips_to_server(
+    pyopsctl_bin, run_ctl, pyops_server_for_ctl, pyops_set,
+):
+    """`debug start --kind testdebug` round-trips: the server accepts
+    the Literal, stores it on the Job row, and the bootstrap composition
+    is identical (same remote-pdb listen on the leased port)."""
+    _create_scriptlet(run_ctl, pyopsctl_bin, pyops_set, "scr_td")
+    job_id = _enqueue_debug(run_ctl, pyopsctl_bin, pyops_set, "scr_td",
+                            "--kind", "testdebug")
+    row = _job_row(run_ctl, pyopsctl_bin, job_id)
+    assert row.get("kind") == "testdebug"
+    param = row.get("param") or ""
+    assert "#!pip remote-pdb" in param
+    assert ".set_trace()" in param
+
+
 def test_debug_start_user_param_appended_below_bootstrap(
     pyopsctl_bin, run_ctl, pyops_server_for_ctl, pyops_set,
 ):

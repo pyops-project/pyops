@@ -176,15 +176,24 @@ export class DebugService {
     }
 
     /**
-     * Enqueue a debug job whose `param` carries the debugpy bootstrap.
-     * Leases a port from the workspace pool, composes the bootstrap,
-     * PUTs the job, rebinds the lease to the real job id on success
-     * or releases on failure.
+     * Enqueue a debug-family job whose `param` carries the debugpy
+     * bootstrap. Leases a port from the workspace pool, composes the
+     * bootstrap, PUTs the job, rebinds the lease to the real job id on
+     * success or releases on failure.
+     *
+     * `kind` selects the server-side variant:
+     *  - 'debug' (default): production codepath under debugpy.
+     *  - 'testdebug': same wire shape, but the server sets
+     *    __name__='__test__' before exec(param) so the scriptlet's
+     *    `if __name__ == "__test__":` block runs under the debugger.
+     *    Sources are still materialised under .debug/src/, so the
+     *    existing pathMappings keep working unchanged.
      */
     async enqueueDebugJob(
         set: string,
         name: string,
         overrides: Record<string, string> = {},
+        kind: 'debug' | 'testdebug' = 'debug',
     ): Promise<{ jobId?: string; port?: number }> {
         const placeholder = `pending_${Date.now()}_${Math.random().toString(36).slice(2)}`;
         let lease: PortLease;
@@ -200,12 +209,12 @@ export class DebugService {
         const param = DebugService.composeDebugpyBootstrap(lease.port);
         const data = {
             set, name, drop_done: false,
-            kind: 'debug',
+            kind,
             param,
             overrides,
         };
         this.outputChannel.appendLine(
-            `[DEBUG enqueueDebugJob] PUT /scriptlet/job/item set=${set} name=${name} port=${lease.port}`,
+            `[DEBUG enqueueDebugJob] PUT /scriptlet/job/item kind=${kind} set=${set} name=${name} port=${lease.port}`,
         );
         try {
             const response = await this.apiClient.fetch('/scriptlet/job/item', {

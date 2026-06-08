@@ -2,13 +2,13 @@
 #
 # Routes the controller-proxy traffic for the Sets view. Mutating
 # operations (clone / create / pull / switch / remove / update_deps) are
-# enqueued as set_*.task.py jobs in the internal set with drop_done=True;
+# enqueued as set_*.task.py jobs in the pyops set with drop_done=True;
 # the response carries the job id so the UI can poll
 # /scriptlet/job/item?id=<id> for live output. Read-only operations
 # (/list) walk the filesystem directly.
 #
-# Scope: pyops internal operations on the data layer (data/git/, venvs,
-# pkg dirs). Future internal services can sit next to this one for other
+# Scope: pyops-managed operations on the data layer (data/git/, venvs,
+# pkg dirs). Future pyops-set services can sit next to this one for other
 # domains.
 import json
 import logging
@@ -30,7 +30,7 @@ def _list_sets():
         return []
     out = []
     for entry in sorted(os.listdir(base)):
-        if entry == "internal":
+        if entry == "pyops":
             continue
         full = os.path.join(base, entry)
         if not (os.path.isdir(full) and os.path.exists(os.path.join(full, ".git"))):
@@ -77,7 +77,7 @@ def _format_param(kwargs):
 
 def _enqueue(scriptlet, params, user):
     job_id = control.job.create(
-        set="internal",
+        set="pyops",
         name=scriptlet,
         drop_done=True,
         param=_format_param(params),

@@ -186,10 +186,11 @@ describe('Extension', () => {
       expect(require('vscode').window.registerTreeDataProvider).toHaveBeenCalledWith('pyops-manager', expect.any(Object));
       expect(require('vscode').window.registerTreeDataProvider).toHaveBeenCalledWith('pyops-monitor', expect.any(Object));
       expect(require('vscode').debug.registerDebugConfigurationProvider).toHaveBeenCalledWith('python', expect.any(Object));
-      expect(require('vscode').commands.registerCommand).toHaveBeenCalledTimes(20); // -1 after pyops.saveRemoteDraft removal
+      expect(require('vscode').commands.registerCommand).toHaveBeenCalledTimes(21); // +1 for pyops.startTestDebugJob
       // 30 from before + 1 for the onDidTerminateDebugSession lease-release hook
       // + 2 for the DebugSessionWatcher (dispose + onDidStartDebugSession)
-      expect(mockContext.subscriptions).toHaveLength(33);
+      // + 1 for pyops.startTestDebugJob
+      expect(mockContext.subscriptions).toHaveLength(34);
       expect(require('vscode').window.createOutputChannel).toHaveBeenCalledWith('PyOps');
     });
 
@@ -540,8 +541,23 @@ describe('Extension', () => {
       const handler = commandHandlers.get('pyops.startDebugJob');
       await handler!(mockScriptletTreeItem);
       expect(DebugServiceModule.DebugService.buildOverrides).toHaveBeenCalledWith('testset', '/test/workspace');
-      expect(debugServiceInstance.enqueueDebugJob).toHaveBeenCalledWith('testset', 'testname', expect.any(Object));
+      expect(debugServiceInstance.enqueueDebugJob).toHaveBeenCalledWith('testset', 'testname', expect.any(Object), 'debug');
       expect(require('vscode').window.showInformationMessage).toHaveBeenCalledWith('Started debug job 123 for testname with local overrides');
+      expect(debugOutputMonitorInstance.startMonitoring).toHaveBeenCalledWith('testset-testname', '123');
+      expect(require('vscode').debug.startDebugging).toHaveBeenCalled();
+    });
+
+    it('should start testdebug job via pyops.startTestDebugJob', async () => {
+      // testdebug shares the entire flow with debug — only the kind
+      // string passed to enqueueDebugJob differs. The shared
+      // startDebugFamilyJob helper drives both commands; this test
+      // pins the wire-level distinction.
+      const handler = commandHandlers.get('pyops.startTestDebugJob');
+      expect(handler).toBeDefined();
+      await handler!(mockScriptletTreeItem);
+      expect(DebugServiceModule.DebugService.buildOverrides).toHaveBeenCalledWith('testset', '/test/workspace');
+      expect(debugServiceInstance.enqueueDebugJob).toHaveBeenCalledWith('testset', 'testname', expect.any(Object), 'testdebug');
+      expect(require('vscode').window.showInformationMessage).toHaveBeenCalledWith('Started testdebug job 123 for testname with local overrides');
       expect(debugOutputMonitorInstance.startMonitoring).toHaveBeenCalledWith('testset-testname', '123');
       expect(require('vscode').debug.startDebugging).toHaveBeenCalled();
     });
@@ -573,7 +589,7 @@ describe('Extension', () => {
 
       const handler = commandHandlers.get('pyops.startDebugJob');
       await handler!(mockScriptletTreeItem);
-      expect(require('vscode').window.showWarningMessage).toHaveBeenCalledWith('Debug job already running');
+      expect(require('vscode').window.showWarningMessage).toHaveBeenCalledWith('debug job already running');
       expect(debugServiceInstance.enqueueDebugJob).not.toHaveBeenCalled();
     });
 
@@ -600,7 +616,7 @@ describe('Extension', () => {
       await handler!(mockScriptletTreeItem);
       expect(apiClient.ApiClient.hasValidConfigStatic).toHaveBeenCalled();
       expect(debugOutputMonitorInstance.isMonitoring).toHaveBeenCalledWith('testset-testname');
-      expect(debugServiceInstance.enqueueDebugJob).toHaveBeenCalledWith('testset', 'testname', expect.any(Object));
+      expect(debugServiceInstance.enqueueDebugJob).toHaveBeenCalledWith('testset', 'testname', expect.any(Object), 'debug');
       expect(require('vscode').window.showErrorMessage).toHaveBeenCalledWith('Failed to start debug');
 
       expect(debugOutputMonitorInstance.startMonitoring).not.toHaveBeenCalled();

@@ -8,21 +8,28 @@ files_path = os.path.join(project_root, "app/files")
 
 version_path = os.path.join(project_root, "VERSION")
 
-# Pyops-managed set whose scriptlets ship with the application source
-# (under app/internal/). Treated as a set for the runner/controller layer
-# but lives outside the user-managed data/git tree.
-INTERNAL_SET_NAME = "internal"
-internal_set_path = os.path.join(project_root, "app", INTERNAL_SET_NAME)
+# The "bundled set" is the one set that ships with the application
+# source — its scriptlets live under `app/<BUNDLED_SET_NAME>/` rather
+# than `data/git/<set>/` and are versioned with the pyops repo, not
+# committed via the inventory API. Its public-facing name is "pyops"
+# (so user code imports its libraries as `#!{pyops::name}`), but the
+# *role* the code checks for is "is this the bundled set?", not "is
+# this named pyops?" — every user set in the project is "a pyops set"
+# in the colloquial sense, so we keep the role-describing
+# identifier (`is_bundled_set`, `bundled_set_path`, `BUNDLED_SET_NAME`)
+# distinct from the value of the name string.
+BUNDLED_SET_NAME = "pyops"
+bundled_set_path = os.path.join(project_root, "app", BUNDLED_SET_NAME)
 
 
-def is_internal_set(name: str) -> bool:
-    """True when `name` refers to the pyops-managed internal set.
+def is_bundled_set(name: str) -> bool:
+    """True when `name` is the bundled (application-shipped) set.
 
-    Callers gate write operations (inventory PUT/POST/DELETE, sets remove,
-    editor save) on this — pyops-shipped scriptlets are versioned with
-    the source tree, not via the UI.
+    Callers gate write operations (inventory PUT/POST/DELETE, sets
+    remove, editor save) on this — the bundled set's scriptlets are
+    versioned with the source tree, not via the UI.
     """
-    return name == INTERNAL_SET_NAME
+    return name == BUNDLED_SET_NAME
 
 def get(path: str):
     with open(os.path.join(files_path, path), "rb") as file:

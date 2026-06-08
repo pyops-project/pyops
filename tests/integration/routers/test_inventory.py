@@ -30,6 +30,19 @@ class TestInventoryRouter:
             assert data["name"] == "test_task"
             assert data["type"] == "task"
 
+    def test_put_inventory_item_create_docs_markdown(self, mock_client, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
+        """Markdown files other than README live under docs/{name}.md.
+        The inventory router should create such files transparently —
+        type='markdown', name='intro' resolves to docs/intro.md via
+        get_file_path; write_content makes the docs/ dir on demand."""
+        create_data = {"set": "test_set", "name": "intro", "type": "markdown"}
+        response = mock_client.put("/scriptlet/inventory/item", json=create_data, headers={"X-User": "testuser"})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["set"] == "test_set"
+        assert data["name"] == "intro"
+        assert data["type"] == "markdown"
+
     def test_put_inventory_item_create_conflict(self, mock_client, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
         create_data = {"set": "default", "name": "sample_task", "type": "task"}  # Exists in mock
         with patch("app.lib.git.create_scriptlet", side_effect=FileExistsError("Name 'sample_task' already exists")):
@@ -116,40 +129,40 @@ class TestInventoryRouter:
             assert response.status_code == 400
 
 
-class TestInventoryInternalGuard:
-    """Inventory write endpoints must reject `set=internal` — those scriptlets
+class TestInventoryPyopsGuard:
+    """Inventory write endpoints must reject `set=pyops` — those scriptlets
     ship with the pyops source and are versioned via the pyops repo, not via
     the API. Allowing writes would corrupt the application's own code."""
 
-    def test_put_internal_rejected(self, mock_client, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
+    def test_put_pyops_rejected(self, mock_client, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
         response = mock_client.put(
             "/scriptlet/inventory/item",
-            json={"set": "internal", "name": "set_clone", "type": "task"},
+            json={"set": "pyops", "name": "set_clone", "type": "task"},
             headers={"X-User": "alice"},
         )
         assert response.status_code == 400
-        assert "pyops-managed" in response.json()["detail"]
+        assert "bundled with pyops" in response.json()["detail"]
 
-    def test_draft_post_internal_rejected(self, mock_client, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
+    def test_draft_post_pyops_rejected(self, mock_client, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
         response = mock_client.post(
             "/scriptlet/inventory/draft",
-            json={"set": "internal", "name": "set_clone", "code": "print('hi')"},
+            json={"set": "pyops", "name": "set_clone", "code": "print('hi')"},
             headers={"X-User": "alice"},
         )
         assert response.status_code == 400
 
-    def test_delete_internal_rejected(self, mock_client, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
+    def test_delete_pyops_rejected(self, mock_client, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
         response = mock_client.delete(
             "/scriptlet/inventory/item",
-            params={"set": "internal", "name": "set_clone"},
+            params={"set": "pyops", "name": "set_clone"},
             headers={"X-User": "alice"},
         )
         assert response.status_code == 400
 
-    def test_draft_delete_internal_rejected(self, mock_client, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
+    def test_draft_delete_pyops_rejected(self, mock_client, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
         response = mock_client.delete(
             "/scriptlet/inventory/draft",
-            params={"set": "internal", "name": "set_clone"},
+            params={"set": "pyops", "name": "set_clone"},
             headers={"X-User": "alice"},
         )
         assert response.status_code == 400

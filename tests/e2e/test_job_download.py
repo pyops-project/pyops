@@ -82,3 +82,78 @@ class TestJobDownload:
         r = api.get("/scriptlet/job/download?id=does-not-exist-xyzzy")
         assert r.status_code == 404
         pyops_server.assert_no_unexpected_errors()
+
+
+class TestStdoutStderrRedirect:
+    """E2E regression for the 3.3.0 fd-level stdout/stderr redirect.
+
+    Pre-3.3.0 the runner used `contextlib.redirect_stdout` /
+    `redirect_stderr`, which only swap the Python-level objects. Raw
+    fd-level writers — `os.write(1, ...)`, `os.write(2, ...)`, child
+    processes inheriting fds, C-extension / native code (HF tqdm,
+    torch native, transformers download bars) — bypassed it and ended
+    up in the gunicorn worker's stdout/stderr instead of the per-job
+    `stdout.log` / `stderr.log`. The 3.3.0 fix uses `os.dup2` to
+    rewire fd1 / fd2 to the log files for the duration of the job.
+
+    These tests exercise the full HTTP enqueue → runner → log file
+    pathway via the `/scriptlet/job/download` ZIP."""
+
+    def test_fd_level_writes_end_in_logs(self, api, pyops_server, set_factory, commit_set):
+        """`os.write(1, ...)` / `os.write(2, ...)` (bypassing
+        `sys.stdout` / `sys.stderr`) reach the job's stdout.log /
+        stderr.log."""
+        code = (
+            "import os\n"
+            "os.write(1, b'e2e-fd1-marker\\n')\n"
+            "os.write(2, b'e2e-fd2-marker\\n')\n"
+        )
+        job_id = _setup_and_run(api, code, set_factory, commit_set,
+                                set_name=SET + "_fd", task_name="fd_writes")
+        _wait_for_terminal(api, job_id)
+
+        r = api.get(f"/scriptlet/job/download?id={job_id}")
+        assert r.status_code == 200
+        with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
+            names = zf.namelist()
+            stdout_logs = [n for n in names if n.endswith("stdout.log")]
+            stderr_logs = [n for n in names if n.endswith("stderr.log")]
+            assert stdout_logs and stderr_logs, f"missing logs in zip; got {names}"
+            stdout_content = zf.read(stdout_logs[0]).decode("utf-8", errors="replace")
+            stderr_content = zf.read(stderr_logs[0]).decode("utf-8", errors="replace")
+        assert "e2e-fd1-marker" in stdout_content, (
+            f"fd1 write missing from stdout.log; got:\n{stdout_content}"
+        )
+        assert "e2e-fd2-marker" in stderr_content, (
+            f"fd2 write missing from stderr.log; got:\n{stderr_content}"
+        )
+        pyops_server.assert_no_unexpected_errors()
+
+    def test_child_process_output_ends_in_logs(self, api, pyops_server, set_factory, commit_set):
+        """A child process spawned with no explicit stdout/stderr
+        capture inherits the redirected fds and its output reaches the
+        job log files. Closest proxy in pure-Python land for what
+        tqdm / native HF downloaders do."""
+        code = (
+            "import os\n"
+            "os.system('echo e2e-child-stdout; echo e2e-child-stderr >&2')\n"
+        )
+        job_id = _setup_and_run(api, code, set_factory, commit_set,
+                                set_name=SET + "_child", task_name="child_out")
+        _wait_for_terminal(api, job_id)
+
+        r = api.get(f"/scriptlet/job/download?id={job_id}")
+        assert r.status_code == 200
+        with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
+            names = zf.namelist()
+            stdout_logs = [n for n in names if n.endswith("stdout.log")]
+            stderr_logs = [n for n in names if n.endswith("stderr.log")]
+            stdout_content = zf.read(stdout_logs[0]).decode("utf-8", errors="replace")
+            stderr_content = zf.read(stderr_logs[0]).decode("utf-8", errors="replace")
+        assert "e2e-child-stdout" in stdout_content, (
+            f"child stdout missing from stdout.log; got:\n{stdout_content}"
+        )
+        assert "e2e-child-stderr" in stderr_content, (
+            f"child stderr missing from stderr.log; got:\n{stderr_content}"
+        )
+        pyops_server.assert_no_unexpected_errors()
