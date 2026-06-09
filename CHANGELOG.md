@@ -22,6 +22,15 @@ inheritance, and clearer `param` documentation.
   endpoint now returns the full job row; `pyopsctl job view` surfaces
   `kind` and `param` alongside the existing fields.
 
+### Documentation
+- **Clarified `param` semantics in the user guide.** `--param` (and
+  `control.job.create(..., param=...)`) is a Python code snippet that
+  the runner runs via `exec(param, globals)` before the scriptlet body
+  — not a JSON/argument payload, and there is no injected `param`
+  global. Added an explicit callout under `pyopsctl job` and corrected
+  the misleading `set_clone --param '<json>'` example to the
+  code-snippet form (`url = "..."`).
+
 ## [3.3.1] — 2026-06-09
 
 Patch release fixing the coverage path of the bundled `pyops::pytest`

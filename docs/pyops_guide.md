@@ -359,6 +359,25 @@ Every command accepts the global flags: `--profile NAME`, `--server URL`,
 - `pyopsctl job cancel-all [--owner U] [--set X]`
 - `pyopsctl job clean --state done|failed [--owner U]`
 
+> **`--param` is a Python code snippet, not a JSON/argument payload.**
+> The runner runs `exec(param, globals)` *before* the scriptlet body, so
+> `param` is where you bind variables the scriptlet then reads by bare
+> name. There is **no** injected `param` global and **no** JSON parsing.
+>
+> ```
+> # param sets two globals the scriptlet reads as `customer` / `quarter`:
+> pyopsctl job run reporting export_report \
+>   --param 'customer = "000000_sysup"; quarter = "2025-Q4"'
+> ```
+>
+> The scriptlet body just references `customer` and `quarter` directly.
+> The same model holds for one scriptlet starting another via
+> `control.job.create(set, name, param=f"objid = {obj_id}")` — the
+> callee picks `objid` up as a global. A task that needs structured
+> input typically takes a JSON *string* and parses it itself, e.g.
+> `--param 'raw = "{...}"'` then `json.loads(raw)` in the body — the
+> `--param` value is still Python source, never parsed by the runner.
+
 #### `debug` — interactive pdb sessions
 
 `debug start` composes a stdlib-pdb bootstrap into the job's `param`,
@@ -536,9 +555,11 @@ pyopsctl job clean --state done
 Set lifecycle (clone, create, pull, switch, remove, update-deps) and
 schedule CRUD still go through the WebUI (Sets Manager below;
 `/scriptlet/schedule/*` for schedules). The set flows can be invoked
-from the CLI by running the pyops-set task scriptlets directly (e.g.
-`pyopsctl job run pyops set_clone --param '<json>'`), but the param
-schema isn't part of pyopsctl's documented surface yet.
+from the CLI by running the pyops-set task scriptlets directly — the
+param is a code snippet binding the task's expected variables (e.g.
+`pyopsctl job run pyops set_clone --param 'url = "https://git.example/grp/repo.git"'`),
+but which variables each set task expects isn't part of pyopsctl's
+documented surface yet.
 
 ## Sets Manager
 
