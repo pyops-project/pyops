@@ -1,11 +1,13 @@
 """Unit tests for app/pyops/pytest.library.py.
 
-The library normally runs as a pyops scriptlet — it expects globals
-`setname`, `appspace`, `config` injected by job_runner.setup_job_globals
-for setname == 'pyops'. We exec it into a controlled namespace with
-those globals stubbed so the pure functions (_scan_classes,
-_resolve_node_ids, _has_cov_override, _coverage_available) are
-testable directly without spinning up a runner.
+The library runs merged into the consuming task's globals (libraries
+are `exec`'d into the task's `glob`), so it sees the same job-runner
+injected globals every job gets — in particular `setname` and the
+absolute `gitspace` git root. It loads into *user* sets via
+`#!{pyops::pytest}`, where setname != 'pyops', so it must NOT depend on
+the `config`/`appspace` globals the runner injects only for the pyops
+set. We exec it into a controlled namespace mirroring that contract so
+the helpers are testable directly without spinning up a runner.
 
 The full kind=test lifecycle (materialise → exec → pytest.main →
 completion) is covered by tests/integration/test_test_kind.py.
@@ -33,14 +35,13 @@ def lib(tmp_path):
     glob = {
         "__name__": "pyops_pytest_loaded",
         "setname": "myset",
-        "appspace": str(tmp_path / "app"),
-        "config": {
-            "data": {"git": str(workspace / "data" / "git")},
-            "runner": {"venv": str(workspace / "data" / "venv")},
-        },
+        # Absolute git root, exactly as job_runner.setup_job_globals
+        # injects it for every job (user sets included). No `config`
+        # or `appspace` — those are pyops-set-only and the library
+        # must not reach for them.
+        "gitspace": str(workspace / "data" / "git"),
         "name": None,
     }
-    (tmp_path / "app").mkdir()
     cwd = os.getcwd()
     try:
         os.chdir(workspace)
@@ -135,6 +136,70 @@ class TestCovOverrideDetection:
     ])
     def test_no_override(self, lib, args):
         assert lib["_has_cov_override"](args) is False
+
+
+class TestWriteCoveragerc:
+    """Regression: _write_coveragerc must resolve the set's canonical
+    git checkout from the universally-injected `gitspace` global, not
+    from a `config` global that the runner injects only for the pyops
+    set. The old `config["data"]["git"]` lookup raised NameError on
+    every user set that loaded this library via `#!{pyops::pytest}`."""
+
+    def test_uses_gitspace_not_config(self, lib, tmp_path):
+        out = tmp_path / "cov.rc"
+        # Must not raise NameError('config') — that was the bug.
+        lib["_write_coveragerc"](str(out))
+        contents = out.read_text()
+        # canonical_set_dir == gitspace/setname
+        expected = os.path.join(lib["gitspace"], "myset")
+        assert "[paths]" in contents
+        assert f"    {expected}/\n" in contents
+        # Both task and library sections map to the same canonical dir.
+        assert contents.count(f"    {expected}/\n") == 2
+        assert ".test/src/myset/task/" in contents
+        assert ".test/src/myset/library/" in contents
+
+    def test_no_config_global_in_namespace(self, lib):
+        # The library must not depend on a `config` global at all.
+        assert "config" not in lib
+
+
+class TestSubprocessCoveragePth:
+    """Regression: _subprocess_coverage_pth must locate the per-set
+    venv via `sys.prefix` (the interpreter the job already runs in),
+    not by reconstructing a path from the pyops-set-only `config`
+    global."""
+
+    def test_writes_pth_into_sys_prefix_site_packages(self, lib, tmp_path, monkeypatch):
+        import sys
+        fake_venv = tmp_path / "venv"
+        sp = fake_venv / "lib" / "python3.13" / "site-packages"
+        sp.mkdir(parents=True)
+        monkeypatch.setattr(sys, "prefix", str(fake_venv))
+        lib["_subprocess_coverage_pth"]()
+        pth = sp / "coverage_subprocess.pth"
+        assert pth.is_file()
+        assert pth.read_text() == "import coverage; coverage.process_startup()\n"
+
+    def test_idempotent_no_rewrite_when_unchanged(self, lib, tmp_path, monkeypatch):
+        import sys
+        fake_venv = tmp_path / "venv"
+        sp = fake_venv / "lib" / "python3.13" / "site-packages"
+        sp.mkdir(parents=True)
+        pth = sp / "coverage_subprocess.pth"
+        pth.write_text("import coverage; coverage.process_startup()\n")
+        before = pth.stat().st_mtime_ns
+        monkeypatch.setattr(sys, "prefix", str(fake_venv))
+        lib["_subprocess_coverage_pth"]()
+        assert pth.stat().st_mtime_ns == before
+
+    def test_no_site_packages_is_silent(self, lib, tmp_path, monkeypatch):
+        import sys
+        fake_venv = tmp_path / "empty_venv"
+        fake_venv.mkdir()
+        monkeypatch.setattr(sys, "prefix", str(fake_venv))
+        # No lib/python*/site-packages — must return without error.
+        lib["_subprocess_coverage_pth"]()
 
 
 class TestPytestRunValidation:

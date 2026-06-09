@@ -89,10 +89,6 @@ import ast
 import os
 import sys
 import types
-import types
-
-
-_VENV_BASE_KEY = "venv"
 
 
 def _materialised_lib_dir():
@@ -185,9 +181,12 @@ def _write_coveragerc(path):
     canonical data/git/{setname}/<type>/<name>.py — coverage.py
     canonicalises at report time, so the operator sees source paths
     they recognise instead of the per-job .test/src/ tree."""
-    git_base = config["data"]["git"]
-    canonical_set_dir = git_base if os.path.isabs(git_base) else os.path.join(_project_root(), git_base)
-    canonical_set_dir = os.path.join(canonical_set_dir, setname)
+    # `gitspace` is the absolute git root injected into every job's
+    # globals by job_runner.setup_job_globals — universal across user
+    # sets and the pyops set. (The old `config["data"]["git"]` lookup
+    # only existed for setname=="pyops", so it NameError'd in every
+    # user set that loaded this library via `#!{pyops::pytest}`.)
+    canonical_set_dir = os.path.join(gitspace, setname)
     contents = (
         "[paths]\n"
         f"task =\n"
@@ -206,24 +205,16 @@ def _write_coveragerc(path):
         f.write(contents)
 
 
-def _project_root():
-    # appspace == <project_root>/app/ when running in the pyops set.
-    # User-set callers don't have appspace, so fall back to the
-    # workspace-relative paths the caller already provided.
-    try:
-        return os.path.dirname(appspace)  # type: ignore[name-defined]
-    except NameError:
-        return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-
-
 def _subprocess_coverage_pth():
     """Drop coverage_subprocess.pth into the per-set venv's
     site-packages once (idempotent — replaced only if content drifts)
     and point COVERAGE_PROCESS_START at our .coveragerc so test
     subprocesses inherit measurement without author plumbing."""
-    venv_base = config["runner"][_VENV_BASE_KEY]
-    venv_root = venv_base if os.path.isabs(venv_base) else os.path.join(_project_root(), venv_base)
-    venv = os.path.join(venv_root, setname)
+    # The job already runs inside the per-set venv — job_setup.py
+    # os.execv's into this interpreter using that venv's python — so the
+    # venv root is `sys.prefix` directly. No reconstruction from config
+    # (which isn't injected for user sets) and no per-set path join.
+    venv = sys.prefix
     # Best-effort site-packages locate. Pyops's per-set venvs are
     # CPython, so the lib/python*/site-packages glob is reliable.
     candidates = []
