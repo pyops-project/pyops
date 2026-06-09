@@ -41,14 +41,34 @@ class ControlRequest:
         r = rq.put(f"http://{self.web_bind}/{path}", headers=headers, json=json)
         return self.handle_response(f"PUT {path}", r)
 
+# Parent kinds whose programmatically-spawned children should run
+# against the working tree. These are exactly the kinds for which
+# loadJob/loadLib read unstaged code (see app/runner.py:loadJob),
+# so a child spawned from one of them defaults to `draft` — it picks
+# up the same working-tree sources the parent is iterating on rather
+# than the committed HEAD a plain `task` would read.
+_DRAFT_PARENT_KINDS = ("draft", "debug", "test", "testdebug")
+
+
 class JobControl:
-    def __init__(self, rq: ControlRequest):
+    def __init__(self, rq: ControlRequest, kind: str = None):
         self.rq = rq
+        # The kind of the job this Control belongs to (None outside a
+        # job context). Drives the default child kind in `create`.
+        self.parent_kind = kind
 
     def list(self):
         return self.rq.get("scriptlet/job/list")
-    
-    def create(self, set: str, name: str, drop_done: bool = False, max_retries: int = 0, param: str = None, debug: bool = False, user: str = None):
+
+    def create(self, set: str, name: str, drop_done: bool = False, max_retries: int = 0, param: str = None, debug: bool = False, user: str = None, kind: str = None):
+        # `kind` resolution: an explicit argument always wins; otherwise
+        # inherit from the spawning job — a working-tree parent
+        # (draft/debug/test/testdebug) yields a `draft` child so it runs
+        # the same uncommitted code, every other parent yields a `task`.
+        # `debug` is a deprecated no-op kept for back-compat (the server
+        # has no `debug` field; pass `kind="debug"` to debug a child).
+        if kind is None:
+            kind = "draft" if self.parent_kind in _DRAFT_PARENT_KINDS else "task"
         headers = {"X-User": user} if user else {}
         return self.rq.put("scriptlet/job/item", headers=headers, json={
             "set": set,
@@ -56,6 +76,7 @@ class JobControl:
             "drop_done": drop_done,
             "max_retries": max_retries,
             "param": param,
+            "kind": kind,
             "debug": debug
         })["job"]
 
@@ -101,9 +122,9 @@ class ScheduleControl:
         return self.rq.get("scriptlet/schedule/deactivate", params={"id": id})
 
 class Control:
-    def __init__(self, owner: str, web_bind: str):
+    def __init__(self, owner: str, web_bind: str, kind: str = None):
         self.rq = ControlRequest(owner, web_bind)
-        self.job = JobControl(self.rq)
+        self.job = JobControl(self.rq, kind)
         self.schedule = ScheduleControl(self.rq)
 
     def get(self, set: str, name: str, params = {}):

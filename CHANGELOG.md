@@ -21,6 +21,22 @@ inheritance, and clearer `param` documentation.
   had been enqueued with them (the `param` had demonstrably run). The
   endpoint now returns the full job row; `pyopsctl job view` surfaces
   `kind` and `param` alongside the existing fields.
+- **`control.job.create(...)` always spawned `kind=task`, even from a
+  working-tree parent.** A scriptlet started programmatically from a
+  `draft`/`debug`/`test`/`testdebug` job ran against committed `HEAD`
+  instead of the working-tree code the parent was iterating on —
+  defeating the point of drafting/debugging an orchestrating
+  task/service. `create` now inherits the child kind from the calling
+  job: a working-tree parent yields a `draft` child, `task`/`service`
+  yield `task`; an explicit `kind=` argument overrides. To make this
+  possible, `setup_job_globals` now injects a `kind` global (every
+  scriptlet can introspect its own execution kind) and threads it into
+  `Control`. The legacy `debug: bool` argument of `create` is now a
+  documented no-op (the enqueue model never had a `debug` field).
+
+### Added
+- **`kind` global** in every scriptlet's namespace — the job's
+  execution kind (`task`/`service`/`draft`/`debug`/`test`/`testdebug`).
 
 ### Documentation
 - **Clarified `param` semantics in the user guide.** `--param` (and

@@ -41,6 +41,7 @@ Execution environment provides these globals:
 - `user`: owner of this job (string; identifies the requesting user)
 - `setname`: set this scriptlet belongs to (string)
 - `name`: scriptlet name (string)
+- `kind`: this job's execution kind (`task`/`service`/`draft`/`debug`/`test`/`testdebug`). `control.job.create(...)` reads it to default a spawned child's kind: a working-tree parent (`draft`/`debug`/`test`/`testdebug`) yields a `draft` child, anything else a `task`. Pass `kind=` to `create` to override.
 - `setspace`: `data/jobs/{setname}/` (set's jobs root; shared across all users)
 - `workspace`: `data/jobs/{setname}/{id}/` (this job's workspace)
 - `listener`: ServiceListener for inbound ZMQ IPC (services, debug, and draft jobs). `listener.listen()` blocking; `listener.poll()` non-blocking (None/"TERM"/msg); `listener.async_poll()` returns list of pending messages; `response(dict)` or `async_response(identity, dict)`.

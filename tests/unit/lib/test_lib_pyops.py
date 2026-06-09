@@ -101,6 +101,7 @@ class TestJobControl:
         from app.lib import pyops
         mock_rq = Mock()
         mock_rq.put.return_value = {"job": {"id": "123"}}
+        # No parent kind -> child defaults to "task".
         job_control = pyops.JobControl(mock_rq)
         result = job_control.create("test_set", "test_name", drop_done=True, param="param", debug=True)
         assert result == {"id": "123"}
@@ -110,6 +111,7 @@ class TestJobControl:
             "drop_done": True,
             "max_retries": 0,
             "param": "param",
+            "kind": "task",
             "debug": True
         })
 
@@ -126,8 +128,42 @@ class TestJobControl:
             "drop_done": False,
             "max_retries": 0,
             "param": "user_param",
+            "kind": "task",
             "debug": False
         })
+
+    def test_create_inherits_draft_from_working_tree_parent(self, mock_control_request):
+        """A job spawned from a working-tree parent (draft/debug/test/
+        testdebug) defaults the child to `draft` so it runs the same
+        uncommitted code the parent is iterating on — not committed HEAD."""
+        from app.lib import pyops
+        for parent_kind in ("draft", "debug", "test", "testdebug"):
+            mock_rq = Mock()
+            mock_rq.put.return_value = {"job": "jid"}
+            job_control = pyops.JobControl(mock_rq, parent_kind)
+            job_control.create("s", "n", param="p")
+            assert mock_rq.put.call_args.kwargs["json"]["kind"] == "draft", \
+                f"parent kind {parent_kind!r} must yield child kind 'draft'"
+
+    def test_create_inherits_task_from_committed_parent(self, mock_control_request):
+        """task/service parents (which run committed code) spawn `task`."""
+        from app.lib import pyops
+        for parent_kind in ("task", "service", None):
+            mock_rq = Mock()
+            mock_rq.put.return_value = {"job": "jid"}
+            job_control = pyops.JobControl(mock_rq, parent_kind)
+            job_control.create("s", "n", param="p")
+            assert mock_rq.put.call_args.kwargs["json"]["kind"] == "task"
+
+    def test_create_explicit_kind_overrides_inheritance(self, mock_control_request):
+        """An explicit kind= argument always wins over parent inheritance."""
+        from app.lib import pyops
+        mock_rq = Mock()
+        mock_rq.put.return_value = {"job": "jid"}
+        # Parent is draft (would default to draft) but caller forces task.
+        job_control = pyops.JobControl(mock_rq, "draft")
+        job_control.create("s", "n", param="p", kind="task")
+        assert mock_rq.put.call_args.kwargs["json"]["kind"] == "task"
 
     def test_get(self, mock_control_request):
         from app.lib import pyops

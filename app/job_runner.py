@@ -73,12 +73,18 @@ def setup_job_globals(owner: str, setspace: str, workspace: str, web_bind: str, 
         "user": owner,
         "setname": setname,
         "name": name,
+        "kind": kind,
         "setspace": setspace,
         "workspace": workspace,
         "gitspace": gitspace,
         "pkgspace": os.path.join(_project_root, _conf_runner["pkg"]),
         "jobsspace": os.path.join(_project_root, _conf_data["jobs"]),
-        "control": pyops.Control(owner, web_bind),
+        # `kind` is threaded into Control so `control.job.create(...)`
+        # can inherit it: a job spawned from a working-tree kind
+        # (draft/debug/test/testdebug) defaults the child to `draft`
+        # so the child reads working-tree code too, matching the
+        # parent. See JobControl.create.
+        "control": pyops.Control(owner, web_bind, kind),
         "listener": listener,
         "data": set_data,
         "__name__": "__main__",
