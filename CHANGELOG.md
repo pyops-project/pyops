@@ -7,6 +7,29 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 from 3.0.0 onward.
 
+## [3.3.1] — 2026-06-09
+
+Patch release fixing the coverage path of the bundled `pyops::pytest`
+library.
+
+### Fixed
+- **`pyops::pytest` coverage path crashed with `NameError: name
+  'config' is not defined`.** `_write_coveragerc` and
+  `_subprocess_coverage_pth` reached for a `config` global that
+  `job_runner.setup_job_globals` injects **only** for the pyops set
+  (`setname == "pyops"`). Loaded into a *user* set via
+  `#!{pyops::pytest}`, no such global exists, so the crash fired
+  unconditionally as soon as `pytest-cov` was importable from the
+  per-set venv — breaking every subsequent `kind=test` run on that set
+  until `pytest-cov` was removed or the caller passed `--no-cov`.
+  `_write_coveragerc` now resolves the set's canonical git checkout
+  from the universally-injected absolute `gitspace` global;
+  `_subprocess_coverage_pth` locates the per-set venv via `sys.prefix`
+  (the interpreter the job already runs in) instead of reconstructing
+  it from `config`. No behaviour change for the pyops set; the
+  documented "coverage auto-attaches iff `import pytest_cov` succeeds"
+  contract is unchanged.
+
 ## [3.3.0] — 2026-05-23
 
 Three additive set capabilities plus a public-namespace rename:
