@@ -103,6 +103,31 @@ class TestJobRouter:
         assert data["id"] == job_id
         assert data["state"] == "todo"
 
+    def test_get_job_item_includes_full_metadata(self, mock_client, mock_db, test_temp_dir, patch_tempfile, mock_datetime):
+        """Regression: the detail endpoint `/scriptlet/job/item` must return
+        `name`, `kind`, `param`, `start`, `end` — not just the
+        `id/owner/set/state/detail/stdout/stderr` subset it used to. The
+        list endpoint exposed these all along, so a *detail* view returning
+        fewer fields than the list rendered `set/name` with an empty name
+        and `kind`/`param` as null in `pyopsctl job view`, even though the
+        job had been enqueued with them and the param had run."""
+        with Session(get_db_engine()) as session:
+            job_id = str(uuid.uuid4().hex)
+            job = Job(id=job_id, owner="testuser", set="reporting", name="export_report",
+                      kind="draft", state="done", param="customer = '000000_sysup'", detail=None)
+            session.add(job)
+            session.commit()
+
+        response = mock_client.get(f"/scriptlet/job/item?id={job_id}", headers={"X-User": "testuser"})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["name"] == "export_report"
+        assert data["kind"] == "draft"
+        assert data["param"] == "customer = '000000_sysup'"
+        # start/end are present as keys even when unset (datetime|null).
+        assert "start" in data
+        assert "end" in data
+
     def test_get_job_item_not_found(self, mock_client, test_temp_dir, patch_tempfile, mock_datetime):
         response = mock_client.get("/scriptlet/job/item?id=999", headers={"X-User": "testuser"})
         assert response.status_code == 404

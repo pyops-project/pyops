@@ -7,6 +7,46 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 from 3.0.0 onward.
 
+## [3.3.2] — 2026-06-09
+
+Patch release: job detail endpoint completeness, programmatic-job kind
+inheritance, and clearer `param` documentation.
+
+### Fixed
+- **`GET /scriptlet/job/item` omitted `name`, `kind`, `param`, `start`,
+  `end`.** The detail endpoint returned only
+  `id/owner/set/state/detail/stdout/stderr` — fewer fields than
+  `/scriptlet/job/list` — so `pyopsctl job view` rendered `set/name`
+  with an empty name and showed no `kind`/`param`, even though the job
+  had been enqueued with them (the `param` had demonstrably run). The
+  endpoint now returns the full job row; `pyopsctl job view` surfaces
+  `kind` and `param` alongside the existing fields.
+- **`control.job.create(...)` always spawned `kind=task`, even from a
+  working-tree parent.** A scriptlet started programmatically from a
+  `draft`/`debug`/`test`/`testdebug` job ran against committed `HEAD`
+  instead of the working-tree code the parent was iterating on —
+  defeating the point of drafting/debugging an orchestrating
+  task/service. `create` now inherits the child kind from the calling
+  job: a working-tree parent yields a `draft` child, `task`/`service`
+  yield `task`; an explicit `kind=` argument overrides. To make this
+  possible, `setup_job_globals` now injects a `kind` global (every
+  scriptlet can introspect its own execution kind) and threads it into
+  `Control`. The legacy `debug: bool` argument of `create` is now a
+  documented no-op (the enqueue model never had a `debug` field).
+
+### Added
+- **`kind` global** in every scriptlet's namespace — the job's
+  execution kind (`task`/`service`/`draft`/`debug`/`test`/`testdebug`).
+
+### Documentation
+- **Clarified `param` semantics in the user guide.** `--param` (and
+  `control.job.create(..., param=...)`) is a Python code snippet that
+  the runner runs via `exec(param, globals)` before the scriptlet body
+  — not a JSON/argument payload, and there is no injected `param`
+  global. Added an explicit callout under `pyopsctl job` and corrected
+  the misleading `set_clone --param '<json>'` example to the
+  code-snippet form (`url = "..."`).
+
 ## [3.3.1] — 2026-06-09
 
 Patch release fixing the coverage path of the bundled `pyops::pytest`

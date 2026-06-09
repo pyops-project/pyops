@@ -74,8 +74,11 @@ def _emit_view(args, job):
         return
     print(f"job {job.get('id')}")
     print(f"  set/name: {job.get('set')}::{job.get('name', '')}")
+    print(f"  kind:     {job.get('kind')}")
     print(f"  state:    {job.get('state')}")
     print(f"  owner:    {job.get('owner')}")
+    if job.get("param"):
+        print(f"  param:    {job.get('param')!r}")
     if job.get("detail"):
         print(f"  detail:   {job.get('detail')}")
     stdout = job.get("stdout")

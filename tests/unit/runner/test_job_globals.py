@@ -28,6 +28,19 @@ class TestSetupJobGlobals:
         assert glob["user"] == "alice"
         assert glob["listener"] is None
 
+    def test_kind_global_reflects_job_kind(self):
+        # Every scriptlet can introspect its own execution kind, and
+        # JobControl reads it to inherit the child kind in create().
+        for kind in ("task", "service", "draft", "debug", "test", "testdebug"):
+            glob = self._call(kind)
+            assert glob["kind"] == kind
+
+    def test_control_receives_kind(self):
+        # The kind is threaded into Control so control.job.create can
+        # inherit it (working-tree parent -> draft child).
+        glob = self._call("draft")
+        assert glob["control"].job.parent_kind == "draft"
+
     def test_draft_kind_has_listener(self):
         glob = self._call("draft")
         assert glob["listener"] is not None

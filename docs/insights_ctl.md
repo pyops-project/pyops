@@ -282,7 +282,11 @@ Sets view's "Commit drafts" button or by enqueuing the task directly.
 
 **job** — `GET /scriptlet/job/list`, `GET /scriptlet/job/item`,
 `PUT /scriptlet/job/item`, `DELETE /scriptlet/job/item`,
-`GET /scriptlet/job/cancel`, `GET /scriptlet/job/download`. The
+`GET /scriptlet/job/cancel`, `GET /scriptlet/job/download`. `GET
+/scriptlet/job/item` returns the full job row — `id`, `owner`, `set`,
+`name`, `kind`, `param`, `state`, `detail`, `start`, `end` — plus the
+materialised `stdout`/`stderr` log contents; `job view` renders
+`set/name`, `kind`, `state`, `owner`, `param` and `detail` from it. The
 `PUT` body of `job run` accepts `--overrides-dir DIR` when paired
 with `--kind test|debug`; the CLI then calls the shared
 `pyopsctl.overrides.build_overrides()` and ships the resulting

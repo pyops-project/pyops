@@ -406,12 +406,13 @@ graph TD
 |------|-------|
 | `user` | job owner (DB column is still `owner`) |
 | `setname`, `name` | scriptlet identity |
+| `kind` | this job's execution kind (`task`/`service`/`draft`/`debug`/`test`/`testdebug`); threaded into `Control` to drive child-kind inheritance in `control.job.create` |
 | `workspace` | `data/jobs/{setname}/{id}/` |
 | `setspace` | `data/jobs/{setname}/` (shared across all users) |
 | `gitspace` | `data/git/` |
 | `pkgspace` | `data/pkg/` |
 | `jobsspace` | `data/jobs/` |
-| `control` | `pyops.Control(owner, web_bind)` |
+| `control` | `pyops.Control(owner, web_bind, kind)` |
 | `listener` | `pyops.ServiceListener(owner, job_id)` (service/debug/draft/testdebug) |
 | `data` | `SetData(setname, repo_path)` — set-scoped YAML/JSON I/O with shared/exclusive locks; see "Set Data" |
 
@@ -679,11 +680,13 @@ sequenceDiagram
 
 ### Control API (scriptlet-side)
 
-`Control(owner, web_bind)` is injected into every scriptlet's global namespace. Proxies to FastAPI via HTTP:
+`Control(owner, web_bind, kind)` is injected into every scriptlet's global namespace. Proxies to FastAPI via HTTP:
 
 - `control.job`: `list()`, `create()`, `get()`, `delete()`, `cancel()`, `download()`
 - `control.schedule`: `list()`, `create()`, `get()`, `delete()`, `activate()`, `deactivate()`
 - `control.get/post/put/delete(set, name, ...)`: proxy to `/controller/{set}/{name}` using matching HTTP method
+
+`control.job.create(set, name, ..., kind=None)` defaults the spawned job's kind from the *calling* job's kind (the `kind` passed to `Control`): a working-tree parent — `draft`/`debug`/`test`/`testdebug` — yields a `draft` child so the child runs the same uncommitted code the parent is iterating on; `task`/`service` (and no-context `None`) yield a `task`. An explicit `kind=` argument overrides the inheritance. This must be client-side: the `PUT /scriptlet/job/item` handler only sees `X-User`, never which job issued the request. The legacy `debug: bool` argument is a deprecated no-op (`RunArgument` has no `debug` field) — pass `kind="debug"` to debug a child.
 
 ---
 
