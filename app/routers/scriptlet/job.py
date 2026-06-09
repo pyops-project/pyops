@@ -128,8 +128,13 @@ async def job_get(id: str):
             "id": job.id,
             "owner": job.owner,
             "set": job.set,
+            "name": job.name,
+            "kind": job.kind,
+            "param": job.param,
             "state": job.state,
             "detail": job.detail,
+            "start": job.start,
+            "end": job.end,
             "stdout": stdout,
             "stderr": stderr
         }

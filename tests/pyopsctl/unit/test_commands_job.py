@@ -168,3 +168,33 @@ def test_run_param_file_combines_with_overrides(tmp_path):
     body = c.put.call_args.kwargs["json_body"]
     assert body["param"] == "setup = True\n"
     assert body["overrides"] == {"myset::myscript": "y = 2\n"}
+
+
+def test_view_renders_kind_and_param(capsys):
+    """`pyopsctl job view` surfaces `kind` and `param` in human output.
+
+    Depends on `/scriptlet/job/item` returning those fields (3.3.2 — the
+    detail endpoint previously omitted name/kind/param, so the view
+    rendered an empty name and showed neither kind nor param)."""
+    job = {
+        "id": "JOBID123", "set": "reporting", "name": "export_report",
+        "kind": "draft", "state": "done", "owner": "u",
+        "param": "customer = '000000_sysup'", "detail": None,
+        "stdout": None, "stderr": None,
+    }
+    from pyopsctl import __main__ as cli
+    from pyopsctl.config import Profile
+    profile = Profile(name="t", url="http://server", user="u", api_key="",
+                      debug_ports=())
+    client_mock = MagicMock()
+    client_mock.__enter__ = MagicMock(return_value=client_mock)
+    client_mock.__exit__ = MagicMock(return_value=False)
+    client_mock.get.return_value = job
+    with patch("pyopsctl.commands.job.load", return_value=profile), \
+         patch("pyopsctl.commands.job.Client", return_value=client_mock):
+        cli.main(["job", "view", "JOBID123"])
+
+    out = capsys.readouterr().out
+    assert "set/name: reporting::export_report" in out
+    assert "kind:     draft" in out
+    assert "customer = '000000_sysup'" in out

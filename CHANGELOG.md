@@ -7,6 +7,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 from 3.0.0 onward.
 
+## [3.3.2] — 2026-06-09
+
+Patch release: job detail endpoint completeness, programmatic-job kind
+inheritance, and clearer `param` documentation.
+
+### Fixed
+- **`GET /scriptlet/job/item` omitted `name`, `kind`, `param`, `start`,
+  `end`.** The detail endpoint returned only
+  `id/owner/set/state/detail/stdout/stderr` — fewer fields than
+  `/scriptlet/job/list` — so `pyopsctl job view` rendered `set/name`
+  with an empty name and showed no `kind`/`param`, even though the job
+  had been enqueued with them (the `param` had demonstrably run). The
+  endpoint now returns the full job row; `pyopsctl job view` surfaces
+  `kind` and `param` alongside the existing fields.
+
 ## [3.3.1] — 2026-06-09
 
 Patch release fixing the coverage path of the bundled `pyops::pytest`
