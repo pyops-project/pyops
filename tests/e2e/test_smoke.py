@@ -8,6 +8,8 @@ import time
 
 import pytest
 
+from tests.e2e.conftest import expand_set
+
 
 class TestServerStartup:
     """Verify that the server starts cleanly and serves basic pages."""
@@ -252,7 +254,9 @@ class TestWebUIWorkflow:
         menu_link.click()
         frame = e2e_page.frame_locator('[data-testid="content-frame"]')
         frame.locator('[data-testid="monitor-navbar"]').wait_for(state="visible", timeout=10000)
-        assert frame.locator('[data-testid="monitor-table"]').is_visible()
+        # Jobs render as per-set collapsible tables inside this container
+        # (3.3.3) — assert the container is present rather than a single table.
+        frame.locator('[data-testid="monitor-sets"]').wait_for(state="attached", timeout=5000)
         pyops_server.assert_no_unexpected_errors()
 
     def test_navigate_to_sets(self, e2e_page, pyops_server):
@@ -292,8 +296,10 @@ class TestWebUIWorkflow:
         frame.locator('[data-testid="manager-create-submit"]').click()
         frame.locator('[data-testid="manager-create-modal"]').wait_for(state="hidden", timeout=10_000)
 
-        # Verify the new scriptlet row appears in the Manager table.
+        # Verify the new scriptlet row appears in the Manager table (the
+        # per-set section is collapsed by default — expand it first).
         frame.locator('[data-testid="manager-refresh"]').click()
+        expand_set(frame, "manager", "ui_create_set")
         frame.locator(
             '[data-testid="scriptlet-row-ui_create_set-new_task"]'
         ).wait_for(state="visible", timeout=10_000)

@@ -11,6 +11,8 @@ import time
 
 import pytest
 
+from tests.e2e.conftest import expand_set
+
 
 SET_NAME = "schedui_e2e"
 TASK_NAME = "dummy"
@@ -143,6 +145,7 @@ class TestSchedulerUI:
 
         frame = _nav_scheduler(e2e_page)
         frame.locator('[data-testid="scheduler-refresh"]').click()
+        expand_set(frame, "scheduler", SET_NAME)
         frame.locator(f'[data-testid="schedule-edit-{sched_id}"]').click()
         frame.locator('[data-testid="scheduler-edit-modal"]').wait_for(
             state="visible", timeout=5_000
@@ -185,6 +188,7 @@ class TestSchedulerUI:
 
         frame = _nav_scheduler(e2e_page)
         frame.locator('[data-testid="scheduler-refresh"]').click()
+        expand_set(frame, "scheduler", SET_NAME)
         frame.locator(f'[data-testid="schedule-edit-{sched_id}"]').click()
         frame.locator('[data-testid="scheduler-edit-modal"]').wait_for(
             state="visible", timeout=5_000
@@ -251,6 +255,7 @@ class TestSchedulerUI:
 
         frame = _nav_scheduler(e2e_page)
         frame.locator('[data-testid="scheduler-refresh"]').click()
+        expand_set(frame, "scheduler", SET_NAME)
         frame.locator(f'[data-testid="schedule-edit-{sched_id}"]').click()
         frame.locator('[data-testid="scheduler-edit-modal"]').wait_for(
             state="visible", timeout=5_000
@@ -294,6 +299,7 @@ class TestSchedulerUI:
 
         frame = _nav_scheduler(e2e_page)
         frame.locator('[data-testid="scheduler-refresh"]').click()
+        expand_set(frame, "scheduler", SET_NAME)
         frame.locator(f'[data-testid="schedule-row-{sched_id}"]').wait_for(
             state="visible", timeout=5_000
         )

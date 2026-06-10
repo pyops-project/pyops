@@ -16,6 +16,8 @@ import time
 
 import pytest
 
+from tests.e2e.conftest import expand_set
+
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -65,7 +67,9 @@ def _create_cron_schedule_via_ui(frame, e2e_page, set_name, task_name, cron_expr
     frame.locator('[data-testid="scheduler-create-submit"]').click()
     frame.locator('[data-testid="scheduler-create-modal"]').wait_for(state="hidden", timeout=5_000)
 
-    # Wait for the new row to appear and read its ID.
+    # Per-set tables are collapsed by default — expand this set, then wait
+    # for the new row to appear and read its ID.
+    expand_set(frame, "scheduler", set_name)
     row = frame.locator('[data-testid^="schedule-row-"]').first
     row.wait_for(state="visible", timeout=5_000)
     return row.get_attribute("data-id")
@@ -131,10 +135,14 @@ class TestCronScheduleWorkflowUI:
 
         assert sched_id, "Schedule row did not appear or has no data-id"
 
-        # Row shows the set and task name.
+        # The set is now the collapsible group header (its own column was
+        # dropped); the task name + cron live in the row.
+        header_text = frame.locator(
+            f'[data-testid="scheduler-set-toggle-{CRON_SET}"]'
+        ).inner_text()
+        assert CRON_SET in header_text
         row = frame.locator(f'[data-testid="schedule-row-{sched_id}"]')
         row_text = row.inner_text()
-        assert CRON_SET in row_text
         assert CRON_TASK in row_text
         assert CRON_EXPR in row_text
 
@@ -253,6 +261,7 @@ class TestCronScheduleWorkflowUI:
 
         # 4. Disable schedule.
         frame = _nav_scheduler(e2e_page)
+        expand_set(frame, "scheduler", CRON_SET)
         frame.locator(f'[data-testid="schedule-toggle-{sched_id}"]').click()
         frame.locator(
             f'[data-testid="schedule-toggle-{sched_id}"].btn-success'
@@ -275,6 +284,7 @@ class TestCronScheduleWorkflowUI:
 
         # 6. Delete schedule.
         frame = _nav_scheduler(e2e_page)
+        expand_set(frame, "scheduler", CRON_SET)
         e2e_page.once("dialog", lambda d: d.accept())
         frame.locator(f'[data-testid="schedule-delete-{sched_id}"]').click()
         frame.locator(f'[data-testid="schedule-row-{sched_id}"]').wait_for(

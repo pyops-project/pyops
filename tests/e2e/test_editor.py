@@ -13,6 +13,8 @@ import time
 
 import pytest
 
+from tests.e2e.conftest import expand_set
+
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -231,6 +233,8 @@ def _nav_sets(e2e_page):
 
 def _open_editor_popup(e2e_page, frame, set_name, name):
     """Click the Edit button in Manager and return the popup Page."""
+    # Per-set tables are collapsed by default — expand the set first.
+    expand_set(frame, "manager", set_name)
     frame.locator(f'[data-testid="scriptlet-row-{set_name}-{name}"]').wait_for(
         state="visible", timeout=10_000
     )
@@ -289,6 +293,9 @@ def _cleanup_scriptlets(e2e_page, names):
     frame = _nav_manager(e2e_page)
     frame.locator('[data-testid="manager-refresh"]').click()
     time.sleep(0.5)
+    # Expand the set so rows are visible (best-effort — the set may
+    # already be empty when this cleanup runs).
+    expand_set(frame, "manager", SET_NAME, required=False)
     for name in names:
         row = frame.locator(f'[data-testid="scriptlet-row-{SET_NAME}-{name}"]')
         if row.count() == 0 or not row.is_visible():
@@ -951,6 +958,7 @@ class TestManagerCreateAndEdit:
         # Cleanup: delete scriptlet + set.
         frame = _nav_manager(e2e_page)
         frame.locator('[data-testid="manager-refresh"]').click()
+        expand_set(frame, "manager", set_name, required=False)
         row = frame.locator(f'[data-testid="scriptlet-row-{set_name}-{new_name}"]')
         if row.count() > 0 and row.is_visible():
             e2e_page.once("dialog", lambda d: d.accept())
@@ -1003,6 +1011,7 @@ class TestManagerCreateAndEdit:
 
         frame = _nav_manager(e2e_page)
         frame.locator('[data-testid="manager-refresh"]').click()
+        expand_set(frame, "manager", set_name, required=False)
         row = frame.locator(f'[data-testid="scriptlet-row-{set_name}-{new_name}"]')
         if row.count() > 0 and row.is_visible():
             e2e_page.once("dialog", lambda d: d.accept())

@@ -39,6 +39,40 @@ SERVER_STARTUP_TIMEOUT = int(os.environ.get("E2E_STARTUP_TIMEOUT", 30))
 # Matches gunicorn's graceful_timeout in app/gunicorn.py (120s).
 SERVER_SHUTDOWN_TIMEOUT = 120
 
+
+def expand_set(frame, view, set_name, timeout=15000, required=True):
+    """Expand a collapsible per-set section so its rows become visible.
+
+    Manager / Scheduler / Monitor each render one collapsible table per
+    set, collapsed by default (3.3.3). Playwright cannot click row
+    buttons inside a collapsed (display:none) section, so a test expands
+    the target set first. Idempotent — a no-op when already expanded.
+
+    `view` is one of "manager" / "scheduler" / "monitor". Waits for the
+    section to render first (the per-set toggle only exists once the set
+    has at least one item and a refresh has drawn it).
+
+    `required=False` makes it best-effort: if the section never appears
+    (e.g. a cleanup helper running against an already-empty set) it
+    returns False instead of raising. Returns True when expanded.
+    """
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+    toggle = frame.locator(f'[data-testid="{view}-set-toggle-{set_name}"]')
+    try:
+        toggle.wait_for(state="visible", timeout=timeout)
+    except PlaywrightTimeoutError:
+        if required:
+            raise
+        return False
+    # Bootstrap keeps `.collapsed` on the trigger while the body is
+    # hidden; only click when actually collapsed so this stays idempotent.
+    if "collapsed" in (toggle.get_attribute("class") or ""):
+        toggle.click()
+    # The body holds the table; once shown it has a non-zero box.
+    frame.locator(f"#{view}-set-body-{set_name}").wait_for(state="visible", timeout=timeout)
+    return True
+
+
 # Log patterns that indicate unexpected errors (checked after each test).
 # Case-sensitive on purpose: Python logging emits FATAL/CRITICAL in uppercase,
 # while git prints lowercase "fatal:" to stderr on normal 404-style failures.

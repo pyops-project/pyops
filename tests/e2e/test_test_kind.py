@@ -12,6 +12,8 @@ import time
 
 import pytest
 
+from tests.e2e.conftest import expand_set
+
 
 SET = "test_kind_e2e"
 
@@ -425,7 +427,9 @@ class TestKindTestLifecycle:
         # Navigate to Manager via the sidebar menu.
         e2e_page.locator('[data-testid="menu-link-scriptlet_manager"]').click()
         frame = e2e_page.frame_locator('[data-testid="content-frame"]')
-        # Wait for the row of our task to appear (refresh is polled).
+        # Wait for the set section to appear (refresh is polled) and expand
+        # it — per-set tables are collapsed by default.
+        expand_set(frame, "manager", SET)
         frame.locator(f'[data-testid="scriptlet-row-{SET}-my_task"]').wait_for(state="visible", timeout=15_000)
         # The new science-icon button.
         frame.locator(f'[data-testid="scriptlet-test-{SET}-my_task"]').click()

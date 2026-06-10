@@ -7,6 +7,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 from 3.0.0 onward.
 
+## [3.3.3] — 2026-06-10
+
+### Changed
+- **Manager, Scheduler and Monitor group rows into per-set collapsible
+  tables, collapsed by default.** Each view previously rendered a
+  single flat table across all sets; it now renders one Bootstrap
+  collapsible card per set (with a row-count badge), sorted
+  alphabetically and collapsed on load. The incremental refresh is
+  preserved — a refresh only ever creates a set section that doesn't
+  exist yet, so a section a user has expanded stays expanded across the
+  10s auto-refresh. The redundant per-row Set column is dropped (the
+  set is the group header). New per-set test ids
+  (`<view>-set-<set>`, `<view>-set-toggle-<set>`, `<view>-table-<set>`,
+  container `<view>-sets`); existing row/button test ids are unchanged.
+
 ## [3.3.2] — 2026-06-09
 
 Patch release: job detail endpoint completeness, programmatic-job kind
