@@ -39,6 +39,10 @@ from 3.0.0 onward.
   default and opened automatically when Run/Test is pressed. Panes
   default to ~10 lines tall and are user-resizable (drag the bottom
   edge); the chosen height persists per pane in localStorage.
+- **Descriptive tooltips on every Web UI button** (Manager, Monitor,
+  Scheduler, the editors, the Sets manager, the sidebar) via native
+  `title` attributes, serving as inline help until the richer overlay
+  help system lands in 4.x.
 
 ## [3.3.2] — 2026-06-09
 

@@ -56,7 +56,7 @@
 
             function genTransActions(j) {
                 return `
-                    <button type="button" onclick="copyParam('${j.id}')" class="btn btn-warning p-0" data-testid="job-copy-${j.id}">
+                    <button type="button" onclick="copyParam('${j.id}')" class="btn btn-warning p-0" title="Copy this job's param to the clipboard" data-testid="job-copy-${j.id}">
                         <span class="material-icons-round">copy_all</span>
                     </button>
                 `
@@ -64,13 +64,13 @@
 
             function genUndoneActions(j) {
                 return `
-                    <button type="button" onclick="cancel('${j.id}')" class="btn btn-danger p-0" data-testid="job-cancel-${j.id}">
+                    <button type="button" onclick="cancel('${j.id}')" class="btn btn-danger p-0" title="Cancel this running job" data-testid="job-cancel-${j.id}">
                         <span class="material-icons-round">cancel</span>
                     </button>
-                    <button type="button" onclick="download('${j.id}')" class="btn btn-warning p-0" data-testid="job-download-${j.id}">
+                    <button type="button" onclick="download('${j.id}')" class="btn btn-warning p-0" title="Download this job's logs + workspace" data-testid="job-download-${j.id}">
                         <span class="material-icons-round">download</span>
                     </button>
-                    <button type="button" onclick="copyParam('${j.id}')" class="btn btn-danger p-0" data-testid="job-copy-${j.id}">
+                    <button type="button" onclick="copyParam('${j.id}')" class="btn btn-danger p-0" title="Copy this job's param to the clipboard" data-testid="job-copy-${j.id}">
                         <span class="material-icons-round">copy_all</span>
                     </button>
                 `
@@ -78,13 +78,13 @@
 
             function genDoneActions(j) {
                 return `
-                    <button type="button" onclick="del('${j.id}')" class="btn btn-danger p-0" data-testid="job-delete-${j.id}">
+                    <button type="button" onclick="del('${j.id}')" class="btn btn-danger p-0" title="Delete this job and its workspace" data-testid="job-delete-${j.id}">
                         <span class="material-icons-round">delete</span>
                     </button>
-                    <button type="button" onclick="download('${j.id}')" class="btn btn-warning p-0" data-testid="job-download-${j.id}">
+                    <button type="button" onclick="download('${j.id}')" class="btn btn-warning p-0" title="Download this job's logs + workspace" data-testid="job-download-${j.id}">
                         <span class="material-icons-round">download</span>
                     </button>
-                    <button type="button" onclick="copyParam('${j.id}')" class="btn btn-danger p-0" data-testid="job-copy-${j.id}">
+                    <button type="button" onclick="copyParam('${j.id}')" class="btn btn-danger p-0" title="Copy this job's param to the clipboard" data-testid="job-copy-${j.id}">
                         <span class="material-icons-round">copy_all</span>
                     </button>
                 `
@@ -121,7 +121,7 @@
                             <button class="btn btn-link text-reset text-decoration-none w-100 text-start d-flex align-items-center collapsed"
                                     type="button" data-bs-toggle="collapse" data-bs-target="#${bodyId}"
                                     aria-expanded="false" aria-controls="${bodyId}"
-                                    data-testid="monitor-set-toggle-${set}">
+                                    title="Expand/collapse this set" data-testid="monitor-set-toggle-${set}">
                                 <span class="material-icons-round set-chevron">chevron_right</span>
                                 <span class="fw-bold ms-1">${set}</span>
                                 <span class="badge bg-secondary ms-2" data-set-count>0</span>
@@ -375,25 +375,25 @@
                     <span class="material-icons-round">description</span>
                     <span>Scriptlet/Monitor</span>
                 </span>
-                <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#monitorNav" aria-controls="monitorNav" aria-expanded="false" aria-label="Toggle navigation">
+                <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#monitorNav" aria-controls="monitorNav" aria-expanded="false" title="Show/hide the toolbar" aria-label="Toggle navigation">
                     <span class="navbar-toggler-icon"></span>
                 </button>
                 <div class="collapse navbar-collapse" id="monitorNav">
                     <ul class="navbar-nav w-100">
                         <li class="nav-item m-1">
-                            <button type="button" class="btn btn-danger" onclick="cancelAll()" data-testid="monitor-cancel-all">
+                            <button type="button" class="btn btn-danger" onclick="cancelAll()" title="Cancel every in-flight job" data-testid="monitor-cancel-all">
                                 <span class="material-icons-round">cancel</span>
                             </button>
                         </li>
 
                         <li class="nav-item m-1">
-                            <button type="button" class="btn btn-danger" onclick="delAllOf(['done', 'cancelled'])" data-testid="monitor-delete-done">
+                            <button type="button" class="btn btn-danger" onclick="delAllOf(['done', 'cancelled'])" title="Delete all done/cancelled jobs" data-testid="monitor-delete-done">
                                 <span class="material-icons-round">delete</span>
                             </button>
                         </li>
 
                         <li class="nav-item m-1">
-                            <button type="button" class="btn btn-danger" onclick="delAllOf(['failed', 'killed'])" data-testid="monitor-delete-failed">
+                            <button type="button" class="btn btn-danger" onclick="delAllOf(['failed', 'killed'])" title="Delete all failed/killed jobs" data-testid="monitor-delete-failed">
                                 <span class="material-icons-round">delete_forever</span>
                             </button>
                         </li>
@@ -401,7 +401,7 @@
                         <li class="nav-item mx-auto"></li>
 
                         <li class="nav-item m-1">
-                            <button type="button" class="btn btn-success" onclick="refreshList()" data-testid="monitor-refresh">
+                            <button type="button" class="btn btn-success" onclick="refreshList()" title="Reload the job list" data-testid="monitor-refresh">
                                 <span class="material-icons-round">refresh</span>
                             </button>
                         </li>

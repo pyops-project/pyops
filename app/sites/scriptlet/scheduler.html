@@ -117,19 +117,19 @@
 
             function genActions(s) {
                 return `
-                    <button type="button" onclick="edit('${s.id}')" class="btn btn-warning p-0" data-testid="schedule-edit-${s.id}">
+                    <button type="button" onclick="edit('${s.id}')" class="btn btn-warning p-0" title="Edit this schedule" data-testid="schedule-edit-${s.id}">
                         <span class="material-icons-round">edit</span>
                     </button>
-                    <button type="button" onclick="del('${s.id}')" class="btn btn-danger p-0" data-testid="schedule-delete-${s.id}">
+                    <button type="button" onclick="del('${s.id}')" class="btn btn-danger p-0" title="Delete this schedule" data-testid="schedule-delete-${s.id}">
                         <span class="material-icons-round">delete</span>
                     </button>
-                    <button type="button" onclick="${s.active ? 'deactivate' : 'activate'}('${s.id}')" class="btn btn-${s.active ? 'danger' : 'success'} p-0" data-testid="schedule-toggle-${s.id}">
+                    <button type="button" onclick="${s.active ? 'deactivate' : 'activate'}('${s.id}')" class="btn btn-${s.active ? 'danger' : 'success'} p-0" title="${s.active ? 'Deactivate (stop the cron loop firing it)' : 'Activate (let the cron loop fire it)'}" data-testid="schedule-toggle-${s.id}">
                         <span class="material-icons-round">${s.active ? 'airplanemode_inactive' : 'airplanemode_active'}</span>
                     </button>
-                    <button type="button" onclick="run('${s.id}')" class="btn btn-success p-0" data-testid="schedule-run-${s.id}">
+                    <button type="button" onclick="run('${s.id}')" class="btn btn-success p-0" title="Run this schedule now (one-off)" data-testid="schedule-run-${s.id}">
                         <span class="material-icons-round">play_arrow</span>
                     </button>
-                    <button type="button" onclick="copyParam('${s.id}')" class="btn btn-danger p-0" data-testid="schedule-copy-${s.id}">
+                    <button type="button" onclick="copyParam('${s.id}')" class="btn btn-danger p-0" title="Copy this schedule's param to the clipboard" data-testid="schedule-copy-${s.id}">
                         <span class="material-icons-round">copy_all</span>
                     </button>
                 `
@@ -164,7 +164,7 @@
                             <button class="btn btn-link text-reset text-decoration-none w-100 text-start d-flex align-items-center collapsed"
                                     type="button" data-bs-toggle="collapse" data-bs-target="#${bodyId}"
                                     aria-expanded="false" aria-controls="${bodyId}"
-                                    data-testid="scheduler-set-toggle-${set}">
+                                    title="Expand/collapse this set" data-testid="scheduler-set-toggle-${set}">
                                 <span class="material-icons-round set-chevron">chevron_right</span>
                                 <span class="fw-bold ms-1">${set}</span>
                                 <span class="badge bg-secondary ms-2" data-set-count>0</span>
@@ -509,13 +509,13 @@
                     <span class="material-icons-round">description</span>
                     <span>Scriptlet/Scheduler</span>
                 </span>
-                <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#schedulerNav" aria-controls="schedulerNav" aria-expanded="false" aria-label="Toggle navigation">
+                <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#schedulerNav" aria-controls="schedulerNav" aria-expanded="false" title="Show/hide the toolbar" aria-label="Toggle navigation">
                     <span class="navbar-toggler-icon"></span>
                 </button>
                 <div class="collapse navbar-collapse" id="schedulerNav">
                     <ul class="navbar-nav w-100">
                         <li class="nav-item m-1">
-                            <button type="button" class="btn btn-success" data-bs-toggle="modal" data-bs-target="#createModal" data-testid="scheduler-create">
+                            <button type="button" class="btn btn-success" data-bs-toggle="modal" data-bs-target="#createModal" title="Create a new schedule" data-testid="scheduler-create">
                                 <span class="material-icons-round">add</span>
                             </button>
                         </li>
@@ -523,7 +523,7 @@
                         <li class="nav-item mx-auto"></li>
 
                         <li class="nav-item m-1">
-                            <button type="button" class="btn btn-success" onclick="refreshList()" data-testid="scheduler-refresh">
+                            <button type="button" class="btn btn-success" onclick="refreshList()" title="Reload the schedule list" data-testid="scheduler-refresh">
                                 <span class="material-icons-round">refresh</span>
                             </button>
                         </li>
@@ -584,8 +584,8 @@
                         </div>
                     </div>
                     <div class="modal-footer">
-                        <button type="button" class="btn btn-danger" data-bs-dismiss="modal" data-testid="scheduler-create-cancel">Cancel</button>
-                        <button type="button" class="btn btn-primary" onclick="onCreate()" data-bs-target="#createModal" data-testid="scheduler-create-submit">Create</button>
+                        <button type="button" class="btn btn-danger" data-bs-dismiss="modal" title="Discard and close" data-testid="scheduler-create-cancel">Cancel</button>
+                        <button type="button" class="btn btn-primary" onclick="onCreate()" data-bs-target="#createModal" title="Create the schedule" data-testid="scheduler-create-submit">Create</button>
                     </div>
                 </div>
             </div>
@@ -640,8 +640,8 @@
                         </div>
                     </div>
                     <div class="modal-footer">
-                        <button type="button" class="btn btn-danger" data-bs-dismiss="modal" data-testid="scheduler-edit-cancel">Cancel</button>
-                        <button type="button" class="btn btn-primary" onclick="onUpdate()" data-bs-target="#editModal" data-testid="scheduler-edit-submit">Update</button>
+                        <button type="button" class="btn btn-danger" data-bs-dismiss="modal" title="Discard changes and close" data-testid="scheduler-edit-cancel">Cancel</button>
+                        <button type="button" class="btn btn-primary" onclick="onUpdate()" data-bs-target="#editModal" title="Save changes to this schedule" data-testid="scheduler-edit-submit">Update</button>
                     </div>
                 </div>
             </div>

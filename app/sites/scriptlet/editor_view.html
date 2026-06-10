@@ -156,12 +156,12 @@
                     <span id="scriptlet-id" data-testid="editor-scriptlet-id"></span>
                 </li>
                 <li class="nav-item m-1">
-                    <button id="btn-revert" type="button" class="btn btn-danger" onclick="rollback()" disabled="disabled" data-testid="editor-revert">
+                    <button id="btn-revert" type="button" class="btn btn-danger" onclick="rollback()" disabled="disabled" title="Revert to the last committed revision (discards the current draft)" data-testid="editor-revert">
                         <span class="material-icons-round">backspace</span>
                     </button>
                 </li>
                 <li class="nav-item m-1">
-                    <select id="font-size" class="form-select bg-dark text-light" onchange="fontSizeChanged()" data-testid="editor-font-size">
+                    <select id="font-size" class="form-select bg-dark text-light" onchange="fontSizeChanged()" title="Editor font size" data-testid="editor-font-size">
                         <option value="8pt">8pt</option>
                         <option value="9pt" selected>9pt</option>
                         <option value="12pt">12pt</option>

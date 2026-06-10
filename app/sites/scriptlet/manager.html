@@ -47,10 +47,10 @@
 
             function genTaskActions(set, name) {
                 return `
-                    <button type="button" onclick="del('${set}', '${name}')" class="btn btn-danger p-0" data-testid="scriptlet-delete-${set}-${name}">
+                    <button type="button" onclick="del('${set}', '${name}')" class="btn btn-danger p-0" title="Delete this scriptlet" data-testid="scriptlet-delete-${set}-${name}">
                         <span class="material-icons-round">delete</span>
                     </button>
-                    <button type="button" onclick="onEditTask('${set}', '${name}')" class="btn btn-warning p-0" data-testid="scriptlet-edit-${set}-${name}">
+                    <button type="button" onclick="onEditTask('${set}', '${name}')" class="btn btn-warning p-0" title="Open in the Task editor" data-testid="scriptlet-edit-${set}-${name}">
                         <span class="material-icons-round">edit</span>
                     </button>
                     <button type="button" onclick="onRunDraftTask('${set}', '${name}')" class="btn btn-success p-0" title="Run draft (kind=draft)" data-testid="scriptlet-run-${set}-${name}">
@@ -64,10 +64,10 @@
 
             function genLibraryActions(set, name) {
                 return `
-                    <button type="button" onclick="del('${set}', '${name}')" class="btn btn-danger p-0" data-testid="scriptlet-delete-${set}-${name}">
+                    <button type="button" onclick="del('${set}', '${name}')" class="btn btn-danger p-0" title="Delete this scriptlet" data-testid="scriptlet-delete-${set}-${name}">
                         <span class="material-icons-round">delete</span>
                     </button>
-                    <button type="button" onclick="onEditLibrary('${set}', '${name}')" class="btn btn-warning p-0" data-testid="scriptlet-edit-${set}-${name}">
+                    <button type="button" onclick="onEditLibrary('${set}', '${name}')" class="btn btn-warning p-0" title="Open in the Library editor" data-testid="scriptlet-edit-${set}-${name}">
                         <span class="material-icons-round">edit</span>
                     </button>
                 `
@@ -75,10 +75,10 @@
 
             function genViewActions(set, name) {
                 return `
-                    <button type="button" onclick="del('${set}', '${name}')" class="btn btn-danger p-0" data-testid="scriptlet-delete-${set}-${name}">
+                    <button type="button" onclick="del('${set}', '${name}')" class="btn btn-danger p-0" title="Delete this scriptlet" data-testid="scriptlet-delete-${set}-${name}">
                         <span class="material-icons-round">delete</span>
                     </button>
-                    <button type="button" onclick="onEditView('${set}', '${name}')" class="btn btn-warning p-0" data-testid="scriptlet-edit-${set}-${name}">
+                    <button type="button" onclick="onEditView('${set}', '${name}')" class="btn btn-warning p-0" title="Open in the View editor" data-testid="scriptlet-edit-${set}-${name}">
                         <span class="material-icons-round">edit</span>
                     </button>
                 `
@@ -86,10 +86,10 @@
 
             function genMdActions(set, name) {
                 return `
-                    <button type="button" onclick="del('${set}', '${name}')" class="btn btn-danger p-0" data-testid="scriptlet-delete-${set}-${name}"${name == 'README' ? ' disabled' : ''}>
+                    <button type="button" onclick="del('${set}', '${name}')" class="btn btn-danger p-0" title="Delete this markdown page (README can't be deleted)" data-testid="scriptlet-delete-${set}-${name}"${name == 'README' ? ' disabled' : ''}>
                         <span class="material-icons-round">delete</span>
                     </button>
-                    <button type="button" onclick="onEditMd('${set}', '${name}')" class="btn btn-warning p-0" data-testid="scriptlet-edit-${set}-${name}">
+                    <button type="button" onclick="onEditMd('${set}', '${name}')" class="btn btn-warning p-0" title="Open in the Markdown editor" data-testid="scriptlet-edit-${set}-${name}">
                         <span class="material-icons-round">edit</span>
                     </button>
                 `
@@ -97,10 +97,10 @@
 
             function genDataActions(set, name) {
                 return `
-                    <button type="button" onclick="del('${set}', '${name}')" class="btn btn-danger p-0" data-testid="scriptlet-delete-${set}-${name}">
+                    <button type="button" onclick="del('${set}', '${name}')" class="btn btn-danger p-0" title="Delete this scriptlet" data-testid="scriptlet-delete-${set}-${name}">
                         <span class="material-icons-round">delete</span>
                     </button>
-                    <button type="button" onclick="onEditData('${set}', '${name}')" class="btn btn-warning p-0" data-testid="scriptlet-edit-${set}-${name}">
+                    <button type="button" onclick="onEditData('${set}', '${name}')" class="btn btn-warning p-0" title="Open in the Data editor" data-testid="scriptlet-edit-${set}-${name}">
                         <span class="material-icons-round">edit</span>
                     </button>
                 `
@@ -163,7 +163,7 @@
                             <button class="btn btn-link text-reset text-decoration-none w-100 text-start d-flex align-items-center collapsed"
                                     type="button" data-bs-toggle="collapse" data-bs-target="#${bodyId}"
                                     aria-expanded="false" aria-controls="${bodyId}"
-                                    data-testid="manager-set-toggle-${set}">
+                                    title="Expand/collapse this set" data-testid="manager-set-toggle-${set}">
                                 <span class="material-icons-round set-chevron">chevron_right</span>
                                 <span class="fw-bold ms-1">${set}</span>
                                 <span class="badge bg-secondary ms-2" data-set-count>0</span>
@@ -460,13 +460,13 @@
                     <span class="material-icons-round">description</span>
                     <span>Scriptlet/Manager</span>
                 </span>
-                <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#managerNav" aria-controls="managerNav" aria-expanded="false" aria-label="Toggle navigation">
+                <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#managerNav" aria-controls="managerNav" aria-expanded="false" title="Show/hide the toolbar" aria-label="Toggle navigation">
                     <span class="navbar-toggler-icon"></span>
                 </button>
                 <div class="collapse navbar-collapse" id="managerNav">
                     <ul class="navbar-nav w-100">
                         <li class="nav-item m-1">
-                            <button type="button" class="btn btn-success" data-bs-toggle="modal" data-bs-target="#createModal" data-testid="manager-create">
+                            <button type="button" class="btn btn-success" data-bs-toggle="modal" data-bs-target="#createModal" title="Create a new scriptlet" data-testid="manager-create">
                                 <span class="material-icons-round">add</span>
                             </button>
                         </li>
@@ -474,7 +474,7 @@
                         <li class="nav-item mx-auto"></li>
 
                         <li class="nav-item m-1">
-                            <button type="button" class="btn btn-success" onclick="refreshList()" data-testid="manager-refresh">
+                            <button type="button" class="btn btn-success" onclick="refreshList()" title="Reload the scriptlet list" data-testid="manager-refresh">
                                 <span class="material-icons-round">refresh</span>
                             </button>
                         </li>
@@ -517,9 +517,9 @@
                         </div>
                     </div>
                     <div class="modal-footer">
-                        <button type="button" class="btn btn-danger" data-bs-dismiss="modal" data-testid="manager-create-cancel">Cancel</button>
-                        <button type="button" class="btn btn-primary" onclick="onCreate()" data-bs-target="#createModal" data-testid="manager-create-submit">Create</button>
-                        <button type="button" class="btn btn-secondary" onclick="onCreate(true)" data-bs-target="#createModal" data-testid="manager-create-edit">Create & Edit</button>
+                        <button type="button" class="btn btn-danger" data-bs-dismiss="modal" title="Discard and close" data-testid="manager-create-cancel">Cancel</button>
+                        <button type="button" class="btn btn-primary" onclick="onCreate()" data-bs-target="#createModal" title="Create the scriptlet" data-testid="manager-create-submit">Create</button>
+                        <button type="button" class="btn btn-secondary" onclick="onCreate(true)" data-bs-target="#createModal" title="Create the scriptlet and open it in the editor" data-testid="manager-create-edit">Create & Edit</button>
                     </div>
                 </div>
             </div>
