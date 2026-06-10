@@ -60,8 +60,10 @@ def _create_cron_schedule_via_ui(frame, e2e_page, set_name, task_name, cron_expr
     frame.locator('[data-testid="scheduler-create"]').click()
     frame.locator('[data-testid="scheduler-create-modal"]').wait_for(state="visible", timeout=5_000)
 
-    frame.locator('[data-testid="scheduler-create-set"]').fill(set_name)
-    frame.locator('[data-testid="scheduler-create-name"]').fill(task_name)
+    # Set + name are dropdowns (the scriptlet must already exist); schedule
+    # stays a free-text cron input.
+    frame.locator('[data-testid="scheduler-create-set"]').select_option(set_name)
+    frame.locator('[data-testid="scheduler-create-name"]').select_option(task_name)
     frame.locator('[data-testid="scheduler-create-schedule"]').fill(cron_expr)
 
     frame.locator('[data-testid="scheduler-create-submit"]').click()

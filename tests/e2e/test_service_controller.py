@@ -191,8 +191,9 @@ def _create_service_schedule_via_ui(e2e_page):
         state="visible", timeout=5_000
     )
 
-    frame.locator('[data-testid="scheduler-create-set"]').fill(SET_NAME)
-    frame.locator('[data-testid="scheduler-create-name"]').fill(SVC_NAME)
+    # Set + name are dropdowns (the scriptlet must already exist).
+    frame.locator('[data-testid="scheduler-create-set"]').select_option(SET_NAME)
+    frame.locator('[data-testid="scheduler-create-name"]').select_option(SVC_NAME)
     # Leave schedule empty → service kind at run time.
 
     frame.locator('[data-testid="scheduler-create-submit"]').click()

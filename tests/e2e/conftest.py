@@ -73,6 +73,19 @@ def expand_set(frame, view, set_name, timeout=15000, required=True):
     return True
 
 
+def set_ace_value(frame, testid, value, timeout=10000):
+    """Set the text of an Ace editor mounted on the element with `testid`.
+
+    The scheduler modals' param field is an Ace editor (3.3.3), not a
+    plain textarea — `.fill()` doesn't apply. `ace.edit(el)` returns the
+    editor already initialised on that element, so we set its value via
+    the page's Ace runtime. Pass the editor's mount element as the arg.
+    """
+    el = frame.locator(f'[data-testid="{testid}"]')
+    el.wait_for(state="visible", timeout=timeout)
+    el.evaluate("(node, v) => window.ace.edit(node).setValue(v, -1)", value)
+
+
 # Log patterns that indicate unexpected errors (checked after each test).
 # Case-sensitive on purpose: Python logging emits FATAL/CRITICAL in uppercase,
 # while git prints lowercase "fatal:" to stderr on normal 404-style failures.

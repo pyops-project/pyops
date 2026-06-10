@@ -11,7 +11,7 @@ import time
 
 import pytest
 
-from tests.e2e.conftest import expand_set
+from tests.e2e.conftest import expand_set, set_ace_value
 
 
 SET_NAME = "schedui_e2e"
@@ -51,14 +51,16 @@ def _open_create_modal(frame):
 
 
 def _submit_create(frame, **fields):
+    # Set + name are dropdowns (must already exist in inventory); schedule
+    # is still a free-text input; param is an Ace editor (3.3.3).
     if fields.get("set") is not None:
-        frame.locator('[data-testid="scheduler-create-set"]').fill(fields["set"])
+        frame.locator('[data-testid="scheduler-create-set"]').select_option(fields["set"])
     if fields.get("name") is not None:
-        frame.locator('[data-testid="scheduler-create-name"]').fill(fields["name"])
+        frame.locator('[data-testid="scheduler-create-name"]').select_option(fields["name"])
     if fields.get("schedule") is not None:
         frame.locator('[data-testid="scheduler-create-schedule"]').fill(fields["schedule"])
     if fields.get("param") is not None:
-        frame.locator('[data-testid="scheduler-create-param"]').fill(fields["param"])
+        set_ace_value(frame, "scheduler-create-param", fields["param"])
     if fields.get("max_retries") is not None:
         frame.locator('[data-testid="scheduler-create-max-retries"]').fill(str(fields["max_retries"]))
     if fields.get("drop_done"):
@@ -79,8 +81,14 @@ class TestSchedulerUI:
         frame = _nav_scheduler(e2e_page)
 
         _open_create_modal(frame)
-        frame.locator('[data-testid="scheduler-create-set"]').fill(SET_NAME)
-        frame.locator('[data-testid="scheduler-create-name"]').fill(TASK_NAME)
+        # Set/name are dropdowns now — no need to pick anything to prove Cancel
+        # closes the modal without creating a schedule. Wait for the modal's
+        # `shown` handler to populate the set dropdown first: that confirms
+        # the open transition finished, so Bootstrap won't swallow the
+        # dismiss as a mid-transition no-op.
+        frame.locator('[data-testid="scheduler-create-set"] option[value="' + SET_NAME + '"]').wait_for(
+            state="attached", timeout=5_000
+        )
         frame.locator('[data-testid="scheduler-create-cancel"]').click()
 
         frame.locator('[data-testid="scheduler-create-modal"]').wait_for(
@@ -151,9 +159,9 @@ class TestSchedulerUI:
             state="visible", timeout=5_000
         )
 
-        # Modify schedule + param + max_retries.
+        # Modify schedule + param + max_retries. (param is an Ace editor)
         frame.locator('[data-testid="scheduler-edit-schedule"]').fill("30 2 * * *")
-        frame.locator('[data-testid="scheduler-edit-param"]').fill("updated = True")
+        set_ace_value(frame, "scheduler-edit-param", "updated = True")
         frame.locator('[data-testid="scheduler-edit-max-retries"]').fill("5")
         frame.locator('[data-testid="scheduler-edit-drop-done"]').check()
         frame.locator('[data-testid="scheduler-edit-submit"]').click()
@@ -206,34 +214,31 @@ class TestSchedulerUI:
         assert s["max_retries"] == 1
         pyops_server.assert_no_unexpected_errors()
 
-    def test_create_with_unknown_scriptlet_shows_error(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
-        """Submitting create with a non-existent scriptlet surfaces the server error inline."""
-        # Set exists, scriptlet does not.
+    def test_create_name_dropdown_excludes_unknown_scriptlet(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
+        """The create modal's name dropdown only offers scriptlets that
+        exist in the chosen set, so an unknown name can't be scheduled
+        from the UI at all (replaces the old "unknown scriptlet → server
+        error" path, which the dropdown makes unreachable). A set with no
+        task scriptlets yields an empty, disabled name dropdown."""
+        # Set exists, but has no task scriptlets.
         set_factory(SET_NAME)
 
         frame = _nav_scheduler(e2e_page)
         _open_create_modal(frame)
-        _submit_create(
-            frame,
-            set=SET_NAME,
-            name="does_not_exist",
-            schedule="0 0 * * *",
-        )
-        # Modal stays open and error text shows the server detail.
-        err_locator = frame.locator('[data-testid="scheduler-create-error"]')
-        err_locator.wait_for(state="visible", timeout=5_000)
-        # Poll until the text is populated (fetch resolves asynchronously).
-        deadline = time.time() + 5
-        while time.time() < deadline and not err_locator.inner_text().strip():
-            time.sleep(0.1)
-        err = err_locator.inner_text()
-        assert err.strip(), "scheduler-create-error was never populated"
-        assert frame.locator('[data-testid="scheduler-create-modal"]').is_visible()
+        # Pick the set (waits for populateSets to fill the option).
+        frame.locator('[data-testid="scheduler-create-set"]').select_option(SET_NAME)
 
-        # No schedule persisted.
-        assert api_anon.get("/scriptlet/schedule/list").json() == []
+        name_select = frame.locator('[data-testid="scheduler-create-name"]')
+        # No option for a non-existent scriptlet exists.
+        assert name_select.locator('option[value="does_not_exist"]').count() == 0
+        # With no task scriptlets in the set, the dropdown is disabled and
+        # carries only the placeholder.
+        assert name_select.locator('option[value=""]').count() == 1
+        assert name_select.is_disabled()
 
         frame.locator('[data-testid="scheduler-create-cancel"]').click()
+        # Nothing was (or could be) created.
+        assert api_anon.get("/scriptlet/schedule/list").json() == []
         pyops_server.assert_no_unexpected_errors()
 
     def test_edit_with_invalid_cron_shows_error(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
@@ -312,4 +317,50 @@ class TestSchedulerUI:
 
         resp = api_anon.get(f"/scriptlet/schedule/item?id={sched_id}")
         assert resp.status_code == 404
+        pyops_server.assert_no_unexpected_errors()
+
+    def test_drops_checkmark_and_edit_cron_preset(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
+        """The Drops column renders a checkmark (not true/false), and the
+        edit modal's cron-preset selector fills the schedule field."""
+        _prepare_set_and_task(api_anon, set_factory, commit_set)
+        resp = api_anon.put(
+            "/scriptlet/schedule/item",
+            json={
+                "set": SET_NAME,
+                "name": TASK_NAME,
+                "drop_done": True,
+                "max_retries": 0,
+                "schedule": "0 1 * * *",
+                "param": "",
+            },
+        )
+        sched_id = resp.json()["schedule"]
+        api_anon.get(f"/scriptlet/schedule/deactivate?id={sched_id}")
+
+        frame = _nav_scheduler(e2e_page)
+        frame.locator('[data-testid="scheduler-refresh"]').click()
+        expand_set(frame, "scheduler", SET_NAME)
+
+        # Drops cell shows a checkmark for drop_done=True (no "true"/"false").
+        drops = frame.locator(f'[data-testid="schedule-drops-{sched_id}"]')
+        drops.wait_for(state="visible", timeout=5_000)
+        assert drops.get_attribute("data-drops") == "true"
+        assert "check" in drops.inner_text()
+
+        # Edit: pick a cron preset and confirm it fills the schedule input,
+        # then persists on Update.
+        frame.locator(f'[data-testid="schedule-edit-{sched_id}"]').click()
+        frame.locator('[data-testid="scheduler-edit-modal"]').wait_for(
+            state="visible", timeout=5_000
+        )
+        frame.locator('[data-testid="scheduler-edit-schedule-preset"]').select_option("0 0 * * *")
+        assert frame.locator('[data-testid="scheduler-edit-schedule"]').input_value() == "0 0 * * *"
+        frame.locator('[data-testid="scheduler-edit-submit"]').click()
+        frame.locator('[data-testid="scheduler-edit-modal"]').wait_for(
+            state="hidden", timeout=5_000
+        )
+
+        s = api_anon.get(f"/scriptlet/schedule/item?id={sched_id}").json()
+        assert s["schedule"] == "0 0 * * *"
+        assert s["drop_done"] is True
         pyops_server.assert_no_unexpected_errors()

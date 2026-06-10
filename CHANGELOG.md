@@ -21,6 +21,19 @@ from 3.0.0 onward.
   set is the group header). New per-set test ids
   (`<view>-set-<set>`, `<view>-set-toggle-<set>`, `<view>-table-<set>`,
   container `<view>-sets`); existing row/button test ids are unchanged.
+- **Scheduler create/edit modals reworked.** Create: Set and Name are
+  now dropdowns (Set from `/inventory/sets`; Name cascades from the
+  chosen set's runnable task scriptlets), and Param is an Ace editor
+  with Python syntax highlighting. Edit: Set and Name are read-only (a
+  schedule can't be retargeted), while Schedule, Drop-done, Max-retries
+  and Param stay editable; Param is the same Ace editor. Both modals'
+  Schedule field carries a cron-preset selector with an explicit
+  "(empty) — run as service" option (the edit modal pre-selects the
+  matching preset for the current cron). Because the Name dropdown only
+  offers existing scriptlets, an unknown scriptlet can no longer be
+  scheduled from the UI at all.
+- **Scheduler table: the Drops column shows a checkmark** for
+  drop-on-success instead of the literal `true`/`false`.
 
 ## [3.3.2] — 2026-06-09
 
