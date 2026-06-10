@@ -808,6 +808,37 @@ class TestEditorInteractiveActions:
         _full_cleanup(e2e_page, BASIC_NAMES)
         pyops_server.assert_no_unexpected_errors()
 
+    def test_editor_output_panes_collapsed_until_run(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
+        """The stdout/stderr panes are collapsed on load and auto-open on Run."""
+        _setup_basic(api_anon, set_factory, commit_set)
+        api_anon.post(
+            "/scriptlet/inventory/draft",
+            json={"set": SET_NAME, "name": TASK_NAME, "code": 'print("pane_open_marker")\n'},
+        )
+        frame = _nav_manager(e2e_page)
+        frame.locator('[data-testid="manager-refresh"]').click()
+
+        editor_page = _open_editor_popup(e2e_page, frame, SET_NAME, TASK_NAME)
+        _wait_for_ace(editor_page)
+
+        # Collapsed by default.
+        assert not editor_page.locator('[data-testid="editor-stdout-pane"]').is_visible()
+        assert not editor_page.locator('[data-testid="editor-stderr-pane"]').is_visible()
+
+        editor_page.locator('[data-testid="editor-run"]').click()
+
+        # Run auto-opens both panes.
+        editor_page.locator('[data-testid="editor-stdout-pane"]').wait_for(state="visible", timeout=10_000)
+        editor_page.locator('[data-testid="editor-stderr-pane"]').wait_for(state="visible", timeout=10_000)
+        editor_page.wait_for_function(
+            "ace.edit('out').getValue().includes('pane_open_marker')",
+            timeout=30_000,
+        )
+
+        editor_page.close()
+        _full_cleanup(e2e_page, BASIC_NAMES)
+        pyops_server.assert_no_unexpected_errors()
+
     def test_editor_clear_logs_empties_output_panels(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """Clear Logs empties both stdout and stderr Ace panels."""
         _setup_basic(api_anon, set_factory, commit_set)

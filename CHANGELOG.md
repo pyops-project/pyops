@@ -34,6 +34,11 @@ from 3.0.0 onward.
   scheduled from the UI at all.
 - **Scheduler table: the Drops column shows a checkmark** for
   drop-on-success instead of the literal `true`/`false`.
+- **Task editor: stdout/stderr panes are collapsible.** Each output
+  pane is now an independently collapsible section, collapsed by
+  default and opened automatically when Run/Test is pressed. Panes
+  default to ~10 lines tall and are user-resizable (drag the bottom
+  edge); the chosen height persists per pane in localStorage.
 
 ## [3.3.2] — 2026-06-09
 
