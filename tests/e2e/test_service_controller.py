@@ -438,8 +438,9 @@ def _cleanup_set(e2e_page):
 
     row = frame.locator(f'[data-testid="set-row-{SET_NAME}"]')
     if row.count() > 0 and row.is_visible():
-        e2e_page.once("dialog", lambda d: d.accept())
         frame.locator(f'[data-testid="set-remove-{SET_NAME}"]').click()
+        # Remove is confirmed via a modal (not a JS confirm dialog).
+        frame.locator('[data-testid="sets-remove-submit"]').click()
         # The set_remove task blocks on the bootstrap lock if a per-set venv
         # pip install is still running (runner's per-job-spawn refresh). Cold
         # devpi cache + aarch64 wheels can push that to ~30s.

@@ -36,6 +36,7 @@ class TestPyopsSetBundlePresent:
         "set_remove.task.py",
         "set_update_deps.task.py",
         "set_commit_drafts.task.py",
+        "set_discard_drafts.task.py",
     ])
     def test_python_scriptlet_parses(self, filename, tmp_path):
         path = _path(filename)

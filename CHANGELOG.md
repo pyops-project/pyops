@@ -44,6 +44,17 @@ from 3.0.0 onward.
   `title` attributes, serving as inline help until the richer overlay
   help system lands in 4.x.
 
+### Added
+- **Per-set "discard drafts" action in the Sets manager.** Each set row
+  gains a button (enabled when the set has unstaged changes) that
+  reverts tracked edits and removes untracked draft files, restoring the
+  set to its last commit — the bulk counterpart to the editor's per-file
+  revert. Backed by a new `set_discard_drafts` task
+  (`git reset --hard HEAD` + `git clean -fd` under the set repo lock);
+  guarded by a confirmation modal that lists the exact changes
+  (`git status`) about to be discarded. The set-remove action gained
+  the same modal treatment, replacing its old native `confirm()` dialog.
+
 ## [3.3.2] — 2026-06-09
 
 Patch release: job detail endpoint completeness, programmatic-job kind

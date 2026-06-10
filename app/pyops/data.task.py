@@ -167,6 +167,12 @@ def handle_request(msg):
             "message": body.get("message", ""),
         }, user)
 
+    if path.startswith("/discard_drafts/") and type_ == "POST":
+        name = path[len("/discard_drafts/"):]
+        if not name:
+            return {"error": "name is required in path"}, 400
+        return _enqueue("set_discard_drafts", {"name": name}, user)
+
     return {"error": f"Not found: {type_} {path}"}, 404
 
 

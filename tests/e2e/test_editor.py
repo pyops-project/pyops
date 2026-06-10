@@ -315,8 +315,9 @@ def _cleanup_set(e2e_page):
     time.sleep(0.5)
     row = frame.locator(f'[data-testid="set-row-{SET_NAME}"]')
     if row.count() > 0 and row.is_visible():
-        e2e_page.once("dialog", lambda d: d.accept())
         frame.locator(f'[data-testid="set-remove-{SET_NAME}"]').click()
+        # Remove is confirmed via a modal (not a JS confirm dialog).
+        frame.locator('[data-testid="sets-remove-submit"]').click()
         # DELETE blocks on the bootstrap lock if the per-set venv pip install
         # is still running (lazy ensure_set_environment kicked off by the runner spawn path).
         # Cold devpi cache + aarch64 wheels can push that to ~30s.
