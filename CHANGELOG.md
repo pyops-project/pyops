@@ -44,6 +44,18 @@ from 3.0.0 onward.
   `title` attributes, serving as inline help until the richer overlay
   help system lands in 4.x.
 
+### Security
+- **The Docker image runs as a non-root user (`pyops`, uid/gid 1000)**
+  instead of root — gunicorn, the runner, and every scriptlet job it
+  spawns now run unprivileged. App code stays root-owned and read-only;
+  only the runtime tree (`data/`, `etc/`, `venv/`) is owned by `pyops`.
+
+  **Migration (existing deployments):** the container can no longer
+  write a root-owned data volume. Before deploying this image, chown the
+  host-side data (and any bind-mounted `etc`/`venv`) to the new uid:
+  `chown -R 1000:1000 <data-volume-path>`. Fresh named volumes inherit
+  the correct ownership from the image automatically.
+
 ### Added
 - **Per-set "discard drafts" action in the Sets manager.** Each set row
   gains a button (enabled when the set has unstaged changes) that
