@@ -21,6 +21,26 @@ class TestServerStartup:
         assert e2e_page.locator('[data-testid="content-frame"]').is_visible()
         pyops_server.assert_no_unexpected_errors()
 
+    def test_sidebar_collapse_toggles_to_mobile_layout(self, e2e_page, pyops_server):
+        """At desktop width the rail is static and the mobile top bar is
+        hidden. Collapsing it hides the rail, reveals the top bar, and its
+        brand-icon button opens the sidebar as an offcanvas overlay."""
+        sidebar = e2e_page.locator('[data-testid="sidebar"]')
+        topbar = e2e_page.locator('[data-testid="mobile-topbar"]')
+        # Default desktop layout: static rail visible, no top bar.
+        sidebar.wait_for(state="visible", timeout=10_000)
+        assert not topbar.is_visible()
+
+        # Collapse → rail hides, top bar appears.
+        e2e_page.locator('[data-testid="sidebar-collapse"]').click()
+        topbar.wait_for(state="visible", timeout=5_000)
+        sidebar.wait_for(state="hidden", timeout=5_000)
+
+        # The top-bar brand button reopens the sidebar as an overlay.
+        e2e_page.locator('[data-testid="sidebar-toggle"]').click()
+        sidebar.wait_for(state="visible", timeout=5_000)
+        pyops_server.assert_no_unexpected_errors()
+
     def test_menu_api_returns_default_sections(self, api, pyops_server):
         """The /menu endpoint returns the default Scriptlet menu section."""
         resp = api.get("/menu")
