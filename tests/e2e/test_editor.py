@@ -13,6 +13,8 @@ import time
 
 import pytest
 
+from tests.e2e.conftest import expand_set
+
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -231,6 +233,8 @@ def _nav_sets(e2e_page):
 
 def _open_editor_popup(e2e_page, frame, set_name, name):
     """Click the Edit button in Manager and return the popup Page."""
+    # Per-set tables are collapsed by default — expand the set first.
+    expand_set(frame, "manager", set_name)
     frame.locator(f'[data-testid="scriptlet-row-{set_name}-{name}"]').wait_for(
         state="visible", timeout=10_000
     )
@@ -289,6 +293,9 @@ def _cleanup_scriptlets(e2e_page, names):
     frame = _nav_manager(e2e_page)
     frame.locator('[data-testid="manager-refresh"]').click()
     time.sleep(0.5)
+    # Expand the set so rows are visible (best-effort — the set may
+    # already be empty when this cleanup runs).
+    expand_set(frame, "manager", SET_NAME, required=False)
     for name in names:
         row = frame.locator(f'[data-testid="scriptlet-row-{SET_NAME}-{name}"]')
         if row.count() == 0 or not row.is_visible():
@@ -308,8 +315,9 @@ def _cleanup_set(e2e_page):
     time.sleep(0.5)
     row = frame.locator(f'[data-testid="set-row-{SET_NAME}"]')
     if row.count() > 0 and row.is_visible():
-        e2e_page.once("dialog", lambda d: d.accept())
         frame.locator(f'[data-testid="set-remove-{SET_NAME}"]').click()
+        # Remove is confirmed via a modal (not a JS confirm dialog).
+        frame.locator('[data-testid="sets-remove-submit"]').click()
         # DELETE blocks on the bootstrap lock if the per-set venv pip install
         # is still running (lazy ensure_set_environment kicked off by the runner spawn path).
         # Cold devpi cache + aarch64 wheels can push that to ~30s.
@@ -801,6 +809,37 @@ class TestEditorInteractiveActions:
         _full_cleanup(e2e_page, BASIC_NAMES)
         pyops_server.assert_no_unexpected_errors()
 
+    def test_editor_output_panes_collapsed_until_run(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
+        """The stdout/stderr panes are collapsed on load and auto-open on Run."""
+        _setup_basic(api_anon, set_factory, commit_set)
+        api_anon.post(
+            "/scriptlet/inventory/draft",
+            json={"set": SET_NAME, "name": TASK_NAME, "code": 'print("pane_open_marker")\n'},
+        )
+        frame = _nav_manager(e2e_page)
+        frame.locator('[data-testid="manager-refresh"]').click()
+
+        editor_page = _open_editor_popup(e2e_page, frame, SET_NAME, TASK_NAME)
+        _wait_for_ace(editor_page)
+
+        # Collapsed by default.
+        assert not editor_page.locator('[data-testid="editor-stdout-pane"]').is_visible()
+        assert not editor_page.locator('[data-testid="editor-stderr-pane"]').is_visible()
+
+        editor_page.locator('[data-testid="editor-run"]').click()
+
+        # Run auto-opens both panes.
+        editor_page.locator('[data-testid="editor-stdout-pane"]').wait_for(state="visible", timeout=10_000)
+        editor_page.locator('[data-testid="editor-stderr-pane"]').wait_for(state="visible", timeout=10_000)
+        editor_page.wait_for_function(
+            "ace.edit('out').getValue().includes('pane_open_marker')",
+            timeout=30_000,
+        )
+
+        editor_page.close()
+        _full_cleanup(e2e_page, BASIC_NAMES)
+        pyops_server.assert_no_unexpected_errors()
+
     def test_editor_clear_logs_empties_output_panels(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """Clear Logs empties both stdout and stderr Ace panels."""
         _setup_basic(api_anon, set_factory, commit_set)
@@ -951,6 +990,7 @@ class TestManagerCreateAndEdit:
         # Cleanup: delete scriptlet + set.
         frame = _nav_manager(e2e_page)
         frame.locator('[data-testid="manager-refresh"]').click()
+        expand_set(frame, "manager", set_name, required=False)
         row = frame.locator(f'[data-testid="scriptlet-row-{set_name}-{new_name}"]')
         if row.count() > 0 and row.is_visible():
             e2e_page.once("dialog", lambda d: d.accept())
@@ -1003,6 +1043,7 @@ class TestManagerCreateAndEdit:
 
         frame = _nav_manager(e2e_page)
         frame.locator('[data-testid="manager-refresh"]').click()
+        expand_set(frame, "manager", set_name, required=False)
         row = frame.locator(f'[data-testid="scriptlet-row-{set_name}-{new_name}"]')
         if row.count() > 0 and row.is_visible():
             e2e_page.once("dialog", lambda d: d.accept())

@@ -14,6 +14,8 @@ covers the separate /inventory/sets endpoint that returns just names.
 
 import pytest
 
+from tests.e2e.conftest import expand_set
+
 
 SET = "inv_api_e2e"
 TASK = "my_task"
@@ -185,6 +187,7 @@ class TestManagerUiStatusIcon:
         _setup_task(api, set_factory, commit_set)
         e2e_page.locator('[data-testid="menu-link-scriptlet_manager"]').click()
         frame = e2e_page.frame_locator('[data-testid="content-frame"]')
+        expand_set(frame, "manager", SET)
         icon = frame.locator(f'[data-testid="scriptlet-status-{SET}-{TASK}"]')
         icon.wait_for(state="visible", timeout=15_000)
         assert icon.get_attribute("data-status") == "clean"
@@ -201,6 +204,7 @@ class TestManagerUiStatusIcon:
 
         e2e_page.locator('[data-testid="menu-link-scriptlet_manager"]').click()
         frame = e2e_page.frame_locator('[data-testid="content-frame"]')
+        expand_set(frame, "manager", SET)
         icon = frame.locator(f'[data-testid="scriptlet-status-{SET}-{TASK}"]')
         icon.wait_for(state="visible", timeout=15_000)
         # The manager refreshes every 10s; wait for the dirty state

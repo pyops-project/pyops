@@ -6,6 +6,11 @@
 
 		<link rel="stylesheet" href="/files/css/bootstrap/bootstrap.min.css">
         <link rel="stylesheet" href="/files/css/material/material-icons.css">
+        <style>
+            .set-chevron { transition: transform 0.15s ease; }
+            [data-bs-toggle="collapse"][aria-expanded="true"] .set-chevron { transform: rotate(90deg); }
+            .set-card-header .badge { font-weight: normal; }
+        </style>
 
         <script src="/files/js/jquery.min.js"></script>
         <script src="/files/js/js.cookie.min.js"></script>
@@ -13,25 +18,22 @@
 
         <script>
             const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+            function currentTableClass() {
+                return mediaQuery.matches ? 'table-dark' : 'table-secondary';
+            }
             function setTheme(e) {
                 const body = document.body;
-                const table = document.querySelector('table');
+                const tables = document.querySelectorAll('table');
                 if (e.matches) {
                     document.documentElement.setAttribute('data-bs-theme', 'dark');
                     body.classList.remove('bg-body');
                     body.classList.add('bg-dark');
-                    if (table) {
-                        table.classList.remove('table-secondary');
-                        table.classList.add('table-dark');
-                    }
+                    tables.forEach((t) => { t.classList.remove('table-secondary'); t.classList.add('table-dark'); });
                 } else {
                     document.documentElement.setAttribute('data-bs-theme', 'light');
                     body.classList.remove('bg-dark');
                     body.classList.add('bg-body');
-                    if (table) {
-                        table.classList.remove('table-dark');
-                        table.classList.add('table-secondary');
-                    }
+                    tables.forEach((t) => { t.classList.remove('table-dark'); t.classList.add('table-secondary'); });
                 }
             }
             mediaQuery.addEventListener('change', setTheme);
@@ -54,7 +56,7 @@
 
             function genTransActions(j) {
                 return `
-                    <button type="button" onclick="copyParam('${j.id}')" class="btn btn-warning p-0" data-testid="job-copy-${j.id}">
+                    <button type="button" onclick="copyParam('${j.id}')" class="btn btn-warning p-0" title="Copy this job's param to the clipboard" data-testid="job-copy-${j.id}">
                         <span class="material-icons-round">copy_all</span>
                     </button>
                 `
@@ -62,13 +64,13 @@
 
             function genUndoneActions(j) {
                 return `
-                    <button type="button" onclick="cancel('${j.id}')" class="btn btn-danger p-0" data-testid="job-cancel-${j.id}">
+                    <button type="button" onclick="cancel('${j.id}')" class="btn btn-danger p-0" title="Cancel this running job" data-testid="job-cancel-${j.id}">
                         <span class="material-icons-round">cancel</span>
                     </button>
-                    <button type="button" onclick="download('${j.id}')" class="btn btn-warning p-0" data-testid="job-download-${j.id}">
+                    <button type="button" onclick="download('${j.id}')" class="btn btn-warning p-0" title="Download this job's logs + workspace" data-testid="job-download-${j.id}">
                         <span class="material-icons-round">download</span>
                     </button>
-                    <button type="button" onclick="copyParam('${j.id}')" class="btn btn-danger p-0" data-testid="job-copy-${j.id}">
+                    <button type="button" onclick="copyParam('${j.id}')" class="btn btn-danger p-0" title="Copy this job's param to the clipboard" data-testid="job-copy-${j.id}">
                         <span class="material-icons-round">copy_all</span>
                     </button>
                 `
@@ -76,13 +78,13 @@
 
             function genDoneActions(j) {
                 return `
-                    <button type="button" onclick="del('${j.id}')" class="btn btn-danger p-0" data-testid="job-delete-${j.id}">
+                    <button type="button" onclick="del('${j.id}')" class="btn btn-danger p-0" title="Delete this job and its workspace" data-testid="job-delete-${j.id}">
                         <span class="material-icons-round">delete</span>
                     </button>
-                    <button type="button" onclick="download('${j.id}')" class="btn btn-warning p-0" data-testid="job-download-${j.id}">
+                    <button type="button" onclick="download('${j.id}')" class="btn btn-warning p-0" title="Download this job's logs + workspace" data-testid="job-download-${j.id}">
                         <span class="material-icons-round">download</span>
                     </button>
-                    <button type="button" onclick="copyParam('${j.id}')" class="btn btn-danger p-0" data-testid="job-copy-${j.id}">
+                    <button type="button" onclick="copyParam('${j.id}')" class="btn btn-danger p-0" title="Copy this job's param to the clipboard" data-testid="job-copy-${j.id}">
                         <span class="material-icons-round">copy_all</span>
                     </button>
                 `
@@ -104,12 +106,63 @@
                 `;
             }
 
-            function getRowKey(row) {
-                return $(row).data("id");
-            }
-
             function genJobItem(j) {
                 return `<tr data-id="${j.id}" data-testid="job-row-${j.id}">${genJobRowContent(j)}</tr>`;
+            }
+
+            // One collapsible Bootstrap card per set, collapsed by default.
+            // refreshList only creates a section that doesn't exist yet, so a
+            // user's expand survives the 10s auto-refresh.
+            function genSetSection(set) {
+                const bodyId = `monitor-set-body-${set}`;
+                return `
+                    <div class="card mb-2" data-set="${set}" data-testid="monitor-set-${set}">
+                        <div class="card-header set-card-header p-0">
+                            <button class="btn btn-link text-reset text-decoration-none w-100 text-start d-flex align-items-center collapsed"
+                                    type="button" data-bs-toggle="collapse" data-bs-target="#${bodyId}"
+                                    aria-expanded="false" aria-controls="${bodyId}"
+                                    title="Expand/collapse this set" data-testid="monitor-set-toggle-${set}">
+                                <span class="material-icons-round set-chevron">chevron_right</span>
+                                <span class="fw-bold ms-1">${set}</span>
+                                <span class="badge bg-secondary ms-2" data-set-count>0</span>
+                            </button>
+                        </div>
+                        <div id="${bodyId}" class="collapse">
+                            <div class="table-responsive">
+                                <table class="table ${currentTableClass()}" data-testid="monitor-table-${set}">
+                                    <thead>
+                                        <tr>
+                                            <th scope="col">ID</th>
+                                            <th scope="col">Start</th>
+                                            <th scope="col">End</th>
+                                            <th scope="col">Kind</th>
+                                            <th scope="col">State</th>
+                                            <th scope="col">Actions</th>
+                                            <th style="display:none;"></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody data-set-body="${set}"></tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>`;
+            }
+
+            function ensureSetSection(set) {
+                const container = $("#sets-container");
+                let card = container.children(`[data-set="${set}"]`);
+                if (card.length) return card;
+                const html = genSetSection(set);
+                let inserted = false;
+                container.children("[data-set]").each(function() {
+                    if (!inserted && set < $(this).attr("data-set")) {
+                        $(this).before(html);
+                        inserted = true;
+                        return false;
+                    }
+                });
+                if (!inserted) container.append(html);
+                return container.children(`[data-set="${set}"]`);
             }
 
             function copyParam(id) {
@@ -124,36 +177,53 @@
                     if(r.ok) {
                         const d = await r.json();
                         console.debug("jobs", d);
-                        const tbody = $("#jobs");
-                        const existingRows = {};
-                        tbody.find("tr").each(function() {
-                            const id = $(this).data("id");
-                            if(id) existingRows[id] = this;
-                        });
-                        const newKeys = new Set();
-                        for(const i of d) {
-                            const key = i.id;
-                            newKeys.add(key);
-                            if(existingRows[key]) {
-                                $(existingRows[key]).html(genJobRowContent(i));
-                            } else {
-                                const newRowHtml = genJobItem(i);
-                                let inserted = false;
-                                tbody.find("tr").each(function() {
-                                    const existingKey = getRowKey(this);
-                                    if (!inserted && key < existingKey) {
-                                        $(this).before(newRowHtml);
-                                        inserted = true;
-                                        return false;
-                                    }
-                                });
-                                if (!inserted) tbody.append(newRowHtml);
+
+                        // Group jobs by set; within a set the row key is the
+                        // job id. `/scriptlet/job/list` always returns `set`.
+                        const bySet = {};
+                        for(const i of d) (bySet[i.set] = bySet[i.set] || []).push(i);
+
+                        for(const set of Object.keys(bySet)) {
+                            const card = ensureSetSection(set);
+                            const tbody = card.find("tbody");
+                            const items = bySet[set];
+                            const existingRows = {};
+                            tbody.find("tr").each(function() {
+                                const id = $(this).data("id");
+                                if(id) existingRows[id] = this;
+                            });
+                            const newKeys = new Set();
+                            for(const i of items) {
+                                const key = i.id;
+                                newKeys.add(key);
+                                if(existingRows[key]) {
+                                    $(existingRows[key]).html(genJobRowContent(i));
+                                } else {
+                                    const newRowHtml = genJobItem(i);
+                                    let inserted = false;
+                                    tbody.find("tr").each(function() {
+                                        if (!inserted && key < $(this).data("id")) {
+                                            $(this).before(newRowHtml);
+                                            inserted = true;
+                                            return false;
+                                        }
+                                    });
+                                    if (!inserted) tbody.append(newRowHtml);
+                                }
                             }
+                            tbody.find("tr").each(function() {
+                                const id = $(this).data("id");
+                                if(id && !newKeys.has(id)) $(this).remove();
+                            });
+                            card.find("[data-set-count]").text(items.length);
                         }
-                        tbody.find("tr").each(function() {
-                            const id = $(this).data("id");
-                            if(id && !newKeys.has(id)) $(this).remove();
+
+                        // Drop sets that no longer have any jobs.
+                        const liveSets = new Set(Object.keys(bySet));
+                        $("#sets-container").children("[data-set]").each(function() {
+                            if(!liveSets.has($(this).attr("data-set"))) $(this).remove();
                         });
+
                         window.scrollTo(0, scrollY);
                     } else
                         console.error("GET", "/scriptlet/job/list", r.statusText);
@@ -305,25 +375,25 @@
                     <span class="material-icons-round">description</span>
                     <span>Scriptlet/Monitor</span>
                 </span>
-                <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#monitorNav" aria-controls="monitorNav" aria-expanded="false" aria-label="Toggle navigation">
+                <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#monitorNav" aria-controls="monitorNav" aria-expanded="false" title="Show/hide the toolbar" aria-label="Toggle navigation">
                     <span class="navbar-toggler-icon"></span>
                 </button>
                 <div class="collapse navbar-collapse" id="monitorNav">
                     <ul class="navbar-nav w-100">
                         <li class="nav-item m-1">
-                            <button type="button" class="btn btn-danger" onclick="cancelAll()" data-testid="monitor-cancel-all">
+                            <button type="button" class="btn btn-danger" onclick="cancelAll()" title="Cancel every in-flight job" data-testid="monitor-cancel-all">
                                 <span class="material-icons-round">cancel</span>
                             </button>
                         </li>
 
                         <li class="nav-item m-1">
-                            <button type="button" class="btn btn-danger" onclick="delAllOf(['done', 'cancelled'])" data-testid="monitor-delete-done">
+                            <button type="button" class="btn btn-danger" onclick="delAllOf(['done', 'cancelled'])" title="Delete all done/cancelled jobs" data-testid="monitor-delete-done">
                                 <span class="material-icons-round">delete</span>
                             </button>
                         </li>
 
                         <li class="nav-item m-1">
-                            <button type="button" class="btn btn-danger" onclick="delAllOf(['failed', 'killed'])" data-testid="monitor-delete-failed">
+                            <button type="button" class="btn btn-danger" onclick="delAllOf(['failed', 'killed'])" title="Delete all failed/killed jobs" data-testid="monitor-delete-failed">
                                 <span class="material-icons-round">delete_forever</span>
                             </button>
                         </li>
@@ -331,7 +401,7 @@
                         <li class="nav-item mx-auto"></li>
 
                         <li class="nav-item m-1">
-                            <button type="button" class="btn btn-success" onclick="refreshList()" data-testid="monitor-refresh">
+                            <button type="button" class="btn btn-success" onclick="refreshList()" title="Reload the job list" data-testid="monitor-refresh">
                                 <span class="material-icons-round">refresh</span>
                             </button>
                         </li>
@@ -340,22 +410,7 @@
             </div>
         </nav>
 
-        <div class="table-responsive">
-        <table class="table table-secondary" data-testid="monitor-table">
-            <thead>
-              <tr>
-                <th scope="col">ID</th>
-                <th scope="col">Start</th>
-                <th scope="col">End</th>
-                <th scope="col">Kind</th>
-                <th scope="col">State</th>
-                <th scope="col">Actions</th>
-                <th style="display:none;"></th>
-              </tr>
-            </thead>
-            <tbody id="jobs" data-testid="monitor-jobs">
-            </tbody>
-        </table>
+        <div class="container-fluid mt-2" id="sets-container" data-testid="monitor-sets">
         </div>
         <iframe id="download" style="display:none"></iframe>
     </body>

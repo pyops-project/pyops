@@ -7,6 +7,14 @@
 		<link rel="stylesheet" href="/files/css/bootstrap/bootstrap.min.css">
         <link rel="stylesheet" href="/files/css/material/material-icons.css">
 		<link rel="stylesheet" href="/files/css/ace/ace.css">
+        <style>
+            .pane-chevron { transition: transform 0.15s ease; }
+            [data-bs-toggle="collapse"][aria-expanded="true"] .pane-chevron { transform: rotate(90deg); }
+            /* Output panes: fixed default height (set to ~10 lines in JS),
+               user-resizable by dragging the bottom edge. Ace fills the box. */
+            .output-pane { resize: vertical; overflow: hidden; min-height: 4em; height: 12em; }
+            .output-pane > div { width: 100%; height: 100%; }
+        </style>
 
         <script src="/files/js/jquery.min.js"></script>
         <script src="/files/js/js.cookie.min.js"></script>
@@ -159,6 +167,7 @@
             }
 
             function _enqueueWithKind(kind, label) {
+                expandOutputPanes();
                 out.setValue(""); errout.setValue("");
                 out.scrollToLine(Number.POSITIVE_INFINITY)
                 errout.scrollToLine(Number.POSITIVE_INFINITY)
@@ -263,6 +272,34 @@
                 }).catch((e)=>console.error(e.toString()));
             }
 
+            // Output panes (#out / #errout) live in collapsible sections,
+            // collapsed by default. The pane container is user-resizable; its
+            // height defaults to ~10 lines (computed once the pane is first
+            // visible, since Ace can't measure lineHeight while hidden) and is
+            // persisted per pane in localStorage.
+            function setupOutputPane(editor, id, storageKey) {
+                const paneEl = document.getElementById(id).parentElement;
+                const saved = localStorage.getItem(storageKey);
+                if(saved) paneEl.style.height = saved;
+                const ro = new ResizeObserver(() => {
+                    editor.resize();
+                    if(paneEl.offsetHeight > 0 && paneEl.style.height)
+                        localStorage.setItem(storageKey, paneEl.style.height);
+                });
+                ro.observe(paneEl);
+                const body = document.getElementById(id + "-body");
+                if(body) body.addEventListener("shown.bs.collapse", () => {
+                    if(!paneEl.style.height)
+                        paneEl.style.height = (Math.round(editor.renderer.lineHeight * 10) + 8) + "px";
+                    editor.resize();
+                });
+            }
+
+            function expandOutputPanes() {
+                bootstrap.Collapse.getOrCreateInstance(document.getElementById("out-body")).show();
+                bootstrap.Collapse.getOrCreateInstance(document.getElementById("errout-body")).show();
+            }
+
             $(document).ready(() =>{
                 $("#scriptlet-id").text(`${set}::${name}`);
 
@@ -291,10 +328,11 @@
                     useWorker: false
                 });
 
+                // No min/maxLines: out/errout fill their resizable pane
+                // container (height controlled by .output-pane, default ~10
+                // lines, set below).
                 out = ace.edit("out", {
                     theme: "ace/theme/twilight",
-                    minLines: 0,
-                    maxLines: 20,
                     readOnly: true,
                     highlightActiveLine: false,
                     highlightGutterLine: false,
@@ -307,8 +345,6 @@
 
                 errout = ace.edit("errout", {
                     theme: "ace/theme/twilight",
-                    minLines: 0,
-                    maxLines: 20,
                     readOnly: true,
                     highlightActiveLine: false,
                     highlightGutterLine: false,
@@ -318,6 +354,9 @@
                     fontSize: $("#font-size").val(),
                     useWorker: false
                 });
+
+                setupOutputPane(out, "out", "pyops.editor.outHeight");
+                setupOutputPane(errout, "errout", "pyops.editor.erroutHeight");
 
                 editor.on("change", ()=>{
                     editor_dirty = true;
@@ -364,32 +403,32 @@
                     <span id="scriptlet-id" data-testid="editor-scriptlet-id"></span>
                 </li>
                 <li class="nav-item m-1">
-                    <button id="btn-revert" type="button" class="btn btn-danger" onclick="rollback()" disabled="disabled" data-testid="editor-revert">
+                    <button id="btn-revert" type="button" class="btn btn-danger" onclick="rollback()" disabled="disabled" title="Revert to the last committed revision (discards the current draft)" data-testid="editor-revert">
                         <span class="material-icons-round">backspace</span>
                     </button>
                 </li>
                 <li class="nav-item m-1">
-                    <button id="btn_run" type="button" class="btn btn-success" onclick="run()" title="Run draft (kind=draft)" data-testid="editor-run">
+                    <button id="btn_run" type="button" class="btn btn-success" onclick="run()" title="Save and run the current draft (kind=draft); output appears in the panes below" data-testid="editor-run">
                         <span class="material-icons-round">play_arrow</span>
                     </button>
                 </li>
                 <li class="nav-item m-1">
-                    <button id="btn_test" type="button" class="btn btn-info" onclick="runAsTest()" title="Run as test (kind=test)" data-testid="editor-test">
+                    <button id="btn_test" type="button" class="btn btn-info" onclick="runAsTest()" title="Save and run the draft as a test (kind=test); __name__ is set to __test__" data-testid="editor-test">
                         <span class="material-icons-round">science</span>
                     </button>
                 </li>
                 <li class="nav-item m-1">
-                    <button id="btn_cancel" type="button" class="btn btn-danger" onclick="cancel()" disabled="disabled" data-testid="editor-cancel">
+                    <button id="btn_cancel" type="button" class="btn btn-danger" onclick="cancel()" disabled="disabled" title="Cancel the currently running job" data-testid="editor-cancel">
                         <span class="material-icons-round">cancel</span>
                     </button>
                 </li>
                 <li class="nav-item m-1">
-                    <button type="button" class="btn btn-warning" onclick="clearLogs();" data-testid="editor-clear-logs">
+                    <button type="button" class="btn btn-warning" onclick="clearLogs();" title="Clear the stdout and stderr panes" data-testid="editor-clear-logs">
                         <span class="material-icons-round">cleaning_services</span>
                     </button>
                 </li>
                 <li class="nav-item m-1">
-                    <select id="font-size" class="form-select bg-dark text-light" onchange="fontSizeChanged()" data-testid="editor-font-size">
+                    <select id="font-size" class="form-select bg-dark text-light" onchange="fontSizeChanged()" title="Editor font size for all panes" data-testid="editor-font-size">
                         <option value="8pt">8pt</option>
                         <option value="9pt" selected>9pt</option>
                         <option value="12pt">12pt</option>
@@ -403,8 +442,28 @@
 
         <div id="editor" class="d-flex flex-column flex-grow-1 mt-1" data-testid="editor-code"></div>
 
-        <div id="out" class="d-flex flex-column text-light border border-secondary border mt-1" data-testid="editor-stdout"></div>
+        <div class="mt-1">
+            <button id="out-toggle" type="button" class="btn btn-sm btn-dark text-light w-100 text-start d-flex align-items-center collapsed" data-bs-toggle="collapse" data-bs-target="#out-body" aria-expanded="false" aria-controls="out-body" title="Show/hide the standard-output pane — opens automatically when you Run" data-testid="editor-stdout-toggle">
+                <span class="material-icons-round pane-chevron">chevron_right</span>
+                <span class="ms-1">stdout</span>
+            </button>
+            <div id="out-body" class="collapse">
+                <div class="output-pane border border-secondary" data-testid="editor-stdout-pane">
+                    <div id="out" class="text-light" data-testid="editor-stdout"></div>
+                </div>
+            </div>
+        </div>
 
-        <div id="errout" class="d-flex flex-column text-danger border border-danger border mt-1" data-testid="editor-stderr"></div>
+        <div class="mt-1">
+            <button id="errout-toggle" type="button" class="btn btn-sm btn-dark text-danger w-100 text-start d-flex align-items-center collapsed" data-bs-toggle="collapse" data-bs-target="#errout-body" aria-expanded="false" aria-controls="errout-body" title="Show/hide the standard-error pane — opens automatically when you Run" data-testid="editor-stderr-toggle">
+                <span class="material-icons-round pane-chevron">chevron_right</span>
+                <span class="ms-1">stderr</span>
+            </button>
+            <div id="errout-body" class="collapse">
+                <div class="output-pane border border-danger" data-testid="editor-stderr-pane">
+                    <div id="errout" class="text-danger" data-testid="editor-stderr"></div>
+                </div>
+            </div>
+        </div>
     </body>
 </html>

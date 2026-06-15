@@ -13,10 +13,24 @@ RUN DEBIAN_FRONTEND=noninteractive apt -y install \
         python3-sqlalchemy python3-sqlalchemy-utils python3-croniter python3-zipstream-ng && \
     apt clean
 
-RUN mkdir -p /opt/pyops/app && mkdir -p /opt/pyops/data && mkdir -p /opt/pyops/etc && mkdir -p /opt/pyops/venv
+# Run pyops — and every scriptlet job it spawns — as a non-root user
+# (uid/gid 1000), not root. `-m` gives pyops a writable $HOME for the
+# pip cache, git config and credential helper.
+RUN groupadd -g 1000 pyops && \
+    useradd -u 1000 -g 1000 -m -s /bin/bash pyops
+
+RUN mkdir -p /opt/pyops/app /opt/pyops/data /opt/pyops/etc /opt/pyops/venv
 
 COPY app /opt/pyops/app
 COPY VERSION /opt/pyops/
 COPY run.sh /opt/pyops/
+
+# App code stays root-owned and read-only (a job can't rewrite pyops
+# itself); only the runtime-writable tree is owned by pyops. A
+# bind-mounted host data volume must be chowned to 1000:1000 — see the
+# 3.3.3 migration note in CHANGELOG.md.
+RUN chown -R pyops:pyops /opt/pyops/data /opt/pyops/etc /opt/pyops/venv
+
+USER pyops
 
 CMD [ "/opt/pyops/run.sh" ]

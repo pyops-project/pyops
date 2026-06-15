@@ -602,6 +602,58 @@ class TestCommitDraftsViaController:
         assert last.startswith("Commit drafts in cd_def by ")
 
 
+class TestDiscardDraftsViaController:
+    """set_discard_drafts reverts tracked changes and removes untracked
+    drafts, restoring the set to its last commit."""
+
+    def test_no_drafts_is_noop(self, api, pyops_server, set_factory, e2e_env):
+        _service_ready(api)
+        set_factory("dd_clean")
+        repo = Path(e2e_env["data_dir"]) / "git" / "dd_clean"
+        pre = subprocess.check_output(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True
+        ).strip()
+
+        _assert_done(_run(api, "POST", "/controller/pyops/sets/discard_drafts/dd_clean"))
+
+        post = subprocess.check_output(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True
+        ).strip()
+        assert pre == post, "no drafts must not move HEAD"
+
+    def test_discards_modified_and_untracked(self, api, pyops_server, set_factory, e2e_env):
+        _service_ready(api)
+        set_factory("dd_set")
+        repo = Path(e2e_env["data_dir"]) / "git" / "dd_set"
+        (repo / "task").mkdir(parents=True, exist_ok=True)
+        (repo / "task" / "keep.task.py").write_text("print('v1')\n")
+        # Commit so there's a tracked file to revert.
+        _assert_done(_run(api, "POST", "/controller/pyops/sets/commit_drafts/dd_set"))
+
+        # Drafts: modify the tracked file + add an untracked one.
+        (repo / "task" / "keep.task.py").write_text("print('v2-draft')\n")
+        (repo / "task" / "new.task.py").write_text("print('new-draft')\n")
+        assert subprocess.check_output(
+            ["git", "-C", str(repo), "status", "--porcelain"], text=True
+        ).strip(), "sanity: working tree should be dirty before discard"
+
+        _assert_done(_run(api, "POST", "/controller/pyops/sets/discard_drafts/dd_set"))
+
+        # Tracked file reverted, untracked draft removed, tree clean.
+        assert (repo / "task" / "keep.task.py").read_text() == "print('v1')\n"
+        assert not (repo / "task" / "new.task.py").exists()
+        dirty = subprocess.check_output(
+            ["git", "-C", str(repo), "status", "--porcelain"], text=True
+        ).strip()
+        assert dirty == "", f"working tree should be clean; got: {dirty!r}"
+
+    def test_unknown_set_fails(self, api, pyops_server, set_factory):
+        _service_ready(api)
+        job = _run(api, "POST", "/controller/pyops/sets/discard_drafts/never_existed_xyz")
+        _assert_failed(job, "not found")
+        pyops_server.assert_no_unexpected_errors(allow=["not found", "set_discard_drafts"])
+
+
 class TestSetsListReportsHasDrafts:
     """`GET /controller/pyops/sets/list` reports `has_drafts` per set
     so the UI knows when to enable the commit-drafts button."""
@@ -889,9 +941,10 @@ class TestSetActionsUI:
         frame.locator('[data-testid="sets-refresh"]').click()
         frame.locator('[data-testid="set-remove-rm_ui"]').wait_for(state="visible", timeout=10_000)
 
-        # The remove button shows a native confirm() before firing — accept it.
-        e2e_page.once("dialog", lambda d: d.accept())
+        # The remove button opens a confirmation modal; confirm via its
+        # Remove button (replaces the old native confirm() dialog).
         frame.locator('[data-testid="set-remove-rm_ui"]').click()
+        frame.locator('[data-testid="sets-remove-submit"]').click()
 
         frame.locator('[data-testid="sets-job-modal"]').wait_for(state="visible", timeout=10_000)
         terminal = _await_modal_done(frame)

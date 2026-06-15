@@ -7,6 +7,66 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 from 3.0.0 onward.
 
+## [3.3.3] — 2026-06-10
+
+### Changed
+- **Manager, Scheduler and Monitor group rows into per-set collapsible
+  tables, collapsed by default.** Each view previously rendered a
+  single flat table across all sets; it now renders one Bootstrap
+  collapsible card per set (with a row-count badge), sorted
+  alphabetically and collapsed on load. The incremental refresh is
+  preserved — a refresh only ever creates a set section that doesn't
+  exist yet, so a section a user has expanded stays expanded across the
+  10s auto-refresh. The redundant per-row Set column is dropped (the
+  set is the group header). New per-set test ids
+  (`<view>-set-<set>`, `<view>-set-toggle-<set>`, `<view>-table-<set>`,
+  container `<view>-sets`); existing row/button test ids are unchanged.
+- **Scheduler create/edit modals reworked.** Create: Set and Name are
+  now dropdowns (Set from `/inventory/sets`; Name cascades from the
+  chosen set's runnable task scriptlets), and Param is an Ace editor
+  with Python syntax highlighting. Edit: Set and Name are read-only (a
+  schedule can't be retargeted), while Schedule, Drop-done, Max-retries
+  and Param stay editable; Param is the same Ace editor. Both modals'
+  Schedule field carries a cron-preset selector with an explicit
+  "(empty) — run as service" option (the edit modal pre-selects the
+  matching preset for the current cron). Because the Name dropdown only
+  offers existing scriptlets, an unknown scriptlet can no longer be
+  scheduled from the UI at all.
+- **Scheduler table: the Drops column shows a checkmark** for
+  drop-on-success instead of the literal `true`/`false`.
+- **Task editor: stdout/stderr panes are collapsible.** Each output
+  pane is now an independently collapsible section, collapsed by
+  default and opened automatically when Run/Test is pressed. Panes
+  default to ~10 lines tall and are user-resizable (drag the bottom
+  edge); the chosen height persists per pane in localStorage.
+- **Descriptive tooltips on every Web UI button** (Manager, Monitor,
+  Scheduler, the editors, the Sets manager, the sidebar) via native
+  `title` attributes, serving as inline help until the richer overlay
+  help system lands in 4.x.
+
+### Security
+- **The Docker image runs as a non-root user (`pyops`, uid/gid 1000)**
+  instead of root — gunicorn, the runner, and every scriptlet job it
+  spawns now run unprivileged. App code stays root-owned and read-only;
+  only the runtime tree (`data/`, `etc/`, `venv/`) is owned by `pyops`.
+
+  **Migration (existing deployments):** the container can no longer
+  write a root-owned data volume. Before deploying this image, chown the
+  host-side data (and any bind-mounted `etc`/`venv`) to the new uid:
+  `chown -R 1000:1000 <data-volume-path>`. Fresh named volumes inherit
+  the correct ownership from the image automatically.
+
+### Added
+- **Per-set "discard drafts" action in the Sets manager.** Each set row
+  gains a button (enabled when the set has unstaged changes) that
+  reverts tracked edits and removes untracked draft files, restoring the
+  set to its last commit — the bulk counterpart to the editor's per-file
+  revert. Backed by a new `set_discard_drafts` task
+  (`git reset --hard HEAD` + `git clean -fd` under the set repo lock);
+  guarded by a confirmation modal that lists the exact changes
+  (`git status`) about to be discarded. The set-remove action gained
+  the same modal treatment, replacing its old native `confirm()` dialog.
+
 ## [3.3.2] — 2026-06-09
 
 Patch release: job detail endpoint completeness, programmatic-job kind

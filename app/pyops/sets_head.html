@@ -64,6 +64,9 @@
                 <button type="button" onclick="onCommitDrafts('${setName}')" class="btn btn-danger p-0" data-testid="set-commit-drafts-${setName}" title="Commit and push all unstaged scriptlets" ${commitDisabled}>
                     <span class="material-icons-round">save_alt</span>
                 </button>
+                <button type="button" onclick="onDiscardDrafts('${setName}')" class="btn btn-warning p-0" data-testid="set-discard-drafts-${setName}" title="Discard all uncommitted drafts (restore the set to its last commit)" ${commitDisabled}>
+                    <span class="material-icons-round">restore</span>
+                </button>
                 <button type="button" onclick="onUpdateDeps('${setName}')" class="btn btn-info p-0" data-testid="set-update-deps-${setName}" title="Update Dependencies">
                     <span class="material-icons-round">system_update_alt</span>
                 </button>
@@ -165,8 +168,43 @@
             .then(() => refreshList());
     }
 
+    function onDiscardDrafts(setName) {
+        const modal = document.getElementById("discardDraftsModal");
+        document.getElementById("discardDraftsModal-name").textContent = setName;
+        document.getElementById("discardDraftsModal-status").textContent = "loading…";
+        modal.dataset.setName = setName;
+        bootstrap.Modal.getOrCreateInstance(modal).show();
+        // Show the porcelain status so the operator sees exactly what's
+        // about to be thrown away before confirming.
+        apiCall("GET", `status/${encodeURIComponent(setName)}`, null, function(ok, body) {
+            const el = document.getElementById("discardDraftsModal-status");
+            if (ok) {
+                el.textContent = (body.status || "").trim() || "(working tree clean)";
+            } else {
+                el.textContent = `error: ${body.error || ""}`;
+            }
+        });
+    }
+
+    function onDiscardDraftsSubmit() {
+        const modal = document.getElementById("discardDraftsModal");
+        const setName = modal.dataset.setName;
+        bootstrap.Modal.getInstance(modal).hide();
+        runSetsJob(`/controller/{{SET}}/{{NAME}}/discard_drafts/${encodeURIComponent(setName)}`, "POST", null, `Discard drafts — ${setName}`)
+            .then(() => refreshList());
+    }
+
     function onRemove(setName) {
-        if (!confirm(`Remove set '${setName}'?`)) return;
+        const modal = document.getElementById("removeModal");
+        document.getElementById("removeModal-name").textContent = setName;
+        modal.dataset.setName = setName;
+        bootstrap.Modal.getOrCreateInstance(modal).show();
+    }
+
+    function onRemoveSubmit() {
+        const modal = document.getElementById("removeModal");
+        const setName = modal.dataset.setName;
+        bootstrap.Modal.getInstance(modal).hide();
         runSetsJob(`/controller/{{SET}}/{{NAME}}/remove/${encodeURIComponent(setName)}`, "DELETE", null, `Remove — ${setName}`)
             .then(() => refreshList());
     }

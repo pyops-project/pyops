@@ -6,6 +6,11 @@
 
 		<link rel="stylesheet" href="/files/css/bootstrap/bootstrap.min.css">
         <link rel="stylesheet" href="/files/css/material/material-icons.css">
+        <style>
+            .set-chevron { transition: transform 0.15s ease; }
+            [data-bs-toggle="collapse"][aria-expanded="true"] .set-chevron { transform: rotate(90deg); }
+            .set-card-header .badge { font-weight: normal; }
+        </style>
 
         <script src="/files/js/jquery.min.js"></script>
         <script src="/files/js/js.cookie.min.js"></script>
@@ -13,25 +18,22 @@
 
         <script>
             const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+            function currentTableClass() {
+                return mediaQuery.matches ? 'table-dark' : 'table-secondary';
+            }
             function setTheme(e) {
                 const body = document.body;
-                const table = document.querySelector('table');
+                const tables = document.querySelectorAll('table');
                 if (e.matches) {
                     document.documentElement.setAttribute('data-bs-theme', 'dark');
                     body.classList.remove('bg-body');
                     body.classList.add('bg-dark');
-                    if (table) {
-                        table.classList.remove('table-secondary');
-                        table.classList.add('table-dark');
-                    }
+                    tables.forEach((t) => { t.classList.remove('table-secondary'); t.classList.add('table-dark'); });
                 } else {
                     document.documentElement.setAttribute('data-bs-theme', 'light');
                     body.classList.remove('bg-dark');
                     body.classList.add('bg-body');
-                    if (table) {
-                        table.classList.remove('table-dark');
-                        table.classList.add('table-secondary');
-                    }
+                    tables.forEach((t) => { t.classList.remove('table-dark'); t.classList.add('table-secondary'); });
                 }
             }
             mediaQuery.addEventListener('change', setTheme);
@@ -45,10 +47,10 @@
 
             function genTaskActions(set, name) {
                 return `
-                    <button type="button" onclick="del('${set}', '${name}')" class="btn btn-danger p-0" data-testid="scriptlet-delete-${set}-${name}">
+                    <button type="button" onclick="del('${set}', '${name}')" class="btn btn-danger p-0" title="Delete this scriptlet" data-testid="scriptlet-delete-${set}-${name}">
                         <span class="material-icons-round">delete</span>
                     </button>
-                    <button type="button" onclick="onEditTask('${set}', '${name}')" class="btn btn-warning p-0" data-testid="scriptlet-edit-${set}-${name}">
+                    <button type="button" onclick="onEditTask('${set}', '${name}')" class="btn btn-warning p-0" title="Open in the Task editor" data-testid="scriptlet-edit-${set}-${name}">
                         <span class="material-icons-round">edit</span>
                     </button>
                     <button type="button" onclick="onRunDraftTask('${set}', '${name}')" class="btn btn-success p-0" title="Run draft (kind=draft)" data-testid="scriptlet-run-${set}-${name}">
@@ -62,10 +64,10 @@
 
             function genLibraryActions(set, name) {
                 return `
-                    <button type="button" onclick="del('${set}', '${name}')" class="btn btn-danger p-0" data-testid="scriptlet-delete-${set}-${name}">
+                    <button type="button" onclick="del('${set}', '${name}')" class="btn btn-danger p-0" title="Delete this scriptlet" data-testid="scriptlet-delete-${set}-${name}">
                         <span class="material-icons-round">delete</span>
                     </button>
-                    <button type="button" onclick="onEditLibrary('${set}', '${name}')" class="btn btn-warning p-0" data-testid="scriptlet-edit-${set}-${name}">
+                    <button type="button" onclick="onEditLibrary('${set}', '${name}')" class="btn btn-warning p-0" title="Open in the Library editor" data-testid="scriptlet-edit-${set}-${name}">
                         <span class="material-icons-round">edit</span>
                     </button>
                 `
@@ -73,10 +75,10 @@
 
             function genViewActions(set, name) {
                 return `
-                    <button type="button" onclick="del('${set}', '${name}')" class="btn btn-danger p-0" data-testid="scriptlet-delete-${set}-${name}">
+                    <button type="button" onclick="del('${set}', '${name}')" class="btn btn-danger p-0" title="Delete this scriptlet" data-testid="scriptlet-delete-${set}-${name}">
                         <span class="material-icons-round">delete</span>
                     </button>
-                    <button type="button" onclick="onEditView('${set}', '${name}')" class="btn btn-warning p-0" data-testid="scriptlet-edit-${set}-${name}">
+                    <button type="button" onclick="onEditView('${set}', '${name}')" class="btn btn-warning p-0" title="Open in the View editor" data-testid="scriptlet-edit-${set}-${name}">
                         <span class="material-icons-round">edit</span>
                     </button>
                 `
@@ -84,10 +86,10 @@
 
             function genMdActions(set, name) {
                 return `
-                    <button type="button" onclick="del('${set}', '${name}')" class="btn btn-danger p-0" data-testid="scriptlet-delete-${set}-${name}"${name == 'README' ? ' disabled' : ''}>
+                    <button type="button" onclick="del('${set}', '${name}')" class="btn btn-danger p-0" title="Delete this markdown page (README can't be deleted)" data-testid="scriptlet-delete-${set}-${name}"${name == 'README' ? ' disabled' : ''}>
                         <span class="material-icons-round">delete</span>
                     </button>
-                    <button type="button" onclick="onEditMd('${set}', '${name}')" class="btn btn-warning p-0" data-testid="scriptlet-edit-${set}-${name}">
+                    <button type="button" onclick="onEditMd('${set}', '${name}')" class="btn btn-warning p-0" title="Open in the Markdown editor" data-testid="scriptlet-edit-${set}-${name}">
                         <span class="material-icons-round">edit</span>
                     </button>
                 `
@@ -95,10 +97,10 @@
 
             function genDataActions(set, name) {
                 return `
-                    <button type="button" onclick="del('${set}', '${name}')" class="btn btn-danger p-0" data-testid="scriptlet-delete-${set}-${name}">
+                    <button type="button" onclick="del('${set}', '${name}')" class="btn btn-danger p-0" title="Delete this scriptlet" data-testid="scriptlet-delete-${set}-${name}">
                         <span class="material-icons-round">delete</span>
                     </button>
-                    <button type="button" onclick="onEditData('${set}', '${name}')" class="btn btn-warning p-0" data-testid="scriptlet-edit-${set}-${name}">
+                    <button type="button" onclick="onEditData('${set}', '${name}')" class="btn btn-warning p-0" title="Open in the Data editor" data-testid="scriptlet-edit-${set}-${name}">
                         <span class="material-icons-round">edit</span>
                     </button>
                 `
@@ -140,18 +142,65 @@
             }
 
             function genScriptletRowContent(set, name, type, has_unstaged) {
+                // The set is now the collapsible group header, so the row
+                // no longer carries a Set column.
                 return `
-                    <th scope="row">${set}</th>
                     <th scope="row">${genStatusIcon(set, name, has_unstaged)}${name}</th>
                     <td>${type}</td>
                     <td>${genActions(set, name, type)}</td>
                 `;
             }
 
-            function getRowKey(row) {
-                const set = $(row).data("set");
-                const name = $(row).data("name");
-                return `${set}::${name}`;
+            // One collapsible Bootstrap card per set, collapsed by default.
+            // refreshList only ever *creates* a section that doesn't exist
+            // yet — existing sections (and thus their expanded/collapsed
+            // state) survive the 10s auto-refresh untouched.
+            function genSetSection(set) {
+                const bodyId = `manager-set-body-${set}`;
+                return `
+                    <div class="card mb-2" data-set="${set}" data-testid="manager-set-${set}">
+                        <div class="card-header set-card-header p-0">
+                            <button class="btn btn-link text-reset text-decoration-none w-100 text-start d-flex align-items-center collapsed"
+                                    type="button" data-bs-toggle="collapse" data-bs-target="#${bodyId}"
+                                    aria-expanded="false" aria-controls="${bodyId}"
+                                    title="Expand/collapse this set" data-testid="manager-set-toggle-${set}">
+                                <span class="material-icons-round set-chevron">chevron_right</span>
+                                <span class="fw-bold ms-1">${set}</span>
+                                <span class="badge bg-secondary ms-2" data-set-count>0</span>
+                            </button>
+                        </div>
+                        <div id="${bodyId}" class="collapse">
+                            <div class="table-responsive">
+                                <table class="table ${currentTableClass()}" data-testid="manager-table-${set}">
+                                    <thead>
+                                        <tr>
+                                            <th scope="col">Name</th>
+                                            <th scope="col">Type</th>
+                                            <th scope="col">Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody data-set-body="${set}"></tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>`;
+            }
+
+            function ensureSetSection(set) {
+                const container = $("#sets-container");
+                let card = container.children(`[data-set="${set}"]`);
+                if (card.length) return card;
+                const html = genSetSection(set);
+                let inserted = false;
+                container.children("[data-set]").each(function() {
+                    if (!inserted && set < $(this).attr("data-set")) {
+                        $(this).before(html);
+                        inserted = true;
+                        return false;
+                    }
+                });
+                if (!inserted) container.append(html);
+                return container.children(`[data-set="${set}"]`);
             }
 
             function genScriptletItem(set, name, type, has_unstaged) {
@@ -165,41 +214,53 @@
                     if(r.ok) {
                         const d = await r.json();
                         console.debug("scriptlets", d);
-                        const tbody = $("#scriptlets");
-                        const existingRows = {};
-                        tbody.find("tr").each(function() {
-                            const set = $(this).data("set");
-                            const name = $(this).data("name");
-                            if(set && name) existingRows[`${set}::${name}`] = this;
-                        });
-                        const newKeys = new Set();
-                        for(const i of d) {
-                            const key = `${i.set}::${i.name}`;
-                            newKeys.add(key);
-                            if(existingRows[key]) {
-                                $(existingRows[key]).html(genScriptletRowContent(i.set, i.name, i.type, i.has_unstaged));
-                            } else {
-                                const newRowHtml = genScriptletItem(i.set, i.name, i.type, i.has_unstaged);
-                                let inserted = false;
-                                tbody.find("tr").each(function() {
-                                    const existingKey = getRowKey(this);
-                                    if (!inserted && key < existingKey) {
-                                        $(this).before(newRowHtml);
-                                        inserted = true;
-                                        return false;
-                                    }
-                                });
-                                if (!inserted) tbody.append(newRowHtml);
+
+                        // Group incoming scriptlets by set; within a set the
+                        // row key is the scriptlet name.
+                        const bySet = {};
+                        for(const i of d) (bySet[i.set] = bySet[i.set] || []).push(i);
+
+                        for(const set of Object.keys(bySet)) {
+                            const card = ensureSetSection(set);
+                            const tbody = card.find("tbody");
+                            const items = bySet[set];
+                            const existingRows = {};
+                            tbody.find("tr").each(function() {
+                                const name = $(this).attr("data-name");
+                                if(name) existingRows[name] = this;
+                            });
+                            const newKeys = new Set();
+                            for(const i of items) {
+                                const key = i.name;
+                                newKeys.add(key);
+                                if(existingRows[key]) {
+                                    $(existingRows[key]).html(genScriptletRowContent(i.set, i.name, i.type, i.has_unstaged));
+                                } else {
+                                    const newRowHtml = genScriptletItem(i.set, i.name, i.type, i.has_unstaged);
+                                    let inserted = false;
+                                    tbody.find("tr").each(function() {
+                                        if (!inserted && key < $(this).attr("data-name")) {
+                                            $(this).before(newRowHtml);
+                                            inserted = true;
+                                            return false;
+                                        }
+                                    });
+                                    if (!inserted) tbody.append(newRowHtml);
+                                }
                             }
+                            tbody.find("tr").each(function() {
+                                const name = $(this).attr("data-name");
+                                if(name && !newKeys.has(name)) $(this).remove();
+                            });
+                            card.find("[data-set-count]").text(items.length);
                         }
-                        tbody.find("tr").each(function() {
-                            const set = $(this).data("set");
-                            const name = $(this).data("name");
-                            if(set && name) {
-                                const key = `${set}::${name}`;
-                                if(!newKeys.has(key)) $(this).remove();
-                            }
+
+                        // Drop sets that no longer have any scriptlets.
+                        const liveSets = new Set(Object.keys(bySet));
+                        $("#sets-container").children("[data-set]").each(function() {
+                            if(!liveSets.has($(this).attr("data-set"))) $(this).remove();
                         });
+
                         window.scrollTo(0, scrollY);
                     } else
                         console.error("GET", "/scriptlet/inventory/list", r.statusText);
@@ -399,13 +460,13 @@
                     <span class="material-icons-round">description</span>
                     <span>Scriptlet/Manager</span>
                 </span>
-                <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#managerNav" aria-controls="managerNav" aria-expanded="false" aria-label="Toggle navigation">
+                <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#managerNav" aria-controls="managerNav" aria-expanded="false" title="Show/hide the toolbar" aria-label="Toggle navigation">
                     <span class="navbar-toggler-icon"></span>
                 </button>
                 <div class="collapse navbar-collapse" id="managerNav">
                     <ul class="navbar-nav w-100">
                         <li class="nav-item m-1">
-                            <button type="button" class="btn btn-success" data-bs-toggle="modal" data-bs-target="#createModal" data-testid="manager-create">
+                            <button type="button" class="btn btn-success" data-bs-toggle="modal" data-bs-target="#createModal" title="Create a new scriptlet" data-testid="manager-create">
                                 <span class="material-icons-round">add</span>
                             </button>
                         </li>
@@ -413,7 +474,7 @@
                         <li class="nav-item mx-auto"></li>
 
                         <li class="nav-item m-1">
-                            <button type="button" class="btn btn-success" onclick="refreshList()" data-testid="manager-refresh">
+                            <button type="button" class="btn btn-success" onclick="refreshList()" title="Reload the scriptlet list" data-testid="manager-refresh">
                                 <span class="material-icons-round">refresh</span>
                             </button>
                         </li>
@@ -422,19 +483,7 @@
             </div>
         </nav>
 
-        <div class="table-responsive">
-        <table class="table table-secondary" data-testid="manager-table">
-            <thead>
-              <tr>
-                <th scope="col">Set</th>
-                <th scope="col">Name</th>
-                <th scope="col">Type</th>
-                <th scope="col">Actions</th>
-              </tr>
-            </thead>
-            <tbody id="scriptlets" data-testid="manager-scriptlets">
-            </tbody>
-        </table>
+        <div class="container-fluid mt-2" id="sets-container" data-testid="manager-sets">
         </div>
 
         <!-- DIALOGS -->
@@ -468,9 +517,9 @@
                         </div>
                     </div>
                     <div class="modal-footer">
-                        <button type="button" class="btn btn-danger" data-bs-dismiss="modal" data-testid="manager-create-cancel">Cancel</button>
-                        <button type="button" class="btn btn-primary" onclick="onCreate()" data-bs-target="#createModal" data-testid="manager-create-submit">Create</button>
-                        <button type="button" class="btn btn-secondary" onclick="onCreate(true)" data-bs-target="#createModal" data-testid="manager-create-edit">Create & Edit</button>
+                        <button type="button" class="btn btn-danger" data-bs-dismiss="modal" title="Discard and close" data-testid="manager-create-cancel">Cancel</button>
+                        <button type="button" class="btn btn-primary" onclick="onCreate()" data-bs-target="#createModal" title="Create the scriptlet" data-testid="manager-create-submit">Create</button>
+                        <button type="button" class="btn btn-secondary" onclick="onCreate(true)" data-bs-target="#createModal" title="Create the scriptlet and open it in the editor" data-testid="manager-create-edit">Create & Edit</button>
                     </div>
                 </div>
             </div>

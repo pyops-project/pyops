@@ -6,32 +6,45 @@
 
 		<link rel="stylesheet" href="/files/css/bootstrap/bootstrap.min.css">
         <link rel="stylesheet" href="/files/css/material/material-icons.css">
+        <link rel="stylesheet" href="/files/css/ace/ace.css">
+        <style>
+            .set-chevron { transition: transform 0.15s ease; }
+            [data-bs-toggle="collapse"][aria-expanded="true"] .set-chevron { transform: rotate(90deg); }
+            .set-card-header .badge { font-weight: normal; }
+            .ace-param { min-height: 120px; border: 1px solid var(--bs-border-color); border-radius: .375rem; }
+        </style>
 
         <script src="/files/js/jquery.min.js"></script>
         <script src="/files/js/js.cookie.min.js"></script>
         <script src="/files/js/bootstrap/bootstrap.bundle.min.js"></script>
+        <script src="/files/js/ace/ace.js"></script>
+        <script src="/files/js/ace/mode-python.js"></script>
+        <script src="/files/js/ace/theme-twilight.js"></script>
+        <script src="/files/js/ace/theme-github.js"></script>
 
         <script>
             const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+            function currentTableClass() {
+                return mediaQuery.matches ? 'table-dark' : 'table-secondary';
+            }
             function setTheme(e) {
                 const body = document.body;
-                const table = document.querySelector('table');
+                const tables = document.querySelectorAll('table');
                 if (e.matches) {
                     document.documentElement.setAttribute('data-bs-theme', 'dark');
                     body.classList.remove('bg-body');
                     body.classList.add('bg-dark');
-                    if (table) {
-                        table.classList.remove('table-secondary');
-                        table.classList.add('table-dark');
-                    }
+                    tables.forEach((t) => { t.classList.remove('table-secondary'); t.classList.add('table-dark'); });
                 } else {
                     document.documentElement.setAttribute('data-bs-theme', 'light');
                     body.classList.remove('bg-dark');
                     body.classList.add('bg-body');
-                    if (table) {
-                        table.classList.remove('table-dark');
-                        table.classList.add('table-secondary');
-                    }
+                    tables.forEach((t) => { t.classList.remove('table-dark'); t.classList.add('table-secondary'); });
+                }
+                // Keep the modal param editors in sync with the page theme.
+                if (typeof aceTheme === 'function') {
+                    if (typeof createParamEditor !== 'undefined' && createParamEditor) createParamEditor.setTheme(aceTheme());
+                    if (typeof editParamEditor !== 'undefined' && editParamEditor) editParamEditor.setTheme(aceTheme());
                 }
             }
             mediaQuery.addEventListener('change', setTheme);
@@ -43,32 +56,91 @@
         <script>
             'use strict';
 
+            // Ace editors for the create/edit modal param fields (Python
+            // syntax highlighting). Initialised once on document.ready and
+            // resized whenever their modal is shown (Ace can't lay out on a
+            // hidden element).
+            let createParamEditor = null;
+            let editParamEditor = null;
+
+            function aceTheme() {
+                return mediaQuery.matches ? "ace/theme/twilight" : "ace/theme/github";
+            }
+
+            function initParamEditors() {
+                const opts = {
+                    mode: "ace/mode/python",
+                    theme: aceTheme(),
+                    minLines: 6,
+                    maxLines: 20,
+                    showPrintMargin: false,
+                    useWorker: false,
+                    fontSize: 13,
+                };
+                if (!createParamEditor) createParamEditor = ace.edit("createModal-param", opts);
+                if (!editParamEditor) editParamEditor = ace.edit("editModal-param", opts);
+            }
+
+            // Set dropdown ← /inventory/sets; name dropdown ← /inventory/list
+            // filtered to the chosen set's runnable scriptlets (type=task;
+            // services are tasks at rest). The name select is disabled until
+            // a set is picked.
+            function populateSets() {
+                fetch("/scriptlet/inventory/sets").then(async (r)=>{
+                    if(r.ok) {
+                        const d = await r.json();
+                        const sel = $("#createModal-set");
+                        const cur = sel.val();
+                        sel.empty().append('<option value="">Select a set</option>');
+                        for(const s of d.sets) sel.append(`<option value="${s}">${s}</option>`);
+                        if(cur) sel.val(cur);
+                    } else
+                        console.error("GET", "/scriptlet/inventory/sets", r.statusText);
+                }).catch((e)=>console.error("GET", "/scriptlet/inventory/sets", e.toString()));
+            }
+
+            function populateNames(set) {
+                const sel = $("#createModal-name");
+                sel.empty().append('<option value="">Select a scriptlet</option>').prop("disabled", true);
+                if(!set) return;
+                fetch("/scriptlet/inventory/list").then(async (r)=>{
+                    if(r.ok) {
+                        const d = await r.json();
+                        const names = d.filter(i => i.set === set && i.type === "task")
+                                       .map(i => i.name).sort();
+                        for(const n of names) sel.append(`<option value="${n}">${n}</option>`);
+                        sel.prop("disabled", names.length === 0);
+                    } else
+                        console.error("GET", "/scriptlet/inventory/list", r.statusText);
+                }).catch((e)=>console.error("GET", "/scriptlet/inventory/list", e.toString()));
+            }
+
             function genActions(s) {
                 return `
-                    <button type="button" onclick="edit('${s.id}')" class="btn btn-warning p-0" data-testid="schedule-edit-${s.id}">
+                    <button type="button" onclick="edit('${s.id}')" class="btn btn-warning p-0" title="Edit this schedule" data-testid="schedule-edit-${s.id}">
                         <span class="material-icons-round">edit</span>
                     </button>
-                    <button type="button" onclick="del('${s.id}')" class="btn btn-danger p-0" data-testid="schedule-delete-${s.id}">
+                    <button type="button" onclick="del('${s.id}')" class="btn btn-danger p-0" title="Delete this schedule" data-testid="schedule-delete-${s.id}">
                         <span class="material-icons-round">delete</span>
                     </button>
-                    <button type="button" onclick="${s.active ? 'deactivate' : 'activate'}('${s.id}')" class="btn btn-${s.active ? 'danger' : 'success'} p-0" data-testid="schedule-toggle-${s.id}">
+                    <button type="button" onclick="${s.active ? 'deactivate' : 'activate'}('${s.id}')" class="btn btn-${s.active ? 'danger' : 'success'} p-0" title="${s.active ? 'Deactivate (stop the cron loop firing it)' : 'Activate (let the cron loop fire it)'}" data-testid="schedule-toggle-${s.id}">
                         <span class="material-icons-round">${s.active ? 'airplanemode_inactive' : 'airplanemode_active'}</span>
                     </button>
-                    <button type="button" onclick="run('${s.id}')" class="btn btn-success p-0" data-testid="schedule-run-${s.id}">
+                    <button type="button" onclick="run('${s.id}')" class="btn btn-success p-0" title="Run this schedule now (one-off)" data-testid="schedule-run-${s.id}">
                         <span class="material-icons-round">play_arrow</span>
                     </button>
-                    <button type="button" onclick="copyParam('${s.id}')" class="btn btn-danger p-0" data-testid="schedule-copy-${s.id}">
+                    <button type="button" onclick="copyParam('${s.id}')" class="btn btn-danger p-0" title="Copy this schedule's param to the clipboard" data-testid="schedule-copy-${s.id}">
                         <span class="material-icons-round">copy_all</span>
                     </button>
                 `
             }
 
             function genScheduleRowContent(s) {
+                // Set is now the collapsible group header — dropped from the row.
                 return `
                     <th scope="row">${s.id}</th>
-                    <th scope="row">${s.set}</th>
                     <th scope="row">${s.name}</th>
-                    <th scope="row">${s.drop_done}</th>
+                    <th scope="row">${s.drop_done ? '<span class="material-icons-round text-success align-middle" title="drops logs/data on success" data-testid="schedule-drops-' + s.id + '" data-drops="true">check</span>' : '<span data-testid="schedule-drops-' + s.id + '" data-drops="false"></span>'}</th>
                     <td>${s.max_retries}</td>
                     <td>${s.schedule}</td>
                     <td>${s.last}</td>
@@ -77,12 +149,64 @@
                 `;
             }
 
-            function getRowKey(row) {
-                return $(row).data("id");
-            }
-
             function genScheduleItem(s) {
                 return `<tr data-id="${s.id}" data-testid="schedule-row-${s.id}">${genScheduleRowContent(s)}</tr>`;
+            }
+
+            // One collapsible Bootstrap card per set, collapsed by default.
+            // refreshList only creates a section that doesn't exist yet, so a
+            // user's expand survives the 10s auto-refresh.
+            function genSetSection(set) {
+                const bodyId = `scheduler-set-body-${set}`;
+                return `
+                    <div class="card mb-2" data-set="${set}" data-testid="scheduler-set-${set}">
+                        <div class="card-header set-card-header p-0">
+                            <button class="btn btn-link text-reset text-decoration-none w-100 text-start d-flex align-items-center collapsed"
+                                    type="button" data-bs-toggle="collapse" data-bs-target="#${bodyId}"
+                                    aria-expanded="false" aria-controls="${bodyId}"
+                                    title="Expand/collapse this set" data-testid="scheduler-set-toggle-${set}">
+                                <span class="material-icons-round set-chevron">chevron_right</span>
+                                <span class="fw-bold ms-1">${set}</span>
+                                <span class="badge bg-secondary ms-2" data-set-count>0</span>
+                            </button>
+                        </div>
+                        <div id="${bodyId}" class="collapse">
+                            <div class="table-responsive">
+                                <table class="table ${currentTableClass()}" data-testid="scheduler-table-${set}">
+                                    <thead>
+                                        <tr>
+                                            <th scope="col">ID</th>
+                                            <th scope="col">Name</th>
+                                            <th scope="col">Drops</th>
+                                            <th scope="col">Retries</th>
+                                            <th scope="col">Schedule</th>
+                                            <th scope="col">Last</th>
+                                            <th scope="col">Actions</th>
+                                            <th style="display:none;"></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody data-set-body="${set}"></tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>`;
+            }
+
+            function ensureSetSection(set) {
+                const container = $("#sets-container");
+                let card = container.children(`[data-set="${set}"]`);
+                if (card.length) return card;
+                const html = genSetSection(set);
+                let inserted = false;
+                container.children("[data-set]").each(function() {
+                    if (!inserted && set < $(this).attr("data-set")) {
+                        $(this).before(html);
+                        inserted = true;
+                        return false;
+                    }
+                });
+                if (!inserted) container.append(html);
+                return container.children(`[data-set="${set}"]`);
             }
 
             function copyParam(id) {
@@ -97,36 +221,53 @@
                     if(r.ok) {
                         const d = await r.json();
                         console.debug("schedules", d);
-                        const tbody = $("#schedules");
-                        const existingRows = {};
-                        tbody.find("tr").each(function() {
-                            const id = $(this).data("id");
-                            if(id) existingRows[id] = this;
-                        });
-                        const newKeys = new Set();
-                        for(const i of d) {
-                            const key = i.id;
-                            newKeys.add(key);
-                            if(existingRows[key]) {
-                                $(existingRows[key]).html(genScheduleRowContent(i));
-                            } else {
-                                const newRowHtml = genScheduleItem(i);
-                                let inserted = false;
-                                tbody.find("tr").each(function() {
-                                    const existingKey = getRowKey(this);
-                                    if (!inserted && key < existingKey) {
-                                        $(this).before(newRowHtml);
-                                        inserted = true;
-                                        return false;
-                                    }
-                                });
-                                if (!inserted) tbody.append(newRowHtml);
+
+                        // Group schedules by set; within a set the row key is
+                        // the (numeric) schedule id.
+                        const bySet = {};
+                        for(const i of d) (bySet[i.set] = bySet[i.set] || []).push(i);
+
+                        for(const set of Object.keys(bySet)) {
+                            const card = ensureSetSection(set);
+                            const tbody = card.find("tbody");
+                            const items = bySet[set];
+                            const existingRows = {};
+                            tbody.find("tr").each(function() {
+                                const id = $(this).data("id");
+                                if(id !== undefined) existingRows[id] = this;
+                            });
+                            const newKeys = new Set();
+                            for(const i of items) {
+                                const key = i.id;
+                                newKeys.add(key);
+                                if(existingRows[key]) {
+                                    $(existingRows[key]).html(genScheduleRowContent(i));
+                                } else {
+                                    const newRowHtml = genScheduleItem(i);
+                                    let inserted = false;
+                                    tbody.find("tr").each(function() {
+                                        if (!inserted && key < $(this).data("id")) {
+                                            $(this).before(newRowHtml);
+                                            inserted = true;
+                                            return false;
+                                        }
+                                    });
+                                    if (!inserted) tbody.append(newRowHtml);
+                                }
                             }
+                            tbody.find("tr").each(function() {
+                                const id = $(this).data("id");
+                                if(id !== undefined && !newKeys.has(id)) $(this).remove();
+                            });
+                            card.find("[data-set-count]").text(items.length);
                         }
-                        tbody.find("tr").each(function() {
-                            const id = $(this).data("id");
-                            if(id && !newKeys.has(id)) $(this).remove();
+
+                        // Drop sets that no longer have any schedules.
+                        const liveSets = new Set(Object.keys(bySet));
+                        $("#sets-container").children("[data-set]").each(function() {
+                            if(!liveSets.has($(this).attr("data-set"))) $(this).remove();
                         });
+
                         window.scrollTo(0, scrollY);
                     } else
                         console.error("GET", "/scriptlet/schedule/list", r.statusText);
@@ -136,11 +277,12 @@
             function clearCreateModal() {
                 $("#createModal-error").text("");
                 $("#createModal-set").val("");
-                $("#createModal-name").val("");
+                $("#createModal-name").empty().append('<option value="">Select a scriptlet</option>').prop("disabled", true);
                 $("#createModal-dropDone").prop( "checked", false);
                 $("#createModal-maxRetries").val("0");
+                $("#createModal-schedule-preset").val("__custom__");
                 $("#createModal-schedule").val("");
-                $("#createModal-param").val("");
+                if(createParamEditor) createParamEditor.setValue("", -1);
             }
 
             function onCreate() {
@@ -151,7 +293,7 @@
                 const drop_done = $("#createModal-dropDone").is(':checked');
                 const max_retries = parseInt($("#createModal-maxRetries").val()) || 0;
                 const schedule = $("#createModal-schedule").val();
-                const param = $("#createModal-param").val();
+                const param = createParamEditor ? createParamEditor.getValue() : "";
 
                 const data = {
                     "set": set,
@@ -255,7 +397,14 @@
                         $("#editModal-dropDone").prop("checked", s.drop_done);
                         $("#editModal-maxRetries").val(s.max_retries);
                         $("#editModal-schedule").val(s.schedule);
-                        $("#editModal-param").val(s.param);
+                        // Reflect the current cron in the preset selector if it
+                        // matches a known preset (empty → "run as service"),
+                        // otherwise fall back to "Custom".
+                        const editPreset = $("#editModal-schedule-preset");
+                        editPreset.val(s.schedule || "");
+                        if(editPreset.val() === null) editPreset.val("__custom__");
+                        initParamEditors();
+                        editParamEditor.setValue(s.param || "", -1);
 
                         $("#editModal").modal('show');
                     } else
@@ -270,8 +419,9 @@
                 $("#editModal-name").val("");
                 $("#editModal-dropDone").prop("checked", false);
                 $("#editModal-maxRetries").val("0");
+                $("#editModal-schedule-preset").val("__custom__");
                 $("#editModal-schedule").val("");
-                $("#editModal-param").val("");
+                if(editParamEditor) editParamEditor.setValue("", -1);
             }
 
             function onUpdate() {
@@ -283,7 +433,7 @@
                 const drop_done = $("#editModal-dropDone").is(':checked');
                 const max_retries = parseInt($("#editModal-maxRetries").val()) || 0;
                 const schedule = $("#editModal-schedule").val();
-                const param = $("#editModal-param").val();
+                const param = editParamEditor ? editParamEditor.getValue() : "";
 
                 const data = {
                     "id": id,
@@ -320,6 +470,35 @@
                 setInterval(function() {
                     refreshList();
                 }, 10000);
+
+                initParamEditors();
+
+                // Create modal: populate the set dropdown + lay out the param
+                // editor each time it opens; cascade name options on set change;
+                // cron presets fill the schedule input ("Custom" leaves it).
+                $("#createModal").on('shown.bs.modal', function () {
+                    populateSets();
+                    if(createParamEditor) createParamEditor.resize();
+                });
+                $("#createModal-set").on('change', function () {
+                    populateNames($(this).val());
+                });
+                $("#createModal-schedule-preset").on('change', function () {
+                    const v = $(this).val();
+                    if(v === "__custom__") return;
+                    $("#createModal-schedule").val(v);
+                });
+
+                $("#editModal-schedule-preset").on('change', function () {
+                    const v = $(this).val();
+                    if(v === "__custom__") return;
+                    $("#editModal-schedule").val(v);
+                });
+
+                // Edit modal: the param editor needs a resize once visible.
+                $("#editModal").on('shown.bs.modal', function () {
+                    if(editParamEditor) editParamEditor.resize();
+                });
             });
         </script>
     </head>
@@ -330,13 +509,13 @@
                     <span class="material-icons-round">description</span>
                     <span>Scriptlet/Scheduler</span>
                 </span>
-                <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#schedulerNav" aria-controls="schedulerNav" aria-expanded="false" aria-label="Toggle navigation">
+                <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#schedulerNav" aria-controls="schedulerNav" aria-expanded="false" title="Show/hide the toolbar" aria-label="Toggle navigation">
                     <span class="navbar-toggler-icon"></span>
                 </button>
                 <div class="collapse navbar-collapse" id="schedulerNav">
                     <ul class="navbar-nav w-100">
                         <li class="nav-item m-1">
-                            <button type="button" class="btn btn-success" data-bs-toggle="modal" data-bs-target="#createModal" data-testid="scheduler-create">
+                            <button type="button" class="btn btn-success" data-bs-toggle="modal" data-bs-target="#createModal" title="Create a new schedule" data-testid="scheduler-create">
                                 <span class="material-icons-round">add</span>
                             </button>
                         </li>
@@ -344,7 +523,7 @@
                         <li class="nav-item mx-auto"></li>
 
                         <li class="nav-item m-1">
-                            <button type="button" class="btn btn-success" onclick="refreshList()" data-testid="scheduler-refresh">
+                            <button type="button" class="btn btn-success" onclick="refreshList()" title="Reload the schedule list" data-testid="scheduler-refresh">
                                 <span class="material-icons-round">refresh</span>
                             </button>
                         </li>
@@ -353,24 +532,7 @@
             </div>
         </nav>
 
-        <div class="table-responsive">
-        <table class="table table-secondary" data-testid="scheduler-table">
-            <thead>
-              <tr>
-                <th scope="col">ID</th>
-                <th scope="col">Set</th>
-                <th scope="col">Name</th>
-                <th scope="col">Drops</th>
-                <th scope="col">Retries</th>
-                <th scope="col">Schedule</th>
-                <th scope="col">Last</th>
-                <th scope="col">Actions</th>
-                <th style="display:none;"></th>
-              </tr>
-            </thead>
-            <tbody id="schedules" data-testid="scheduler-schedules">
-            </tbody>
-        </table>
+        <div class="container-fluid mt-2" id="sets-container" data-testid="scheduler-sets">
         </div>
 
         <!-- DIALOGS -->
@@ -385,11 +547,11 @@
                     <div class="modal-body">
                         <div class="mb-3">
                             <label for="createModal-set" class="col-form-label">Set:</label>
-                            <input id="createModal-set" type="text" class="form-control" data-testid="scheduler-create-set">
+                            <select id="createModal-set" class="form-select" data-testid="scheduler-create-set"></select>
                         </div>
                         <div class="mb-3">
                             <label for="createModal-name" class="col-form-label">Name:</label>
-                            <input id="createModal-name" type="text" class="form-control" data-testid="scheduler-create-name">
+                            <select id="createModal-name" class="form-select" data-testid="scheduler-create-name" disabled></select>
                         </div>
                         <div class="mb-3">
                             <label class="form-check-label" for="createModal-dropDone">Drop logs/data if successful:</label>
@@ -401,16 +563,29 @@
                         </div>
                         <div class="mb-3">
                             <label for="createModal-schedule" class="col-form-label">Schedule:</label>
-                            <input id="createModal-schedule" type="text" class="form-control" data-testid="scheduler-create-schedule">
+                            <select id="createModal-schedule-preset" class="form-select form-select-sm mb-1" data-testid="scheduler-create-schedule-preset">
+                                <option value="__custom__">Custom (cron below)</option>
+                                <option value="">(empty) — run as service</option>
+                                <option value="* * * * *">Every minute</option>
+                                <option value="*/5 * * * *">Every 5 minutes</option>
+                                <option value="*/15 * * * *">Every 15 minutes</option>
+                                <option value="0 * * * *">Hourly (minute 0)</option>
+                                <option value="0 0 * * *">Daily at 00:00</option>
+                                <option value="0 2 * * *">Daily at 02:00</option>
+                                <option value="0 0 * * 0">Weekly (Sun 00:00)</option>
+                                <option value="0 0 1 * *">Monthly (1st 00:00)</option>
+                            </select>
+                            <input id="createModal-schedule" type="text" class="form-control" placeholder="min hour dom mon dow — empty = service" data-testid="scheduler-create-schedule">
+                            <div class="form-text">Five cron fields. Leave empty to run the scriptlet as a long-lived service.</div>
                         </div>
                         <div class="mb-3">
-                            <label for="createModal-param" class="col-form-label">Param:</label>
-                            <textarea id="createModal-param" cols="40" rows="5" class="form-control" data-testid="scheduler-create-param"></textarea>
+                            <label for="createModal-param" class="col-form-label">Param (Python):</label>
+                            <div id="createModal-param" class="ace-param" data-testid="scheduler-create-param"></div>
                         </div>
                     </div>
                     <div class="modal-footer">
-                        <button type="button" class="btn btn-danger" data-bs-dismiss="modal" data-testid="scheduler-create-cancel">Cancel</button>
-                        <button type="button" class="btn btn-primary" onclick="onCreate()" data-bs-target="#createModal" data-testid="scheduler-create-submit">Create</button>
+                        <button type="button" class="btn btn-danger" data-bs-dismiss="modal" title="Discard and close" data-testid="scheduler-create-cancel">Cancel</button>
+                        <button type="button" class="btn btn-primary" onclick="onCreate()" data-bs-target="#createModal" title="Create the schedule" data-testid="scheduler-create-submit">Create</button>
                     </div>
                 </div>
             </div>
@@ -428,11 +603,11 @@
                         <input id="editModal-id" type="hidden">
                         <div class="mb-3">
                             <label for="editModal-set" class="col-form-label">Set:</label>
-                            <input id="editModal-set" type="text" class="form-control" data-testid="scheduler-edit-set">
+                            <input id="editModal-set" type="text" class="form-control" data-testid="scheduler-edit-set" readonly disabled>
                         </div>
                         <div class="mb-3">
                             <label for="editModal-name" class="col-form-label">Name:</label>
-                            <input id="editModal-name" type="text" class="form-control" data-testid="scheduler-edit-name">
+                            <input id="editModal-name" type="text" class="form-control" data-testid="scheduler-edit-name" readonly disabled>
                         </div>
                         <div class="mb-3">
                             <label class="form-check-label" for="editModal-dropDone">Drop logs/data if successful:</label>
@@ -444,16 +619,29 @@
                         </div>
                         <div class="mb-3">
                             <label for="editModal-schedule" class="col-form-label">Schedule:</label>
-                            <input id="editModal-schedule" type="text" class="form-control" data-testid="scheduler-edit-schedule">
+                            <select id="editModal-schedule-preset" class="form-select form-select-sm mb-1" data-testid="scheduler-edit-schedule-preset">
+                                <option value="__custom__">Custom (cron below)</option>
+                                <option value="">(empty) — run as service</option>
+                                <option value="* * * * *">Every minute</option>
+                                <option value="*/5 * * * *">Every 5 minutes</option>
+                                <option value="*/15 * * * *">Every 15 minutes</option>
+                                <option value="0 * * * *">Hourly (minute 0)</option>
+                                <option value="0 0 * * *">Daily at 00:00</option>
+                                <option value="0 2 * * *">Daily at 02:00</option>
+                                <option value="0 0 * * 0">Weekly (Sun 00:00)</option>
+                                <option value="0 0 1 * *">Monthly (1st 00:00)</option>
+                            </select>
+                            <input id="editModal-schedule" type="text" class="form-control" placeholder="min hour dom mon dow — empty = service" data-testid="scheduler-edit-schedule">
+                            <div class="form-text">Five cron fields. Leave empty to run the scriptlet as a long-lived service.</div>
                         </div>
                         <div class="mb-3">
-                            <label for="editModal-param" class="col-form-label">Param:</label>
-                            <textarea id="editModal-param" cols="40" rows="5" class="form-control" data-testid="scheduler-edit-param"></textarea>
+                            <label for="editModal-param" class="col-form-label">Param (Python):</label>
+                            <div id="editModal-param" class="ace-param" data-testid="scheduler-edit-param"></div>
                         </div>
                     </div>
                     <div class="modal-footer">
-                        <button type="button" class="btn btn-danger" data-bs-dismiss="modal" data-testid="scheduler-edit-cancel">Cancel</button>
-                        <button type="button" class="btn btn-primary" onclick="onUpdate()" data-bs-target="#editModal" data-testid="scheduler-edit-submit">Update</button>
+                        <button type="button" class="btn btn-danger" data-bs-dismiss="modal" title="Discard changes and close" data-testid="scheduler-edit-cancel">Cancel</button>
+                        <button type="button" class="btn btn-primary" onclick="onUpdate()" data-bs-target="#editModal" title="Save changes to this schedule" data-testid="scheduler-edit-submit">Update</button>
                     </div>
                 </div>
             </div>

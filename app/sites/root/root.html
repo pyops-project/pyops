@@ -143,7 +143,7 @@
                         <button class="pyops-section-toggle" type="button"
                                 data-bs-toggle="collapse" data-bs-target="#section_${id}"
                                 aria-expanded="${open}" aria-controls="section_${id}"
-                                data-testid="menu-toggle-${id}">
+                                title="Expand/collapse this section" data-testid="menu-toggle-${id}">
                             <span class="material-icons-round pyops-chevron" aria-hidden="true">expand_more</span>
                             <span>${name}</span>
                         </button>
@@ -233,7 +233,7 @@
                 <button class="navbar-toggler border-0" type="button"
                         data-bs-toggle="offcanvas" data-bs-target="#sidebarOffcanvas"
                         aria-controls="sidebarOffcanvas" aria-label="Toggle navigation"
-                        data-testid="sidebar-toggle">
+                        title="Show the navigation sidebar" data-testid="sidebar-toggle">
                     <span class="navbar-toggler-icon"></span>
                 </button>
                 <span class="navbar-brand d-flex align-items-center gap-2 mb-0">
@@ -254,7 +254,7 @@
                     </span>
                     <button type="button" class="btn-close btn-close-white d-lg-none"
                             data-bs-dismiss="offcanvas" data-bs-target="#sidebarOffcanvas"
-                            aria-label="Close"></button>
+                            title="Close the sidebar" aria-label="Close"></button>
                 </div>
                 <nav id="menu" class="flex-grow-1"
                      data-testid="sidebar-menu" aria-label="Main navigation"></nav>

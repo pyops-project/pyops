@@ -42,8 +42,8 @@
                 </div>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-danger" data-bs-dismiss="modal" data-testid="sets-clone-cancel">Cancel</button>
-                <button type="button" class="btn btn-primary" onclick="onCloneSubmit()" data-testid="sets-clone-submit">Clone</button>
+                <button type="button" class="btn btn-danger" data-bs-dismiss="modal" title="Discard and close" data-testid="sets-clone-cancel">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="onCloneSubmit()" title="Clone the remote set" data-testid="sets-clone-submit">Clone</button>
             </div>
         </div>
     </div>
@@ -64,8 +64,8 @@
                 </div>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-danger" data-bs-dismiss="modal" data-testid="sets-create-cancel">Cancel</button>
-                <button type="button" class="btn btn-primary" onclick="onCreateSubmit()" data-testid="sets-create-submit">Create</button>
+                <button type="button" class="btn btn-danger" data-bs-dismiss="modal" title="Discard and close" data-testid="sets-create-cancel">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="onCreateSubmit()" title="Create the empty set" data-testid="sets-create-submit">Create</button>
             </div>
         </div>
     </div>
@@ -90,8 +90,55 @@
                 </div>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-danger" data-bs-dismiss="modal" data-testid="sets-commit-drafts-cancel">Cancel</button>
-                <button type="button" class="btn btn-primary" onclick="onCommitDraftsSubmit()" data-testid="sets-commit-drafts-submit">Commit</button>
+                <button type="button" class="btn btn-danger" data-bs-dismiss="modal" title="Discard and close" data-testid="sets-commit-drafts-cancel">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="onCommitDraftsSubmit()" title="Commit and push the set's drafts" data-testid="sets-commit-drafts-submit">Commit</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Discard drafts modal -->
+<div class="modal fade" data-bs-backdrop="static" id="discardDraftsModal" tabindex="-1" aria-hidden="true" data-testid="sets-discard-drafts-modal">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Discard Drafts</h5>
+                <p id="discardDraftsModal-name" class="text-muted m-0" data-testid="sets-discard-drafts-name"></p>
+            </div>
+            <div class="modal-body">
+                <div class="alert alert-warning mb-3" role="alert">
+                    Reverts every change listed below and removes new draft files,
+                    restoring the set to its last commit. <strong>This cannot be undone.</strong>
+                </div>
+                <label class="col-form-label">Changes to discard:</label>
+                <pre id="discardDraftsModal-status" class="form-control bg-secondary text-light small mb-0" style="height: 10em; overflow-y: auto; white-space: pre-wrap;" data-testid="sets-discard-drafts-status"></pre>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal" title="Keep the drafts and close" data-testid="sets-discard-drafts-cancel">Cancel</button>
+                <button type="button" class="btn btn-danger" onclick="onDiscardDraftsSubmit()" title="Permanently discard the listed drafts" data-testid="sets-discard-drafts-submit">Discard</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Remove set modal -->
+<div class="modal fade" data-bs-backdrop="static" id="removeModal" tabindex="-1" aria-hidden="true" data-testid="sets-remove-modal">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Remove Set</h5>
+                <p id="removeModal-name" class="text-muted m-0" data-testid="sets-remove-name"></p>
+            </div>
+            <div class="modal-body">
+                <div class="alert alert-danger mb-0" role="alert">
+                    Permanently deletes this set — all of its scriptlets, git
+                    history, the per-set virtualenv and installed packages.
+                    <strong>This cannot be undone.</strong>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal" title="Keep the set and close" data-testid="sets-remove-cancel">Cancel</button>
+                <button type="button" class="btn btn-danger" onclick="onRemoveSubmit()" title="Permanently remove this set" data-testid="sets-remove-submit">Remove</button>
             </div>
         </div>
     </div>
@@ -116,8 +163,8 @@
                 </div>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-danger" data-bs-dismiss="modal" data-testid="sets-switch-cancel">Cancel</button>
-                <button type="button" class="btn btn-primary" onclick="onSwitchSubmit()" data-testid="sets-switch-submit">Switch</button>
+                <button type="button" class="btn btn-danger" data-bs-dismiss="modal" title="Discard and close" data-testid="sets-switch-cancel">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="onSwitchSubmit()" title="Switch the set's branch" data-testid="sets-switch-submit">Switch</button>
             </div>
         </div>
     </div>

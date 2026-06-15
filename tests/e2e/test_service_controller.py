@@ -17,6 +17,8 @@ import time
 
 import pytest
 
+from tests.e2e.conftest import expand_set
+
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -130,11 +132,19 @@ def _setup_full_stack(api, set_factory, commit_set):
 # ---------------------------------------------------------------------------
 
 
+# Per-set tables collapse by default (3.3.3). Every interaction in this
+# file targets SET_NAME, so each nav helper expands that set best-effort
+# (the section only exists once the set has an item — required=False so a
+# nav before anything is created is a no-op). Helpers that wait for an
+# item to appear *after* nav (the monitor pollers) expand again in-loop.
+
+
 def _nav_scheduler(e2e_page):
     """Click Scheduler in the sidebar and return the content frame locator."""
     e2e_page.locator('[data-testid="menu-link-scriptlet_scheduler"]').click()
     frame = e2e_page.frame_locator('[data-testid="content-frame"]')
     frame.locator('[data-testid="scheduler-navbar"]').wait_for(state="visible", timeout=10_000)
+    expand_set(frame, "scheduler", SET_NAME, timeout=6000, required=False)
     return frame
 
 
@@ -143,6 +153,7 @@ def _nav_monitor(e2e_page):
     e2e_page.locator('[data-testid="menu-link-scriptlet_monitor"]').click()
     frame = e2e_page.frame_locator('[data-testid="content-frame"]')
     frame.locator('[data-testid="monitor-navbar"]').wait_for(state="visible", timeout=10_000)
+    expand_set(frame, "monitor", SET_NAME, timeout=6000, required=False)
     return frame
 
 
@@ -151,6 +162,7 @@ def _nav_manager(e2e_page):
     e2e_page.locator('[data-testid="menu-link-scriptlet_manager"]').click()
     frame = e2e_page.frame_locator('[data-testid="content-frame"]')
     frame.locator('[data-testid="manager-navbar"]').wait_for(state="visible", timeout=10_000)
+    expand_set(frame, "manager", SET_NAME, timeout=6000, required=False)
     return frame
 
 
@@ -179,8 +191,9 @@ def _create_service_schedule_via_ui(e2e_page):
         state="visible", timeout=5_000
     )
 
-    frame.locator('[data-testid="scheduler-create-set"]').fill(SET_NAME)
-    frame.locator('[data-testid="scheduler-create-name"]').fill(SVC_NAME)
+    # Set + name are dropdowns (the scriptlet must already exist).
+    frame.locator('[data-testid="scheduler-create-set"]').select_option(SET_NAME)
+    frame.locator('[data-testid="scheduler-create-name"]').select_option(SVC_NAME)
     # Leave schedule empty → service kind at run time.
 
     frame.locator('[data-testid="scheduler-create-submit"]').click()
@@ -188,6 +201,9 @@ def _create_service_schedule_via_ui(e2e_page):
         state="hidden", timeout=5_000
     )
 
+    # The set section is (re)created collapsed on the post-submit refresh —
+    # expand it before reading the new row.
+    expand_set(frame, "scheduler", SET_NAME)
     row = frame.locator('[data-testid^="schedule-row-"]').first
     row.wait_for(state="visible", timeout=5_000)
     sched_id = row.get_attribute("data-id")
@@ -223,6 +239,9 @@ def _wait_for_running_job_in_monitor(frame, timeout=30):
     while time.time() < deadline:
         frame.locator('[data-testid="monitor-refresh"]').click()
         time.sleep(1)
+        # The job appears in SET_NAME's section after nav; expand it so
+        # inner_text() (layout-aware — empty for collapsed rows) works.
+        expand_set(frame, "monitor", SET_NAME, timeout=2000, required=False)
         rows = frame.locator('[data-testid^="job-row-"]')
         for i in range(rows.count()):
             row = rows.nth(i)
@@ -240,6 +259,7 @@ def _wait_for_terminal_job_in_monitor(frame, job_id, timeout=30):
     while time.time() < deadline:
         frame.locator('[data-testid="monitor-refresh"]').click()
         time.sleep(1)
+        expand_set(frame, "monitor", SET_NAME, timeout=2000, required=False)
         if frame.locator(f'[data-testid="job-delete-{job_id}"]').is_visible():
             return
     pytest.fail(f"Job {job_id} did not reach terminal state within {timeout}s")
@@ -418,8 +438,9 @@ def _cleanup_set(e2e_page):
 
     row = frame.locator(f'[data-testid="set-row-{SET_NAME}"]')
     if row.count() > 0 and row.is_visible():
-        e2e_page.once("dialog", lambda d: d.accept())
         frame.locator(f'[data-testid="set-remove-{SET_NAME}"]').click()
+        # Remove is confirmed via a modal (not a JS confirm dialog).
+        frame.locator('[data-testid="sets-remove-submit"]').click()
         # The set_remove task blocks on the bootstrap lock if a per-set venv
         # pip install is still running (runner's per-job-spawn refresh). Cold
         # devpi cache + aarch64 wheels can push that to ~30s.
