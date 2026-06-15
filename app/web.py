@@ -332,6 +332,16 @@ async def controller(set: str, name: str):
                 --bs-table-bg: transparent;
                 --bs-table-border-color: rgba(255, 255, 255, 0.15);
             }
+            /* Below the navbar-expand-md breakpoint the controller toolbar
+               collapses; lay its icons out in a single horizontally-scrollable
+               row instead of stacking them vertically. */
+            @media (max-width: 767.98px) {
+                .navbar-collapse .navbar-nav {
+                    flex-direction: row;
+                    flex-wrap: nowrap;
+                    overflow-x: auto;
+                }
+            }
         </style>
 
         <script>

@@ -12,6 +12,17 @@
             [data-bs-toggle="collapse"][aria-expanded="true"] .set-chevron { transform: rotate(90deg); }
             .set-card-header .badge { font-weight: normal; }
             .ace-param { min-height: 120px; border: 1px solid var(--bs-border-color); border-radius: .375rem; }
+
+            /* Below the navbar-expand-md breakpoint the toolbar collapses;
+               lay its icons out in a single horizontally-scrollable row
+               instead of stacking them vertically. */
+            @media (max-width: 767.98px) {
+                .navbar-collapse .navbar-nav {
+                    flex-direction: row;
+                    flex-wrap: nowrap;
+                    overflow-x: auto;
+                }
+            }
         </style>
 
         <script src="/files/js/jquery.min.js"></script>

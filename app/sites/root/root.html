@@ -128,6 +128,33 @@
                 padding-left: 1rem;
                 margin: 0;
             }
+
+            /* Collapsible sidebar. The aside is a plain Bootstrap offcanvas.
+               At >=lg it normally renders statically in-flow (the rail); once
+               the user collapses it (body.sidebar-collapsed) it falls back to
+               real offcanvas behaviour — the mobile presentation — and the top
+               bar appears so the brand-icon button can reopen it as an overlay. */
+            @media (min-width: 992px) {
+                body:not(.sidebar-collapsed) #sidebarOffcanvas {
+                    visibility: visible !important;
+                    transform: none !important;
+                    position: relative;
+                    z-index: auto;
+                    /* Drop the offcanvas's 1px translucent right border —
+                       it shows as a white seam against the content in the
+                       pinned rail (offcanvas-lg zeroes it the same way). */
+                    --bs-offcanvas-border-width: 0;
+                    border-right: 0;
+                }
+                body.sidebar-collapsed [data-testid="mobile-topbar"] {
+                    display: flex !important;
+                }
+            }
+            /* The topbar toggle shows the brand icon, not the hamburger. */
+            [data-testid="sidebar-toggle"] .pyops-brand-icon {
+                width: 1.75rem;
+                height: 1.75rem;
+            }
         </style>
 
         <script>
@@ -163,6 +190,19 @@
                 `;
             }
 
+            // Collapse / expand the desktop sidebar. Collapsed, the layout
+            // falls back to the mobile presentation (top bar + offcanvas
+            // overlay); the state is remembered across reloads. On either
+            // transition, clear any lingering offcanvas 'show'/backdrop.
+            function toggleSidebarCollapsed() {
+                const collapsed = !document.body.classList.contains('sidebar-collapsed');
+                document.body.classList.toggle('sidebar-collapsed', collapsed);
+                try { localStorage.setItem('pyops.sidebarCollapsed', collapsed ? '1' : '0'); } catch (e) {}
+                const el = document.getElementById('sidebarOffcanvas');
+                const inst = bootstrap.Offcanvas.getInstance(el);
+                if (inst && el.classList.contains('show')) inst.hide();
+            }
+
             function onMenuItemClick(id) {
                 history.replaceState(id, '', '/?goto=' + id);
                 setActive(id);
@@ -193,6 +233,12 @@
             }
 
             $(document).ready(() => {
+                // Restore the remembered sidebar-collapsed state.
+                try {
+                    if (localStorage.getItem('pyops.sidebarCollapsed') === '1')
+                        document.body.classList.add('sidebar-collapsed');
+                } catch (e) {}
+
                 // Snapshot whether the URL carried a goto so we don't
                 // double-click below: setActive() flips the global `goto`
                 // when an item is clicked, which would otherwise make the
@@ -230,20 +276,17 @@
     <body class="d-flex flex-column h-100">
         <nav class="navbar navbar-dark bg-dark d-lg-none flex-shrink-0" data-testid="mobile-topbar">
             <div class="container-fluid">
-                <button class="navbar-toggler border-0" type="button"
+                <button class="navbar-toggler border-0 d-flex align-items-center p-1" type="button"
                         data-bs-toggle="offcanvas" data-bs-target="#sidebarOffcanvas"
                         aria-controls="sidebarOffcanvas" aria-label="Toggle navigation"
                         title="Show the navigation sidebar" data-testid="sidebar-toggle">
-                    <span class="navbar-toggler-icon"></span>
-                </button>
-                <span class="navbar-brand d-flex align-items-center gap-2 mb-0">
                     {{BRAND_ICON}}
-                    <span class="fs-5">{{BRAND_TITLE}}</span>
-                </span>
+                </button>
+                <span class="navbar-brand mb-0 fs-5">{{BRAND_TITLE}}</span>
             </div>
         </nav>
         <div class="d-flex flex-grow-1 overflow-hidden">
-            <aside class="bg-dark text-light offcanvas-lg offcanvas-start flex-shrink-0 d-flex flex-column"
+            <aside class="bg-dark text-light offcanvas offcanvas-start flex-shrink-0 d-flex flex-column"
                    tabindex="-1" id="sidebarOffcanvas"
                    aria-labelledby="sidebarOffcanvasLabel" data-testid="sidebar">
                 <div class="pyops-brand d-flex align-items-center justify-content-between">
@@ -252,9 +295,17 @@
                         {{BRAND_ICON}}
                         <span>{{BRAND_TITLE}}</span>
                     </span>
-                    <button type="button" class="btn-close btn-close-white d-lg-none"
-                            data-bs-dismiss="offcanvas" data-bs-target="#sidebarOffcanvas"
-                            title="Close the sidebar" aria-label="Close"></button>
+                    <div class="d-flex align-items-center gap-1">
+                        <button id="sidebar-collapse-btn" type="button"
+                                class="btn btn-sm btn-dark text-light d-none d-lg-inline-flex align-items-center p-1"
+                                onclick="toggleSidebarCollapsed()"
+                                title="Collapse / expand the sidebar" data-testid="sidebar-collapse">
+                            <span class="material-icons-round">menu_open</span>
+                        </button>
+                        <button type="button" class="btn-close btn-close-white d-lg-none"
+                                data-bs-dismiss="offcanvas" data-bs-target="#sidebarOffcanvas"
+                                title="Close the sidebar" aria-label="Close"></button>
+                    </div>
                 </div>
                 <nav id="menu" class="flex-grow-1"
                      data-testid="sidebar-menu" aria-label="Main navigation"></nav>

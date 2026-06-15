@@ -7,6 +7,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 from 3.0.0 onward.
 
+## [3.3.4] — 2026-06-15
+
+### Changed
+- **Sidebar is collapsible.** A button collapses the desktop navigation
+  rail; collapsed, the layout falls back to the mobile presentation (top
+  bar + offcanvas overlay) and the state is remembered across reloads.
+  The top-bar toggle now shows the brand icon instead of the hamburger
+  glyph.
+- **Collapsed view toolbars scroll horizontally.** Below the
+  `navbar-expand-md` breakpoint, the Manager / Monitor / Scheduler and
+  controller-view toolbars lay their icons out in a single
+  horizontally-scrollable row instead of stacking them vertically.
+
 ## [3.3.3] — 2026-06-10
 
 ### Changed
