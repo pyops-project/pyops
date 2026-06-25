@@ -13,9 +13,11 @@ RUN DEBIAN_FRONTEND=noninteractive apt -y install \
         python3-sqlalchemy python3-sqlalchemy-utils python3-croniter python3-zipstream-ng && \
     apt clean
 
-# Run pyops — and every scriptlet job it spawns — as a non-root user
-# (uid/gid 1000), not root. `-m` gives pyops a writable $HOME for the
-# pip cache, git config and credential helper.
+# pyops — and every scriptlet job it spawns — runs as a non-root user
+# (uid/gid 1000). `-m` gives pyops a writable $HOME for the pip cache, git
+# config and credential helper. The container itself still STARTS as root
+# (no USER line) so entrypoint.sh can run the deployment's init.sh (package
+# installs) and fix the data-volume ownership before dropping to pyops.
 RUN groupadd -g 1000 pyops && \
     useradd -u 1000 -g 1000 -m -s /bin/bash pyops
 
@@ -24,13 +26,13 @@ RUN mkdir -p /opt/pyops/app /opt/pyops/data /opt/pyops/etc /opt/pyops/venv
 COPY app /opt/pyops/app
 COPY VERSION /opt/pyops/
 COPY run.sh /opt/pyops/
+COPY entrypoint.sh /opt/pyops/
 
 # App code stays root-owned and read-only (a job can't rewrite pyops
-# itself); only the runtime-writable tree is owned by pyops. A
-# bind-mounted host data volume must be chowned to 1000:1000 — see the
-# 3.3.3 migration note in CHANGELOG.md.
-RUN chown -R pyops:pyops /opt/pyops/data /opt/pyops/etc /opt/pyops/venv
+# itself); only the runtime-writable tree is pyops-owned. entrypoint.sh
+# re-chowns the data tree at boot, so a root-owned bind mount works with
+# no manual migration.
+RUN chown -R pyops:pyops /opt/pyops/data /opt/pyops/etc /opt/pyops/venv && \
+    chmod +x /opt/pyops/run.sh /opt/pyops/entrypoint.sh
 
-USER pyops
-
-CMD [ "/opt/pyops/run.sh" ]
+CMD [ "/opt/pyops/entrypoint.sh" ]

@@ -2,7 +2,9 @@
 
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 
-[ -f "$DIR/init.sh" ] && . "$DIR/init.sh"
+# NB: init.sh + privilege drop happen in entrypoint.sh (as root) before
+# this runs. run.sh just launches gunicorn as the already-dropped user, so
+# it stays usable on its own (dev / tests run it directly).
 
 cd $DIR
 # `exec` replaces this bash with the gunicorn process. Without exec, bash

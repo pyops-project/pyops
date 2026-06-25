@@ -7,6 +7,26 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 from 3.0.0 onward.
 
+## [3.3.5] — 2026-06-17
+
+### Fixed
+- **Container start-up could no longer install packages (regression from
+  3.3.3).** 3.3.3 set `USER pyops`, so the whole container ran
+  unprivileged and the deployment's `init.sh` hook (sourced at boot)
+  could no longer `apt`/`pip install`. The container now starts as root
+  via a new `entrypoint.sh`: it sources `init.sh` (privileged package
+  setup), `chown`s the data tree to `pyops`, then drops to the
+  unprivileged `pyops` user (uid/gid 1000) with `setpriv` and execs
+  `run.sh` → gunicorn. pyops and every scriptlet job still run non-root;
+  privileged start-up works again. Because the entrypoint now chowns the
+  data tree on boot, the manual `chown -R 1000:1000` migration noted in
+  3.3.3 is no longer required. `entrypoint.sh` also runs under `set -e`
+  with an `ERR` trap, so a failing privileged step in `init.sh` (e.g. an
+  `apt install` that errors) aborts the boot with a clear message in the
+  container log instead of being swallowed — otherwise gunicorn would
+  start anyway and the missing package would only surface later as an
+  import error inside a job.
+
 ## [3.3.4] — 2026-06-15
 
 ### Changed
