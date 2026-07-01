@@ -142,6 +142,17 @@ def _dirs(e2e_env, set_name):
     }
 
 
+def _local_git_config(git_dir, key):
+    """Read a repo-local git config value (empty string when unset).
+    Reading --local (not the effective value) keeps identity assertions
+    independent of the host's global git config."""
+    out = subprocess.run(
+        ["git", "-C", str(git_dir), "config", "--local", key],
+        capture_output=True, text=True,
+    )
+    return out.stdout.strip()
+
+
 def _create_user_scriptlet(api, set_name, name, type_, code):
     """Bypass the inventory API's set-existence check: write the scriptlet
     file directly. This keeps update_deps tests free of API contract
@@ -206,6 +217,35 @@ class TestSetsLifecycleViaController:
         assert d["git"].is_dir()
         # venv + pkg are created lazily on first job spawn in the set;
         # ensure_set_dirs runs from runner.py before each Popen.
+
+    def test_create_persists_default_git_identity(self, api, pyops_server, e2e_env, set_factory):
+        """With no identity fields supplied, create persists a *local*
+        committer identity so the initial commit succeeds even without a
+        global git config (the container case, where pyops has none). We
+        read --local so the assertion is independent of the host's global
+        config."""
+        _service_ready(api)
+        _assert_done(_run(api, "POST", "/controller/pyops/sets/create", {"name": "lc_ident_def"}))
+        git_dir = _dirs(e2e_env, "lc_ident_def")["git"]
+        assert _local_git_config(git_dir, "user.name") == "pyops"
+        assert _local_git_config(git_dir, "user.email") == "pyops@localhost"
+        # The initial commit landed (would have failed without an identity).
+        head = subprocess.run(["git", "-C", str(git_dir), "rev-parse", "HEAD"],
+                              capture_output=True, text=True)
+        assert head.returncode == 0 and head.stdout.strip()
+
+    def test_create_persists_supplied_git_identity(self, api, pyops_server, e2e_env, set_factory):
+        """Supplied Git Name / Git Email are persisted as the set's local
+        committer identity, mirroring the clone dialog."""
+        _service_ready(api)
+        _assert_done(_run(api, "POST", "/controller/pyops/sets/create", {
+            "name": "lc_ident_set",
+            "git_name": "Alice Dev",
+            "git_email": "alice@example.com",
+        }))
+        git_dir = _dirs(e2e_env, "lc_ident_set")["git"]
+        assert _local_git_config(git_dir, "user.name") == "Alice Dev"
+        assert _local_git_config(git_dir, "user.email") == "alice@example.com"
 
     def test_remove_deletes_all_three_dirs(self, api, pyops_server, e2e_env, set_factory):
         _service_ready(api)

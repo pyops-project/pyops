@@ -18,6 +18,15 @@ from 3.0.0 onward.
   permission errors. `entrypoint.sh` now exports `HOME=/home/pyops`
   (plus `USER`/`LOGNAME`) before the `setpriv` hand-off, pointing at the
   pyops-owned home created by `useradd -m`.
+- **Creating a local set failed with no git identity configured.** The
+  Create Set task makes the repo's initial commit itself, which `git`
+  aborts ("Please tell me who you are") when no committer identity is
+  set — the container case, where pyops runs unprivileged with no global
+  git config. The Create dialog now carries the same optional Git Name /
+  Git Email fields as Clone, and the task persists them (or a `pyops` /
+  `pyops@localhost` fallback) as the set's local identity before the
+  initial commit, so create — and any later commit-drafts on that
+  locally-created set — succeeds.
 
 ## [3.3.5] — 2026-06-17
 
