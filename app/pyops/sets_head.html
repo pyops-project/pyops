@@ -104,8 +104,13 @@
             document.getElementById("createModal-error").textContent = "Please provide name";
             return;
         }
+        const params = {
+            name,
+            git_name: document.getElementById("createModal-git_name").value,
+            git_email: document.getElementById("createModal-git_email").value,
+        };
         bootstrap.Modal.getInstance(document.getElementById("createModal")).hide();
-        runSetsJob("/controller/{{SET}}/{{NAME}}/create", "POST", { name }, `Create — ${name}`)
+        runSetsJob("/controller/{{SET}}/{{NAME}}/create", "POST", params, `Create — ${name}`)
             .then(() => refreshList());
     }
 
@@ -218,7 +223,9 @@
     }
 
     function onCreateOpen() {
-        document.getElementById("createModal-name").value = "";
+        ["name", "git_name", "git_email"].forEach((k) => {
+            document.getElementById(`createModal-${k}`).value = "";
+        });
         document.getElementById("createModal-error").textContent = "";
         bootstrap.Modal.getOrCreateInstance(document.getElementById("createModal")).show();
     }

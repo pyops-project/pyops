@@ -130,7 +130,11 @@ def handle_request(msg):
         name = body.get("name")
         if not name:
             return {"error": "name is required"}, 400
-        return _enqueue("set_create", {"name": name}, user)
+        return _enqueue("set_create", {
+            "name": name,
+            "git_name": body.get("git_name", ""),
+            "git_email": body.get("git_email", ""),
+        }, user)
 
     if path.startswith("/pull/") and type_ == "POST":
         name = path[len("/pull/"):]

@@ -7,6 +7,27 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 from 3.0.0 onward.
 
+## [3.3.6] — 2026-07-01
+
+### Fixed
+- **Container ran as pyops but with `HOME=/root` (regression from 3.3.5).**
+  3.3.5 drops privileges with `setpriv`, which changes the uid/gid but
+  does not reset the environment, so root's `HOME=/root` leaked into the
+  pyops process. pyops (uid 1000) cannot write to `/root`, so pip's
+  cache, the git config and the credential helper all failed with
+  permission errors. `entrypoint.sh` now exports `HOME=/home/pyops`
+  (plus `USER`/`LOGNAME`) before the `setpriv` hand-off, pointing at the
+  pyops-owned home created by `useradd -m`.
+- **Creating a local set failed with no git identity configured.** The
+  Create Set task makes the repo's initial commit itself, which `git`
+  aborts ("Please tell me who you are") when no committer identity is
+  set — the container case, where pyops runs unprivileged with no global
+  git config. The Create dialog now carries the same optional Git Name /
+  Git Email fields as Clone, and the task persists them (or a `pyops` /
+  `pyops@localhost` fallback) as the set's local identity before the
+  initial commit, so create — and any later commit-drafts on that
+  locally-created set — succeeds.
+
 ## [3.3.5] — 2026-06-17
 
 ### Fixed
