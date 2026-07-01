@@ -7,6 +7,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 from 3.0.0 onward.
 
+## [3.3.6] — 2026-07-01
+
+### Fixed
+- **Container ran as pyops but with `HOME=/root` (regression from 3.3.5).**
+  3.3.5 drops privileges with `setpriv`, which changes the uid/gid but
+  does not reset the environment, so root's `HOME=/root` leaked into the
+  pyops process. pyops (uid 1000) cannot write to `/root`, so pip's
+  cache, the git config and the credential helper all failed with
+  permission errors. `entrypoint.sh` now exports `HOME=/home/pyops`
+  (plus `USER`/`LOGNAME`) before the `setpriv` hand-off, pointing at the
+  pyops-owned home created by `useradd -m`.
+
 ## [3.3.5] — 2026-06-17
 
 ### Fixed

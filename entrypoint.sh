@@ -29,6 +29,15 @@ fi
 # typically root-owned on first boot. Harmless once already owned.
 chown -R pyops:pyops "$DIR/data" "$DIR/etc" "$DIR/venv" 2>/dev/null || true
 
+# setpriv changes the uid/gid but does NOT reset the environment, so root's
+# HOME=/root would otherwise leak into the pyops process — and pyops
+# (uid 1000) cannot write to /root, which breaks pip's cache, the git config
+# and the credential helper. Point HOME (and USER/LOGNAME) at pyops's own
+# home, created writable by `useradd -m` and owned by uid 1000.
+export HOME=/home/pyops
+export USER=pyops
+export LOGNAME=pyops
+
 # Drop privileges and hand off to run.sh, which `exec`s gunicorn so it stays
 # PID 1 and receives docker's SIGTERM for the graceful shutdown chain.
 exec setpriv --reuid=pyops --regid=pyops --init-groups "$DIR/run.sh"
