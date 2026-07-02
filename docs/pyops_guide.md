@@ -15,7 +15,8 @@ PyOps is an execution platform for Python operations scriptlets, licensed under 
     "pyops.autoRefreshInterval": 10,
     "pyops.authMode": "basic",      // "basic" (Basic Auth, via an auth proxy) or "x-user" (send X-User directly, no password)
     "pyops.username": "anonymous",  // Basic Auth username, or the X-User identity in x-user mode
-    "pyops.excludedSets": []        // Sets to hide from the manager tree view
+    "pyops.excludedSets": [],       // Sets to hide from the manager tree view (blacklist)
+    "pyops.includedSets": []        // If non-empty, only these sets are shown and excludedSets is ignored (whitelist)
   }
   ```
 - **Auth**: `basic` (default) — set `pyops.username`; the extension prompts for the password on first API call (stored securely in workspace state). `x-user` — the extension sends `X-User: <username or "vsix">` with no password, for direct connections to a server that trusts the header (dev / no auth proxy).

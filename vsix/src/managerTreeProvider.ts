@@ -256,6 +256,21 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
         return vscode.workspace.getConfiguration('pyops').get('excludedSets', []) as string[];
     }
 
+    private getIncludedSets(): string[] {
+        return vscode.workspace.getConfiguration('pyops').get('includedSets', []) as string[];
+    }
+
+    // Whitelist wins: if `includedSets` is non-empty, show only those sets and
+    // ignore `excludedSets`; otherwise fall back to the `excludedSets` blacklist.
+    private filterSets(scriptlets: ScriptletInfo[]): ScriptletInfo[] {
+        const includedSets = this.getIncludedSets();
+        if (includedSets.length > 0) {
+            return scriptlets.filter(s => includedSets.includes(s.set));
+        }
+        const excludedSets = this.getExcludedSets();
+        return scriptlets.filter(s => !excludedSets.includes(s.set));
+    }
+
 
     async downloadScriptlet(scriptletItem: ScriptletTreeItem): Promise<void> {
         if (!scriptletItem.set || !scriptletItem.scriptletName || !scriptletItem.scriptletType) return;
@@ -301,9 +316,7 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
         const remoteKeys = new Set(remoteScriptlets.map(s => `${s.set}-${s.name}-${s.type}`));
         const localScriptlets = await this.scanLocalScriptlets();
         const localOnlyScriptlets = localScriptlets.filter(l => !remoteKeys.has(`${l.set}-${l.name}-${l.type}`));
-        let allScriptlets = [...remoteScriptlets, ...localOnlyScriptlets];
-        const excludedSets = this.getExcludedSets();
-        allScriptlets = allScriptlets.filter(s => !excludedSets.includes(s.set));
+        const allScriptlets = this.filterSets([...remoteScriptlets, ...localOnlyScriptlets]);
         this._scriptlets = allScriptlets;
         this._syncStatus.clear();
         const remoteOnly = allScriptlets.filter(s => !s.isLocalOnly);

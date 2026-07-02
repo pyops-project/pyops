@@ -312,7 +312,15 @@
             "type": "string"
           },
           "default": [],
-          "description": "List of set names to exclude from the Manager tree view"
+          "description": "Blacklist of set names to exclude from the Manager tree view. Ignored when 'includedSets' is non-empty."
+        },
+        "pyops.includedSets": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Whitelist of set names to show in the Manager tree view. When non-empty, only these sets are shown and 'excludedSets' is ignored. When empty, 'excludedSets' applies."
         },
         "pyops.debugPorts": {
           "type": "array",

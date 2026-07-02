@@ -56,7 +56,8 @@ flowchart TD
 | `useRemoteLinter` | boolean | true | Enable Jedi completion via server |
 | `localPyopsDir` | string | `pyops` | Workspace-relative path to local scriptlet directory |
 | `autoRefreshInterval` | number | 10 | Tree auto-refresh interval in seconds |
-| `excludedSets` | string[] | `[]` | Sets excluded from Manager tree |
+| `excludedSets` | string[] | `[]` | Blacklist of sets hidden from the Manager tree. Ignored when `includedSets` is non-empty |
+| `includedSets` | string[] | `[]` | Whitelist of sets shown in the Manager tree. Non-empty → only these are shown and `excludedSets` is ignored; empty → `excludedSets` applies |
 | `debugPorts` | number[] | `[5678]` | Per-VSCode-session pool of TCP ports leased one-per-concurrent-debug-job by `DebugService` |
 
 `hasValidConfig()` (in `apiClient.ts`) returns false if `serverUrl` is empty/undefined — it does **not** check any other config keys. Auth is optional and `authMode`-dependent:
@@ -75,7 +76,7 @@ Displays scriptlet sets with their scriptlets. Each refresh:
 
 1. `fetchScriptlets()` — `GET /scriptlet/inventory/list` → `ScriptletInfo[]`
 2. `scanLocalScriptlets()` — walks `{localPyopsDir}/pyops/{set}/{type}/` for files matching `inferExt(type)`; marks `isLocalOnly: true`
-3. Merges remote and local lists; applies `excludedSets` filter
+3. Merges remote and local lists; applies the set filter (`filterSets`): if `includedSets` is non-empty, keep only those sets (whitelist wins, `excludedSets` ignored); otherwise drop sets in `excludedSets`
 4. Downloads remote-only scriptlets to `{localPyopsDir}/pyops/{set}/{type}/{name}{ext}`
 5. Checks `has_unstaged_changes` per scriptlet to set sync status icon
 

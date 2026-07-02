@@ -348,6 +348,52 @@ describe('ManagerTreeDataProvider', () => {
         { set: 'includedSet', name: 'script1', type: 'task' },
       ]);
     });
+
+    it('should show only whitelisted sets when includedSets is set', async () => {
+      require('./utils/helpers').setupConfigMock({includedSets: ['keep']});
+      mockApiClient.fetch.mockResolvedValue({
+        ok: true,
+        json: jest.fn().mockResolvedValue([
+          { set: 'keep', name: 'script1', type: 'task' },
+          { set: 'drop', name: 'script2', type: 'task' },
+        ]),
+      });
+      await provider.refresh();
+      expect((provider as any)._scriptlets).toEqual([
+        { set: 'keep', name: 'script1', type: 'task' },
+      ]);
+    });
+
+    it('should ignore excludedSets when includedSets is non-empty', async () => {
+      require('./utils/helpers').setupConfigMock({includedSets: ['keep'], excludedSets: ['keep']});
+      mockApiClient.fetch.mockResolvedValue({
+        ok: true,
+        json: jest.fn().mockResolvedValue([
+          { set: 'keep', name: 'script1', type: 'task' },
+          { set: 'other', name: 'script2', type: 'task' },
+        ]),
+      });
+      await provider.refresh();
+      // 'keep' appears despite being in excludedSets; 'other' is not whitelisted.
+      expect((provider as any)._scriptlets).toEqual([
+        { set: 'keep', name: 'script1', type: 'task' },
+      ]);
+    });
+
+    it('should fall back to excludedSets when includedSets is empty', async () => {
+      require('./utils/helpers').setupConfigMock({includedSets: [], excludedSets: ['drop']});
+      mockApiClient.fetch.mockResolvedValue({
+        ok: true,
+        json: jest.fn().mockResolvedValue([
+          { set: 'keep', name: 'script1', type: 'task' },
+          { set: 'drop', name: 'script2', type: 'task' },
+        ]),
+      });
+      await provider.refresh();
+      expect((provider as any)._scriptlets).toEqual([
+        { set: 'keep', name: 'script1', type: 'task' },
+      ]);
+    });
   });
 
   describe('getChildren with empty workspaceFolders array', () => {

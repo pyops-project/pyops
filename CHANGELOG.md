@@ -20,6 +20,11 @@ from 3.0.0 onward.
   behaviour. In x-user mode the password prompt is skipped and a 401 is
   reported as a plain connection failure instead of triggering a
   password re-prompt.
+- **VSIX: set whitelist for the Manager tree.** A new `pyops.includedSets`
+  setting complements the existing `pyops.excludedSets` blacklist: when
+  `includedSets` is non-empty the Manager tree shows only those sets and
+  the blacklist is ignored; when it is empty the `excludedSets` blacklist
+  applies as before.
 
 ## [3.3.6] — 2026-07-01
 
