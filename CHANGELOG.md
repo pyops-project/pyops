@@ -7,6 +7,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 from 3.0.0 onward.
 
+## [3.3.7] — 2026-07-02
+
+### Added
+- **VSIX: X-User authentication mode.** A new `pyops.authMode` setting
+  switches between `basic` (HTTP Basic Auth, for deployments where an
+  auth proxy in front of PyOps validates credentials and injects the
+  `X-User` header) and `x-user` (the extension sends `X-User: <username
+  or "vsix">` directly, with no Authorization header and no password).
+  The x-user pathway targets direct connections to a PyOps server that
+  trusts the header (dev / no proxy), mirroring pyopsctl's api-key-absent
+  behaviour. In x-user mode the password prompt is skipped and a 401 is
+  reported as a plain connection failure instead of triggering a
+  password re-prompt.
+
 ## [3.3.6] — 2026-07-01
 
 ### Fixed

@@ -57,6 +57,20 @@ describe('ApiClient', () => {
       const headers = await apiClient.getHeaders();
       expect(headers).toEqual({});
     });
+
+    it('sends X-User (from username) and no Authorization in x-user mode', async () => {
+      require('./utils/helpers').setupConfigMock({authMode: 'x-user', username: 'alice'});
+      const headers = await apiClient.getHeaders();
+      expect(headers).toEqual({ 'X-User': 'alice' });
+      expect(context.secrets.get).not.toHaveBeenCalled();
+    });
+
+    it('falls back to DEFAULT_X_USER when username is unset in x-user mode', async () => {
+      require('./utils/helpers').setupConfigMock({authMode: 'x-user', username: undefined});
+      const { DEFAULT_X_USER } = require('../src/apiClient');
+      const headers = await apiClient.getHeaders();
+      expect(headers).toEqual({ 'X-User': DEFAULT_X_USER });
+    });
   });
 
   describe('hasValidConfig', () => {

@@ -36,7 +36,8 @@ export class ConnectionStatusManager {
                     isValid = true;
                     this.outputChannel.appendLine(`Status: Connected to ${serverUrl}`);
                 } else {
-                    if (response.status === 401) {
+                    const authMode = vscode.workspace.getConfiguration('pyops').get('authMode', 'basic') as string;
+                    if (response.status === 401 && authMode !== 'x-user') {
                         this.outputChannel.appendLine('[AUTH] Invalid credentials (401), clearing stored password and prompting for new one.');
                         await this.context.secrets.delete('pyops.password');
                         await AuthService.setupAuth(this.context, this.outputChannel);

@@ -50,7 +50,8 @@ flowchart TD
 | Key | Type | Default | Purpose |
 |-----|------|---------|---------|
 | `serverUrl` | string | `http://localhost:8000` | PyOps server base URL |
-| `username` | string | — | Basic Auth username (optional) |
+| `username` | string | — | Basic Auth username (basic mode) or the X-User identity sent to the server (x-user mode) |
+| `authMode` | enum `basic`\|`x-user` | `basic` | How the extension authenticates. `basic` → `Authorization: Basic base64(username:password)` (an auth proxy in front of PyOps validates and injects `X-User`). `x-user` → `X-User: <username or "vsix">` sent directly, no Authorization, no password (direct connection to a server that trusts the header). |
 | `timeout` | number | 30 | HTTP request timeout in seconds |
 | `useRemoteLinter` | boolean | true | Enable Jedi completion via server |
 | `localPyopsDir` | string | `pyops` | Workspace-relative path to local scriptlet directory |
@@ -58,7 +59,9 @@ flowchart TD
 | `excludedSets` | string[] | `[]` | Sets excluded from Manager tree |
 | `debugPorts` | number[] | `[5678]` | Per-VSCode-session pool of TCP ports leased one-per-concurrent-debug-job by `DebugService` |
 
-`hasValidConfig()` (in `apiClient.ts`) returns false if `serverUrl` is empty/undefined — it does **not** check any other config keys. Auth is optional: `getHeaders()` returns Basic Auth header only if both `username` and a stored password exist.
+`hasValidConfig()` (in `apiClient.ts`) returns false if `serverUrl` is empty/undefined — it does **not** check any other config keys. Auth is optional and `authMode`-dependent:
+- **`basic`** (default): `getHeaders()` returns a Basic Auth header only if both `username` and a stored password exist. `AuthService.setupAuth()` prompts for and stores the password; `ConnectionStatusManager` clears the stored password and re-prompts on a 401 then retries once.
+- **`x-user`**: `getHeaders()` returns `{ 'X-User': username || DEFAULT_X_USER }` (`DEFAULT_X_USER = 'vsix'`, exported from `apiClient.ts`, mirroring pyopsctl's `'pyopsctl'`); no Authorization header and the stored password is never read. `AuthService.setupAuth()` is a no-op (no password prompt). `ConnectionStatusManager` treats a 401 as a plain failure — no password clear, no re-prompt, no retry — since there is no password to fix. This is the direct-connection pathway to a PyOps server that trusts `X-User` (dev / no auth proxy), matching pyopsctl's `api_key`-absent branch (`ctl/pyopsctl/client.py`).
 
 `ApiClient.fetch(path, init?)` is the primary HTTP method: prepends `getServerUrl()` to the path, merges auth headers from `getHeaders()` with any headers in `init`, and delegates to `global.fetch()`. `fetchJson<T>()` adds response-ok validation and JSON parsing. All services (`DebugService`, `JobService`, `ScriptletService`, `DebugOutputMonitor`, `ConnectionStatusManager`, `CreateScriptletCommand`) and tree providers use `apiClient.fetch()` — no service builds its own URL/header combination.
 

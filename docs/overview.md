@@ -403,7 +403,7 @@ graph TD
 
 ### Configuration
 
-VSCode workspace settings set serverUrl, username, password (state), localPyopsDir, and autoRefreshInterval. Auth is optional (Basic if username/password set).
+VSCode workspace settings set serverUrl, authMode, username, password (state), localPyopsDir, and autoRefreshInterval. Auth is optional: `basic` mode sends Basic Auth if username/password are set; `x-user` mode sends `X-User: <username or "vsix">` with no password.
 
 ### Functionality
 
@@ -411,7 +411,7 @@ VSCode workspace settings set serverUrl, username, password (state), localPyopsD
 
 `src/services/AuthService.ts` handles authentication setup for Basic Auth:
 
-- Prompts for password if username is configured but no password is stored.
+- Prompts for password if username is configured but no password is stored (`basic` mode only; a no-op in `x-user` mode).
 - Stores password securely in workspace state.
 - Unit tests in `tests/services/AuthService.test.ts`.
 

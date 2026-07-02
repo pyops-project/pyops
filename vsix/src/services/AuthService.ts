@@ -3,6 +3,11 @@ import * as vscode from 'vscode';
 export class AuthService {
     static async setupAuth(context: vscode.ExtensionContext, outputChannel: vscode.OutputChannel): Promise<void> {
         const pyopsConfig = vscode.workspace.getConfiguration('pyops');
+        const authMode = pyopsConfig.get('authMode', 'basic') as string;
+        if (authMode === 'x-user') {
+            outputChannel.appendLine('Auth mode: X-User (direct); no password required');
+            return;
+        }
         const username = pyopsConfig.get('username') as string;
         let password = await context.secrets.get('pyops.password');
         if (username && !password) {

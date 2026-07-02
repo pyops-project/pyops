@@ -49,6 +49,18 @@ describe('AuthService', () => {
       expect(mockOutputChannel.appendLine).not.toHaveBeenCalled();
     });
 
+    it('skips the password prompt in x-user mode', async () => {
+      require('../utils/helpers').setupConfigMock({authMode: 'x-user'});
+      mockContext.secrets.get.mockResolvedValue(undefined);
+
+      await AuthService.setupAuth(mockContext, mockOutputChannel);
+
+      expect(mockVscode.window.showInputBox).not.toHaveBeenCalled();
+      expect(mockContext.secrets.get).not.toHaveBeenCalled();
+      expect(mockContext.secrets.store).not.toHaveBeenCalled();
+      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith('Auth mode: X-User (direct); no password required');
+    });
+
     it('logs found credentials when username and password exist', async () => {
       require('../utils/helpers').setupConfigMock();
       mockContext.secrets.get.mockResolvedValue('testpass');

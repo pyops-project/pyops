@@ -163,6 +163,19 @@ describe('ConnectionStatusManager', () => {
       expect(require('vscode').commands.executeCommand).toHaveBeenCalledWith('setContext', 'pyops.hasValidConfig', false);
     });
 
+    it('does not clear password or re-prompt on 401 in x-user mode', async () => {
+      require('./utils/helpers').setupConfigMock({authMode: 'x-user'});
+      mockApiClient.fetch.mockResolvedValueOnce({ ok: false, status: 401 });
+
+      await manager.update();
+
+      expect(mockContext.secrets.delete).not.toHaveBeenCalled();
+      expect(require('../src/services/AuthService').AuthService.setupAuth).not.toHaveBeenCalled();
+      expect(mockStatusBarItem.text).toBe('$(circle-slash) PyOps: Failed (401)');
+      expect(mockApiClient.fetch).toHaveBeenCalledTimes(1);
+      expect(require('vscode').commands.executeCommand).toHaveBeenCalledWith('setContext', 'pyops.hasValidConfig', false);
+    });
+
     it('should throw error if statusBarItem not created', async () => {
       manager = new ConnectionStatusManager(mockApiClient, mockContext, mockOutputChannel); // New instance without createStatusBarItem
 

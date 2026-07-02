@@ -2,7 +2,7 @@
   "name": "pyops",
   "displayName": "PyOps",
   "description": "VSCodium extension for integrating with PyOps server",
-  "version": "3.3.6",
+  "version": "3.3.7",
   "publisher": "pyops-team",
   "license": "AGPL-3.0-only",
   "repository": {
@@ -271,7 +271,20 @@
         },
         "pyops.username": {
           "type": "string",
-          "description": "Username for HTTP Basic Auth"
+          "description": "Username for HTTP Basic Auth (basic mode) or the X-User identity sent to the server (x-user mode)"
+        },
+        "pyops.authMode": {
+          "type": "string",
+          "enum": [
+            "basic",
+            "x-user"
+          ],
+          "enumDescriptions": [
+            "HTTP Basic Auth: send Authorization: Basic base64(username:password). Use when an auth proxy in front of PyOps validates credentials and injects X-User.",
+            "X-User direct: send X-User: <username> (no Authorization, no password). Use when connecting directly to a PyOps server that trusts the header (dev / no proxy)."
+          ],
+          "default": "basic",
+          "description": "How the extension authenticates to PyOps. 'basic' sends HTTP Basic Auth; 'x-user' sends the X-User header directly."
         },
         "pyops.timeout": {
           "type": "number",
