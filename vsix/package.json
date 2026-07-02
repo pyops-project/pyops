@@ -343,7 +343,7 @@
     "lint": "eslint src --ext ts",
     "test": "jest",
     "test:coverage": "jest --coverage",
-    "test:integration": "npm run compile && tsc -p tests/integration/ && node tests/integration/runTests.js"
+    "test:e2e": "npm run compile && tsc -p tests/e2e/ && node tests/e2e/runTests.js"
   },
   "devDependencies": {
     "@types/jest": "^29.5.12",
@@ -369,7 +369,7 @@
       "**/?(*.)+(spec|test).ts"
     ],
     "testPathIgnorePatterns": [
-      "<rootDir>/tests/integration/"
+      "<rootDir>/tests/e2e/"
     ],
     "collectCoverageFrom": [
       "src/**/*.ts"

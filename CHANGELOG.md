@@ -26,6 +26,14 @@ from 3.0.0 onward.
   the blacklist is ignored; when it is empty the `excludedSets` blacklist
   applies as before.
 
+### CI
+- **VSIX "integration" suite renamed to the VSIX e2e axis.** It boots a
+  real Electron extension host against a real server, so it is e2e — a
+  peer of `tests/e2e/` (WebUI) and `tests/pyopsctl/e2e/`.
+  `vsix/tests/integration/` → `vsix/tests/e2e/`, npm script
+  `test:integration` → `test:e2e`, CI job `test:vsix_integration` →
+  `test:e2e:vsix`.
+
 ## [3.3.6] — 2026-07-01
 
 ### Fixed

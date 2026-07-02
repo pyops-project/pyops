@@ -7,7 +7,7 @@ import * as debug from './debug.test';
 import * as command_integration from './command_integration.test';
 
 export async function run(): Promise<void> {
-  console.log('Running PyOps Integration Tests...');
+  console.log('Running PyOps E2E Tests (VSIX axis)...');
 
   await core.run();
   await helpers.run();
@@ -17,5 +17,5 @@ export async function run(): Promise<void> {
   await content.run();
   await debug.run();
 
-  console.log('All integration tests passed!');
+  console.log('All e2e tests passed!');
 }

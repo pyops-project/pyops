@@ -444,16 +444,16 @@ RemoteContentProvider serves remote files; onDidChange events.
 
 #### VSIX Tests
 
-- **Unit tests** in `tests/` use Jest with mocked vscode APIs & API client.
-- **Integration tests** in `tests/integration/` use @vscode/test-electron for real VS Code environment with simple assert-based testing.
-- Integration tests run against separately started localhost PyOps development server without authentication.
-- PyOps server must be started externally before running integration tests (not managed by test framework).
+- **Unit tests** in `vsix/tests/` use Jest with mocked vscode APIs & API client.
+- **E2E tests (VSIX axis)** in `vsix/tests/e2e/` use @vscode/test-electron for a real VS Code environment with simple assert-based testing.
+- The VSIX e2e suite runs against a separately started localhost PyOps development server without authentication.
+- PyOps server must be started externally before running the e2e suite (not managed by the test framework).
 - Run unit tests with `npm run test` or `npm run test:coverage`.
-- Run integration tests with `npm run test:integration` (requires running local development PyOps server on localhost:8000).
-- Integration tests excluded from CI/CD since VS Code not available.
-- Infrastructure set up with simple console-based test runner that works in VS Code extension host.
+- Run the VSIX e2e suite with `npm run test:e2e` (requires a running local development PyOps server on localhost:8000).
+- In CI the VSIX e2e suite runs as the `test:e2e:vsix` job (server started + `xvfb-run` for a virtual display).
+- Infrastructure set up with a simple console-based test runner that works in the VS Code extension host.
 - Tests verify extension activation, configuration (server URL only), views, and command registration.
-- No authentication testing in integration tests (development server runs without auth).
+- No authentication testing in the VSIX e2e suite (development server runs without auth).
 
 ## Key Features
 

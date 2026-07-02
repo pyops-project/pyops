@@ -381,9 +381,11 @@ Coverage targets: branches 80%, functions 80%, lines 90%, statements 80%.
 - VSCode API mocks: `window.createOutputChannel`, `workspace.getConfiguration`, etc.
 - `beforeEach(jest.clearAllMocks())` for isolation; `beforeAll` for shared activation
 
-### Integration Tests (`vsix/tests/integration/`, VSCode electron)
+### E2E Tests — VSIX axis (`vsix/tests/e2e/`, VSCode electron)
 
-Run with `npm run test:integration --prefix vsix/`. Requires a running PyOps server on `localhost:8000` without authentication. In CI the `test:vsix_integration` stage starts the server, waits for it to respond, and drives the suite with `xvfb-run` so Electron/VSCode has a virtual display.
+This is the VSIX client's **e2e** axis: a real VSCode/Electron extension host driving a **real** PyOps server. It is the VSIX peer of the WebUI e2e (`tests/e2e/`, Playwright) and the pyopsctl e2e (`tests/pyopsctl/e2e/`, real gunicorn + real `pyopsctl` binary) — the taxonomy is "the server is one end, each client is a test axis." The Jest suite (`vsix/tests/`) is the **unit** tier (mocked vscode + fetch); there is currently no VSIX **integration** (pure-interface/contract) tier, so that name is reserved for a future contract suite rather than used for what is really e2e.
+
+Run with `npm run test:e2e --prefix vsix/`. Requires a running PyOps server on `localhost:8000` without authentication. In CI the `test:e2e:vsix` job starts the server, waits for it to respond, and drives the suite with `xvfb-run` so Electron/VSCode has a virtual display.
 
 Uses `@vscode/test-electron` and a simple console-based test runner. Test suites:
 
@@ -399,11 +401,11 @@ Uses `@vscode/test-electron` and a simple console-based test runner. Test suites
 
 Extension services accessed via `(global as any).serviceName` — not direct TypeScript imports. Static methods accessed via `serviceInstance.constructor.methodName` or class name.
 
-### Integration Test TypeScript Config
+### E2E Test TypeScript Config
 
-Integration tests use a **separate** `tests/integration/tsconfig.json` from the main extension `tsconfig.json`:
+The VSIX e2e suite uses a **separate** `tests/e2e/tsconfig.json` from the main extension `tsconfig.json`:
 - Different `rootDir` and `include` patterns (must list both suite files and utility files explicitly)
-- Separate `outDir` (`tests/integration/out/`)
+- `rootDir: ../..` (the `vsix/` root) with `outDir: ../../out`, so the suite compiles to `out/tests/e2e/suite/index.js` — the exact path `runTests.js` passes as `extensionTestsPath`
 - `rootDir` must exactly match the directory containing all compiled source files
 
 ---
@@ -416,7 +418,7 @@ Integration tests use a **separate** `tests/integration/tsconfig.json` from the 
 | `npm run watch` | `tsc -watch -p ./` |
 | `npm run test` | Jest unit tests |
 | `npm run test:coverage` | Jest with coverage report |
-| `npm run test:integration` | Compile + compile integration tests + run electron |
+| `npm run test:e2e` | Compile + compile e2e tests + run electron (VSIX e2e axis) |
 | `npm run lint` | ESLint on `src/` |
 | `vscode:prepublish` | `compile` |
 
