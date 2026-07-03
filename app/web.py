@@ -472,7 +472,6 @@ async def controller_proxy(set: str, name: str, rest: str, request: Request):
                 content={"error": f"No running {kind}: {glob['set']}::{glob['service']}"},
             )
         job_id = jobs[0]
-        s = pyops.ServiceClient(job_id)
 
         params = dict(request.query_params)
         params["type"] = request.method
@@ -506,7 +505,16 @@ async def controller_proxy(set: str, name: str, rest: str, request: Request):
             params["data"] = None
             params["data_type"] = "none"
 
-        status, data = s.request(params)
+        # Caller-owned ZMQ lifecycle: bound the recv to the web worker's
+        # request timeout and always close() so the client's context (and
+        # its background thread pair) is reclaimed per request rather than
+        # leaked for the worker's lifetime.
+        web_timeout = int(files.conf_web().get("timeout", 300) or 300)
+        s = pyops.ServiceClient(job_id, recv_timeout_ms=web_timeout * 1000)
+        try:
+            status, data = s.request(params)
+        finally:
+            s.close()
         if status != 200:
             raise HTTPException(status_code=status, detail=data)
         return data

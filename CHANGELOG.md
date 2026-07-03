@@ -7,7 +7,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 from 3.0.0 onward.
 
-## [3.3.7] — 2026-07-02
+## [3.3.7] — 2026-07-03
 
 ### Added
 - **VSIX: X-User authentication mode.** A new `pyops.authMode` setting
@@ -25,6 +25,22 @@ from 3.0.0 onward.
   `includedSets` is non-empty the Manager tree shows only those sets and
   the blacklist is ignored; when it is empty the `excludedSets` blacklist
   applies as before.
+
+### Fixed
+- **Web workers leaked a ZMQ context and two threads per controller
+  request.** `controller_proxy` created a `ServiceClient` for every
+  request and never closed it — teardown was deferred to `atexit`, i.e.
+  to worker exit — so each call to a controller pinned a `zmq.Context`
+  and its `ZMQbg` IO/reaper thread pair for the worker's lifetime. Under
+  service polling this showed as steadily growing kernel stack and
+  shrinking `MemAvailable`, reclaimed only by a worker restart.
+  `controller_proxy` now closes the client after every request (success
+  or error), and the wait for the service's reply is bounded by
+  `web.timeout`.
+- **A busy or restarting runner could hang a job at completion.**
+  `send_completion` waited indefinitely for the runner's ACK; it now
+  gives up after 30 s (logged, not raised) and always tears down its
+  ZMQ context, so the job subprocess can exit.
 
 ### CI
 - **VSIX "integration" suite renamed to the VSIX e2e axis.** It boots a

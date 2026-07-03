@@ -216,3 +216,33 @@ def test_controller_html_output(client, mock_git_ops, mock_db):
         assert "<div>head_view content</div>" in html
         assert "<div>menu_view content</div>" in html
         assert "<div>body_view content</div>" in html
+
+
+def test_controller_proxy_closes_service_client_on_success(client, mock_git_ops, mock_db):
+    """Regression (ZMQ leak): the per-request ServiceClient must be closed so
+    its context + ZMQbg thread pair is reclaimed, not leaked for the worker
+    lifetime."""
+    with patch("app.lib.runner.find", return_value=["mock_job_id"]), \
+         patch("app.lib.pyops.ServiceClient") as mock_service:
+        mock_instance = MagicMock()
+        mock_service.return_value = mock_instance
+        mock_instance.request.return_value = (200, {"ok": True})
+
+        response = client.get("/controller/testset/testname/", headers={"X-User": "testuser"})
+        assert response.status_code == 200
+        mock_instance.request.assert_called_once()
+        mock_instance.close.assert_called_once()
+
+
+def test_controller_proxy_closes_service_client_on_error_status(client, mock_git_ops, mock_db):
+    """close() runs via finally even when the service returns a non-200 (which
+    raises HTTPException) — the client is never leaked on the error path."""
+    with patch("app.lib.runner.find", return_value=["mock_job_id"]), \
+         patch("app.lib.pyops.ServiceClient") as mock_service:
+        mock_instance = MagicMock()
+        mock_service.return_value = mock_instance
+        mock_instance.request.return_value = (500, "boom")
+
+        response = client.get("/controller/testset/testname/", headers={"X-User": "testuser"})
+        assert response.status_code == 500
+        mock_instance.close.assert_called_once()

@@ -348,7 +348,7 @@ The main loop's `while not killer.kill_now` exits at the next iteration boundary
 1. Snapshot live targets — `pid → job_id` for every Popen in `processes` whose `poll()` is still `None`.
 2. SIGTERM each process tree (`job_lib.get_process_tree(pid)` + `kill_proc_tree(tree, SIGTERM)`).
 3. Wait loop until `timeout` or all exited. Each pass:
-   - **Drain the runner ZMQ socket** — services that handle SIGTERM via their `ServiceListener` loop out of `listen()`, run through `job_runner`'s wrap-up, call `job_lib.send_completion(...)` and block on the REQ recv() for the ACK. Without this drain they sit there until the timeout and always get SIGKILL'd. With it, the runner ACKs, `finishJob` updates state to whatever the completion said (typically `done`), and the service exits within milliseconds.
+   - **Drain the runner ZMQ socket** — services that handle SIGTERM via their `ServiceListener` loop out of `listen()`, run through `job_runner`'s wrap-up, call `job_lib.send_completion(...)` and block on the REQ recv() for the ACK (bounded by `ACK_TIMEOUT_MS`, 30 s — see Runner Completion IPC). Without this drain they sit there until the timeout and always get SIGKILL'd. With it, the runner ACKs, `finishJob` updates state to whatever the completion said (typically `done`), and the service exits within milliseconds.
    - Reap exited subprocesses via `subprocess.Popen.poll()`, **not** `psutil.Process.is_running()` — psutil reports zombies as still alive, which made the prior implementation always wait out the full timeout.
 4. SIGKILL any survivors (`kill_proc_tree(tree, SIGKILL)`), wait briefly for them to die.
 5. Final sweep: for each target whose state is still not terminal (no completion arrived — typical for tasks under default Python SIGTERM, and for SIGKILL'd survivors), mark `cancelled` with `detail="killed during shutdown"` (if SIGKILL'd) or `"terminated during shutdown"` (clean exit, no completion sent).
@@ -649,7 +649,7 @@ Two distinct ZMQ channels in the system:
 
 ### Runner Completion IPC
 
-`send_completion(runner_sock_path, msg)` in `app/lib/job.py`: connects REQ, sends `{"id", "state", "detail"}` (msgpack-packed), blocks for ACK. No retries — IPC in same container is reliable.
+`send_completion(runner_sock_path, msg)` in `app/lib/job.py`: connects REQ, sends `{"id", "state", "detail"}` (msgpack-packed), waits for the ACK, then closes the socket and terminates its context in a `finally`. The REQ socket sets `LINGER=0` and `RCVTIMEO=ACK_TIMEOUT_MS` (30 s) — so a busy/restarting/absent runner can't block the job subprocess (and orphan its ZMQ context) forever; on timeout the `zmq.Again` is logged and swallowed rather than raised. No retries — IPC in the same container is reliable, and the completion was already sent.
 
 Runner receives multipart `(identity + empty + packed)`, calls `finishJob`, replies `(identity + empty + b'ack')`.
 
@@ -666,6 +666,8 @@ sequenceDiagram
 ### Service IPC
 
 `ServiceListener` (in service/debug scriptlets) binds a ROUTER socket at `/tmp/pyops/{job_id}.sock`. `ServiceClient` (in `controller_proxy`) connects REQ and calls `request(params)`.
+
+**`ServiceClient` lifecycle is caller-owned.** Each instance owns its own `zmq.Context`, and a context carries a background thread pair (`ZMQbg/IO`, `ZMQbg/Reaper`) backed by non-reclaimable kernel stack. `controller_proxy` creates one **per request**, so it must close it — it does so in a `finally` (`s.request(...)` wrapped in try/finally → `s.close()`), which closes the socket (`LINGER=0`) and `term()`s the context, reaping the thread pair per request. A second `close()` raises (`RuntimeError`) instead of passing silently, and errors of the teardown surface; `ServiceClient` is also a context manager. There is deliberately **no `atexit` fallback**: that was the ZMQ thread-leak root cause — it deferred every per-request context's teardown to worker exit, so a long-lived, heavily-polled gunicorn worker accumulated thousands of `ZMQbg` threads (KernelStack/`MemAvailable` creep, only cleared by a worker restart). The REQ socket takes an optional `recv_timeout_ms`; `controller_proxy` passes `web.timeout` (default 300 s) so a dead/slow service can't wedge the worker.
 
 **Message format** (scriptlet → FastAPI): `{"type": "GET/POST/...", "path": str, "user": str, "data": body, "data_type": "json/text/binary/none"}`
 

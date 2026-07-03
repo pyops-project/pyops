@@ -2,7 +2,6 @@
 import os, signal, zmq, msgpack, json
 import requests as rq
 import tempfile
-import atexit
 
 import logging
 logger = logging.getLogger(__name__)
@@ -236,8 +235,24 @@ class ServiceListener:
         self.socket.send(b)
 
 class ServiceClient:
-    def __init__(self, job_id: str):
+    """Short-lived REQ client to a service job's ServiceListener.
+
+    Lifecycle is **caller-owned**: construct one, `request()`, then
+    `close()` (or use it as a context manager). Each instance owns its
+    own `zmq.Context` — a context carries a pair of background threads
+    (`ZMQbg/IO`, `ZMQbg/Reaper`) backed by non-reclaimable kernel stack —
+    so a client that is never closed pins those threads for the life of
+    the process. The web worker creates one per controller-proxy request;
+    at that rate a missing close() is a steady KernelStack/thread leak
+    (~2 threads/request) that only a worker restart reclaims. `close()`
+    is therefore deterministic and idempotent, and there is deliberately
+    no `atexit` fallback (that was the leak-enabler: it deferred every
+    per-request context's teardown to process exit).
+    """
+
+    def __init__(self, job_id: str, recv_timeout_ms: int = None):
         self.job_id = job_id
+        self._closed = False
 
         temp_dir = tempfile.gettempdir()
         pyops_dir = os.path.join(temp_dir, "pyops")
@@ -245,14 +260,31 @@ class ServiceClient:
 
         self.context = zmq.Context()
         self.socket = self.context.socket(zmq.REQ)
+        # LINGER 0 → close() returns immediately (a completed REQ/REP has
+        # nothing to flush) instead of blocking teardown on delivery.
+        self.socket.setsockopt(zmq.LINGER, 0)
+        # Bound the blocking recv so a slow/dead service can't wedge the
+        # caller — and orphan this context — forever. Left unset (infinite,
+        # legacy behaviour) when no timeout is supplied.
+        if recv_timeout_ms is not None and recv_timeout_ms > 0:
+            self.socket.setsockopt(zmq.RCVTIMEO, recv_timeout_ms)
         self.socket.connect(f"ipc://{self.sockfile}")
-        atexit.register(self.close)
 
     def close(self):
-        if hasattr(self, 'socket'):
-            self.socket.close()
-        if hasattr(self, 'context'):
-            self.context.term()
+        """Deterministic teardown of the socket + context; reaps this
+        client's ZMQbg thread pair. Closing twice is a caller bug and
+        raises (zmq itself would accept it silently)."""
+        if self._closed:
+            raise RuntimeError(f"ServiceClient for job {self.job_id} is already closed")
+        self._closed = True
+        self.socket.close()
+        self.context.term()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
 
     def request(self, msg):
         b = msgpack.packb(msg)

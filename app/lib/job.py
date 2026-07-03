@@ -321,19 +321,37 @@ def process_code_installs(param: str, code: str, libs: list, venv_path: str, pkg
 
     return param, code, libs
 
+# Upper bound on how long send_completion waits for the runner's ACK.
+# The runner ACKs as soon as it processes the completion (runner.py
+# receive_and_process), so on the happy path this never elapses. It caps
+# the pathological case — runner busy/restarting/gone — so the ACK wait
+# can't block the job subprocess (and orphan its ZMQ context) forever.
+ACK_TIMEOUT_MS = 30000
+
 def send_completion(runner_sock_path: str, msg: dict):
     """Send job completion message to runner via ZMQ REQ/REP.
 
-    Blocks until ACK received. No retry - IPC in same container is reliable.
+    Blocks until the runner ACKs or ACK_TIMEOUT_MS elapses. No retry — IPC
+    in the same container is reliable; a missed ACK just means the runner
+    is busy/restarting and the completion (already sent) will be picked up
+    or the job reconciled by other means, so we log and move on rather
+    than hang.
     """
     context = zmq.Context()
     socket = context.socket(zmq.REQ)
+    socket.setsockopt(zmq.LINGER, 0)
+    socket.setsockopt(zmq.RCVTIMEO, ACK_TIMEOUT_MS)
     socket.connect(f"ipc://{runner_sock_path}")
     try:
         packed = msgpack.packb(msg)
         socket.send(packed)
-        socket.recv()  # Wait for ACK - blocks until received
+        socket.recv()  # Wait for ACK - bounded by RCVTIMEO
         logger.debug(f"Sent completion for job {msg['id']}")
+    except zmq.Again:
+        logger.warning(
+            f"No ACK for job {msg['id']} completion within {ACK_TIMEOUT_MS}ms; "
+            "proceeding (runner busy/restarting?)"
+        )
     except zmq.ZMQError as e:
         logger.error(f"Failed to send completion for job {msg['id']}: {e}")
     finally:
