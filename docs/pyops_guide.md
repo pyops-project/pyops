@@ -10,6 +10,7 @@ PyOps is an execution platform for Python operations scriptlets, licensed under 
 - **Configure** workspace settings (Ctrl+, > Workspace tab, or `Preferences: Open Workspace Settings (JSON)`):
   ```json
   {
+    "pyops.profile": "",            // Client-config profile to inherit connectivity from (empty → the file's default_profile)
     "pyops.serverUrl": "http://localhost:8000",
     "pyops.localPyopsDir": "pyops",
     "pyops.autoRefreshInterval": 10,
@@ -19,7 +20,8 @@ PyOps is an execution platform for Python operations scriptlets, licensed under 
     "pyops.includedSets": []        // If non-empty, only these sets are shown and excludedSets is ignored (whitelist)
   }
   ```
-- **Auth**: `basic` (default) — set `pyops.username`; the extension prompts for the password on first API call (stored securely in workspace state). `x-user` — the extension sends `X-User: <username or "vsix">` with no password, for direct connections to a server that trusts the header (dev / no auth proxy).
+- **Connectivity profile**: if the shared PyOps client config `~/.config/pyops/config.toml` exists (the file `pyopsctl` reads, see *pyopsctl → Configure* below; override via `PYOPSCTL_CONFIG`), the extension takes `serverUrl`, `username`, auth and `debugPorts` from the profile named by `pyops.profile` (empty → the file's `default_profile`). Any of those `pyops.*` settings you set explicitly overrides the profile's value; without the file (or a matching profile) the settings are used as-is. The set black/whitelist and the other settings are always VSCode-only.
+- **Auth**: `basic` — set `pyops.username`; the extension prompts for the password on first API call (stored securely in workspace state). With a profile, its `api_key` is used as the password with no prompt — unless `pyops.username` remaps a different user onto the profile, which brings the prompt back. `x-user` — the extension sends `X-User: <username or "vsix">` with no password, for direct connections to a server that trusts the header (dev / no auth proxy). `pyops.authMode` defaults to `basic`; with a profile and no explicit `authMode`, a profile with an `api_key` means `basic`, one without means `x-user`.
 - **Status**: Status bar shows connection (requires valid `pyops.serverUrl`).
 
 VSIX provides pyops-container in sidebar/activitybar:
@@ -280,8 +282,11 @@ locally (rare; CI does this for releases): `./ctl/build.sh` (needs
 
 ### Configure
 
-`pyopsctl` reads `~/.config/pyops/config.toml`. The file must be mode
-0600 — `pyopsctl` refuses to load otherwise (it holds API keys).
+`pyopsctl` reads `~/.config/pyops/config.toml` — the shared PyOps client
+config, whose connectivity profiles are read by every PyOps client (the
+CLI here, and the VSIX extension via its `pyops.profile` setting). The
+file must be mode 0600 — `pyopsctl` refuses to load otherwise (it holds
+API keys).
 
 ```toml
 default_profile = "aiops"

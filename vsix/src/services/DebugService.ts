@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import { ApiClient } from '../apiClient';
+import { resolveConnectivity } from '../connectivity';
 
 /**
  * Per-set walk of `localPyopsDir/<set>/*.py` returning a `{set::name: code}`
@@ -105,11 +106,10 @@ export class DebugService {
      * leased to another active debug session.
      */
     leasePort(jobIdHint: string): PortLease {
-        const pyopsConfig = vscode.workspace.getConfiguration('pyops');
-        const pool = pyopsConfig.get<number[]>('debugPorts', [5678]) || [];
+        const pool = resolveConnectivity().debugPorts;
         if (pool.length === 0) {
             throw new Error(
-                "pyops.debugPorts is empty — set it in workspace/user settings before starting a debug job",
+                "pyops.debugPorts is empty — set it in workspace/user settings (or the PyOps client-config profile) before starting a debug job",
             );
         }
         for (const port of pool) {

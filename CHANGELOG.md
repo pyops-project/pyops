@@ -7,9 +7,29 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 from 3.0.0 onward.
 
-## [3.3.7] — 2026-07-03
+## [3.3.7] — 2026-07-07
 
 ### Added
+- **VSIX: connectivity inherited from the shared PyOps client config.** The
+  extension now reads the PyOps client config (`~/.config/pyops/config.toml`,
+  override via `PYOPSCTL_CONFIG`) — the same connectivity profiles the
+  pyopsctl CLI reads — so all clients share one source of truth for
+  connectivity. A new `pyops.profile` setting names the profile a
+  workspace adopts (empty → the file's `default_profile`); the profile
+  supplies `serverUrl`, `username`, auth (`api_key`) and `debugPorts` as
+  a base layer, and any explicitly-set `pyops.*` setting fully overrides
+  the matching profile field. With `pyops.authMode` unset, the profile
+  also decides the auth mode: `api_key` present → `basic`, absent →
+  `x-user`. Leaving `pyops.username` unset uses the
+  profile's user; setting it remaps a different user onto that
+  connection, in which case the profile's `api_key` no longer applies and
+  a Basic password is prompted for (when the user is not remapped, the
+  `api_key` is used directly with no prompt). The set black/whitelist
+  (`excludedSets`/`includedSets`) and other client-local settings stay in
+  VSCode settings. When no config file or profile resolves, connectivity
+  comes entirely from `pyops.*` settings as before. A config file that
+  cannot be parsed is shown as an error naming the file, and no
+  connection is made.
 - **VSIX: X-User authentication mode.** A new `pyops.authMode` setting
   switches between `basic` (HTTP Basic Auth, for deployments where an
   auth proxy in front of PyOps validates credentials and injects the

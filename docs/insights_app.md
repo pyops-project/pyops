@@ -96,7 +96,7 @@ graph TD
 - `data`: `{"jobs": "data/jobs", "git": "data/git", "db": "data/app.db"}`
 - `runner`: `{"venv": "data/venv", "pkg": "data/pkg", "git_pull_interval": 60, "drop_done_delay_seconds": 60}`
 - `log`: `{"loglevel": "debug"}`
-- `users`: per-owner table; pyops itself reads nothing more than the keys to identify owners. Any client-side debug-port pool, credentials, etc. live in client configs (VSIX workspace settings, pyopsctl profile TOML), not here.
+- `users`: per-owner table; pyops itself reads nothing more than the keys to identify owners. Any client-side debug-port pool, credentials, etc. live in client configs (VSIX workspace settings, and the shared PyOps client config `~/.config/pyops/config.toml` read by all clients), not here.
 
 ### Access Methods
 

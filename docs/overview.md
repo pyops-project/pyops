@@ -403,7 +403,7 @@ graph TD
 
 ### Configuration
 
-VSCode workspace settings set serverUrl, authMode, username, password (state), localPyopsDir, and autoRefreshInterval. Auth is optional: `basic` mode sends Basic Auth if username/password are set; `x-user` mode sends `X-User: <username or "vsix">` with no password.
+VSCode workspace settings set serverUrl, authMode, username, password (state), localPyopsDir, and autoRefreshInterval. Connectivity (serverUrl, username, auth, debugPorts) inherits from a profile in the shared PyOps client config (`~/.config/pyops/config.toml`, the one pyopsctl reads; selected by `pyops.profile`) when one resolves, with explicitly-set settings overriding it. Auth is optional: `basic` mode sends Basic Auth if username/password are set; `x-user` mode sends `X-User: <username or "vsix">` with no password.
 
 ### Functionality
 
@@ -411,7 +411,7 @@ VSCode workspace settings set serverUrl, authMode, username, password (state), l
 
 `src/services/AuthService.ts` handles authentication setup for Basic Auth:
 
-- Prompts for password if username is configured but no password is stored (`basic` mode only; a no-op in `x-user` mode).
+- Prompts for password if username is configured but no password is stored (`basic` mode only, and not when a profile's `api_key` supplies the password; a no-op in `x-user` mode).
 - Stores password securely in workspace state.
 - Unit tests in `tests/services/AuthService.test.ts`.
 

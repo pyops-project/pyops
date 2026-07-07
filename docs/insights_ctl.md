@@ -111,6 +111,13 @@ chain:
 The config file path is `~/.config/pyops/config.toml` by default,
 overridable via `PYOPSCTL_CONFIG` env var (used by tests).
 
+The file is the **shared PyOps client config**: the VSIX reads the same
+profiles (`url`, `user`, `api_key`, `debug_ports`), the same
+`default_profile` / `PYOPSCTL_PROFILE` selection and the same
+`PYOPSCTL_CONFIG` override through its own parser
+(`vsix/src/services/ProfileService.ts`, see `insights_vsix.md`), so
+schema changes here must stay compatible with it.
+
 **Mode enforcement.** `config.py` `_ensure_mode_0600` rejects files
 with any group/other bits set. The file holds API keys; permissive
 modes get a `ConfigError` with the corrective `chmod 600` command in

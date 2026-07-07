@@ -71,6 +71,66 @@ describe('ApiClient', () => {
       const headers = await apiClient.getHeaders();
       expect(headers).toEqual({ 'X-User': DEFAULT_X_USER });
     });
+
+    describe('with a PyOps client-config profile', () => {
+      const { setProfileConfig, clearProfileConfig } = require('./utils/helpers');
+      afterEach(() => clearProfileConfig());
+
+      it('uses the profile api_key + user as Basic Auth without reading secrets', async () => {
+        setProfileConfig(`
+default_profile = "dev"
+[profiles.dev]
+url = "https://dev.example"
+user = "profuser"
+api_key = "profkey"
+`);
+        require('./utils/helpers').setupConfigMock({serverUrl: undefined, username: undefined});
+        const headers = await apiClient.getHeaders();
+        expect(headers).toEqual({
+          'Authorization': 'Basic ' + Buffer.from('profuser:profkey').toString('base64'),
+        });
+        expect(context.secrets.get).not.toHaveBeenCalled();
+      });
+
+      it('sends X-User from a keyless profile and never reads secrets', async () => {
+        setProfileConfig(`
+default_profile = "direct"
+[profiles.direct]
+url = "https://direct.example"
+user = "directuser"
+`);
+        require('./utils/helpers').setupConfigMock({serverUrl: undefined, username: undefined});
+        const headers = await apiClient.getHeaders();
+        expect(headers).toEqual({ 'X-User': 'directuser' });
+        expect(context.secrets.get).not.toHaveBeenCalled();
+      });
+
+      it('a remapped user falls back to the stored secret, not the profile key', async () => {
+        setProfileConfig(`
+default_profile = "dev"
+[profiles.dev]
+url = "https://dev.example"
+user = "profuser"
+api_key = "profkey"
+`);
+        require('./utils/helpers').setupConfigMock({serverUrl: undefined, username: 'mapped'});
+        const headers = await apiClient.getHeaders();
+        expect(headers).toEqual({
+          'Authorization': 'Basic ' + Buffer.from('mapped:testpassword').toString('base64'),
+        });
+        expect(context.secrets.get).toHaveBeenCalledWith('pyops.password');
+      });
+
+      it('serverUrl comes from the profile when unset in settings', () => {
+        setProfileConfig(`
+default_profile = "dev"
+[profiles.dev]
+url = "https://dev.example"
+`);
+        require('./utils/helpers').setupConfigMock({serverUrl: undefined, username: undefined});
+        expect(apiClient.getServerUrl()).toBe('https://dev.example');
+      });
+    });
   });
 
   describe('hasValidConfig', () => {

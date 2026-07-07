@@ -207,7 +207,6 @@
           "when": "view == 'pyops-manager' && viewItem =~ /^pyopsItem-(task|service|library|controller|view|markdown|jslibrary|data)(-local)?$/ && pyops.hasValidConfig",
           "group": "navigation"
         },
-
         {
           "command": "pyops.startDebugJob",
           "when": "view == 'pyops-manager' && viewItem =~ /^pyopsItem-task(-local)?$/ && pyops.hasValidConfig",
@@ -233,7 +232,6 @@
           "when": "view == 'pyops-manager' && viewItem =~ /^pyopsItem-(task|service|library|controller|view|markdown|jslibrary|data)(-local)?$/ && pyops.hasValidConfig",
           "group": "navigation"
         },
-
         {
           "command": "pyops.viewJob",
           "when": "view == pyops-monitor && viewItem =~ /pyopsJob-.*/ && pyops.hasValidConfig",
@@ -264,14 +262,19 @@
     "configuration": {
       "title": "PyOps",
       "properties": {
+        "pyops.profile": {
+          "type": "string",
+          "default": "",
+          "description": "Name of the connectivity profile from the shared PyOps client config (~/.config/pyops/config.toml, override via PYOPSCTL_CONFIG) this workspace adopts — the same profiles the pyopsctl CLI reads. Empty uses the config's default_profile. The profile supplies serverUrl, username, auth (api_key), and debugPorts as a base layer; any explicitly-set pyops.* setting below fully overrides the corresponding profile field. When no config file or profile resolves, connectivity comes entirely from these settings (legacy behaviour)."
+        },
         "pyops.serverUrl": {
           "type": "string",
           "default": "http://localhost:8000",
-          "description": "URL of the PyOps server instance"
+          "description": "URL of the PyOps server instance. Overrides the resolved profile's url when explicitly set."
         },
         "pyops.username": {
           "type": "string",
-          "description": "Username for HTTP Basic Auth (basic mode) or the X-User identity sent to the server (x-user mode)"
+          "description": "Username for HTTP Basic Auth (basic mode) or the X-User identity sent to the server (x-user mode). When a profile is resolved, leaving this unset uses the profile's user; setting it remaps a different user onto the profile's connection — the profile's api_key no longer applies, so a Basic password is prompted for and stored per-workspace."
         },
         "pyops.authMode": {
           "type": "string",
@@ -284,7 +287,7 @@
             "X-User direct: send X-User: <username> (no Authorization, no password). Use when connecting directly to a PyOps server that trusts the header (dev / no proxy)."
           ],
           "default": "basic",
-          "description": "How the extension authenticates to PyOps. 'basic' sends HTTP Basic Auth; 'x-user' sends the X-User header directly."
+          "description": "How the extension authenticates to PyOps. 'basic' sends HTTP Basic Auth; 'x-user' sends the X-User header directly. When unset and a profile is resolved, the mode follows the profile: api_key present → basic, absent → x-user."
         },
         "pyops.timeout": {
           "type": "number",
@@ -329,8 +332,10 @@
             "minimum": 1025,
             "maximum": 65535
           },
-          "default": [5678],
-          "description": "Pool of TCP ports VSIX may use when starting a PyOps debug job. The extension leases one per active debug session and composes a `debugpy.listen(<port>)` call into the job's `param`. The pyops server no longer hands out ports."
+          "default": [
+            5678
+          ],
+          "description": "Pool of TCP ports VSIX may use when starting a PyOps debug job. The extension leases one per active debug session and composes a `debugpy.listen(<port>)` call into the job's `param`. The pyops server no longer hands out ports. When unset and a profile is resolved, the profile's debug_ports pool is used; setting this fully replaces it (no union)."
         }
       }
     }
@@ -371,6 +376,9 @@
     "testPathIgnorePatterns": [
       "<rootDir>/tests/e2e/"
     ],
+    "setupFiles": [
+      "<rootDir>/tests/jest.setup.ts"
+    ],
     "collectCoverageFrom": [
       "src/**/*.ts"
     ],
@@ -382,5 +390,8 @@
         "statements": 80
       }
     }
+  },
+  "dependencies": {
+    "smol-toml": "^1.7.0"
   }
 }

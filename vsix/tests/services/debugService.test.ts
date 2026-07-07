@@ -12,6 +12,12 @@ describe('DebugService', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    // The fs mock also answers the PyOps client config lookup; clearAllMocks
+    // keeps an earlier test's statSync/readFileSync answers, which would then
+    // read as an (unparseable) config. No config file here.
+    require('fs').statSync.mockImplementation(() => {
+      throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    });
     const mockVscode = require('vscode');
 
     mockVscode.workspace.workspaceFolders = [{ uri: { fsPath: '/test/workspace' } }];
