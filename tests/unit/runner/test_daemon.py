@@ -805,6 +805,77 @@ class TestDaemon:
             assert row.state == "done"  # untouched
 
 
+class TestCleanupDropDoneKeepN:
+    """cleanup_drop_done_jobs keeps the newest keep_n done jobs of a cron schedule with drop_done; the delay is 3s."""
+
+    @staticmethod
+    def _schedule(**kw):
+        from app.orm.database import get_db_engine
+        from app.orm.schedule import Schedule
+        with Session(get_db_engine()) as session:
+            sched = Schedule(set="test_set", name="test_name", owner="test_owner", active=False, param=None, **kw)
+            session.add(sched)
+            session.commit()
+            return sched.id
+
+    @staticmethod
+    def _done_jobs(schedule_id, ages):
+        """Done drop_done jobs of `schedule_id` that ended `ages` seconds ago; returns their ids."""
+        from datetime import timedelta
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        now = datetime.now()
+        ids = [f"{schedule_id}_{age}" for age in ages]
+        with Session(get_db_engine()) as session:
+            session.add_all(Job(id=job_id, set="test_set", name="test_name", owner="test_owner", kind="task", state="done",
+                                drop_done=True, end=now - timedelta(seconds=age), schedule_id=schedule_id)
+                            for job_id, age in zip(ids, ages))
+            session.commit()
+        return ids
+
+    @staticmethod
+    def _states_after_cleanup(ids):
+        from app.runner import cleanup_drop_done_jobs
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        with patch('app.runner.files.conf_runner', return_value={"drop_done_delay_seconds": 3}):
+            cleanup_drop_done_jobs()
+        with Session(get_db_engine()) as session:
+            return [session.get(Job, job_id).state for job_id in ids]
+
+    def test_keeps_newest_keep_n_done_jobs(self, mock_db):
+        sched_id = self._schedule(schedule="* * * * *", drop_done=True, keep_n=2)
+        jobs = self._done_jobs(sched_id, [40, 30, 20, 10])
+
+        assert self._states_after_cleanup(jobs) == ["remove", "remove", "done", "done"]
+
+    @pytest.mark.parametrize("schedule_kw", [
+        {"schedule": "* * * * *", "drop_done": True, "keep_n": 0},
+        {"schedule": "* * * * *", "drop_done": False, "keep_n": 2},
+        {"schedule": "", "drop_done": True, "keep_n": 2},
+    ], ids=["keep_n_0", "drop_done_false", "service"])
+    def test_inactive_keep_n_removes_all(self, mock_db, schedule_kw):
+        sched_id = self._schedule(**schedule_kw)
+        jobs = self._done_jobs(sched_id, [30, 20, 10])
+
+        assert self._states_after_cleanup(jobs) == ["remove"] * 3
+
+    def test_jobs_without_schedule_row_removed(self, mock_db):
+        sched_id = self._schedule(schedule="* * * * *", drop_done=True, keep_n=2)
+        # no schedule_id (job API, control.job.create) and a deleted schedule
+        jobs = self._done_jobs(None, [20, 10]) + self._done_jobs(sched_id + 1, [20, 10])
+
+        assert self._states_after_cleanup(jobs) == ["remove"] * 4
+
+    def test_keep_n_per_schedule(self, mock_db):
+        """Two schedules of the same task each keep their own newest job."""
+        first = self._schedule(schedule="0 * * * *", drop_done=True, keep_n=1)
+        second = self._schedule(schedule="30 * * * *", drop_done=True, keep_n=1)
+        jobs = self._done_jobs(first, [50, 40]) + self._done_jobs(second, [30, 10])
+
+        assert self._states_after_cleanup(jobs) == ["remove", "done", "remove", "done"]
+
+
 class TestShutdownFlag:
     """The shutdown-flag mechanism gates lib_runner.enqueue across process
     boundaries — so gunicorn workers (HTTP /scriptlet/job/item, /scriptlet/

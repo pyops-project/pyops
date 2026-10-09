@@ -285,14 +285,22 @@
                 }).catch((e)=>console.error("GET", "/scriptlet/schedule/list", e.toString()));
             }
 
+            // keep_n only applies to a cron schedule that drops done jobs.
+            function updateKeepN(modal) {
+                const active = $(`#${modal}-dropDone`).is(':checked') && $(`#${modal}-schedule`).val() !== "";
+                $(`#${modal}-keepN`).prop("disabled", !active);
+            }
+
             function clearCreateModal() {
                 $("#createModal-error").text("");
                 $("#createModal-set").val("");
                 $("#createModal-name").empty().append('<option value="">Select a scriptlet</option>').prop("disabled", true);
                 $("#createModal-dropDone").prop( "checked", false);
                 $("#createModal-maxRetries").val("0");
+                $("#createModal-keepN").val("0");
                 $("#createModal-schedule-preset").val("__custom__");
                 $("#createModal-schedule").val("");
+                updateKeepN("createModal");
                 if(createParamEditor) createParamEditor.setValue("", -1);
             }
 
@@ -303,6 +311,7 @@
                 const name = $("#createModal-name").val();
                 const drop_done = $("#createModal-dropDone").is(':checked');
                 const max_retries = parseInt($("#createModal-maxRetries").val()) || 0;
+                const keep_n = parseInt($("#createModal-keepN").val()) || 0;
                 const schedule = $("#createModal-schedule").val();
                 const param = createParamEditor ? createParamEditor.getValue() : "";
 
@@ -311,6 +320,7 @@
                     "name": name,
                     "drop_done": drop_done,
                     "max_retries": max_retries,
+                    "keep_n": keep_n,
                     "schedule": schedule,
                     "param": param
                 }
@@ -330,7 +340,7 @@
                         refreshList();
                     } else {
                         const d = await r.json();
-                        $("#createModal-error").text(d.detail);
+                        $("#createModal-error").text(Array.isArray(d.detail) ? d.detail.map(e => e.msg).join("; ") : d.detail);
                     }
                 }).catch((e)=>$("#createModal-error").text(e.toString()));
             }
@@ -407,7 +417,9 @@
                         $("#editModal-name").val(s.name);
                         $("#editModal-dropDone").prop("checked", s.drop_done);
                         $("#editModal-maxRetries").val(s.max_retries);
+                        $("#editModal-keepN").val(s.keep_n);
                         $("#editModal-schedule").val(s.schedule);
+                        updateKeepN("editModal");
                         // Reflect the current cron in the preset selector if it
                         // matches a known preset (empty → "run as service"),
                         // otherwise fall back to "Custom".
@@ -430,8 +442,10 @@
                 $("#editModal-name").val("");
                 $("#editModal-dropDone").prop("checked", false);
                 $("#editModal-maxRetries").val("0");
+                $("#editModal-keepN").val("0");
                 $("#editModal-schedule-preset").val("__custom__");
                 $("#editModal-schedule").val("");
+                updateKeepN("editModal");
                 if(editParamEditor) editParamEditor.setValue("", -1);
             }
 
@@ -443,6 +457,7 @@
                 const name = $("#editModal-name").val();
                 const drop_done = $("#editModal-dropDone").is(':checked');
                 const max_retries = parseInt($("#editModal-maxRetries").val()) || 0;
+                const keep_n = parseInt($("#editModal-keepN").val()) || 0;
                 const schedule = $("#editModal-schedule").val();
                 const param = editParamEditor ? editParamEditor.getValue() : "";
 
@@ -452,6 +467,7 @@
                     "name": name,
                     "drop_done": drop_done,
                     "max_retries": max_retries,
+                    "keep_n": keep_n,
                     "schedule": schedule,
                     "param": param
                 }
@@ -471,7 +487,7 @@
                         refreshList();
                     } else {
                         const d = await r.json();
-                        $("#editModal-error").text(d.detail);
+                        $("#editModal-error").text(Array.isArray(d.detail) ? d.detail.map(e => e.msg).join("; ") : d.detail);
                     }
                 }).catch((e)=>$("#editModal-error").text(e.toString()));
             }
@@ -498,13 +514,20 @@
                     const v = $(this).val();
                     if(v === "__custom__") return;
                     $("#createModal-schedule").val(v);
+                    updateKeepN("createModal");
                 });
 
                 $("#editModal-schedule-preset").on('change', function () {
                     const v = $(this).val();
                     if(v === "__custom__") return;
                     $("#editModal-schedule").val(v);
+                    updateKeepN("editModal");
                 });
+
+                for(const modal of ["createModal", "editModal"]) {
+                    $(`#${modal}-dropDone`).on('change', () => updateKeepN(modal));
+                    $(`#${modal}-schedule`).on('input', () => updateKeepN(modal));
+                }
 
                 // Edit modal: the param editor needs a resize once visible.
                 $("#editModal").on('shown.bs.modal', function () {
@@ -569,6 +592,11 @@
                             <input id="createModal-dropDone" class="form-check-input" type="checkbox" value="" data-testid="scheduler-create-drop-done">
                         </div>
                         <div class="mb-3">
+                            <label for="createModal-keepN" class="col-form-label">Keep last N successful runs:</label>
+                            <input id="createModal-keepN" type="number" min="0" max="100" value="0" class="form-control" data-testid="scheduler-create-keep-n" disabled>
+                            <div class="form-text">Only with "Drop logs/data" and a cron schedule: the newest N done jobs are not dropped.</div>
+                        </div>
+                        <div class="mb-3">
                             <label for="createModal-maxRetries" class="col-form-label">Max Retries:</label>
                             <input id="createModal-maxRetries" type="number" min="0" value="0" class="form-control" data-testid="scheduler-create-max-retries">
                         </div>
@@ -623,6 +651,11 @@
                         <div class="mb-3">
                             <label class="form-check-label" for="editModal-dropDone">Drop logs/data if successful:</label>
                             <input id="editModal-dropDone" class="form-check-input" type="checkbox" value="" data-testid="scheduler-edit-drop-done">
+                        </div>
+                        <div class="mb-3">
+                            <label for="editModal-keepN" class="col-form-label">Keep last N successful runs:</label>
+                            <input id="editModal-keepN" type="number" min="0" max="100" value="0" class="form-control" data-testid="scheduler-edit-keep-n" disabled>
+                            <div class="form-text">Only with "Drop logs/data" and a cron schedule: the newest N done jobs are not dropped.</div>
                         </div>
                         <div class="mb-3">
                             <label for="editModal-maxRetries" class="col-form-label">Max Retries:</label>

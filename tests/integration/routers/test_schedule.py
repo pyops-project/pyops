@@ -50,6 +50,44 @@ class TestScheduleRouter:
                 assert response.status_code == 400
                 assert "Invalid cron" in response.json()["detail"]
 
+    @pytest.mark.parametrize("keep_n", [None, 0, 100])
+    def test_put_schedule_item_create_keep_n(self, mock_client, mock_db, mock_git_ops, mock_croniter, keep_n):
+        create_data = {"set": "default", "name": "test_job", "drop_done": True, "schedule": "* * * * *", "param": "{}"}
+        if keep_n is not None:
+            create_data["keep_n"] = keep_n
+        with patch('app.lib.git.read_content', return_value='pass'):
+            response = mock_client.put("/scriptlet/schedule/item", json=create_data, headers={"X-User": "testuser"})
+        assert response.status_code == 200
+        schedule_id = response.json()["schedule"]
+
+        expected = keep_n or 0
+        assert mock_client.get(f"/scriptlet/schedule/item?id={schedule_id}").json()["keep_n"] == expected
+        assert [s["keep_n"] for s in mock_client.get("/scriptlet/schedule/list").json()] == [expected]
+
+    @pytest.mark.parametrize("keep_n", [-1, 101])
+    def test_put_schedule_item_keep_n_out_of_range(self, mock_client, mock_db, mock_git_ops, mock_croniter, keep_n):
+        create_data = {"set": "default", "name": "test_job", "drop_done": True, "schedule": "* * * * *", "param": "{}", "keep_n": keep_n}
+        with patch('app.lib.git.read_content', return_value='pass'):
+            response = mock_client.put("/scriptlet/schedule/item", json=create_data, headers={"X-User": "testuser"})
+        assert response.status_code == 422
+        assert mock_client.get("/scriptlet/schedule/list").json() == []
+
+    def test_put_schedule_item_update_keep_n(self, mock_client, mock_db, mock_git_ops, mock_croniter):
+        from app.orm.database import get_db_engine
+        from app.orm.schedule import Schedule
+        with Session(get_db_engine()) as session:
+            schedule = Schedule(set="default", name="test_job", owner="testuser", schedule="* * * * *", active=True, param="{}", last=None, drop_done=True)
+            session.add(schedule)
+            session.commit()
+            schedule_id = schedule.id
+
+        update_data = {"id": schedule_id, "set": "default", "name": "test_job", "drop_done": True, "schedule": "* * * * *", "param": "{}", "keep_n": 5}
+        with patch('app.lib.git.read_content', return_value='pass'):
+            response = mock_client.put("/scriptlet/schedule/item", json=update_data, headers={"X-User": "testuser"})
+        assert response.status_code == 200
+        with Session(get_db_engine()) as session:
+            assert session.get(Schedule, schedule_id).keep_n == 5
+
     def test_put_schedule_item_create_no_job(self, mock_client, mock_db, mock_git_ops):
         create_data = {
             "set": "nonexistent",

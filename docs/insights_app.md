@@ -159,6 +159,7 @@ The gunicorn master's `on_starting` runs `init_db()` once, before the runner and
 | active | Boolean | indexed |
 | drop_done | Boolean | default=True |
 | max_retries | Integer | default=0 |
+| keep_n | Integer | 0-100, default=0; how many of its newest done jobs survive `drop_done` (cron schedules only) |
 | param | String | |
 | last | DateTime | last trigger time; indexed |
 
@@ -297,7 +298,7 @@ Background daemon spawned by `app/gunicorn.py`. Polls DB, spawns subprocesses, h
 1. Remove a stale `/tmp/pyops/shutdown.flag` from a previous unclean exit (so `lib_runner.enqueue` won't refuse from the first iteration).
 2. `handleOddJobs()`: `dequeued`→`todo`, `running`→`failed`, `cancel`/`cancelling`→`cancelled` (crash + interrupted-cancel recovery).
 3. `purgeLeftoverServiceJobs()`: deletes stale service jobs (dequeued/running/failed/done).
-4. `cleanup_drop_done_jobs()`: marks expired `drop_done` done-jobs as `remove`.
+4. `cleanup_drop_done_jobs()`: marks expired `drop_done` done-jobs as `remove`, except the newest `keep_n` done jobs (by `end`) of a cron `Schedule` with `drop_done` and `keep_n > 0`, matched via `job.schedule_id`. `keep_n` has no effect for jobs without a (still existing) schedule, for services, or when the schedule's `drop_done` is off.
 
 #### Main Loop
 

@@ -11,7 +11,7 @@ from typing import Any
 import zmq, msgpack
 import psutil
 
-from sqlalchemy import null, select, delete, and_, or_, case
+from sqlalchemy import null, select, delete, and_, or_, case, func
 from sqlalchemy.orm import Session
 import sqlalchemy.exc
 
@@ -534,12 +534,21 @@ def cleanup_drop_done_jobs():
     delay_seconds = files.conf_runner()["drop_done_delay_seconds"]
     cutoff = now - timedelta(seconds=delay_seconds)
 
+    # keep_n: a cron schedule with drop_done keeps its newest keep_n done jobs.
+    newest = func.row_number().over(partition_by=Job.schedule_id, order_by=Job.end.desc()).label("newest")
+    ranked = select(Job.id, newest, Schedule.keep_n) \
+        .join(Schedule, Schedule.id == Job.schedule_id) \
+        .where(Job.state == "done", Schedule.schedule != "", Schedule.drop_done == True, Schedule.keep_n > 0) \
+        .subquery()
+    kept = select(ranked.c.id).where(ranked.c.newest <= ranked.c.keep_n)
+
     with Session(get_db_engine()) as session:
         logger.debug(f"cleanup_drop_done_jobs: session ID {id(session)} at {now}, delay={delay_seconds}s")
         stmt = select(Job).where(
             Job.state == "done",
             Job.drop_done == True,
-            Job.end < cutoff
+            Job.end < cutoff,
+            Job.id.not_in(kept)
         )
 
         jobs_to_remove = session.scalars(stmt).all()

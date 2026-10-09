@@ -4,7 +4,8 @@ drop_done auto-removal E2E tests.
 When a job is enqueued with drop_done=True and reaches the "done" state,
 the runner's cleanup_drop_done_jobs() loop marks it "remove" once
 drop_done_delay_seconds have elapsed, which then causes it to be deleted
-from the DB on the next disposeJobs() pass.
+from the DB on the next disposeJobs() pass. A cron schedule with drop_done
+and keep_n > 0 keeps its newest keep_n done jobs.
 
 This file overrides the e2e_env fixture to set drop_done_delay_seconds=2
 so the test does not have to wait for the default 60-second delay.
@@ -241,3 +242,61 @@ class TestDropDone:
         )
 
         pyops_server.assert_no_unexpected_errors(allow=["intentional"])
+
+    def test_keep_n_keeps_newest_scheduled_jobs(self, api, pyops_server, set_factory, commit_set):
+        """A cron schedule with drop_done and keep_n=2 keeps its 2 newest done jobs past the delay."""
+        set_name = SET + "_keep_n"
+        set_factory(set_name)
+        api.put(
+            "/scriptlet/inventory/item",
+            json={"set": set_name, "name": "quick", "type": "task"},
+        )
+        api.post(
+            "/scriptlet/inventory/draft",
+            json={"set": set_name, "name": "quick", "code": 'print("done")\n'},
+        )
+        commit_set(set_name, "add quick")
+
+        resp = api.put(
+            "/scriptlet/schedule/item",
+            json={
+                "set": set_name,
+                "name": "quick",
+                "drop_done": True,
+                "keep_n": 2,           # ← key field under test
+                "schedule": "0 0 1 1 *",
+                "param": "",
+                "active": False,       # jobs come from "run now" only
+            },
+        )
+        assert resp.status_code == 200
+        sched_id = resp.json()["schedule"]
+
+        # "run now" records the schedule on the job, like the cron loop does.
+        job_ids = []
+        for _ in range(3):
+            resp = api.get(f"/scriptlet/schedule/run?id={sched_id}")
+            assert resp.status_code == 200
+            job_id = resp.json()["job"]
+            assert _wait_for_job(api, job_id, timeout=30)["state"] == "done"
+            job_ids.append(job_id)
+        oldest, *newest = job_ids
+
+        deadline = time.time() + DROP_DONE_DELAY + 6
+        while time.time() < deadline:
+            if not _job_visible(api, oldest):
+                break
+            time.sleep(0.5)
+        else:
+            pytest.fail(
+                f"Job {oldest} was not auto-removed within "
+                f"{DROP_DONE_DELAY + 6}s of the third run"
+            )
+
+        # Every job is past the delay now; the newest two remain.
+        time.sleep(DROP_DONE_DELAY + 1)
+        assert all(_job_visible(api, job_id) for job_id in newest), (
+            "The newest keep_n jobs should not be auto-removed"
+        )
+
+        pyops_server.assert_no_unexpected_errors()

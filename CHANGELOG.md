@@ -26,6 +26,11 @@ from 3.0.0 onward.
   schedule — by the scheduler or via "run now" — stores the schedule's id
   in the new `job.schedule_id` column; all other jobs leave it empty.
   Existing databases get the column at start-up; older jobs stay empty.
+- **Schedules can keep their last runs despite drop_done.** A new
+  schedule field `keep_n` (0-100, default 0) keeps the newest `keep_n`
+  done jobs of a cron schedule with drop_done; older ones are removed as
+  before. Set it in the Web UI Scheduler, via `PUT /scriptlet/schedule/item`
+  or `control.schedule.create(..., keep_n=…)`; existing schedules read 0.
 - **VSIX: connectivity inherited from the shared PyOps client config.** The
   extension now reads the PyOps client config (`~/.config/pyops/config.toml`,
   override via `PYOPSCTL_CONFIG`) — the same connectivity profiles the

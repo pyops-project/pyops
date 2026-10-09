@@ -200,6 +200,14 @@ Format is detected by file extension. On first create, `data.write("name", forma
 
 Files are versioned alongside scriptlets; runtime writes show as unstaged changes foldable into the standard draft-commit flow. Per-file flocks live alongside the data files under `data/.{name}.lock` and are gitignored automatically.
 
+## Schedules
+
+Scriptlets create schedules with `control.schedule.create(set, name, drop_done, schedule, param, max_retries=0, keep_n=0)`, which returns the schedule id. Over REST, `PUT /scriptlet/schedule/item` takes the same fields as JSON (plus `id` to update an existing schedule); `GET /scriptlet/schedule/list` and `GET /scriptlet/schedule/item?id=…` return them.
+
+- `schedule`: a five-field cron expression; an empty string runs the task as a long-lived service.
+- `drop_done`: a job that ends `done` is removed together with its logs/data after `runner.drop_done_delay_seconds` (a service right away). Failed jobs are kept.
+- `keep_n` (0-100, default 0; other values → 422): with `drop_done` on a cron schedule, the newest `keep_n` done jobs started by this schedule (by the scheduler or "run now") are kept; older ones are removed as usual. No effect on services or without `drop_done`.
+
 ## Full Workflow Example
 
 1. **Clone Set**: Browser to http://localhost:8000/controller/pyops/sets > Add (name="myops", URL=git@github.com/user/myops.git, branch=main).

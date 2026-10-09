@@ -5,7 +5,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Depends
 from starlette.status import HTTP_404_NOT_FOUND, HTTP_400_BAD_REQUEST, HTTP_500_INTERNAL_SERVER_ERROR
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 
 from sqlalchemy import select
@@ -30,6 +30,8 @@ class ScheduleArgument(BaseModel):
     name: str
     drop_done: bool
     max_retries: int = 0
+    # Done jobs kept despite drop_done (cron schedules only; 0 = none).
+    keep_n: int = Field(default=0, ge=0, le=100)
     schedule: str
     param: str
     # Whether the schedule starts active. Defaults to True for backwards
@@ -53,6 +55,7 @@ async def list_get():
                           Schedule.active,
                           Schedule.drop_done,
                           Schedule.max_retries,
+                          Schedule.keep_n,
                           Schedule.schedule,
                           Schedule.last,
                           Schedule.param)
@@ -141,6 +144,7 @@ async def item_put(cr: ScheduleArgument, user: str = Depends(get_current_user)):
                 schedule.name = cr.name
                 schedule.drop_done = cr.drop_done
                 schedule.max_retries = cr.max_retries
+                schedule.keep_n = cr.keep_n
                 schedule.schedule = cr.schedule
                 schedule.param = cr.param
                 # Do not update owner, active, last
@@ -153,6 +157,7 @@ async def item_put(cr: ScheduleArgument, user: str = Depends(get_current_user)):
                     active      = cr.active,
                     drop_done   = cr.drop_done,
                     max_retries = cr.max_retries,
+                    keep_n      = cr.keep_n,
                     schedule    = cr.schedule,
                     param       = cr.param,
                     last        = datetime.now()
