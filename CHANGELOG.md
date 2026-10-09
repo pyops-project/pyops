@@ -103,6 +103,11 @@ from 3.0.0 onward.
   `test:integration` → `test:e2e`, CI job `test:vsix_integration` →
   `test:e2e:vsix`.
 
+### Documentation
+- **Agent instructions moved from `CLAUDE.md` to `AGENTS.md`** (read by
+  Claude Code and other coding agents); the unused `.roo/` configuration
+  was removed.
+
 ## [3.3.6] — 2026-07-01
 
 ### Fixed
