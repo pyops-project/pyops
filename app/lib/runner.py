@@ -32,7 +32,7 @@ def is_shutdown_pending() -> bool:
     return os.path.exists(SHUTDOWN_FLAG_PATH)
 
 
-def enqueue(set: str, name: str, owner: str, kind: str, drop_done: bool, param: str, max_retries: int = 0, overrides: str | None = None):
+def enqueue(set: str, name: str, owner: str, kind: str, drop_done: bool, param: str, max_retries: int = 0, overrides: str | None = None, schedule_id: int | None = None):
     """Enqueues a new job into the database.
 
     Args:
@@ -43,6 +43,7 @@ def enqueue(set: str, name: str, owner: str, kind: str, drop_done: bool, param: 
         drop_done (bool): Auto-drop on success.
         param (str): Job parameters/code snippet.
         overrides (str | None): JSON string of overrides dict for debug/test/testdebug kind.
+        schedule_id (int | None): Id of the Schedule row the job is started from.
 
     Returns:
         str: Generated job ID.
@@ -78,7 +79,8 @@ def enqueue(set: str, name: str, owner: str, kind: str, drop_done: bool, param: 
             kind = kind,
             state = "todo",
             param = param,
-            overrides = overrides
+            overrides = overrides,
+            schedule_id = schedule_id
         )
 
         session.add(job)

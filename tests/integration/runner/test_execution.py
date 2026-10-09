@@ -815,7 +815,7 @@ class TestExecution:
             call("owner", "set", "name", "service", ["failed"]),
         ])
         # Verify enqueue
-        mock_enqueue.assert_called_once_with("set", "name", "owner", "service", True, "param", 0, None)
+        mock_enqueue.assert_called_once_with("set", "name", "owner", "service", True, "param", 0, None, schedule_id=1)
         # Check last updated
         with Session(engine) as session:
             result = session.get(Schedule, 1)

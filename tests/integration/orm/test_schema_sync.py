@@ -71,6 +71,17 @@ def test_models_upgrade_populated_baseline_db(empty_db, seed_db, schema_baseline
     assert _projected(_rows(empty_db, "schedule"), schedules) == schedules
 
 
+def test_job_schedule_id_added_to_3_3_6_db(empty_db, seed_db):
+    from app.orm.database import init_db
+
+    seed_db(empty_db, "3.3.6")
+
+    init_db()
+
+    assert [row["schedule_id"] for row in _rows(empty_db, "job")] == [None]
+    assert "ix_job_schedule_id" in {name for _, name, _ in _schema(empty_db)}
+
+
 def test_columns_and_index_added_after_backup(empty_db, seed_db):
     from app.lib.files import version
     from app.orm.database import get_db_engine, sync_schema

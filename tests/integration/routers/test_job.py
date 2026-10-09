@@ -32,6 +32,7 @@ class TestJobRouter:
             assert job.state == "todo"
             assert job.param == run_data["param"]
             assert job.owner
+            assert job.schedule_id is None
 
     def test_put_job_item_enqueue_invalid_param(self, mock_client, test_temp_dir, patch_tempfile, mock_datetime):
         run_data = {"name": "test", "drop_done": False, "param": "{}", "debug": False}  # Missing 'set'

@@ -93,7 +93,7 @@ async def run_get(id: int):
         if schedule == None:
             raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Schedule {} not existing".format(id))
 
-        job_id = runner.enqueue(schedule.set, schedule.name, schedule.owner, "task" if schedule.schedule else "service", schedule.drop_done, schedule.param, schedule.max_retries, None)
+        job_id = runner.enqueue(schedule.set, schedule.name, schedule.owner, "task" if schedule.schedule else "service", schedule.drop_done, schedule.param, schedule.max_retries, None, schedule_id=schedule.id)
 
         with Session(get_db_engine()) as session:
             updated_schedule = session.get(Schedule, id)

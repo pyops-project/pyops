@@ -109,21 +109,20 @@ class TestScheduleRouter:
             assert updated_schedule.active is False
 
     def test_post_schedule_run(self, mock_client, mock_db):
+        from app.orm.job import Job
         with Session(get_db_engine()) as session:
             schedule = Schedule(set="default", name="test_job", owner="testuser", schedule="* * * * *", active=True, param="{}", last=None, drop_done=False)
             session.add(schedule)
             session.commit()
             schedule_id = schedule.id
-        
-        with patch("app.lib.runner.enqueue") as mock_enqueue:
-            mock_enqueue.return_value = 2  # New job id
-            response = mock_client.get(f"/scriptlet/schedule/run?id={schedule_id}", headers={"X-User": "testuser"})
-            assert response.status_code == 200
-            mock_enqueue.assert_called_once_with("default", "test_job", "testuser", "task", False, "{}", 0, None)
-            assert response.json()["job"] == 2
-            with Session(get_db_engine()) as session:
-                updated_schedule = session.query(Schedule).filter_by(id=schedule_id).first()
-                assert updated_schedule.last is not None
+
+        response = mock_client.get(f"/scriptlet/schedule/run?id={schedule_id}", headers={"X-User": "testuser"})
+        assert response.status_code == 200
+        with Session(get_db_engine()) as session:
+            job = session.get(Job, response.json()["job"])
+            assert (job.set, job.name, job.owner, job.kind, job.drop_done, job.param, job.max_retries, job.schedule_id) == ("default", "test_job", "testuser", "task", False, "{}", 0, schedule_id)
+            updated_schedule = session.query(Schedule).filter_by(id=schedule_id).first()
+            assert updated_schedule.last is not None
 
     def test_post_schedule_run_not_found(self, mock_client, mock_db):
         response = mock_client.get("/scriptlet/schedule/run?id=999", headers={"X-User": "testuser"})

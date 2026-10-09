@@ -22,6 +22,10 @@ from 3.0.0 onward.
   database is unchanged and start-up aborts with an error naming the
   database, the SQLite error, the failing statement and the backup.
   Recovery: restore the backup, fix the cause, restart pyops.
+- **Jobs record the schedule that started them.** A job started by a
+  schedule — by the scheduler or via "run now" — stores the schedule's id
+  in the new `job.schedule_id` column; all other jobs leave it empty.
+  Existing databases get the column at start-up; older jobs stay empty.
 - **VSIX: connectivity inherited from the shared PyOps client config.** The
   extension now reads the PyOps client config (`~/.config/pyops/config.toml`,
   override via `PYOPSCTL_CONFIG`) — the same connectivity profiles the

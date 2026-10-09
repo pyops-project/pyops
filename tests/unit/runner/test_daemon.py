@@ -417,7 +417,7 @@ class TestDaemon:
         mock_croniter.return_value = mock_cron
         mock_find.return_value = []  # No running jobs
         schedule()
-        mock_enqueue.assert_called_once_with("test_set", "test_name", "test_owner", "task", False, None, 0, None)
+        mock_enqueue.assert_called_once_with("test_set", "test_name", "test_owner", "task", False, None, 0, None, schedule_id=sched_id)
         with Session(get_db_engine()) as test_session:
             sched = test_session.get(Schedule, sched_id)
             test_session.refresh(sched)
@@ -491,7 +491,7 @@ class TestDaemon:
         mock_croniter.return_value = mock_cron
         mock_find.return_value = []  # No running jobs
         schedule()
-        mock_enqueue.assert_called_once_with("test_set", "test_name", "test_owner", "task", False, None, 0, None)
+        mock_enqueue.assert_called_once_with("test_set", "test_name", "test_owner", "task", False, None, 0, None, schedule_id=sched_id)
         with Session(get_db_engine()) as test_session:
             sched = test_session.get(Schedule, sched_id)
             test_session.refresh(sched)
@@ -514,7 +514,7 @@ class TestDaemon:
             sched_id = sched.id
         mock_find.side_effect = [[], []]
         schedule()
-        mock_enqueue.assert_called_once_with("test_set", "test_name", "test_owner", "service", False, None, 0, None)
+        mock_enqueue.assert_called_once_with("test_set", "test_name", "test_owner", "service", False, None, 0, None, schedule_id=sched_id)
         with Session(get_db_engine()) as test_session:
             sched = test_session.get(Schedule, sched_id)
             test_session.refresh(sched)

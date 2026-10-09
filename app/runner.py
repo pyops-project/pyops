@@ -693,7 +693,7 @@ def schedule():
                         if not running_jobs:
                             logger.debug(f"schedule: enqueuing task {s.set}::{s.name} (cron {s.schedule}) at {next_run}")
                             try:
-                                lib_runner.enqueue(s.set, s.name, s.owner, "task", s.drop_done, s.param, s.max_retries, None)
+                                lib_runner.enqueue(s.set, s.name, s.owner, "task", s.drop_done, s.param, s.max_retries, None, schedule_id=s.id)
                             except lib_runner.ShutdownPending:
                                 logger.info("schedule: shutdown pending — skipping task enqueue for %s::%s", s.set, s.name)
                                 return
@@ -709,7 +709,7 @@ def schedule():
                      len(lib_runner.find(s.owner, s.set, s.name, "service", ["failed"])) < 3:
                     logger.debug(f"schedule: enqueuing service {s.set}::{s.name} at {now}")
                     try:
-                        lib_runner.enqueue(s.set, s.name, s.owner, "service", s.drop_done, s.param, s.max_retries, None)
+                        lib_runner.enqueue(s.set, s.name, s.owner, "service", s.drop_done, s.param, s.max_retries, None, schedule_id=s.id)
                     except lib_runner.ShutdownPending:
                         logger.info("schedule: shutdown pending — skipping service enqueue for %s::%s", s.set, s.name)
                         return

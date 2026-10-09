@@ -18,3 +18,4 @@ class Job(Base):
     overrides = Column(String, default=None)
     start = Column(DateTime, index=True)
     end = Column(DateTime, index=True)
+    schedule_id = Column(Integer, index=True)

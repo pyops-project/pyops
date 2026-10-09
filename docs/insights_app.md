@@ -139,6 +139,7 @@ The gunicorn master's `on_starting` runs `init_db()` once, before the runner and
 | detail | String | error message or traceback |
 | overrides | String | JSON dict for debug/VSIX local code |
 | start, end | DateTime | timestamps |
+| schedule_id | Integer | indexed; id of the `Schedule` row that started the job; NULL for all other jobs |
 
 **State machine**: `todo → dequeued → loading → running → done/failed/cancel/cancelling/cancelled/remove/removed`
 
@@ -343,6 +344,8 @@ graph TD
 - **Cron tasks** (non-empty `schedule` string): enqueues `task` job when `next_run ≤ now`; skips if one already running.
 - **Persistent services** (empty `schedule` string): enqueues `service` job if none active and failed count < 3.
 - **Essential services** (`PYOPS_ESSENTIAL_SERVICES`, currently `[{"set":"pyops","name":"data","owner":"system"}]`): same `<3-failed` gating as services-with-empty-schedule, but no `Schedule` row required — the runner keeps the listed services up unconditionally. The `pyops::data` service is what backs `/controller/pyops/sets`.
+
+Jobs enqueued from a `Schedule` row — cron tasks and persistent services here, plus "run now" (`GET /scriptlet/schedule/run`, the Web UI Scheduler's run button) — record its id in `job.schedule_id` (`enqueue(..., schedule_id=…)`). Essential services and every other job (job API `PUT /scriptlet/job/item` incl. the Web UI Manager/editor run buttons, `control.job.create`, pyopsctl, VSIX) leave it NULL.
 
 Every `lib_runner.enqueue` inside `schedule()` is wrapped in `try/except ShutdownPending → return` so a SIGTERM landing mid-iteration terminates the call cleanly rather than escaping as an exception.
 
