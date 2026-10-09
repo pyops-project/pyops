@@ -157,6 +157,7 @@ sequenceDiagram
 ### Database
 
 - `database.py`: `get_db_path()`, `init_db()`, `get_db_engine()`, `destroy_db()`
+- `init_db()` at start-up: additive schema sync (missing tables/columns/indexes) in one transaction, after backing up an existing DB
 - SQLite file-based DB, thread-safe WAL mode
 
 ## Execution

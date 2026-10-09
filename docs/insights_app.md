@@ -113,7 +113,17 @@ graph TD
 
 SQLite file-based DB in `data/app.db`, thread-safe WAL mode.
 
-`app/orm/database.py`: `get_db_path()`, `init_db()` (creates tables on startup), `get_db_engine()`, `destroy_db()`.
+`app/orm/database.py`: `get_db_path()`, `init_db()` (schema sync on startup), `sync_schema(engine, metadata)`, `get_db_engine()`, `destroy_db()`.
+
+### Schema Sync
+
+The gunicorn master's `on_starting` runs `init_db()` once, before the runner and the workers start. It compares the live DB with the models and applies only additive changes: missing tables are created, missing columns added (`ALTER TABLE … ADD COLUMN`), missing indexes created; each is logged as `schema sync: …`, and a current schema changes nothing. Renames, type changes and drops are not synced.
+
+- **Rule**: a new NOT NULL column needs a `server_default` (existing rows read it; an ORM `default=` does not count). CI guards this: `test_models_upgrade_populated_baseline_db` upgrades a populated DB of every schema baseline with the current models.
+- **Schema baselines** (`SCHEMA_BASELINES` in `tests/conftest.py`, currently 3.3.6): frozen, populated schemas of released versions. Before a change alters the models, freeze the last release's schema from its tag as a new baseline — unless it equals the newest baseline — so the upgrade is tested from every released schema (e.g. 3.3.6→3.3.8 and 3.3.7→3.3.8, not only 3.3.7→3.3.8). A release that did not change the schema gets no baseline; existing baselines are never regenerated.
+- **Backup**: before changing a DB that already has tables, `VACUUM INTO` writes a consistent copy next to it, `<stem>.bck.<VERSION>.<HASH>.<YYYYmmddTHHMMSS>.db` (`app.bck.3.3.7.<sha256[:12]>.<datetime>.db` for `data/app.db`). `VACUUM` rebuilds the file from the content, so equal content hashes equally: if a backup with the same hash exists (e.g. on every restart after a failed, rolled-back sync) it is reused and no new copy is kept.
+- **Failure**: all changes run in one transaction (`BEGIN IMMEDIATE`), so a failure leaves the DB unchanged. gunicorn prints `Error: …` naming the DB file, the SQLite error, the failing statement and the backup, and exits 1 before the runner starts. Recovery: restore the backup, fix the cause, restart pyops (the sync runs again).
+- **Connections**: `init_db()` disposes the engine (`destroy_db()`), so no open SQLite connection is inherited across `fork()` by the runner or the workers; they open their own via `get_db_engine()`.
 
 ### Job
 

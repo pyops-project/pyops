@@ -5,6 +5,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import pytest
 from unittest.mock import patch
 
+import contextlib
+import sqlite3
 import tempfile
 import os
 import shutil
@@ -86,28 +88,117 @@ def mock_conf(tmp_path):
     files.Config.init(str(conf_path))
     yield
 
-"""Standard isolated DB fixture for all tests using temporary SQLite with full patching and cleanup."""
+"""Base DB fixture: the configured temp DB path (tmp_path/test.db), absent, with the models
+registered and no global engine bound; yields the path."""
 @pytest.fixture(scope="function")
-def mock_db(mock_conf, tmp_path):
+def empty_db(mock_conf, tmp_path):
     import gc
-    from app.orm.database import Base, get_db_engine, init_db, destroy_db
+    from app.orm.database import destroy_db
     from app.orm.job import Job
     from app.orm.schedule import Schedule
-    from unittest.mock import patch
 
     destroy_db()
     db_path = tmp_path / "test.db"
     if db_path.exists():
         db_path.unlink()
-    init_db()
 
     try:
-        yield
+        yield db_path
     finally:
         destroy_db()
         gc.collect()
         if db_path.exists():
             db_path.unlink()
+
+"""Standard isolated DB fixture for all tests using temporary SQLite with full patching and cleanup."""
+@pytest.fixture(scope="function")
+def mock_db(empty_db):
+    from app.orm.database import init_db
+
+    init_db()
+
+# FROZEN: the sqlite_master DDL that `create_all` emits for the v3.3.6 models
+# (generated once from the v3.3.6 tag; trailing whitespace and index order
+# normalised). It is the "existing deployment" baseline the schema-sync tests
+# upgrade from — never regenerate it from HEAD, or it stops being the 3.3.6
+# shape once the models gain columns.
+V3_3_6_SCHEMA = """
+CREATE TABLE job (
+	id VARCHAR NOT NULL,
+	"set" VARCHAR NOT NULL,
+	name VARCHAR NOT NULL,
+	owner VARCHAR NOT NULL,
+	kind VARCHAR NOT NULL,
+	state VARCHAR NOT NULL,
+	drop_done BOOLEAN NOT NULL,
+	max_retries INTEGER NOT NULL,
+	param VARCHAR,
+	pid INTEGER,
+	detail VARCHAR,
+	overrides VARCHAR,
+	start DATETIME,
+	"end" DATETIME,
+	PRIMARY KEY (id)
+);
+CREATE INDEX ix_job_end ON job ("end");
+CREATE INDEX ix_job_kind ON job (kind);
+CREATE INDEX ix_job_name ON job (name);
+CREATE INDEX ix_job_owner ON job (owner);
+CREATE INDEX ix_job_pid ON job (pid);
+CREATE INDEX ix_job_set ON job ("set");
+CREATE INDEX ix_job_start ON job (start);
+CREATE INDEX ix_job_state ON job (state);
+CREATE TABLE schedule (
+	id INTEGER NOT NULL,
+	schedule VARCHAR NOT NULL,
+	"set" VARCHAR NOT NULL,
+	name VARCHAR NOT NULL,
+	owner VARCHAR NOT NULL,
+	active BOOLEAN NOT NULL,
+	drop_done BOOLEAN NOT NULL,
+	max_retries INTEGER NOT NULL,
+	param VARCHAR,
+	last DATETIME,
+	PRIMARY KEY (id)
+);
+CREATE INDEX ix_schedule_active ON schedule (active);
+CREATE INDEX ix_schedule_last ON schedule (last);
+CREATE INDEX ix_schedule_name ON schedule (name);
+CREATE INDEX ix_schedule_owner ON schedule (owner);
+CREATE INDEX ix_schedule_schedule ON schedule (schedule);
+CREATE INDEX ix_schedule_set ON schedule ("set");
+"""
+
+# Rows of an existing 3.3.6 deployment; terminal job state with drop_done=0
+# and an inactive schedule, so the runner's start-up housekeeping leaves them alone.
+V3_3_6_ROWS = """
+INSERT INTO job (id, "set", name, owner, kind, state, drop_done, max_retries, param, start, "end")
+VALUES ('seed-done', 'seed', 'task', 'seed_user', 'task', 'done', 0, 2, '{"k": 1}',
+        '2026-01-01 00:00:00.000000', '2026-01-01 00:01:00.000000');
+INSERT INTO schedule (id, schedule, "set", name, owner, active, drop_done, max_retries, param, last)
+VALUES (1, '0 3 * * *', 'seed', 'task', 'seed_user', 0, 1, 0, '{}', NULL);
+"""
+
+# Frozen, populated schema baselines of released versions the schema sync must
+# upgrade from (rule: docs/insights_app.md § Schema Sync). Only a release whose
+# schema differs from the newest baseline gets an entry.
+SCHEMA_BASELINES = {
+    "3.3.6": V3_3_6_SCHEMA + V3_3_6_ROWS,
+}
+
+"""Factory fixture writing the populated baseline of a released version to a path with stdlib sqlite3 (no app code)."""
+@pytest.fixture(scope="function")
+def seed_db():
+    def _seed(path, baseline):
+        with contextlib.closing(sqlite3.connect(str(path))) as conn:
+            conn.executescript(SCHEMA_BASELINES[baseline])
+
+    return _seed
+
+"""Each schema baseline version in turn, for tests that must upgrade from every one of them."""
+@pytest.fixture(scope="function", params=list(SCHEMA_BASELINES))
+def schema_baseline(request):
+    return request.param
 
 """Fixture for FastAPI TestClient with config patches and user override."""
 @pytest.fixture

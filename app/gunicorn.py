@@ -72,8 +72,9 @@ p = Process(target=runner.main, kwargs={
 def on_starting(server):
     from app.orm.schedule import Schedule
     from app.orm.job import Job
-    init_db()
-    
+    for change in init_db():
+        server.log.info("schema sync: %s", change)
+
     p.start()
 
 def on_exit(server):

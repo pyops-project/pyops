@@ -7,9 +7,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 from 3.0.0 onward.
 
-## [3.3.7] — 2026-07-07
+## [3.3.7] — 2026-10-09
 
 ### Added
+- **Additive database schema sync at start-up.** Besides creating missing
+  tables, start-up now adds missing columns and indexes to existing tables
+  (each logged as `schema sync: …`); renames, type changes and drops are
+  not synced. A new NOT NULL column needs a `server_default`. Before
+  changing an existing database, a backup
+  `<stem>.bck.<VERSION>.<HASH>.<DATETIME>.db` is written next to it
+  (e.g. `data/app.bck.3.3.7.<hash>.<datetime>.db`); an existing backup
+  with the same content hash is reused, so restarting after a failure
+  does not pile up copies. All changes run in one transaction: on failure the
+  database is unchanged and start-up aborts with an error naming the
+  database, the SQLite error, the failing statement and the backup.
+  Recovery: restore the backup, fix the cause, restart pyops.
 - **VSIX: connectivity inherited from the shared PyOps client config.** The
   extension now reads the PyOps client config (`~/.config/pyops/config.toml`,
   override via `PYOPSCTL_CONFIG`) — the same connectivity profiles the
@@ -61,6 +73,11 @@ from 3.0.0 onward.
   `send_completion` waited indefinitely for the runner's ACK; it now
   gives up after 30 s (logged, not raised) and always tears down its
   ZMQ context, so the job subprocess can exit.
+- **The runner and the web workers inherited the gunicorn master's open
+  SQLite connection across `fork()`.** SQLite forbids carrying a
+  connection into a child process (latent locking/corruption risk); the
+  master now disposes its engine after the start-up schema sync, so each
+  process opens its own.
 
 ### CI
 - **VSIX "integration" suite renamed to the VSIX e2e axis.** It boots a
