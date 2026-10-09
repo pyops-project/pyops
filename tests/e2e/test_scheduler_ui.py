@@ -5,12 +5,14 @@ Covers the UI workflows not exercised by test_schedule_api.py:
   - Delete schedule (confirm dialog + row removal)
   - Create modal with every field populated (param, max-retries, drop-done, keep-n, max-fail-n)
   - Create modal Cancel button
-  - keep-n input enabled only with drop-done and a cron schedule; max-fail-n always enabled
+  - keep-n input enabled only with drop-done and a cron schedule (create and edit modal); max-fail-n always enabled
+  - 422 validation errors shown as their messages
 """
 
 import time
 
 import pytest
+from playwright.sync_api import expect
 
 from tests.e2e.conftest import expand_set, set_ace_value
 
@@ -142,7 +144,7 @@ class TestSchedulerUI:
         pyops_server.assert_no_unexpected_errors()
 
     def test_edit_modal_updates_existing_schedule(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
-        """Opening Edit, changing fields, and submitting updates the schedule."""
+        """Opening Edit, changing fields, and submitting updates the schedule; a 422 shows its message first."""
         _prepare_set_and_task(api_anon, set_factory, commit_set)
         # Create via API — the create flow is already covered above.
         resp = api_anon.put(
@@ -183,6 +185,10 @@ class TestSchedulerUI:
         frame.locator('[data-testid="scheduler-edit-max-retries"]').fill("5")
         frame.locator('[data-testid="scheduler-edit-drop-done"]').check()
         keep_n.fill("6")
+        # Out of range: the 422 shows its message and the modal stays open for the correction.
+        max_fail_n.fill("101")
+        frame.locator('[data-testid="scheduler-edit-submit"]').click()
+        expect(frame.locator('[data-testid="scheduler-edit-error"]')).to_contain_text("less than or equal to 100")
         max_fail_n.fill("9")
         frame.locator('[data-testid="scheduler-edit-submit"]').click()
 
@@ -224,6 +230,25 @@ class TestSchedulerUI:
         assert keep_n.is_enabled()
         drop_done.uncheck()
         assert keep_n.is_disabled()
+
+        frame.locator('[data-testid="scheduler-create-cancel"]').click()
+        pyops_server.assert_no_unexpected_errors()
+
+    def test_create_validation_error_shows_message(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
+        """A 422 (keep_n 101; the input's max is not enforced on a scripted submit) shows its message, not "[object Object]"."""
+        _prepare_set_and_task(api_anon, set_factory, commit_set)
+        frame = _nav_scheduler(e2e_page)
+        _open_create_modal(frame)
+        _submit_create(frame, set=SET_NAME, name=TASK_NAME, schedule="0 0 * * *", drop_done=True, keep_n=101)
+
+        err_locator = frame.locator('[data-testid="scheduler-create-error"]')
+        deadline = time.time() + 5
+        while time.time() < deadline and not err_locator.inner_text().strip():
+            time.sleep(0.1)
+        err = err_locator.inner_text()
+        assert "100" in err and "[object Object]" not in err, err
+        assert frame.locator('[data-testid="scheduler-create-modal"]').is_visible()
+        assert api_anon.get("/scriptlet/schedule/list").json() == []
 
         frame.locator('[data-testid="scheduler-create-cancel"]').click()
         pyops_server.assert_no_unexpected_errors()
@@ -372,7 +397,8 @@ class TestSchedulerUI:
 
     def test_drops_checkmark_and_edit_cron_preset(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """The Drops column renders a checkmark (not true/false), and the
-        edit modal's cron-preset selector fills the schedule field."""
+        edit modal's cron-preset selector fills the schedule field; changing
+        the schedule (preset or typed) re-checks the keep-n enablement."""
         _prepare_set_and_task(api_anon, set_factory, commit_set)
         resp = api_anon.put(
             "/scriptlet/schedule/item",
@@ -381,12 +407,12 @@ class TestSchedulerUI:
                 "name": TASK_NAME,
                 "drop_done": True,
                 "max_retries": 0,
-                "schedule": "0 1 * * *",
+                "schedule": "",
                 "param": "",
+                "active": False,
             },
         )
         sched_id = resp.json()["schedule"]
-        api_anon.get(f"/scriptlet/schedule/deactivate?id={sched_id}")
 
         frame = _nav_scheduler(e2e_page)
         frame.locator('[data-testid="scheduler-refresh"]').click()
@@ -404,8 +430,16 @@ class TestSchedulerUI:
         frame.locator('[data-testid="scheduler-edit-modal"]').wait_for(
             state="visible", timeout=5_000
         )
+        keep_n = frame.locator('[data-testid="scheduler-edit-keep-n"]')
+        schedule = frame.locator('[data-testid="scheduler-edit-schedule"]')
+        assert keep_n.is_disabled()  # drop_done, but a service
         frame.locator('[data-testid="scheduler-edit-schedule-preset"]').select_option("0 0 * * *")
-        assert frame.locator('[data-testid="scheduler-edit-schedule"]').input_value() == "0 0 * * *"
+        assert schedule.input_value() == "0 0 * * *"
+        assert keep_n.is_enabled()
+        schedule.fill("")
+        assert keep_n.is_disabled()
+        schedule.fill("0 0 * * *")
+        assert keep_n.is_enabled()
         frame.locator('[data-testid="scheduler-edit-submit"]').click()
         frame.locator('[data-testid="scheduler-edit-modal"]').wait_for(
             state="hidden", timeout=5_000

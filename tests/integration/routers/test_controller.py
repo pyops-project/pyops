@@ -159,9 +159,16 @@ def test_controller_proxy_preserves_query_path(client, mock_git_ops, mock_db):
         assert params["path"] == "/custom"
         assert params["cmd"] == "foo"
 
-def test_controller_proxy_service_client_args(client, mock_git_ops, mock_db):
+@pytest.mark.parametrize("web_conf, recv_timeout_ms", [
+    ({}, 300_000),
+    ({"timeout": 0}, 300_000),
+    ({"timeout": 7}, 7_000),
+], ids=["timeout_unset", "timeout_0", "timeout_7"])
+def test_controller_proxy_service_client_args(client, mock_git_ops, mock_db, web_conf, recv_timeout_ms):
     # Test that ServiceClient is called with correct arguments from controller globals
+    import zmq
     with patch("app.lib.runner.find", return_value=["mock_job_id"]) as mock_find, \
+         patch("app.lib.files.conf_web", return_value=web_conf), \
          patch("zmq.Context") as mock_zmq_context, \
          patch("msgpack.unpackb", return_value=[200, {"test": "response"}]) as mock_unpackb:
 
@@ -177,6 +184,8 @@ def test_controller_proxy_service_client_args(client, mock_git_ops, mock_db):
         # The mock controller code sets: set="testset", service="testservice", debug=False (default)
         # For services (not debug), owner is None to allow access by all users
         mock_find.assert_called_once_with(None, "testset", "testservice", "service", ["running"])
+        # The recv is bounded by the web worker's request timeout (web.timeout s, 300 s when unset or 0).
+        mock_socket.setsockopt.assert_any_call(zmq.RCVTIMEO, recv_timeout_ms)
 
 def test_controller_html_output(client, mock_git_ops, mock_db):
     # Test that controller endpoint returns HTML with sticky navbar
@@ -235,8 +244,8 @@ def test_controller_proxy_closes_service_client_on_success(client, mock_git_ops,
 
 
 def test_controller_proxy_closes_service_client_on_error_status(client, mock_git_ops, mock_db):
-    """close() runs via finally even when the service returns a non-200 (which
-    raises HTTPException) — the client is never leaked on the error path."""
+    """close() also runs when the service returns a non-200 (which then
+    raises HTTPException) — the client is not leaked on the error status."""
     with patch("app.lib.runner.find", return_value=["mock_job_id"]), \
          patch("app.lib.pyops.ServiceClient") as mock_service:
         mock_instance = MagicMock()
@@ -245,4 +254,20 @@ def test_controller_proxy_closes_service_client_on_error_status(client, mock_git
 
         response = client.get("/controller/testset/testname/", headers={"X-User": "testuser"})
         assert response.status_code == 500
+        mock_instance.close.assert_called_once()
+
+
+def test_controller_proxy_closes_service_client_on_request_error(client, mock_git_ops, mock_db):
+    """close() runs via finally when request() raises — a recv that timed out
+    (zmq.Again) on a slow or dead service does not leak the client."""
+    import zmq
+    with patch("app.lib.runner.find", return_value=["mock_job_id"]), \
+         patch("app.lib.pyops.ServiceClient") as mock_service:
+        mock_instance = MagicMock()
+        mock_service.return_value = mock_instance
+        mock_instance.request.side_effect = zmq.Again()
+
+        response = client.get("/controller/testset/testname/", headers={"X-User": "testuser"})
+        assert response.status_code == 200
+        assert response.json()["error"].startswith("Controller execution failed: ")
         mock_instance.close.assert_called_once()

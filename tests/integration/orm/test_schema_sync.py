@@ -148,17 +148,47 @@ def test_failure_rolls_back_and_names_statement_and_backup(empty_db, seed_db):
         Column("probe_bad", Integer, nullable=False),  # no server_default: rejected on a populated table
     )
 
-    errors = []
-    for _ in range(2):
+    def failed_sync():
         with pytest.raises(RuntimeError) as exc:
             sync_schema(get_db_engine(), md)
-        errors.append(str(exc.value))
+        return str(exc.value)
+
+    first = failed_sync()
+    [backup] = _backups(empty_db)
+    # the restart happens later: the reused backup keeps its name, no copy with a newer datetime appears
+    earlier = backup.with_name(re.sub(r"\d{8}T\d{6}", "20000101T000000", backup.name))
+    backup.rename(earlier)
+    second = failed_sync()
+
+    assert _backups(empty_db) == [earlier]
+    assert not (empty_db.parent / "test.bck.tmp").exists()
+    for error, named in ((first, backup), (second, earlier)):
+        assert f"schema sync of {empty_db} failed and was rolled back: " \
+               "Cannot add a NOT NULL column with default value NULL" in error
+        assert "ALTER TABLE job ADD COLUMN probe_bad INTEGER NOT NULL" in error
+        assert str(named) in error
+    assert _schema(empty_db) == schema
+
+
+def test_stale_backup_tmp_does_not_block_backup(empty_db, seed_db):
+    """A <stem>.bck.tmp left by a start-up killed mid-backup is replaced, not refused by VACUUM INTO."""
+    from app.orm.database import get_db_engine, sync_schema
+
+    seed_db(empty_db, "3.3.6")
+    schema = _schema(empty_db)
+    stale = empty_db.parent / "test.bck.tmp"
+    stale.write_bytes(b"partial backup")
+
+    assert sync_schema(get_db_engine(), _probe_metadata()) == [
+        "added column job.probe_note",
+        "added column job.probe_n",
+        "added column job.probe_ref",
+        "created index ix_job_probe_ref",
+    ]
 
     [backup] = _backups(empty_db)
-    for error in errors:
-        assert str(backup) in error
-        assert "ALTER TABLE job ADD COLUMN probe_bad INTEGER NOT NULL" in error
-    assert _schema(empty_db) == schema
+    assert _schema(backup) == schema
+    assert not stale.exists()
 
 
 def test_init_db_disposes_engine(empty_db):

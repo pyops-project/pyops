@@ -849,6 +849,13 @@ class TestCleanupDropDoneKeepN:
 
         assert self._states_after_cleanup(jobs) == ["remove", "remove", "done", "done"]
 
+    def test_failed_jobs_take_no_keep_slot(self, mock_db):
+        """A newer failed run of the schedule does not push its last successful runs out of keep_n."""
+        sched_id = self._schedule(schedule="* * * * *", drop_done=True, keep_n=2)
+        jobs = self._done_jobs(sched_id, [40, 30]) + TestCleanupFailedMaxFailN._failed_jobs(sched_id, [10])
+
+        assert self._states_after_cleanup(jobs) == ["done", "done", "failed"]
+
     @pytest.mark.parametrize("schedule_kw", [
         {"schedule": "* * * * *", "drop_done": True, "keep_n": 0},
         {"schedule": "* * * * *", "drop_done": False, "keep_n": 2},
@@ -932,6 +939,20 @@ class TestCleanupFailedMaxFailN:
         jobs = self._failed_jobs(first, [4, 3]) + self._failed_jobs(second, [2, 1])
 
         assert self._states_after_cleanup(jobs) == ["remove", "failed", "remove", "failed"]
+
+    def test_only_failed_jobs_trimmed(self, mock_db):
+        """Done history and in-flight jobs (no end yet) of the schedule are left alone."""
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        sched_id = TestCleanupDropDoneKeepN._schedule(schedule="* * * * *", drop_done=False, max_fail_n=1)
+        jobs = self._failed_jobs(sched_id, [4, 2]) + TestCleanupDropDoneKeepN._done_jobs(sched_id, [3, 1])
+        with Session(get_db_engine()) as session:
+            session.add_all(Job(id=state, set="test_set", name="test_name", owner="test_owner", kind="task",
+                                state=state, drop_done=False, schedule_id=sched_id) for state in ("todo", "running"))
+            session.commit()
+
+        assert self._states_after_cleanup(jobs + ["todo", "running"]) == \
+            ["remove", "failed", "done", "done", "todo", "running"]
 
     def test_service_and_unscheduled_failed_jobs_kept(self, mock_db):
         service = TestCleanupDropDoneKeepN._schedule(schedule="", drop_done=False, max_fail_n=1)

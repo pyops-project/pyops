@@ -394,6 +394,38 @@ describe('ManagerTreeDataProvider', () => {
         { set: 'keep', name: 'script1', type: 'task' },
       ]);
     });
+
+    it('applies the set filter to local-only scriptlets and downloads only kept sets', async () => {
+      require('./utils/helpers').setupConfigMock({includedSets: ['keep']});
+      mockApiClient.fetch.mockImplementation(async (url: string) => ({
+        ok: true,
+        json: jest.fn().mockResolvedValue(
+          url === '/scriptlet/inventory/list'
+            ? [{ set: 'keep', name: 's1', type: 'task' }, { set: 'drop', name: 's2', type: 'task' }]
+            : { code: 'print(1)' }
+        ),
+      }));
+      // Workspace holds a local-only file of a kept set, one of a non-whitelisted
+      // set, and a previously synced copy of the filtered remote drop/s2.
+      jest.spyOn(provider as any, 'scanLocalScriptlets').mockResolvedValue([
+        { set: 'keep', name: 'local1', type: 'task', isLocalOnly: true },
+        { set: 'other', name: 'local2', type: 'task', isLocalOnly: true },
+        { set: 'drop', name: 's2', type: 'task', isLocalOnly: true },
+      ]);
+
+      await provider.refresh();
+
+      expect((provider as any)._scriptlets).toEqual([
+        { set: 'keep', name: 's1', type: 'task' },
+        { set: 'keep', name: 'local1', type: 'task', isLocalOnly: true },
+      ]);
+      const fetchedUrls = mockApiClient.fetch.mock.calls.map((c: any[]) => c[0]);
+      expect(fetchedUrls).toContain('/scriptlet/inventory/code?set=keep&name=s1');
+      expect(fetchedUrls.filter((u: string) => u.includes('set=drop'))).toEqual([]);
+      const writtenPaths = (require('fs').writeFileSync as jest.Mock).mock.calls.map((c: any[]) => c[0]);
+      expect(writtenPaths).toContain('/test/workspace/pyops/keep/task/s1.py');
+      expect(writtenPaths.filter((p: string) => p.includes('/pyops/drop/'))).toEqual([]);
+    });
   });
 
   describe('getChildren with empty workspaceFolders array', () => {

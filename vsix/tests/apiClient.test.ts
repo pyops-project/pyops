@@ -129,6 +129,7 @@ url = "https://dev.example"
 `);
         require('./utils/helpers').setupConfigMock({serverUrl: undefined, username: undefined});
         expect(apiClient.getServerUrl()).toBe('https://dev.example');
+        expect(ApiClient.hasValidConfigStatic()).toBe(true);
       });
     });
   });

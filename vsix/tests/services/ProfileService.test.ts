@@ -159,4 +159,21 @@ url = "http://two"
     fs.utimesSync(file, later, later);
     expect(resolveProfile('dev')?.url).toBe('http://two');
   });
+
+  it('serves the cached parse while the mtime is unchanged', () => {
+    const mtime = new Date('2020-01-01T00:00:00Z');
+    write(`
+[profiles.dev]
+url = "http://one"
+`);
+    fs.utimesSync(file, mtime, mtime);
+    expect(resolveProfile('dev')?.url).toBe('http://one');
+    // Rewrite but restore the same mtime: the cache must answer, not a re-parse.
+    fs.writeFileSync(file, `
+[profiles.dev]
+url = "http://two"
+`);
+    fs.utimesSync(file, mtime, mtime);
+    expect(resolveProfile('dev')?.url).toBe('http://one');
+  });
 });

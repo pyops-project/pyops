@@ -74,6 +74,7 @@ describe('resolveConnectivity', () => {
       expect(c.authMode).toBe('x-user');
       expect(c.username).toBe('directuser');
       expect(c.profileApiKey).toBeUndefined();
+      expect(c.debugPorts).toEqual([5678]); // profile has no debug_ports
     });
 
     it('the pyops.profile setting selects a non-default profile', () => {
@@ -105,6 +106,36 @@ describe('resolveConnectivity', () => {
     it('authMode override wins over the profile-derived mode', () => {
       setupConfigMock({ serverUrl: undefined, username: undefined, authMode: 'x-user' });
       expect(resolveConnectivity().authMode).toBe('x-user');
+      // and the other way round: basic over a keyless (x-user) profile
+      setupConfigMock({ serverUrl: undefined, username: undefined, authMode: 'basic', profile: 'direct' });
+      expect(resolveConnectivity().authMode).toBe('basic');
+    });
+
+    it('an explicitly empty username (cleared in the Settings UI) is not a remap', () => {
+      setupConfigMock({ serverUrl: undefined, username: '' });
+      const c = resolveConnectivity();
+      expect(c.userOverridden).toBe(false);
+      expect(c.username).toBe('profuser');
+      expect(c.profileApiKey).toBe('profkey');
+    });
+
+    it('User-level and workspace-folder settings count as overrides', () => {
+      setupConfigMock({ serverUrl: undefined, username: undefined });
+      const inspect = require('vscode').workspace.getConfiguration('pyops').inspect as jest.Mock;
+      const workspaceOnly = inspect.getMockImplementation()!;
+      inspect.mockImplementation((key: string) => {
+        if (key === 'serverUrl') {
+          return { ...workspaceOnly(key), globalValue: 'http://user-level:1' };
+        }
+        if (key === 'username') {
+          return { ...workspaceOnly(key), workspaceFolderValue: 'folderuser' };
+        }
+        return workspaceOnly(key);
+      });
+      const c = resolveConnectivity();
+      expect(c.serverUrl).toBe('http://user-level:1');
+      expect(c.username).toBe('folderuser');
+      expect(c.userOverridden).toBe(true);
     });
 
     it('debugPorts override fully replaces the profile pool', () => {
