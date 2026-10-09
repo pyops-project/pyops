@@ -44,8 +44,8 @@ from app.lib import job as job_lib
 
 
 # Persistent services that run without a `Schedule` row. The schedule loop
-# re-enqueues each entry whenever it isn't already running, gated by the
-# same `<3 failed` rule used for service-with-empty-schedule. The operator
+# re-enqueues each entry whenever it isn't already running, gated by a
+# fixed `<3 failed` rule (schedule services use their `max_fail_n`). The operator
 # unblocks a stuck essential service by deleting its failed records from
 # the Monitor (which removes them from `find(..., "service", ["failed"])`).
 PYOPS_ESSENTIAL_SERVICES = [
@@ -186,7 +186,7 @@ def _shutdown_job_processes(processes: dict[int, subprocess.Popen], timeout: flo
     # Final sweep — drives each row to the right state for the next boot:
     #   • SIGKILL'd: the service didn't respond to SIGTERM. Mark `failed`
     #     so it's visible in the monitor and counts toward the per-service
-    #     <3-failed gate.
+    #     failed-count gate.
     #   • `cancel` / `cancelling`: an operator cancel was mid-flight when
     #     shutdown started. Finalise to `cancelled` so the next-start
     #     gate honours the operator intent (cancelled blocks restart).
@@ -299,13 +299,14 @@ def handleOddJobs():
 
     Transient states (`dequeued`, `loading`) get reset to `todo` so the
     new runner can pick them up. `running` gets marked `failed` with a
-    sentinel detail (`INCOMPLETE_ON_STARTUP_DETAIL`). `cancel`/`cancelling`
+    sentinel detail (`INCOMPLETE_ON_STARTUP_DETAIL`) and `end` set to the
+    detection time, so it ranks as the newest failure. `cancel`/`cancelling`
     get finalised to `cancelled` — the daemon-thread terminate from a
     cancel HTTP got killed by an immediately-following shutdown, or the
     previous run crashed mid-terminate; the process is gone by the time
     we see this on startup.
 
-    To keep the per-service `<3 failed` gate from accumulating ghosts
+    To keep the per-service failed-count gate from accumulating ghosts
     across repeated unclean container restarts (docker stop_grace_period
     exhausted before the runner could clean up), we deduplicate after
     the sweep: at most ONE row with the incomplete-on-startup detail
@@ -314,7 +315,7 @@ def handleOddJobs():
 
     Terminal states (`done`, `failed`-with-other-detail, `cancelled`,
     `remove`, `removed`) are NOT touched — they're either history we
-    want to preserve (for `<3 failed` and cancelled-blocks-restart) or
+    want to preserve (for the failed-count gate and cancelled-blocks-restart) or
     transient cleanup states that purgeLeftoverServiceJobs handles.
     """
     new_incomplete = []  # (id, set, name, owner, kind) of rows we just marked incomplete
@@ -336,6 +337,7 @@ def handleOddJobs():
             else:  # running
                 job.state = "failed"
                 job.detail = INCOMPLETE_ON_STARTUP_DETAIL
+                job.end = datetime.now()
                 new_incomplete.append((job.id, job.set, job.name, job.owner, job.kind))
         commit_with_retry(session)
 
@@ -369,7 +371,7 @@ def purgeLeftoverServiceJobs():
     re-enqueueing the service. This sweep finishes that cleanup.
 
     Terminal `failed` / `done` / `cancelled` rows are preserved — the
-    schedule-loop's `<3 failed` gate and the cancelled-blocks-restart
+    schedule-loop's failed-count gate and the cancelled-blocks-restart
     rule both rely on those rows surviving across restarts.
     """
     with Session(get_db_engine()) as session:
@@ -564,6 +566,25 @@ def cleanup_drop_done_jobs():
         else:
             logger.debug("cleanup_drop_done_jobs: no jobs to clean up")
 
+def cleanup_failed_jobs():
+    # max_fail_n: a cron schedule keeps only its newest max_fail_n failed jobs.
+    newest = func.row_number().over(partition_by=Job.schedule_id, order_by=Job.end.desc()).label("newest")
+    ranked = select(Job.id, newest, Schedule.max_fail_n) \
+        .join(Schedule, Schedule.id == Job.schedule_id) \
+        .where(Job.state == "failed", Schedule.schedule != "") \
+        .subquery()
+    surplus = select(ranked.c.id).where(ranked.c.newest > ranked.c.max_fail_n)
+
+    with Session(get_db_engine()) as session:
+        jobs_to_remove = session.scalars(select(Job).where(Job.id.in_(surplus))).all()
+
+        for job in jobs_to_remove:
+            logger.debug(f"cleanup_failed_jobs: marking job {job.id} for removal")
+            job.state = "remove"
+
+        if jobs_to_remove:
+            commit_with_retry(session)
+
 def finishJob(job_id: str, state: str, detail: str):
     logger.debug(f"finishJob(job_id='{job_id}', state='{state}', detail='{detail}')")
 
@@ -685,6 +706,7 @@ def schedule():
                       Schedule.active,
                       Schedule.drop_done,
                       Schedule.max_retries,
+                      Schedule.max_fail_n,
                       Schedule.schedule,
                       Schedule.param,
                       Schedule.last)
@@ -715,7 +737,7 @@ def schedule():
                 elif not lib_runner.find(s.owner, s.set, s.name, "service",
                          ["todo", "dequeued", "loading", "running",
                           "cancel", "cancelling", "cancelled", "done"]) and \
-                     len(lib_runner.find(s.owner, s.set, s.name, "service", ["failed"])) < 3:
+                     len(lib_runner.find(s.owner, s.set, s.name, "service", ["failed"], schedule_id=s.id)) < s.max_fail_n:
                     logger.debug(f"schedule: enqueuing service {s.set}::{s.name} at {now}")
                     try:
                         lib_runner.enqueue(s.set, s.name, s.owner, "service", s.drop_done, s.param, s.max_retries, None, schedule_id=s.id)
@@ -730,7 +752,8 @@ def schedule():
                     logger.debug(f"schedule: after commit, session ID {id(session)}, committed last={now} for service {s.id} at {datetime.now()}")
 
     # Essential services without a Schedule row — same gating as the
-    # service-with-empty-schedule branch above. A user-initiated cancel
+    # service-with-empty-schedule branch above, with a fixed failure limit
+    # of 3 in place of max_fail_n. A user-initiated cancel
     # (`cancel` → `cancelling` → `cancelled`) is a hard stop: the operator
     # has deliberately taken the service down and must remove the row
     # before it comes back. Three failures in a row is also a stop until
@@ -802,6 +825,7 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
 
     # clean up drop_done jobs that have been done for 60+ seconds
     cleanup_drop_done_jobs()
+    cleanup_failed_jobs()
 
     processes: dict[int, subprocess.Popen] = {}
 
@@ -874,6 +898,7 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
 
             # clean up drop_done jobs that have been done for delay+ seconds
             cleanup_drop_done_jobs()
+            cleanup_failed_jobs()
 
             # Once shutdown has been signalled, stop claiming new jobs.
             # In-flight terminations and ZMQ completions above still run so

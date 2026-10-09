@@ -3,9 +3,9 @@
 Covers the UI workflows not exercised by test_schedule_api.py:
   - Edit-existing-schedule modal (scheduler-edit-*)
   - Delete schedule (confirm dialog + row removal)
-  - Create modal with every field populated (param, max-retries, drop-done, keep-n)
+  - Create modal with every field populated (param, max-retries, drop-done, keep-n, max-fail-n)
   - Create modal Cancel button
-  - keep-n input enabled only with drop-done and a cron schedule
+  - keep-n input enabled only with drop-done and a cron schedule; max-fail-n always enabled
 """
 
 import time
@@ -68,6 +68,8 @@ def _submit_create(frame, **fields):
         frame.locator('[data-testid="scheduler-create-drop-done"]').check()
     if fields.get("keep_n") is not None:
         frame.locator('[data-testid="scheduler-create-keep-n"]').fill(str(fields["keep_n"]))
+    if fields.get("max_fail_n") is not None:
+        frame.locator('[data-testid="scheduler-create-max-fail-n"]').fill(str(fields["max_fail_n"]))
     frame.locator('[data-testid="scheduler-create-submit"]').click()
 
 
@@ -103,7 +105,7 @@ class TestSchedulerUI:
         pyops_server.assert_no_unexpected_errors()
 
     def test_create_with_all_fields_persists_values(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
-        """Every field on the create modal (param, max_retries, drop_done, keep_n) round-trips."""
+        """Every field on the create modal (param, max_retries, drop_done, keep_n, max_fail_n) round-trips."""
         _prepare_set_and_task(api_anon, set_factory, commit_set)
         frame = _nav_scheduler(e2e_page)
 
@@ -117,6 +119,7 @@ class TestSchedulerUI:
             max_retries=3,
             drop_done=True,
             keep_n=4,
+            max_fail_n=7,
         )
         frame.locator('[data-testid="scheduler-create-modal"]').wait_for(
             state="hidden", timeout=5_000
@@ -132,6 +135,7 @@ class TestSchedulerUI:
         assert s["max_retries"] == 3
         assert s["drop_done"] is True
         assert s["keep_n"] == 4
+        assert s["max_fail_n"] == 7
 
         # Deactivate so the scheduler doesn't start firing it.
         api_anon.get(f"/scriptlet/schedule/deactivate?id={s['id']}")
@@ -149,6 +153,7 @@ class TestSchedulerUI:
                 "drop_done": False,
                 "max_retries": 0,
                 "keep_n": 2,
+                "max_fail_n": 5,
                 "schedule": "0 0 * * *",
                 "param": "",
             },
@@ -169,6 +174,8 @@ class TestSchedulerUI:
         keep_n = frame.locator('[data-testid="scheduler-edit-keep-n"]')
         assert keep_n.input_value() == "2"
         assert keep_n.is_disabled()
+        max_fail_n = frame.locator('[data-testid="scheduler-edit-max-fail-n"]')
+        assert max_fail_n.input_value() == "5"
 
         # Modify schedule + param + max_retries. (param is an Ace editor)
         frame.locator('[data-testid="scheduler-edit-schedule"]').fill("30 2 * * *")
@@ -176,6 +183,7 @@ class TestSchedulerUI:
         frame.locator('[data-testid="scheduler-edit-max-retries"]').fill("5")
         frame.locator('[data-testid="scheduler-edit-drop-done"]').check()
         keep_n.fill("6")
+        max_fail_n.fill("9")
         frame.locator('[data-testid="scheduler-edit-submit"]').click()
 
         frame.locator('[data-testid="scheduler-edit-modal"]').wait_for(
@@ -188,25 +196,30 @@ class TestSchedulerUI:
         assert s["max_retries"] == 5
         assert s["drop_done"] is True
         assert s["keep_n"] == 6
+        assert s["max_fail_n"] == 9
         pyops_server.assert_no_unexpected_errors()
 
-    def test_create_keep_n_enabled_only_with_drop_done_and_cron(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
-        """The keep-n input follows drop-done and the schedule field live."""
+    def test_create_keep_n_and_max_fail_n_enablement(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
+        """The keep-n input follows drop-done and the schedule field live; max-fail-n (default 3) is enabled for cron and service."""
         _prepare_set_and_task(api_anon, set_factory, commit_set)
         frame = _nav_scheduler(e2e_page)
         _open_create_modal(frame)
 
         keep_n = frame.locator('[data-testid="scheduler-create-keep-n"]')
+        max_fail_n = frame.locator('[data-testid="scheduler-create-max-fail-n"]')
         drop_done = frame.locator('[data-testid="scheduler-create-drop-done"]')
         schedule = frame.locator('[data-testid="scheduler-create-schedule"]')
         assert keep_n.is_disabled()
+        assert max_fail_n.input_value() == "3"
 
         schedule.fill("0 0 * * *")
         assert keep_n.is_disabled()  # cron, but no drop_done
+        assert max_fail_n.is_enabled()
         drop_done.check()
         assert keep_n.is_enabled()
         schedule.fill("")
         assert keep_n.is_disabled()  # drop_done, but a service
+        assert max_fail_n.is_enabled()
         frame.locator('[data-testid="scheduler-create-schedule-preset"]').select_option("*/5 * * * *")
         assert keep_n.is_enabled()
         drop_done.uncheck()

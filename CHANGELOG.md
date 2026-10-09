@@ -31,6 +31,13 @@ from 3.0.0 onward.
   done jobs of a cron schedule with drop_done; older ones are removed as
   before. Set it in the Web UI Scheduler, via `PUT /scriptlet/schedule/item`
   or `control.schedule.create(..., keep_n=…)`; existing schedules read 0.
+- **Schedules limit their failed jobs.** A new schedule field `max_fail_n`
+  (1-100, default 3): a cron schedule keeps only its newest `max_fail_n`
+  failed jobs and removes older ones right away; a service schedule stops
+  restarting once `max_fail_n` of its jobs have failed — the service restart
+  limit, previously a fixed 3, is now per schedule. Set it in the Web UI
+  Scheduler, via `PUT /scriptlet/schedule/item` or
+  `control.schedule.create(..., max_fail_n=…)`; existing schedules read 3.
 - **VSIX: connectivity inherited from the shared PyOps client config.** The
   extension now reads the PyOps client config (`~/.config/pyops/config.toml`,
   override via `PYOPSCTL_CONFIG`) — the same connectivity profiles the

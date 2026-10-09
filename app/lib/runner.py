@@ -100,7 +100,7 @@ def query(id: str):
     with Session(get_db_engine()) as session:
         return session.get(Job, id)
 
-def find(owner: str | None, set: str, name: str, kind: str, states: list[str]):
+def find(owner: str | None, set: str, name: str, kind: str, states: list[str], schedule_id: int | None = None):
     """Finds job IDs matching criteria.
 
     Args:
@@ -109,6 +109,7 @@ def find(owner: str | None, set: str, name: str, kind: str, states: list[str]):
         name (str): Name.
         kind (str): Kind.
         states (list[str]): Job states to filter.
+        schedule_id (int | None): Schedule id (optional, if None, no schedule filter).
 
     Returns:
         list[str]: Matching job IDs (descending order).
@@ -122,6 +123,8 @@ def find(owner: str | None, set: str, name: str, kind: str, states: list[str]):
         )
         if owner is not None:
             stmt = stmt.where(Job.owner == owner)
+        if schedule_id is not None:
+            stmt = stmt.where(Job.schedule_id == schedule_id)
         stmt = stmt.order_by(Job.id.desc())
         return [j.id for j in session.execute(stmt)]
 

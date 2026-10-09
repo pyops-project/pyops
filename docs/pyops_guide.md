@@ -202,11 +202,12 @@ Files are versioned alongside scriptlets; runtime writes show as unstaged change
 
 ## Schedules
 
-Scriptlets create schedules with `control.schedule.create(set, name, drop_done, schedule, param, max_retries=0, keep_n=0)`, which returns the schedule id. Over REST, `PUT /scriptlet/schedule/item` takes the same fields as JSON (plus `id` to update an existing schedule); `GET /scriptlet/schedule/list` and `GET /scriptlet/schedule/item?id=…` return them.
+Scriptlets create schedules with `control.schedule.create(set, name, drop_done, schedule, param, max_retries=0, keep_n=0, max_fail_n=3)`, which returns the schedule id. Over REST, `PUT /scriptlet/schedule/item` takes the same fields as JSON (plus `id` to update an existing schedule — an update sets every field, omitted ones take their defaults); `GET /scriptlet/schedule/list` and `GET /scriptlet/schedule/item?id=…` return them.
 
 - `schedule`: a five-field cron expression; an empty string runs the task as a long-lived service.
-- `drop_done`: a job that ends `done` is removed together with its logs/data after `runner.drop_done_delay_seconds` (a service right away). Failed jobs are kept.
+- `drop_done`: a job that ends `done` is removed together with its logs/data after `runner.drop_done_delay_seconds` (a service right away). Failed jobs are not dropped (see `max_fail_n`).
 - `keep_n` (0-100, default 0; other values → 422): with `drop_done` on a cron schedule, the newest `keep_n` done jobs started by this schedule (by the scheduler or "run now") are kept; older ones are removed as usual. No effect on services or without `drop_done`.
+- `max_fail_n` (1-100, default 3; other values → 422): on a cron schedule, only the newest `max_fail_n` failed jobs started by this schedule are kept; older ones are removed with their logs/data right away, with or without `drop_done`. On a service, the service is not restarted once `max_fail_n` of its jobs have failed; delete failed jobs in the Monitor to restart it.
 
 ## Full Workflow Example
 

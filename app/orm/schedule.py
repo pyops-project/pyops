@@ -13,5 +13,6 @@ class Schedule(Base):
     drop_done = Column(Boolean, default=True, nullable=False)
     max_retries = Column(Integer, default=0, nullable=False)
     keep_n = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    max_fail_n = Column(Integer, nullable=False, default=3, server_default=text("3"))
     param = Column(String)
     last = Column(DateTime, index=True)

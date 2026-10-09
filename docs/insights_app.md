@@ -160,6 +160,7 @@ The gunicorn master's `on_starting` runs `init_db()` once, before the runner and
 | drop_done | Boolean | default=True |
 | max_retries | Integer | default=0 |
 | keep_n | Integer | 0-100, default=0; how many of its newest done jobs survive `drop_done` (cron schedules only) |
+| max_fail_n | Integer | 1-100, default=3; cron schedule: how many of its newest failed jobs are kept; service: how many failed jobs stop the restarts |
 | param | String | |
 | last | DateTime | last trigger time; indexed |
 
@@ -296,9 +297,10 @@ Background daemon spawned by `app/gunicorn.py`. Polls DB, spawns subprocesses, h
 #### Startup Sequence
 
 1. Remove a stale `/tmp/pyops/shutdown.flag` from a previous unclean exit (so `lib_runner.enqueue` won't refuse from the first iteration).
-2. `handleOddJobs()`: `dequeued`→`todo`, `running`→`failed`, `cancel`/`cancelling`→`cancelled` (crash + interrupted-cancel recovery).
+2. `handleOddJobs()`: `dequeued`→`todo`, `running`→`failed` (`end` = detection time), `cancel`/`cancelling`→`cancelled` (crash + interrupted-cancel recovery).
 3. `purgeLeftoverServiceJobs()`: deletes stale service jobs (dequeued/running/failed/done).
 4. `cleanup_drop_done_jobs()`: marks expired `drop_done` done-jobs as `remove`, except the newest `keep_n` done jobs (by `end`) of a cron `Schedule` with `drop_done` and `keep_n > 0`, matched via `job.schedule_id`. `keep_n` has no effect for jobs without a (still existing) schedule, for services, or when the schedule's `drop_done` is off.
+5. `cleanup_failed_jobs()`: marks the failed jobs of a cron `Schedule` beyond its newest `max_fail_n` (by `end`, matched via `job.schedule_id`) as `remove` right away — no delay, independent of `drop_done`; they are deleted with their workspace like drop-done jobs. Failed service jobs and failed jobs without a (still existing) schedule are kept.
 
 #### Main Loop
 
@@ -312,7 +314,7 @@ flowchart TD
     E -->|none| G[Poll ZMQ ROUTER]
     G --> H{Event?}
     H -->|yes| I[receive_and_process → finishJob]
-    H -->|no| J[cleanup_drop_done_jobs]
+    H -->|no| J[cleanup_drop_done_jobs + cleanup_failed_jobs]
     J --> K{getNextToDo?}
     K -->|job| L[loadJob → spawn Popen → assignJob]
     K -->|none| M[schedule → sleep 0.5s]
@@ -343,8 +345,8 @@ graph TD
 
 `schedule()` is called each main loop iteration when no job is queued:
 - **Cron tasks** (non-empty `schedule` string): enqueues `task` job when `next_run ≤ now`; skips if one already running.
-- **Persistent services** (empty `schedule` string): enqueues `service` job if none active and failed count < 3.
-- **Essential services** (`PYOPS_ESSENTIAL_SERVICES`, currently `[{"set":"pyops","name":"data","owner":"system"}]`): same `<3-failed` gating as services-with-empty-schedule, but no `Schedule` row required — the runner keeps the listed services up unconditionally. The `pyops::data` service is what backs `/controller/pyops/sets`.
+- **Persistent services** (empty `schedule` string): enqueues `service` job if none active and fewer than the schedule's `max_fail_n` failed service jobs carry its `schedule_id`.
+- **Essential services** (`PYOPS_ESSENTIAL_SERVICES`, currently `[{"set":"pyops","name":"data","owner":"system"}]`): same gating as services-with-empty-schedule, but with a fixed `<3-failed` limit (counting all their failed service jobs) and no `Schedule` row required — the runner keeps the listed services up unconditionally. The `pyops::data` service is what backs `/controller/pyops/sets`.
 
 Jobs enqueued from a `Schedule` row — cron tasks and persistent services here, plus "run now" (`GET /scriptlet/schedule/run`, the Web UI Scheduler's run button) — record its id in `job.schedule_id` (`enqueue(..., schedule_id=…)`). Essential services and every other job (job API `PUT /scriptlet/job/item` incl. the Web UI Manager/editor run buttons, `control.job.create`, pyopsctl, VSIX) leave it NULL.
 
@@ -873,7 +875,7 @@ docker  ── SIGTERM ──▶  gunicorn master (PID 1)
                   gunicorn master exits
 ```
 
-Worst-case clock: 120s (workers) + 15s (runner) ≈ **135s**. Docker's default `stop_grace_period` is **10s** — that's nowhere near enough; docker SIGKILLs the container before the runner ever gets its SIGTERM, leaving any then-running service rows in state `running`. The next start's `handleOddJobs` marks those as `failed` with the sentinel detail `"incomplete execution detected on startup"` (deduplicated per identity so the per-service `<3 failed` gate never accumulates across repeated unclean restarts).
+Worst-case clock: 120s (workers) + 15s (runner) ≈ **135s**. Docker's default `stop_grace_period` is **10s** — that's nowhere near enough; docker SIGKILLs the container before the runner ever gets its SIGTERM, leaving any then-running service rows in state `running`. The next start's `handleOddJobs` marks those as `failed` with the sentinel detail `"incomplete execution detected on startup"` (deduplicated per identity so the per-service failed-count gate never accumulates across repeated unclean restarts).
 
 **Compose deployments must set `stop_grace_period: 180s`** (or higher) on the pyops service so the chain has room to finish. See the example in the project README.
 

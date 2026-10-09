@@ -5,7 +5,8 @@ When a job is enqueued with drop_done=True and reaches the "done" state,
 the runner's cleanup_drop_done_jobs() loop marks it "remove" once
 drop_done_delay_seconds have elapsed, which then causes it to be deleted
 from the DB on the next disposeJobs() pass. A cron schedule with drop_done
-and keep_n > 0 keeps its newest keep_n done jobs.
+and keep_n > 0 keeps its newest keep_n done jobs. Independently, a cron
+schedule keeps only its newest max_fail_n failed jobs.
 
 This file overrides the e2e_env fixture to set drop_done_delay_seconds=2
 so the test does not have to wait for the default 60-second delay.
@@ -300,3 +301,53 @@ class TestDropDone:
         )
 
         pyops_server.assert_no_unexpected_errors()
+
+    def test_max_fail_n_trims_scheduled_failed_jobs(self, api, pyops_server, set_factory, commit_set):
+        """A cron schedule with max_fail_n=1 keeps only its newest failed job (drop_done off)."""
+        set_name = SET + "_max_fail_n"
+        set_factory(set_name)
+        api.put(
+            "/scriptlet/inventory/item",
+            json={"set": set_name, "name": "bad", "type": "task"},
+        )
+        api.post(
+            "/scriptlet/inventory/draft",
+            json={"set": set_name, "name": "bad", "code": 'raise RuntimeError("intentional")\n'},
+        )
+        commit_set(set_name, "add bad")
+
+        resp = api.put(
+            "/scriptlet/schedule/item",
+            json={
+                "set": set_name,
+                "name": "bad",
+                "drop_done": False,
+                "max_fail_n": 1,       # ← key field under test
+                "schedule": "0 0 1 1 *",
+                "param": "",
+                "active": False,       # jobs come from "run now" only
+            },
+        )
+        assert resp.status_code == 200
+        sched_id = resp.json()["schedule"]
+
+        job_ids = []
+        for _ in range(2):
+            resp = api.get(f"/scriptlet/schedule/run?id={sched_id}")
+            assert resp.status_code == 200
+            job_id = resp.json()["job"]
+            assert _wait_for_job(api, job_id, timeout=30)["state"] == "failed"
+            job_ids.append(job_id)
+        older, newer = job_ids
+
+        deadline = time.time() + 6
+        while time.time() < deadline:
+            if not _job_visible(api, older):
+                break
+            time.sleep(0.5)
+        else:
+            pytest.fail(f"Failed job {older} was not removed within 6s of the newer failure")
+
+        assert _job_visible(api, newer), "The newest max_fail_n failed jobs should be kept"
+
+        pyops_server.assert_no_unexpected_errors(allow=["intentional"])

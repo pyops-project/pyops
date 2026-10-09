@@ -812,7 +812,7 @@ class TestExecution:
             call("owner", "set", "name", "service",
                  ["todo", "dequeued", "loading", "running",
                   "cancel", "cancelling", "cancelled", "done"]),
-            call("owner", "set", "name", "service", ["failed"]),
+            call("owner", "set", "name", "service", ["failed"], schedule_id=1),
         ])
         # Verify enqueue
         mock_enqueue.assert_called_once_with("set", "name", "owner", "service", True, "param", 0, None, schedule_id=1)

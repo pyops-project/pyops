@@ -298,6 +298,7 @@
                 $("#createModal-dropDone").prop( "checked", false);
                 $("#createModal-maxRetries").val("0");
                 $("#createModal-keepN").val("0");
+                $("#createModal-maxFailN").val("3");
                 $("#createModal-schedule-preset").val("__custom__");
                 $("#createModal-schedule").val("");
                 updateKeepN("createModal");
@@ -312,6 +313,7 @@
                 const drop_done = $("#createModal-dropDone").is(':checked');
                 const max_retries = parseInt($("#createModal-maxRetries").val()) || 0;
                 const keep_n = parseInt($("#createModal-keepN").val()) || 0;
+                const max_fail_n = parseInt($("#createModal-maxFailN").val());
                 const schedule = $("#createModal-schedule").val();
                 const param = createParamEditor ? createParamEditor.getValue() : "";
 
@@ -321,6 +323,7 @@
                     "drop_done": drop_done,
                     "max_retries": max_retries,
                     "keep_n": keep_n,
+                    "max_fail_n": max_fail_n,
                     "schedule": schedule,
                     "param": param
                 }
@@ -418,6 +421,7 @@
                         $("#editModal-dropDone").prop("checked", s.drop_done);
                         $("#editModal-maxRetries").val(s.max_retries);
                         $("#editModal-keepN").val(s.keep_n);
+                        $("#editModal-maxFailN").val(s.max_fail_n);
                         $("#editModal-schedule").val(s.schedule);
                         updateKeepN("editModal");
                         // Reflect the current cron in the preset selector if it
@@ -443,6 +447,7 @@
                 $("#editModal-dropDone").prop("checked", false);
                 $("#editModal-maxRetries").val("0");
                 $("#editModal-keepN").val("0");
+                $("#editModal-maxFailN").val("3");
                 $("#editModal-schedule-preset").val("__custom__");
                 $("#editModal-schedule").val("");
                 updateKeepN("editModal");
@@ -458,6 +463,7 @@
                 const drop_done = $("#editModal-dropDone").is(':checked');
                 const max_retries = parseInt($("#editModal-maxRetries").val()) || 0;
                 const keep_n = parseInt($("#editModal-keepN").val()) || 0;
+                const max_fail_n = parseInt($("#editModal-maxFailN").val());
                 const schedule = $("#editModal-schedule").val();
                 const param = editParamEditor ? editParamEditor.getValue() : "";
 
@@ -468,6 +474,7 @@
                     "drop_done": drop_done,
                     "max_retries": max_retries,
                     "keep_n": keep_n,
+                    "max_fail_n": max_fail_n,
                     "schedule": schedule,
                     "param": param
                 }
@@ -601,6 +608,11 @@
                             <input id="createModal-maxRetries" type="number" min="0" value="0" class="form-control" data-testid="scheduler-create-max-retries">
                         </div>
                         <div class="mb-3">
+                            <label for="createModal-maxFailN" class="col-form-label">Max failed runs:</label>
+                            <input id="createModal-maxFailN" type="number" min="1" max="100" value="3" class="form-control" data-testid="scheduler-create-max-fail-n">
+                            <div class="form-text">Cron schedule: only the newest N failed jobs are kept. Service: not restarted once N runs have failed.</div>
+                        </div>
+                        <div class="mb-3">
                             <label for="createModal-schedule" class="col-form-label">Schedule:</label>
                             <select id="createModal-schedule-preset" class="form-select form-select-sm mb-1" data-testid="scheduler-create-schedule-preset">
                                 <option value="__custom__">Custom (cron below)</option>
@@ -660,6 +672,11 @@
                         <div class="mb-3">
                             <label for="editModal-maxRetries" class="col-form-label">Max Retries:</label>
                             <input id="editModal-maxRetries" type="number" min="0" value="0" class="form-control" data-testid="scheduler-edit-max-retries">
+                        </div>
+                        <div class="mb-3">
+                            <label for="editModal-maxFailN" class="col-form-label">Max failed runs:</label>
+                            <input id="editModal-maxFailN" type="number" min="1" max="100" value="3" class="form-control" data-testid="scheduler-edit-max-fail-n">
+                            <div class="form-text">Cron schedule: only the newest N failed jobs are kept. Service: not restarted once N runs have failed.</div>
                         </div>
                         <div class="mb-3">
                             <label for="editModal-schedule" class="col-form-label">Schedule:</label>

@@ -219,7 +219,7 @@ Distinguishes types by argument:
 
 #### Scheduling
 
-- `schedule()`: enqueues from cron Schedules via croniter; also re-enqueues `PYOPS_ESSENTIAL_SERVICES` (currently the `pyops::data` service that backs `/controller/pyops/sets`) under the same `<3-failed` gating as services without a Schedule row
+- `schedule()`: enqueues from cron Schedules via croniter; also re-enqueues `PYOPS_ESSENTIAL_SERVICES` (currently the `pyops::data` service that backs `/controller/pyops/sets`) under a fixed `<3-failed` gate (services with a Schedule row use its `max_fail_n`)
 
 #### Subprocess Execution Isolation
 

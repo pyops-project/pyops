@@ -98,7 +98,7 @@ class ScheduleControl:
     def list(self):
         return self.rq.get("scriptlet/schedule/list")
     
-    def create(self, set: str, name: str, drop_done: bool, schedule: str, param: str, max_retries: int = 0, keep_n: int = 0):
+    def create(self, set: str, name: str, drop_done: bool, schedule: str, param: str, max_retries: int = 0, keep_n: int = 0, max_fail_n: int = 3):
         return self.rq.put("scriptlet/schedule/item", json={
             "set": set,
             "name": name,
@@ -106,7 +106,8 @@ class ScheduleControl:
             "schedule": schedule,
             "param": param,
             "max_retries": max_retries,
-            "keep_n": keep_n
+            "keep_n": keep_n,
+            "max_fail_n": max_fail_n
         })["schedule"]
 
     def get(self, id: int):

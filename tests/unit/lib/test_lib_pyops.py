@@ -224,22 +224,24 @@ class TestScheduleControl:
             "drop_done": True,
             "max_retries": 0,
             "keep_n": 0,
+            "max_fail_n": 3,
             "schedule": "* * * * *",
             "param": "param"
         })
 
-    def test_create_keep_n(self, mock_control_request):
+    def test_create_keep_n_max_fail_n(self, mock_control_request):
         from app.lib import pyops
         mock_rq = Mock()
         mock_rq.put.return_value = {"schedule": 1}
         schedule_control = pyops.ScheduleControl(mock_rq)
-        assert schedule_control.create("test_set", "test_name", True, "* * * * *", "param", max_retries=2, keep_n=5) == 1
+        assert schedule_control.create("test_set", "test_name", True, "* * * * *", "param", max_retries=2, keep_n=5, max_fail_n=7) == 1
         mock_rq.put.assert_called_once_with("scriptlet/schedule/item", json={
             "set": "test_set",
             "name": "test_name",
             "drop_done": True,
             "max_retries": 2,
             "keep_n": 5,
+            "max_fail_n": 7,
             "schedule": "* * * * *",
             "param": "param"
         })

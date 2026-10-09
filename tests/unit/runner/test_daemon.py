@@ -107,7 +107,7 @@ class TestDaemon:
 
     def test_handleOddJobs_incomplete_dedup_does_not_block_under_three_gate(self, mock_db):
         """Three unclean restarts in a row leave ONE failed row, not three,
-        so the schedule's <3 failed gate still permits restart."""
+        so the schedule's failed-count gate still permits restart."""
         from app.runner import handleOddJobs, INCOMPLETE_ON_STARTUP_DETAIL
         from app.orm.database import get_db_engine
         from app.orm.job import Job
@@ -126,7 +126,7 @@ class TestDaemon:
 
     def test_handleOddJobs_preserves_terminal_states(self, mock_db):
         """`done` / `failed` / `cancelled` / `remove` / `removed` rows are
-        never overwritten — the per-service `<3 failed` gate and the
+        never overwritten — the per-service failed-count gate and the
         cancelled-blocks-restart rule both depend on those rows surviving
         across restarts."""
         from app.runner import handleOddJobs
@@ -876,6 +876,99 @@ class TestCleanupDropDoneKeepN:
         assert self._states_after_cleanup(jobs) == ["remove", "done", "remove", "done"]
 
 
+class TestCleanupFailedMaxFailN:
+    """cleanup_failed_jobs keeps the newest max_fail_n failed jobs of a cron schedule, without delay."""
+
+    @staticmethod
+    def _failed_jobs(schedule_id, ages, kind="task"):
+        """Failed jobs of `schedule_id` that ended `ages` seconds ago; returns their ids."""
+        from datetime import timedelta
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        now = datetime.now()
+        ids = [f"{schedule_id}_{age}" for age in ages]
+        with Session(get_db_engine()) as session:
+            session.add_all(Job(id=job_id, set="test_set", name="test_name", owner="test_owner", kind=kind, state="failed",
+                                drop_done=False, end=now - timedelta(seconds=age), schedule_id=schedule_id)
+                            for job_id, age in zip(ids, ages))
+            session.commit()
+        return ids
+
+    @staticmethod
+    def _states_after_cleanup(ids):
+        from app.runner import cleanup_failed_jobs
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        cleanup_failed_jobs()
+        with Session(get_db_engine()) as session:
+            return [session.get(Job, job_id).state for job_id in ids]
+
+    @pytest.mark.parametrize("drop_done", [True, False])
+    def test_keeps_newest_max_fail_n_failed_jobs(self, mock_db, drop_done):
+        sched_id = TestCleanupDropDoneKeepN._schedule(schedule="* * * * *", drop_done=drop_done, max_fail_n=2)
+        jobs = self._failed_jobs(sched_id, [4, 3, 2, 1])
+
+        assert self._states_after_cleanup(jobs) == ["remove", "remove", "failed", "failed"]
+
+    def test_incomplete_on_startup_kept_as_newest(self, mock_db):
+        """A cron task still running at an unclean stop is the schedule's newest failure after start-up."""
+        from app.runner import handleOddJobs
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        sched_id = TestCleanupDropDoneKeepN._schedule(schedule="* * * * *", drop_done=False, max_fail_n=2)
+        jobs = self._failed_jobs(sched_id, [2, 1])
+        with Session(get_db_engine()) as session:
+            session.add(Job(id="incomplete", set="test_set", name="test_name", owner="test_owner", kind="task",
+                            state="running", drop_done=False, schedule_id=sched_id))
+            session.commit()
+        handleOddJobs()
+
+        assert self._states_after_cleanup(jobs + ["incomplete"]) == ["remove", "failed", "failed"]
+
+    def test_max_fail_n_per_schedule(self, mock_db):
+        """Two schedules of the same task each keep their own newest failed job."""
+        first = TestCleanupDropDoneKeepN._schedule(schedule="0 * * * *", drop_done=False, max_fail_n=1)
+        second = TestCleanupDropDoneKeepN._schedule(schedule="30 * * * *", drop_done=False, max_fail_n=1)
+        jobs = self._failed_jobs(first, [4, 3]) + self._failed_jobs(second, [2, 1])
+
+        assert self._states_after_cleanup(jobs) == ["remove", "failed", "remove", "failed"]
+
+    def test_service_and_unscheduled_failed_jobs_kept(self, mock_db):
+        service = TestCleanupDropDoneKeepN._schedule(schedule="", drop_done=False, max_fail_n=1)
+        jobs = self._failed_jobs(service, [3, 2, 1], kind="service") + self._failed_jobs(None, [3, 2, 1])
+
+        assert self._states_after_cleanup(jobs) == ["failed"] * 6
+
+
+class TestServiceMaxFailN:
+    """A service schedule is re-enqueued while fewer than max_fail_n of its own jobs (by schedule_id) failed."""
+
+    @pytest.mark.parametrize("own_failed, enqueued", [(3, True), (4, False)])
+    @patch('app.runner.PYOPS_ESSENTIAL_SERVICES', [])
+    @patch('app.runner.lib_runner.enqueue')
+    def test_gate_counts_own_failed_jobs(self, mock_enqueue, mock_db, own_failed, enqueued):
+        from app.runner import schedule
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        from app.orm.schedule import Schedule
+        with Session(get_db_engine()) as session:
+            sched = Schedule(set="test_set", name="test_name", owner="test_owner", schedule="", active=True,
+                             drop_done=False, max_fail_n=4, param=None, last=None)
+            session.add(sched)
+            session.commit()
+            sched_id = sched.id
+            # Failed jobs of another schedule and without a schedule do not count.
+            session.add_all(Job(id=f"{schedule_id}_{i}", set="test_set", name="test_name", owner="test_owner",
+                                kind="service", state="failed", schedule_id=schedule_id)
+                            for schedule_id, count in ((sched_id, own_failed), (sched_id + 1, 4), (None, 4))
+                            for i in range(count))
+            session.commit()
+
+        schedule()
+
+        assert mock_enqueue.call_count == (1 if enqueued else 0)
+
+
 class TestShutdownFlag:
     """The shutdown-flag mechanism gates lib_runner.enqueue across process
     boundaries — so gunicorn workers (HTTP /scriptlet/job/item, /scriptlet/
@@ -1264,8 +1357,8 @@ class TestShutdownContract:
 
 class TestPyopsEssentialServices:
     """Persistent pyops-managed services run without a Schedule row.
-    The schedule loop iterates PYOPS_ESSENTIAL_SERVICES with the same
-    `<3 failed` gating as service-with-empty-schedule."""
+    The schedule loop iterates PYOPS_ESSENTIAL_SERVICES with a fixed
+    `<3 failed` gate (schedule services use their max_fail_n)."""
 
     @patch('app.runner.PYOPS_ESSENTIAL_SERVICES', [{"set": "pyops", "name": "data", "owner": "system"}])
     @patch('app.runner.lib_runner.enqueue')

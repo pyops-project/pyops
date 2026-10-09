@@ -92,6 +92,16 @@ def test_schedule_keep_n_added_to_3_3_6_db(empty_db, seed_db):
     assert [row["keep_n"] for row in _rows(empty_db, "schedule")] == [0]
 
 
+def test_schedule_max_fail_n_added_to_3_3_6_db(empty_db, seed_db):
+    from app.orm.database import init_db
+
+    seed_db(empty_db, "3.3.6")
+
+    init_db()
+
+    assert [row["max_fail_n"] for row in _rows(empty_db, "schedule")] == [3]
+
+
 def test_columns_and_index_added_after_backup(empty_db, seed_db):
     from app.lib.files import version
     from app.orm.database import get_db_engine, sync_schema
