@@ -385,7 +385,7 @@ The `test:pyopsctl` stage in `.gitlab-ci.yml` runs after `test:`,
 installs distribution `python3-requests` (matching the operator's
 environment — no pip-installed `requests` for the CLI), and runs
 `pytest tests/pyopsctl -v`. The other test stages (`test:`,
-`test:e2e`, `test:vsix*`, `test:image_build:`) are untouched.
+`test:e2e`, `test:vsix*`) are untouched.
 
 ## Interactive debug — session daemon
 

@@ -13,7 +13,7 @@ if [[ $# -ge 1 && -n "$1" ]]; then
 else
     if [[ ! -f "$DIR/VERSION" ]]; then
         echo "VERSION file not found at $DIR/VERSION" >&2
-        echo "Usage: $0 [VERSION] [no-pull]" >&2
+        echo "Usage: $0 [VERSION|dev] [no-pull]" >&2
         exit 1
     fi
     VERSION="$(tr -d '[:space:]' < "$DIR/VERSION")"
@@ -28,12 +28,19 @@ NO_CACHE_PULL="${2:-}"   # empty = normal cache/pull, non-empty = disable them
 # Clean up pycache
 find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 
-# Prepare tags
-TAG_FULL="${REGISTRY}:${VERSION}"
-TAG_MINOR="${REGISTRY}:${VERSION%.*}"
-TAG_MAJOR="${REGISTRY}:${VERSION%%.*}"
-TAG_LATEST="${REGISTRY}:latest"
-TAG_DEFAULT="${REGISTRY}"               # tagless
+# Prepare tags: "dev" (CI on non-main branches) pushes only :dev; a release
+# version pushes tagless, :latest, :MAJOR, :MAJOR.MINOR and :VERSION
+if [[ "$VERSION" == "dev" ]]; then
+    TAGS=( "${REGISTRY}:dev" )
+else
+    TAGS=(
+        "${REGISTRY}"                   # tagless
+        "${REGISTRY}:latest"
+        "${REGISTRY}:${VERSION%%.*}"
+        "${REGISTRY}:${VERSION%.*}"
+        "${REGISTRY}:${VERSION}"
+    )
+fi
 
 # Buildx builder setup (idempotent)
 docker buildx inspect pyops-builder >/dev/null 2>&1 || \
@@ -53,14 +60,12 @@ if [[ -z "$NO_CACHE_PULL" ]]; then
 fi
 
 # Add all tags
-BUILD_ARGS+=( --tag "$TAG_DEFAULT" )
-BUILD_ARGS+=( --tag "$TAG_LATEST" )
-BUILD_ARGS+=( --tag "$TAG_MAJOR" )
-BUILD_ARGS+=( --tag "$TAG_MINOR" )
-BUILD_ARGS+=( --tag "$TAG_FULL" )
+for TAG in "${TAGS[@]}"; do
+    BUILD_ARGS+=( --tag "$TAG" )
+done
 
 echo "Building and pushing the following tags:"
-printf "  - %s\n" "$TAG_DEFAULT" "$TAG_LATEST" "$TAG_MAJOR" "$TAG_MINOR" "$TAG_FULL"
+printf "  - %s\n" "${TAGS[@]}"
 
 docker buildx build \
     "${BUILD_ARGS[@]}" \
@@ -73,8 +78,4 @@ docker buildx build \
 echo
 echo "Build & push completed successfully."
 echo "Tags pushed:"
-echo "  ${TAG_DEFAULT}"
-echo "  ${TAG_LATEST}"
-echo "  ${TAG_MAJOR}"
-echo "  ${TAG_MINOR}"
-echo "  ${TAG_FULL}"
+printf "  %s\n" "${TAGS[@]}"

@@ -139,23 +139,6 @@ test:pyopsctl:
       when: always
     - when: manual
 
-# Test that the Dockerfile still builds on the runner's native arch. NOT
-# a real build: `build_dev.sh` keeps `:dev` local and doesn't push. The
-# point is to fail CI fast when a Dockerfile change breaks the image
-# definition, instead of only finding out during the manual `build:image:`
-# multi-arch run on main.
-test:image_build:
-  stage: test
-  image: docker:latest
-  before_script:
-    - apk add --no-cache bash
-  script:
-    - ./build_dev.sh
-  rules:
-    - if: '$CI_COMMIT_BRANCH == "main" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"'
-      when: always
-    - when: manual
-
 build:
   stage: build
   needs: [test, test:vsix]
@@ -320,13 +303,14 @@ verify:version_bumped:
 
 # Multi-arch container image build. Runs `./build.sh` which reads VERSION
 # and pushes :VERSION + :MAJOR + :MINOR + :latest + tagless to
-# registry.ralph.or.at/pyops/pyops. Manual trigger only — the operator goes
-# into the pipeline after a main-merge and starts this when they actually
-# want a published image.
+# registry.ralph.or.at/pyops/pyops — automatically on every main pipeline.
+# The predefined job-token credentials (CI_REGISTRY_USER / CI_REGISTRY_PASSWORD)
+# may push to the project's own registry; no extra CI/CD variables needed.
 #
 # Host requirements on the runner (graz-2 — see /srv/docker02/gitlab/README.md):
-#   1. qemu-user-static + binfmt-support installed → ARM64 emulation for the
-#      multi-arch buildx step
+#   1. ARM64 emulation for the multi-arch buildx step: qemu-user-static +
+#      binfmt-support are installed there; the docker-container builder would
+#      also emulate arm64 without them (BuildKit ships its own QEMU)
 #   2. /var/run/docker.sock mounted into job containers via runner config
 #      volumes — required because the runner runs with privileged=false so
 #      docker:dind is not an option, we share the host docker daemon instead
@@ -336,12 +320,32 @@ build:image:
   image: docker:latest
   before_script:
     - apk add --no-cache bash
-    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" registry.ralph.or.at
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin registry.ralph.or.at
   script:
     - ./build.sh
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'
-      when: manual
+
+# Dev image of every non-main build: `./build.sh dev` builds the same
+# multi-arch image and pushes only registry.ralph.or.at/pyops/pyops:dev
+# (never :latest or version tags). Starts right away (needs: []) so a
+# Dockerfile change that breaks the image fails the pipeline early.
+# Automatic in MR pipelines targeting main, manual on other branches like the
+# other jobs, never on main (build:image publishes the release there).
+build:image:dev:
+  stage: image
+  needs: []
+  image: docker:latest
+  before_script:
+    - apk add --no-cache bash
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin registry.ralph.or.at
+  script:
+    - ./build.sh dev
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      when: never
+    - if: '$CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"'
+    - when: manual
 
 # Tags the current main HEAD with vVERSION, uploads the VSIX as a Generic
 # Package, and creates a GitLab Release linking back to it. Manual — the

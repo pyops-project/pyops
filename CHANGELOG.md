@@ -112,6 +112,15 @@ from 3.0.0 onward.
   trixie) instead of apt-installing trixie's Node 20 — the latest
   `@vscode/vsce` needs Node >= 22. Applies to `test:e2e`, `test:e2e:vsix`,
   `test:vsix` and `build`.
+- **The container image is built and pushed on every main pipeline.**
+  `build:image` (multi-arch via `build.sh`) runs automatically on main
+  instead of manually, and logs in to the project registry with
+  `--password-stdin`.
+- **Non-main builds push a multi-arch `:dev` image.** The new
+  `build:image:dev` job runs `./build.sh dev` (only the `:dev` tag, never
+  `:latest` or version tags) — automatically in MR pipelines targeting
+  main, manually on other branches, never on main. It replaces
+  `test:image_build`; `build_dev.sh` is local only.
 
 ### Documentation
 - **Agent instructions moved from `CLAUDE.md` to `AGENTS.md`** (read by
