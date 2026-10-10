@@ -49,6 +49,37 @@ def _wait_ready(url: str, timeout: float) -> bool:
     return False
 
 
+def _job_processes(data_dir) -> list:
+    """The job processes (job_setup.py / job_runner.py) of the server whose
+    data lives in `data_dir`: their command line names a workspace file
+    below it."""
+    import psutil
+    found = []
+    for p in psutil.process_iter(["pid", "cmdline"]):
+        cmdline = p.info["cmdline"] or []
+        if any(arg.endswith(("job_setup.py", "job_runner.py")) for arg in cmdline) \
+                and any(str(data_dir) in arg for arg in cmdline):
+            found.append(p)
+    return found
+
+
+def _assert_no_job_left(data_dir, timeout: float):
+    """After the server stopped, its job processes must be gone: the runner
+    stops them during its shutdown. Waits up to `timeout` for that shutdown
+    to finish; a job process still alive then is a leak — it is killed so
+    later tests start clean, and the test fails naming it."""
+    deadline = time.monotonic() + timeout
+    left = _job_processes(data_dir)
+    while left and time.monotonic() < deadline:
+        time.sleep(0.5)
+        left = _job_processes(data_dir)
+    if left:
+        described = [f"pid {p.pid}: {' '.join(p.info['cmdline'])}" for p in left]
+        for p in left:
+            p.kill()
+        pytest.fail("job processes survived the server's shutdown:\n" + "\n".join(described))
+
+
 def _kill(proc, timeout: float):
     try:
         os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
@@ -175,6 +206,7 @@ def pyops_server_for_ctl(pyopsctl_env):
     finally:
         _kill(proc, SHUTDOWN_TIMEOUT)
         log.close()
+        _assert_no_job_left(pyopsctl_env["data_dir"], SHUTDOWN_TIMEOUT)
 
 
 @pytest.fixture(scope="function")

@@ -364,6 +364,13 @@ e2e/
   test_debug_interactive_session.py
 ```
 
+`pyops_server_for_ctl` stops its server's process group on teardown and
+then waits up to `SHUTDOWN_TIMEOUT` for the runner to have stopped the
+server's job processes (job processes run in their own session, so only
+the runner's shutdown reaches them). A job process still alive then —
+its command line names a workspace below the test's data dir — fails
+the test, and is killed so later tests start clean.
+
 The shared server fixture starts a fresh pyops in a new process group
 (mirrors `tests/e2e/conftest.py`) on port `18322` so it can run
 alongside the main e2e suite without colliding. The fixture also

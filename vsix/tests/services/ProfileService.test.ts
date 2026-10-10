@@ -3,6 +3,7 @@ import * as os from 'os';
 import * as path from 'path';
 
 import { configPath, ProfileConfigError, resolveProfile, _clearProfileCache } from '../../src/services/ProfileService';
+import { testCacheDir } from '../utils/helpers';
 
 describe('ProfileService', () => {
   let dir: string;
@@ -10,7 +11,7 @@ describe('ProfileService', () => {
   const savedEnv = { ...process.env };
 
   beforeEach(() => {
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pyops-profilesvc-'));
+    dir = fs.mkdtempSync(path.join(testCacheDir(), 'profilesvc-'));
     file = path.join(dir, 'config.toml');
     process.env.PYOPSCTL_CONFIG = file;
     delete process.env.PYOPSCTL_PROFILE;

@@ -114,6 +114,15 @@ from 3.0.0 onward.
   `vsix/tests/integration/` → `vsix/tests/e2e/`, npm script
   `test:integration` → `test:e2e`, CI job `test:vsix_integration` →
   `test:e2e:vsix`.
+- **The `test` job installs `pytest-playwright`.** `pytest tests/` also
+  collects (and skips) `tests/e2e`, so an e2e module importing Playwright
+  broke collection in CI while passing locally. The unused
+  `PYTHON_VERSION` variable (stale `3.12`) is removed.
+- **pyopsctl test servers must not leave job processes behind.** A test
+  server's `pyops::data` processes were once found running long after
+  their tests. The server fixture now fails a test whose server leaves a
+  job process alive after its shutdown, and kills that process so later
+  tests start clean.
 - **Node-using jobs run on `node:24-trixie-slim`** (Node 24 LTS on Debian
   trixie) instead of apt-installing trixie's Node 20 — the latest
   `@vscode/vsce` needs Node >= 22. Applies to `test:e2e`, `test:e2e:vsix`,

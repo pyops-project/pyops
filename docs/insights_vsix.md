@@ -394,6 +394,7 @@ Coverage targets: branches 80%, functions 80%, lines 90%, statements 80%.
 - `fs`/`path` mocks for filesystem operations
 - VSCode API mocks: `window.createOutputChannel`, `workspace.getConfiguration`, etc.
 - `beforeEach(jest.clearAllMocks())` for isolation; `beforeAll` for shared activation
+- Profile fixtures: `setProfileConfig(toml)` writes a client config under `vsix/.cache/tests/` (`testCacheDir()`) and points `PYOPSCTL_CONFIG` at it; `clearProfileConfig()` (in `afterEach`) resets the variable and deletes those dirs. `tests/jest.setup.ts` points `PYOPSCTL_CONFIG` at an absent file so the host's real client config never leaks in. `vsix/.vscodeignore` excludes `.cache/`
 
 ### E2E Tests — VSIX axis (`vsix/tests/e2e/`, VSCode electron)
 

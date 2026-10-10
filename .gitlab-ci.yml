@@ -2,7 +2,6 @@ image: debian:trixie-slim
 
 variables:
   PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
-  PYTHON_VERSION: "3.12"
   NPM_CACHE_DIR: "$CI_PROJECT_DIR/.cache/npm"
 
 stages:
@@ -20,7 +19,9 @@ test:
     - python3 -m venv .venv
     - source .venv/bin/activate
     - pip install --upgrade pip
-    - pip install psutil fastapi uvicorn sqlalchemy pyzmq msgpack croniter jedi requests zipstream-ng gunicorn pyyaml pytest httpx pytest-cov debugpy
+    # pytest-playwright: `pytest tests/` also collects tests/e2e (skipped there,
+    # but imported), as in the local venv
+    - pip install psutil fastapi uvicorn sqlalchemy pyzmq msgpack croniter jedi requests zipstream-ng gunicorn pyyaml pytest httpx pytest-cov debugpy pytest-playwright pytest-base-url
   script:
     - source .venv/bin/activate
     - ./test.sh

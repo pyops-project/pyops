@@ -163,8 +163,20 @@ const nodePath = require('path');
 // fixture resolves no profile (legacy VSCode-only connectivity).
 export const NONEXISTENT_CONFIG = nodePath.join(nodeOs.tmpdir(), 'pyops-vsix-tests-no-such-config.toml');
 
+// Test runtime files live in .cache/ (project rule). Resolved on use: some
+// suites mock 'path', and they load this module too.
+export function testCacheDir(): string {
+  const dir = nodePath.resolve(__dirname, '../../.cache/tests');
+  nodeFs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+// The profile dirs setProfileConfig() creates are removed again by clearProfileConfig().
+const profileDirs: string[] = [];
+
 export function setProfileConfig(toml: string): string {
-  const dir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'pyops-vsix-cfg-'));
+  const dir = nodeFs.mkdtempSync(nodePath.join(testCacheDir(), 'cfg-'));
+  profileDirs.push(dir);
   const file = nodePath.join(dir, 'config.toml');
   nodeFs.writeFileSync(file, toml);
   process.env.PYOPSCTL_CONFIG = file;
@@ -175,4 +187,7 @@ export function setProfileConfig(toml: string): string {
 export function clearProfileConfig() {
   process.env.PYOPSCTL_CONFIG = NONEXISTENT_CONFIG;
   require('../../src/services/ProfileService')._clearProfileCache();
+  for (const dir of profileDirs.splice(0)) {
+    nodeFs.rmSync(dir, { recursive: true, force: true });
+  }
 }

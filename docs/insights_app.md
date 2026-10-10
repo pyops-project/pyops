@@ -780,6 +780,7 @@ Ulimit check tracks RLIMIT_NOFILE and RLIMIT_NPROC against current usage from `/
 
 ### Key Fixtures
 
+- `mock_conf`: temp config (DB, jobs, git, venv, pkg under `tmp_path`) and a per-test `lib_runner.SHUTDOWN_FLAG_PATH`, so a pyops runner shutting down elsewhere on the host (real `/tmp/pyops/shutdown.flag`) cannot make `enqueue()` refuse
 - `mock_db`: temp SQLite DB
 - `mock_git_dir`: mock set/scriptlet directory tree
 - `mock_git_ops(mock_git_dir)`: temp FS ops; covers `write_content`, `read_content`, `get_controller_code`, `get_view_content`, `delete_file_unstaged`

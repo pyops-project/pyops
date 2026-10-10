@@ -59,9 +59,13 @@ def pytest_collection_modifyitems(config, items):
 
 """Common mock config fixture for tests."""
 @pytest.fixture(scope="function")
-def mock_conf(tmp_path):
+def mock_conf(tmp_path, monkeypatch):
     from app.lib import files
+    from app.lib import runner as lib_runner
     import json
+    # enqueue() refuses while the shutdown flag exists; a per-test path keeps a
+    # pyops runner shutting down elsewhere on the host from failing tests
+    monkeypatch.setattr(lib_runner, "SHUTDOWN_FLAG_PATH", str(tmp_path / "pyops" / "shutdown.flag"))
     test_db = tmp_path / "test.db"
     test_jobs = tmp_path / "data" / "jobs"
     test_git = tmp_path / "data" / "git"
