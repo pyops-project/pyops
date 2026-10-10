@@ -5,14 +5,18 @@ from app.routers.scriptlet.editor import CompletionArgument
 from unittest.mock import patch
 
 class TestEditorRouter:
-    @pytest.mark.parametrize("editor_type", ["task", "library", "view", "md"])
+    @pytest.mark.parametrize("editor_type", ["task", "library", "view", "md", "data", "jslibrary"])
     def test_get_editor_html(self, mock_client, editor_type, test_temp_dir, patch_tempfile, mock_datetime):
+        from pathlib import Path
         response = mock_client.get(f"/scriptlet/editor_{editor_type}")
         assert response.status_code == 200
         assert response.headers["content-type"] == "text/html; charset=utf-8"
         # Check for common elements in editor HTML
         assert "<ace-editor>" in response.text or "ace.js" in response.text  # Ace integration
         assert "bootstrap.min.css" in response.text  # UI framework
+        # Each route serves its own editor page.
+        page = Path(__file__).parents[3] / "app" / "sites" / "scriptlet" / f"editor_{editor_type}.html"
+        assert response.text == page.read_text()
 
     def test_get_editor_html_not_found(self, mock_client, test_temp_dir, patch_tempfile, mock_datetime):
         response = mock_client.get("/scriptlet/editor_invalid")

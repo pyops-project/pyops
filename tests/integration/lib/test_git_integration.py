@@ -275,3 +275,74 @@ class TestGitIntegration:
 
         result = git.has_unstaged_changes(integration_repo, 'script', 'task')
         assert result is False  # Treated as clean due to stderr
+
+
+class TestScriptletLayout:
+    """Scriptlet files beyond the top level — docs/<name>.md and
+    data/<name>.{yaml,yml,json} — in a real set repo."""
+
+    @pytest.mark.parametrize("name,type_,rel_path", [
+        ("job", "task", "job.task.py"),
+        ("guide", "markdown", os.path.join("docs", "guide.md")),
+        ("cfg", "data", os.path.join("data", "cfg.yaml")),
+    ])
+    def test_create_scriptlet_writes_untracked_file(self, integration_repo, name, type_, rel_path):
+        """create_scriptlet writes the initial content at the type's location
+        (creating docs/ or data/) as an uncommitted draft."""
+        from app.lib import git
+        path = git.create_scriptlet("test_set", name, type_, "initial\n")
+
+        assert path == os.path.join(integration_repo, rel_path)
+        with open(path) as f:
+            assert f.read() == "initial\n"
+        assert git.has_unstaged_changes(integration_repo, name, type_) is True
+
+    @pytest.mark.parametrize("existing_type", ["task", "markdown", "data"])
+    def test_create_scriptlet_name_taken_in_any_namespace(self, integration_repo, existing_type):
+        """A name already used at the top level, under docs/ or under data/
+        cannot be created again, whatever the new type."""
+        from app.lib import git
+        git.create_scriptlet("test_set", "shared", existing_type, "first\n")
+        for new_type in ("task", "markdown", "data"):
+            with pytest.raises(FileExistsError, match="Name 'shared' already exists in set 'test_set'"):
+                git.create_scriptlet("test_set", "shared", new_type, "second\n")
+
+    def test_list_scriptlets_covers_docs_and_data(self, integration_repo):
+        """docs/ pages and data/ files are listed (data entries with their
+        on-disk extension), each with its own draft flag; a top-level .py
+        that is no scriptlet filename is skipped."""
+        from app.lib import git
+        os.makedirs(os.path.join(integration_repo, "docs"))
+        os.makedirs(os.path.join(integration_repo, "data"))
+        for rel, content in [("docs/guide.md", "# Guide\n"), ("data/cfg.yaml", "x: 1\n")]:
+            with open(os.path.join(integration_repo, rel), "w") as f:
+                f.write(content)
+        subprocess.run(["git", "add", "."], cwd=integration_repo, check=True)
+        subprocess.run(["git", "commit", "-m", "docs and data"], cwd=integration_repo, check=True)
+        for rel, content in [("data/state.json", "{}\n"), ("notes.py", "x = 1\n")]:
+            with open(os.path.join(integration_repo, rel), "w") as f:
+                f.write(content)
+
+        listing = [e for e in git.list_scriptlets() if e["set"] == "test_set"]
+
+        assert sorted(listing, key=lambda e: e["name"]) == [
+            {"set": "test_set", "name": "README", "type": "markdown", "has_unstaged": False},
+            {"set": "test_set", "name": "cfg", "type": "data", "ext": "yaml", "has_unstaged": False},
+            {"set": "test_set", "name": "guide", "type": "markdown", "has_unstaged": False},
+            {"set": "test_set", "name": "state", "type": "data", "ext": "json", "has_unstaged": True},
+        ]
+
+    def test_repo_status_with_tags_but_head_off_tag(self, integration_repo):
+        """A set with release tags whose HEAD moved past them is not reported
+        as tag-pinned."""
+        from app.lib import git
+        subprocess.run(["git", "tag", "v1.0"], cwd=integration_repo, check=True)
+        with open(os.path.join(integration_repo, "job.task.py"), "w") as f:
+            f.write("pass\n")
+        subprocess.run(["git", "add", "job.task.py"], cwd=integration_repo, check=True)
+        subprocess.run(["git", "commit", "-m", "after the tag"], cwd=integration_repo, check=True)
+
+        assert git.get_repo_status("test_set") == {"branch": "main", "is_tag": False, "flag": None}
+
+        subprocess.run(["git", "checkout", "-q", "v1.0"], cwd=integration_repo, check=True)
+        assert git.get_repo_status("test_set") == {"branch": "", "is_tag": True, "flag": "TAG"}

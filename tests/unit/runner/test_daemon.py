@@ -8,6 +8,54 @@ import croniter
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+
+class _Killer:
+    """GracefulKiller stand-in: main() keeps looping until the test calls stop()."""
+
+    def __init__(self):
+        self.kill_now = False
+
+    def stop(self, *_args):
+        self.kill_now = True
+
+
+"""Runs runner.main() on the test DB with its process-wide side effects stubbed:
+signal handlers (GracefulKiller → the given killer), the ZMQ ROUTER socket,
+logging/os.environ/config set-up, start-up housekeeping, schedule(), sleeps and
+the terminate threads finishJob starts. Keyword arguments replace further
+app.runner attributes (dotted paths allowed) or override these defaults; main()
+returns once the test's patches call killer.stop(). Returns the applied patches."""
+@pytest.fixture
+def run_main(mock_db):
+    import contextlib
+
+    def _run(killer, **patches):
+        from app import runner
+        applied = {
+            "GracefulKiller": Mock(return_value=killer),
+            "setup_runner_socket": Mock(return_value=(Mock(), Mock(), Mock(**{"poll.return_value": []}))),
+            "handleOddJobs": Mock(),
+            "purgeLeftoverServiceJobs": Mock(),
+            "cleanup_drop_done_jobs": Mock(),
+            "cleanup_failed_jobs": Mock(),
+            "schedule": Mock(),
+            "ensure_set_environment": Mock(),
+            "threading.Thread": Mock(),
+            "time.sleep": Mock(),
+            "os.environ": Mock(),
+            "logging.basicConfig": Mock(),
+            "files.Config.init": Mock(),
+        }
+        applied.update(patches)
+        with contextlib.ExitStack() as stack:
+            for target, value in applied.items():
+                stack.enter_context(patch(f"app.runner.{target}", value))
+            runner.main("data", "127.0.0.1:0", "/venv", "/pkg", {})
+        return applied
+
+    return _run
+
+
 class TestDaemon:
     def test_handleOddJobs_dequeued_to_todo(self, mock_db):
         from app.runner import handleOddJobs
@@ -319,6 +367,47 @@ class TestDaemon:
             job = test_session.get(Job, "id")
             assert job.state == "failed"
             assert job.detail == "error"
+
+    def test_finishJob_without_row_is_noop(self, mock_db):
+        """A completion for a job whose row is already gone (a drop_done
+        service disposed before its second completion arrived) changes
+        nothing and starts no terminate thread."""
+        from app.runner import finishJob
+        with patch('app.runner.threading.Thread') as mock_thread:
+            finishJob("disposed_id", "done", None)
+        mock_thread.assert_not_called()
+
+    def test_disposeJobs_deletes_only_removed_rows(self, mock_db):
+        """Per-iteration housekeeping: rows whose workspace is gone
+        (`removed`) are deleted; every other state stays."""
+        from app.runner import disposeJobs
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        with Session(get_db_engine()) as session:
+            session.add_all(Job(id=job_id, set="s", name="n", owner="o", kind="task", state=state)
+                            for job_id, state in [("rmd1", "removed"), ("rmd2", "removed"),
+                                                  ("rm", "remove"), ("done", "done")])
+            session.commit()
+
+        disposeJobs()
+
+        with Session(get_db_engine()) as session:
+            remaining = {j.id: j.state for j in session.scalars(select(Job))}
+        assert remaining == {"rm": "remove", "done": "done"}
+
+    def test_receive_and_process_acks_when_processing_fails(self):
+        """The job's REQ socket waits for the runner's reply: the ACK goes
+        out even if recording the completion fails (e.g. a locked DB), so
+        the job process never blocks on it."""
+        import msgpack
+        import zmq
+        from app.runner import receive_and_process
+        sock = Mock()
+        sock.recv.side_effect = [b"job-identity", b"",
+                                 msgpack.packb({"id": "x", "state": "done", "detail": None})]
+        with patch('app.runner.finishJob', side_effect=RuntimeError("database is locked")):
+            receive_and_process(sock)
+        assert sock.send.call_args_list == [call(b"job-identity", zmq.SNDMORE), call(b"", zmq.SNDMORE), call(b"ack")]
 
     def test_finishJob_cas_preserves_terminal_state(self, mock_db):
         """A row that already reached a terminal state must not be re-written
@@ -804,6 +893,94 @@ class TestDaemon:
             row = session.get(Job, "exited_job")
             assert row.state == "done"  # untouched
 
+    def test_shutdown_job_processes_skips_live_pid_without_row(self, mock_db):
+        """A live tracked process whose job row is gone gets no signal —
+        only processes the DB still knows as jobs are shut down."""
+        from app.runner import _shutdown_job_processes
+
+        mock_p = Mock()
+        mock_p.poll.return_value = None  # alive
+        with patch('app.runner.job_lib.kill_proc_group') as mock_kill:
+            _shutdown_job_processes({7001: mock_p}, timeout=2.0,
+                                    runner_socket=Mock(), runner_poller=Mock())
+
+        mock_kill.assert_not_called()
+
+    def test_shutdown_job_processes_keeps_row_failed_during_drain(self, mock_db):
+        """A service whose drained completion reports `failed` keeps its
+        row (state and detail) — the failure counts toward the schedule's
+        max_fail_n on the next boot instead of being swept away."""
+        from app.runner import _shutdown_job_processes
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+
+        with Session(get_db_engine()) as session:
+            session.add(Job(id="failing_svc", set="s", name="n", owner="o",
+                            kind="service", state="running", pid=805, drop_done=False))
+            session.commit()
+
+        mock_p = Mock()
+        mock_p.poll.side_effect = [None, None, 1, 1]
+        sock = Mock()
+        poller = Mock()
+        poller.poll.side_effect = [[(sock, None)], [], []]
+
+        def fake_receive(_socket):
+            from app.runner import finishJob
+            finishJob("failing_svc", "failed", "ConnectionError: broker gone")
+        with patch('app.runner.receive_and_process', side_effect=fake_receive), \
+             patch('app.runner.job_lib.kill_proc_group'), \
+             patch('app.runner.job_lib.proc_group_alive', return_value=False), \
+             patch('app.runner.threading.Thread'), \
+             patch('app.runner.time.sleep'):
+            _shutdown_job_processes({805: mock_p}, timeout=2.0,
+                                    runner_socket=sock, runner_poller=poller)
+
+        with Session(get_db_engine()) as session:
+            row = session.get(Job, "failing_svc")
+            assert row is not None
+            assert row.state == "failed"
+            assert row.detail == "ConnectionError: broker gone"
+
+    def test_shutdown_job_processes_sigkill_wait_ends_when_group_is_gone(self, mock_db):
+        """Real process group that ignores SIGTERM: after the graceful
+        timeout it is SIGKILL'd, and the sweep returns as soon as the group
+        is gone instead of waiting out the 2 s SIGKILL grace period."""
+        import signal
+        import sys
+        import time
+        from app.runner import _shutdown_job_processes
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+
+        script = ("import signal, time\n"
+                  "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+                  "print('ready', flush=True)\n"
+                  "time.sleep(60)\n")
+        with subprocess.Popen([sys.executable, "-c", script], stdout=subprocess.PIPE,
+                              text=True, start_new_session=True) as p:
+            try:
+                assert p.stdout.readline().strip() == "ready"
+                with Session(get_db_engine()) as session:
+                    session.add(Job(id="deaf_svc", set="s", name="n", owner="o",
+                                    kind="service", state="running", pid=p.pid, drop_done=False))
+                    session.commit()
+
+                started = time.monotonic()
+                _shutdown_job_processes({p.pid: p}, timeout=0.2)
+                elapsed = time.monotonic() - started
+            finally:
+                if p.poll() is None:
+                    p.kill()
+                    p.wait()
+
+        assert p.returncode == -signal.SIGKILL
+        assert elapsed < 1.5, f"sweep waited {elapsed:.2f}s after the group was gone"
+        with Session(get_db_engine()) as session:
+            row = session.get(Job, "deaf_svc")
+            assert row.state == "failed"
+            assert row.detail == "did not respond to shutdown SIGTERM"
+
 
 class TestCleanupDropDoneKeepN:
     """cleanup_drop_done_jobs keeps the newest keep_n done jobs of a cron schedule with drop_done; the delay is 3s."""
@@ -959,6 +1136,56 @@ class TestCleanupFailedMaxFailN:
         jobs = self._failed_jobs(service, [3, 2, 1], kind="service") + self._failed_jobs(None, [3, 2, 1])
 
         assert self._states_after_cleanup(jobs) == ["failed"] * 6
+
+
+class TestScheduleShutdownPending:
+    """Once the shutdown flag exists, enqueue raises ShutdownPending: schedule()
+    returns at the first refused enqueue — no further enqueue attempts in that
+    call, and a cron schedule's `last` is not advanced, so the due run is
+    still due after the restart."""
+
+    @pytest.mark.parametrize("schedule_expr", ["* * * * *", ""], ids=["cron_task", "service"])
+    def test_schedule_row_stops_scheduling(self, mock_db, schedule_expr):
+        import os
+        from app.runner import schedule
+        from app.lib import runner as lib_runner_mod
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        from app.orm.schedule import Schedule
+        os.makedirs(os.path.dirname(lib_runner_mod.SHUTDOWN_FLAG_PATH), exist_ok=True)
+        with open(lib_runner_mod.SHUTDOWN_FLAG_PATH, "w") as f:
+            f.write("1")
+        with Session(get_db_engine()) as session:
+            session.add_all(Schedule(set="s", name=name, owner="o", schedule=schedule_expr, active=True,
+                                     drop_done=False, param=None, last=None) for name in ("first", "second"))
+            session.commit()
+
+        with patch('app.runner.lib_runner.enqueue', wraps=lib_runner_mod.enqueue) as spy:
+            schedule()
+
+        assert spy.call_count == 1  # neither the second schedule nor the essential service
+        with Session(get_db_engine()) as session:
+            assert session.scalars(select(Job)).all() == []
+            assert [s.last for s in session.scalars(select(Schedule))] == [None, None]
+
+    @patch('app.runner.PYOPS_ESSENTIAL_SERVICES', [{"set": "pyops", "name": "data", "owner": "system"},
+                                                   {"set": "pyops", "name": "other", "owner": "system"}])
+    def test_essential_service_stops_scheduling(self, mock_db):
+        import os
+        from app.runner import schedule
+        from app.lib import runner as lib_runner_mod
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        os.makedirs(os.path.dirname(lib_runner_mod.SHUTDOWN_FLAG_PATH), exist_ok=True)
+        with open(lib_runner_mod.SHUTDOWN_FLAG_PATH, "w") as f:
+            f.write("1")
+
+        with patch('app.runner.lib_runner.enqueue', wraps=lib_runner_mod.enqueue) as spy:
+            schedule()
+
+        assert spy.call_count == 1
+        with Session(get_db_engine()) as session:
+            assert session.scalars(select(Job)).all() == []
 
 
 class TestServiceMaxFailN:
@@ -1222,6 +1449,44 @@ class TestShutdownContract:
         assert killer.kill_now is True
         assert flag.exists()
 
+    def test_graceful_killer_unwritable_flag_still_flips_kill_now(self, tmp_path, monkeypatch):
+        """The flag is best-effort: when it cannot be written, the handler
+        does not raise and kill_now still stops the main loop."""
+        import signal
+        from app.runner import GracefulKiller
+        from app.lib import runner as lib_runner_mod
+        not_a_dir = tmp_path / "afile"
+        not_a_dir.write_text("")
+        monkeypatch.setattr(lib_runner_mod, "SHUTDOWN_FLAG_PATH", str(not_a_dir / "shutdown.flag"))
+        with patch('app.runner.signal.signal'):
+            killer = GracefulKiller()
+        killer.exit_gracefully(signal.SIGTERM, None)
+        assert killer.kill_now is True
+
+    def test_completion_after_shutdown_wait_is_processed(self, run_main):
+        """A completion that arrives after the shutdown wait is still
+        recorded and ACKed before main() exits."""
+        import msgpack
+        import zmq
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        with Session(get_db_engine()) as session:
+            session.add(Job(id="late", set="s", name="n", owner="o", kind="task", state="running"))
+            session.commit()
+        sock = Mock()
+        sock.recv.side_effect = [b"job-identity", b"",
+                                 msgpack.packb({"id": "late", "state": "done", "detail": None})]
+        poller = Mock()
+        poller.poll.side_effect = [[(sock, zmq.POLLIN)], []]
+        killer = _Killer()
+        killer.stop()
+
+        run_main(killer, setup_runner_socket=Mock(return_value=(Mock(), sock, poller)))
+
+        with Session(get_db_engine()) as session:
+            assert session.get(Job, "late").state == "done"
+        assert sock.send.call_args_list[-1] == call(b"ack")
+
     def test_main_loop_skips_spawn_when_kill_now_already_set(self, mock_db):
         """If `kill_now` is True at the top of the loop, while-check exits
         and getNextToDo / Popen are never reached — no new claims, no new
@@ -1374,6 +1639,168 @@ class TestShutdownContract:
         assert len(written) > 1024 * 1024  # the 1 MiB code is in there
         assert huge_code in written
         mock_proc.stdin.close.assert_called_once()
+
+
+class TestMainLoop:
+    """One or a few main() iterations against the test DB (see run_main)."""
+
+    @staticmethod
+    def _add_jobs(*jobs):
+        from app.orm.database import get_db_engine
+        with Session(get_db_engine()) as session:
+            session.add_all(jobs)
+            session.commit()
+
+    @staticmethod
+    def _job(job_id):
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        with Session(get_db_engine()) as session:
+            return session.get(Job, job_id)
+
+    def test_stale_pid_rows_are_failed(self, run_main):
+        """A loading/running row whose process no longer exists (crash in
+        job_setup's install phase or in the job itself) is finished as
+        failed; a row with a live pid is left alone."""
+        import os
+        from app.orm.job import Job
+        gone = subprocess.Popen(["true"])
+        gone.wait()
+        self._add_jobs(
+            Job(id="stale_loading", set="s", name="n", owner="o", kind="task", state="loading", pid=gone.pid),
+            Job(id="stale_running", set="s", name="n", owner="o", kind="task", state="running", pid=gone.pid),
+            Job(id="alive", set="s", name="n", owner="o", kind="task", state="running", pid=os.getpid()),
+        )
+        killer = _Killer()
+
+        run_main(killer, getNextToDo=Mock(side_effect=killer.stop))
+
+        for job_id in ("stale_loading", "stale_running"):
+            row = self._job(job_id)
+            assert (row.state, row.detail, row.pid) == ("failed", f"stale process pid={gone.pid}", None), job_id
+        assert (self._job("alive").state, self._job("alive").pid) == ("running", os.getpid())
+
+    def test_cancel_of_tracked_process_starts_termination_and_keeps_detail(self, run_main):
+        """A cancel whose pid is one of the runner's processes is handed to
+        a terminate thread; the operator's cancel detail survives."""
+        from app import runner
+        from app.orm.job import Job
+        self._add_jobs(Job(id="cj", set="s", name="n", owner="o", kind="debug", state="cancel", pid=4242,
+                           detail="Cancelled by new debug job start for o"))
+        killer = _Killer()
+        tracked = Mock(**{"poll.return_value": 0})
+
+        applied = run_main(killer, getNextToDo=Mock(side_effect=killer.stop),
+                           cleanProcesses=Mock(return_value={4242: tracked}))
+
+        applied["threading.Thread"].assert_called_once_with(
+            target=runner.terminate_job_processes, args=("cj", 4242, "o"), daemon=True)
+        applied["threading.Thread"].return_value.start.assert_called_once_with()
+        row = self._job("cj")
+        assert row.detail == "Cancelled by new debug job start for o"
+        assert row.pid is None
+
+    def test_cancel_of_untracked_job_is_finalised(self, run_main):
+        """A cancel for a job the runner has no process for (claimed but not
+        spawned, or spawned by a previous runner) is finalised directly."""
+        from app.orm.job import Job
+        self._add_jobs(Job(id="cu", set="s", name="n", owner="o", kind="task", state="cancel", pid=4243))
+        killer = _Killer()
+
+        applied = run_main(killer, getNextToDo=Mock(side_effect=killer.stop))
+
+        row = self._job("cu")
+        assert (row.state, row.pid) == ("cancelled", None)
+        assert row.end is not None
+        applied["threading.Thread"].assert_not_called()
+
+    @staticmethod
+    def _claim(killer, job_id):
+        def claim():
+            killer.stop()
+            return job_id
+        return Mock(side_effect=claim)
+
+    def test_launch_failure_fails_job(self, run_main):
+        """If the job process cannot be started (e.g. the per-set venv's
+        python is missing), the job is failed with 'Launch failed: ...'
+        and no pid is assigned."""
+        from app.orm.job import Job
+        self._add_jobs(Job(id="lf", set="myset", name="t", owner="o", kind="task", state="loading"))
+        killer = _Killer()
+        missing = FileNotFoundError(2, "No such file or directory", "/venv/myset/bin/python")
+
+        run_main(killer, getNextToDo=self._claim(killer, "lf"),
+                 loadJob=Mock(return_value=("o", "myset", "t", "task", "", "pass", None, 0)),
+                 **{"subprocess.Popen": Mock(side_effect=missing)})
+
+        row = self._job("lf")
+        assert row.state == "failed"
+        assert row.detail == "Launch failed: [Errno 2] No such file or directory: '/venv/myset/bin/python'"
+        assert row.pid is None
+
+    def test_child_dying_before_reading_stdin_is_still_tracked(self, run_main):
+        """BrokenPipeError while piping the kwargs (child died at start-up):
+        the spawn is still assigned and tracked — the stale-PID check reaps
+        it later — and the runner does not fail or crash."""
+        from app.orm.job import Job
+        self._add_jobs(Job(id="bp", set="myset", name="t", owner="o", kind="task", state="loading"))
+        killer = _Killer()
+        proc = Mock(pid=99002, **{"poll.return_value": 1})
+        proc.stdin.write.side_effect = BrokenPipeError()
+
+        applied = run_main(killer, getNextToDo=self._claim(killer, "bp"),
+                           loadJob=Mock(return_value=("o", "myset", "t", "task", "", "pass", None, 0)),
+                           _shutdown_job_processes=Mock(),
+                           **{"subprocess.Popen": Mock(return_value=proc)})
+
+        row = self._job("bp")
+        assert (row.state, row.pid) == ("loading", 99002)
+        assert row.detail is None
+        assert applied["_shutdown_job_processes"].call_args.args[0] == {99002: proc}
+
+    def test_load_failure_fails_job_with_traceback(self, run_main):
+        """A claimed job that cannot be loaded (here: its set was removed
+        after enqueue) is failed with the traceback; nothing is spawned."""
+        from app.runner import getNextToDo
+        from app.orm.job import Job
+        self._add_jobs(Job(id="gone", set="removed_set", name="t", owner="o", kind="task", state="todo"))
+        killer = _Killer()
+
+        def claim():
+            killer.stop()
+            return getNextToDo()
+
+        applied = run_main(killer, getNextToDo=Mock(side_effect=claim), **{"subprocess.Popen": Mock()})
+
+        row = self._job("gone")
+        assert row.state == "failed"
+        assert "Traceback" in row.detail
+        assert "Set 'removed_set' does not exist" in row.detail
+        applied["subprocess.Popen"].assert_not_called()
+
+    def test_loop_survives_errors(self, run_main):
+        """Errors in the iteration (e.g. a locked DB) are logged and the
+        loop goes on: disposeJobs failing pauses 1 s before the next
+        iteration; getNextToTerm / getNextToDo failing skip their block."""
+        killer = _Killer()
+        locked = RuntimeError("database is locked")
+        todo_calls = []
+
+        def next_todo():
+            todo_calls.append(1)
+            if len(todo_calls) == 1:
+                raise locked
+            killer.stop()
+
+        applied = run_main(killer,
+                           disposeJobs=Mock(side_effect=[locked, None, None, None]),
+                           getNextToTerm=Mock(side_effect=[locked, None]),
+                           getNextToDo=Mock(side_effect=next_todo))
+
+        assert call(1) in applied["time.sleep"].call_args_list
+        assert len(todo_calls) == 2
+        applied["schedule"].assert_called_once_with()
 
 
 class TestPyopsEssentialServices:

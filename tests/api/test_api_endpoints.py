@@ -167,6 +167,23 @@ def test_controller_body_handling_text(mock_client, mock_controller_glob, method
         assert params["data_type"] == "text"
         assert params["type"] == method.upper()
 
+def test_controller_body_handling_text_not_utf8(mock_client, mock_controller_glob):
+    # A text/* body that is not UTF-8 (here a latin-1 CSV) reaches the service as raw bytes
+    body = b"name\ncaf\xe9\n"
+    headers = {"X-User": "testuser", "content-type": "text/csv"}
+    with patch("app.lib.pyops.ServiceClient") as mock_service:
+        mock_instance = MagicMock()
+        mock_service.return_value = mock_instance
+        mock_instance.request.return_value = (200, {"success": True})
+
+        response = mock_client.post("/controller/testset/testname/upload", content=body, headers=headers)
+
+        assert response.status_code == 200
+        assert response.json() == {"success": True}
+        params = mock_instance.request.call_args[0][0]
+        assert params["data"] == body
+        assert params["data_type"] == "binary"
+
 @pytest.mark.parametrize("method", ["post", "put"])
 def test_controller_body_handling_binary(mock_client, mock_controller_glob, method):
     # Binary with application/octet-stream

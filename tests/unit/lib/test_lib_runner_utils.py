@@ -333,6 +333,24 @@ class TestLoadUtils:
             assert fetched.state == "cancel"
             assert fetched.start is None  # 'loading' write never happened
 
+    def test_load_job_refuses_row_cancelled_before_load(self, mock_db):
+        """Cancel committed between the claim and loadJob: loadJob raises
+        without reading code, and the cancel state stays for the term loop."""
+        from app import runner
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        with Session(get_db_engine()) as test_session:
+            test_session.add(Job(id="123", set="set", name="name", kind="task", state="cancel", owner="owner"))
+            test_session.commit()
+        with patch('app.runner.git.read_content') as mock_read:
+            with pytest.raises(Exception, match=r"Job 123 state changed to cancel"):
+                runner.loadJob("123")
+        mock_read.assert_not_called()
+        with Session(get_db_engine()) as test_session:
+            fetched = test_session.get(Job, "123")
+            assert fetched.state == "cancel"
+            assert fetched.start is None
+
 class TestProcessImports:
     @patch('app.lib.job.loadLib')
     def test_process_imports_valid_lib(self, mock_load_lib):
@@ -377,6 +395,28 @@ class TestProcessImports:
         libs = []
         with pytest.raises(Exception, match='load error'):
             process_imports(text, 'set', 'task', libs)
+
+    def test_process_imports_shared_library_loaded_once(self):
+        """Diamond include (a -> b, c; b -> d; c -> d): d is loaded once,
+        ahead of the libraries that include it."""
+        from app.lib.job import process_imports
+        overrides = {"s::b": "#!{s::d}\n", "s::c": "#!{::d}\n", "s::d": "D = 1\n"}
+        libs = []
+        process_imports("#!{s::b}\n#!{s::c}\n", "s", "task", libs, overrides)
+        assert [lib["filename"] for lib in libs] == ["s::d", "s::b", "s::c"]
+
+    def test_process_imports_stops_following_includes_past_depth_limit(self, caplog):
+        """An include chain deeper than 10 levels stops with a warning: the
+        library at the limit is still loaded, its own includes are not."""
+        import logging
+        from app.lib.job import process_imports
+        overrides = {f"s::l{i}": f"#!{{s::l{i + 1}}}\n" for i in range(1, 12)}
+        overrides["s::l12"] = "X = 1\n"
+        libs = []
+        with caplog.at_level(logging.WARNING, logger="app.lib.job"):
+            process_imports("#!{s::l1}\n", "s", "task", libs, overrides)
+        assert [lib["filename"] for lib in libs] == [f"s::l{i}" for i in range(11, 0, -1)]
+        assert "Directive depth limit exceeded" in caplog.text
 
 class TestProcessInstallLines:
     @patch('app.lib.job.process_install_lines')
@@ -961,6 +1001,54 @@ class TestProcessInstallLines:
         process_install_lines(lines, "/venv", "/pkg", "set", "id", stdout_file, stderr_file, upgrade=True)
         commands = [c.args[0] for c in mock_run.call_args_list]
         assert any('pull' in cmd for cmd in commands), f"git pull expected in upgrade mode: {commands}"
+
+    @patch('app.lib.job.subprocess.run')
+    def test_process_install_lines_bare_bang_ignored(self, mock_run, mock_conf):
+        """A `#!` line without any argument is not a directive."""
+        from app.lib.job import process_install_lines
+        import io
+        lines = ["#!\n", "#!   \n", "x = 1\n"]
+        assert process_install_lines(lines, "/venv", "/pkg", "set", "id", io.StringIO(), io.StringIO()) == lines
+        mock_run.assert_not_called()
+
+    @patch('app.lib.job.subprocess.run')
+    def test_process_install_lines_git_branch_cloned_with_b(self, mock_run, tmp_path):
+        """`#!<url> <branch>` without a local clone clones that branch."""
+        from app.lib.job import process_install_lines
+        import io
+        mock_run.return_value = Mock(returncode=0, stderr="")
+        pkg = tmp_path / "pkg"
+        process_install_lines(["#!https://h.example/g/r.git dev\n"], "/venv", str(pkg), "set", "id",
+                              io.StringIO(), io.StringIO())
+        assert mock_run.call_args_list[0].args[0] == [
+            "git", "clone", "-b", "dev", "https://h.example/g/r.git", str(pkg / "set" / "r")]
+        assert mock_run.call_args_list[1].args[0][-2:] == ["-e", str(pkg / "set" / "r")]
+
+    @patch('app.lib.job.subprocess.run')
+    def test_process_install_lines_failing_checkout_raises(self, mock_run, tmp_path):
+        """An existing clone that cannot switch to the directive's branch
+        fails the install (no pip install of the wrong branch)."""
+        from app.lib.job import process_install_lines
+        import io
+        (tmp_path / "pkg" / "set" / "r").mkdir(parents=True)
+        mock_run.return_value = Mock(returncode=1, stderr="error: pathspec 'dev' did not match")
+        with pytest.raises(Exception, match=r"git checkout dev in .*/pkg/set/r failed: error: pathspec"):
+            process_install_lines(["#!https://h.example/g/r.git dev\n"], "/venv", str(tmp_path / "pkg"), "set", "id",
+                                  io.StringIO(), io.StringIO())
+        assert mock_run.call_count == 1
+
+    @patch('app.lib.job.subprocess.run')
+    def test_process_install_lines_failing_upgrade_pull_raises(self, mock_run, tmp_path):
+        """Update Dependencies mode: a failing `git pull` of an existing
+        clone fails the install."""
+        from app.lib.job import process_install_lines
+        import io
+        (tmp_path / "pkg" / "set" / "r").mkdir(parents=True)
+        mock_run.return_value = Mock(returncode=1, stderr="fatal: unable to access")
+        with pytest.raises(Exception, match=r"git pull in .*/pkg/set/r failed: fatal: unable to access"):
+            process_install_lines(["#!https://h.example/g/r.git\n"], "/venv", str(tmp_path / "pkg"), "set", "id",
+                                  io.StringIO(), io.StringIO(), upgrade=True)
+        assert mock_run.call_count == 1
 
 
 class TestInstallGitRepoUpgradeFlag:

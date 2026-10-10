@@ -86,9 +86,55 @@ class TestNameUniqueness:
         assert check_data_name_unique(repo, "fresh") is False
 
 
+class TestApiErrors:
+    """Errors a scriptlet author gets from the `data` global."""
+
+    def test_read_missing_without_data_dir(self, repo):
+        from app.lib.data import SetData
+        with pytest.raises(FileNotFoundError, match="data 'cfg' does not exist in set 'myset'"):
+            with SetData("myset", repo).read("cfg") as _:
+                pass
+
+    def test_read_missing_name(self, repo):
+        from app.lib.data import SetData
+        sd = SetData("myset", repo)
+        with sd.write("other", format="yaml") as c:
+            c["x"] = 1
+        with pytest.raises(FileNotFoundError, match="data 'cfg' does not exist"):
+            with sd.read("cfg") as _:
+                pass
+
+    def test_name_in_two_formats_is_ambiguous(self, repo):
+        """`cfg.yaml` and `cfg.json` side by side (e.g. both arrived with a
+        pull): reading or writing `cfg` refuses to pick one."""
+        from app.lib.data import SetData
+        data_dir = os.path.join(repo, "data")
+        os.makedirs(data_dir)
+        with open(os.path.join(data_dir, "cfg.yaml"), "w") as f:
+            f.write("x: 1\n")
+        with open(os.path.join(data_dir, "cfg.json"), "w") as f:
+            f.write('{"x": 2}\n')
+        sd = SetData("myset", repo)
+        with pytest.raises(FileExistsError, match=r"multiple formats \['.json', '.yaml'\]"):
+            with sd.read("cfg") as _:
+                pass
+        with pytest.raises(FileExistsError, match=r"multiple formats \['.json', '.yaml'\]"):
+            with sd.write("cfg") as c:
+                c["x"] = 3
+        with open(os.path.join(data_dir, "cfg.json")) as f:
+            assert json.load(f) == {"x": 2}
+
+    def test_unsupported_format_rejected(self, repo):
+        from app.lib.data import SetData
+        with pytest.raises(ValueError, match="unsupported format: 'toml'"):
+            with SetData("myset", repo).write("cfg", format="toml") as _:
+                pass
+        assert not os.path.exists(os.path.join(repo, "data", "cfg.toml"))
+
+
 class TestEscapeRejection:
     @pytest.mark.parametrize("bad_name", [
-        "../other", "/abs", "sub/dir", "..", ".hidden", "with\\bs",
+        "", "../other", "/abs", "sub/dir", "..", ".hidden", "with\\bs",
     ])
     def test_invalid_names_rejected_on_read(self, repo, bad_name):
         from app.lib.data import SetData
@@ -98,7 +144,7 @@ class TestEscapeRejection:
                 pass
 
     @pytest.mark.parametrize("bad_name", [
-        "../other", "/abs", "sub/dir", "..", ".hidden",
+        "", "../other", "/abs", "sub/dir", "..", ".hidden",
     ])
     def test_invalid_names_rejected_on_write(self, repo, bad_name):
         from app.lib.data import SetData
@@ -157,6 +203,27 @@ class TestGitignore:
             content = f.read()
         # The entry appears exactly once
         assert content.count("data/.*.lock") == 1
+
+    def test_gitignore_without_trailing_newline(self, repo):
+        from app.lib.data import SetData
+        with open(os.path.join(repo, ".gitignore"), "w") as f:
+            f.write("*.bck")
+        with SetData("myset", repo).write("cfg", format="yaml") as c:
+            c["x"] = 1
+        with open(os.path.join(repo, ".gitignore")) as f:
+            assert f.read() == "*.bck\ndata/.*.lock\n"
+
+    def test_unreadable_gitignore_does_not_break_writes(self, repo):
+        """The .gitignore entry is best effort: a .gitignore that cannot be
+        read or written (here: a directory) does not fail data writes."""
+        from app.lib.data import SetData
+        os.remove(os.path.join(repo, ".gitignore"))
+        os.mkdir(os.path.join(repo, ".gitignore"))
+        sd = SetData("myset", repo)
+        with sd.write("cfg", format="yaml") as c:
+            c["x"] = 1
+        with sd.read("cfg") as c:
+            assert c == {"x": 1}
 
 
 class TestRoundTripInsideWrite:

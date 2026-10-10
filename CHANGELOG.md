@@ -136,6 +136,15 @@ from 3.0.0 onward.
   `:latest` or version tags) — automatically in MR pipelines targeting
   main, manually on other branches, never on main. It replaces
   `test:image_build`; `build_dev.sh` is local only.
+- **Python coverage also measures the processes the tests start.**
+  `.coveragerc` sets `[run] patch = subprocess, execv, fork, _exit`: the
+  pyopsctl test server's forked runner, `job_setup.py` → `job_runner.py`
+  of host-venv (bundled `pyops` set) jobs and test-started subprocesses
+  now count; uvicorn workers and per-set venvs do not. The `omit`
+  pattern is anchored (`*/app/gunicorn.py`) so subprocesses running in a
+  job workspace apply it too. `app/pyops` scriptlets that no test execs
+  under their real path (367 statements) are not in the reported total;
+  see "Coverage measurement" in `docs/insights_app.md`.
 
 ### Documentation
 - **Agent instructions moved from `CLAUDE.md` to `AGENTS.md`** (read by

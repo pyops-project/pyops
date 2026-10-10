@@ -128,3 +128,34 @@ class TestNormalizeOriginUrl:
         # Only the first call writes; the second sees the clean URL.
         assert len(calls) == 1
         assert calls[0][:3] == ["git", "remote", "set-url"]
+
+
+class TestPaths:
+    def test_relative_config_resolves_against_project_root(self, lib, monkeypatch, tmp_path):
+        """etc/pyops.json ships relative paths (data/venv, ...): they resolve
+        against the project root, the parent of the injected `appspace`."""
+        monkeypatch.setitem(lib, "config", {
+            "data": {"git": "data/git"},
+            "runner": {"venv": "data/venv", "pkg": "data/pkg"},
+        })
+        assert lib["_set_dir"]("s") == os.path.join(str(tmp_path), "data/git", "s")
+        assert lib["_venv_dir"]("s") == os.path.join(str(tmp_path), "data/venv", "s")
+        assert lib["_pkg_dir"]("s") == os.path.join(str(tmp_path), "data/pkg", "s")
+
+
+class TestInstallLock:
+    def test_same_lock_file_as_runner_installs(self, lib, mock_conf, tmp_path, monkeypatch):
+        """install_lock(set) holds the flock the runner's job-time installs
+        take (app.lib.sets): while it is held, the runner's lock file cannot
+        be locked — pyops-set tasks and job installs on a set serialise."""
+        import fcntl
+        from app.lib import files, sets
+        monkeypatch.setitem(lib["config"]["runner"], "venv", files.conf_runner()["venv"])
+
+        runner_lock = sets._bootstrap_lock_path("s")
+        with open(runner_lock, "w") as fd:
+            with lib["install_lock"]("s"):
+                with pytest.raises(BlockingIOError):
+                    fcntl.flock(fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)  # released on exit
+            fcntl.flock(fd.fileno(), fcntl.LOCK_UN)

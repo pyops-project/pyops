@@ -768,11 +768,20 @@ Ulimit check tracks RLIMIT_NOFILE and RLIMIT_NPROC against current usage from `/
 
 `tests/` uses pytest with >90% coverage target.
 
+### Coverage measurement
+
+`.coveragerc` sets `[run] patch = subprocess, execv, fork, _exit`, so coverage also measures the Python processes the tests start; pytest-cov combines the per-process data files at session end (also across `test.sh`'s `--cov-append` runs).
+
+- **Measured**: the pyopsctl integration tests' gunicorn server and its forked runner daemon; `job_setup.py` → `os.execv` → `job_runner.py` of jobs that run in the host venv (bundled `pyops` set); subprocesses that tests start with the test venv's Python (e.g. `test_job_setup.py` running `job_setup.py`).
+- **Not measured**: gunicorn's uvicorn workers (uvicorn re-raises SIGTERM with the default handler, so they end without saving data; the web code is measured in-process through TestClient) and jobs of user sets (their per-set venv has no coverage installed).
+- `omit = */app/gunicorn.py` is anchored with `*/`: a subprocess whose cwd is a job workspace resolves a relative pattern against that cwd.
+- **Outside the reported total**: `app/pyops/` has no `__init__.py` and dotted file names (`set_pull.task.py`), so coverage lists an `app/pyops` file only when a test execs it under its real path (`pytest.library.py`, `set.library.py`, `set_clone.task.py`, `set_update_deps.task.py`). A job running a pyops scriptlet does not count either: jobs compile scriptlets as `<set>/task/<name>.py` in the job workspace. Not in the denominator: `data.task.py`, `set_pull`, `set_switch`, `set_commit_drafts`, `set_create`, `set_discard_drafts`, `set_remove` (`.task.py`) and `sets.controller.py` — 367 statements.
+
 ### Structure
 
 - `conftest.py`: shared fixtures
 - `tests/unit/lib/`: lib_files, lib_git, lib_pyops, lib_runner_utils, lib_sites
-- `tests/unit/runner/`: test_daemon (covers `_shutdown_job_processes`, `TestShutdownFlag`, `TestHandleOddJobsCancelStates`, essential-services, pyops-set host-venv contract)
+- `tests/unit/runner/`: test_daemon (covers `_shutdown_job_processes`, `TestShutdownFlag`, `TestHandleOddJobsCancelStates`, essential-services, pyops-set host-venv contract, `schedule()` under `ShutdownPending`, and the `main()` loop in `TestMainLoop`: stale-PID reaping, cancel handling, launch/load failures, error resilience)
 - `tests/unit/orm/`: job, schedule
 - `tests/integration/`: git, orm, routers, runner execution, zmq_integration, error_logging, `test_pyops_set` (rendering + scriptlet parse + controller-proxy reach)
 - `tests/api/`: api_editor, api_endpoints, api_job, api_schedule
@@ -785,6 +794,8 @@ Ulimit check tracks RLIMIT_NOFILE and RLIMIT_NPROC against current usage from `/
 - `mock_git_dir`: mock set/scriptlet directory tree
 - `mock_git_ops(mock_git_dir)`: temp FS ops; covers `write_content`, `read_content`, `get_controller_code`, `get_view_content`, `delete_file_unstaged`
   - **Pitfall**: `Path(repo)` creates real `./data/git/{set}/` files; can pollute test output and conflict with pytest collection despite `norecursedirs=data`
+- `set_repo(mock_conf)` (`tests/integration/routers/conftest.py`): factory for a real git set repo under the configured git base — `set_repo(name, committed={path: content}, drafts={path: content})` commits `committed` (plus README.md and the `*.bck` .gitignore, so `get_repo_path` commits nothing) and leaves `drafts` uncommitted; for router tests without git mocks
+- `run_main(mock_db)` (`tests/unit/runner/test_daemon.py`): runs `runner.main(...)` against the test DB with its process-wide side effects stubbed (signal handlers, ZMQ ROUTER socket, logging / `os.environ` / config set-up, start-up housekeeping, `schedule`, sleeps, finishJob's terminate threads) — `run_main(killer, **patches)` takes a `_Killer` and further `app.runner` patches, loops until a patch calls `killer.stop()` and returns the applied patches
 - `mock_popen`: `subprocess.Popen` mock with pid, `poll()`, `terminate()`, `wait()`
 - `mock_zmq`: ZMQ Context/Socket mock; `send_completion` sends once and blocks for ACK (no retries)
 - `mock_croniter`, `mock_jedi`, `mock_datetime`

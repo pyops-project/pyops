@@ -238,6 +238,61 @@ class TestExecution:
     @patch('app.job_runner.subprocess.run')
     @patch('app.lib.sets.subprocess.check_call')
     @patch('app.lib.pyops.ServiceListener')
+    def test_run_test_applies_overrides_and_materialises_param(self, mock_listener, mock_check_call, mock_run, mock_send, tmp_path, mock_conf):
+        """kind=test runs the VSIX overrides — for the task and for its
+        libraries — and materialises exactly that code (plus a non-empty
+        param as param.py) under .test/src/, so reports map to what ran."""
+        from app.job_runner import main as run
+        mock_listener.return_value = None
+        mock_check_call.return_value = None
+        mock_run.return_value = Mock(returncode=0)
+        data_base = os.path.join(tmp_path, "data")
+        overrides = json.dumps({"myset::my_task": "TASK = 'local'\n", "other::shared": "LIB = 'local'\n"})
+        libs = [{"filename": "other::shared", "code": "LIB = 'committed'\n"}]
+
+        run("id", "owner", "myset", "my_task", "test", "P = 1\n", "TASK = 'committed'\n", libs,
+            "/tmp/pyops/runner.sock", 0, overrides,
+            {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}},
+            {"venv": os.path.join(tmp_path, "venv"), "pkg": os.path.join(tmp_path, "pkg")},
+            {"owner": {}}, {"bind": "bind"})
+
+        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
+        src = os.path.join(data_base, "myset", "id", ".test", "src")
+        with open(os.path.join(src, "myset", "task", "my_task.py")) as f:
+            assert f.read() == "TASK = 'local'\n"
+        with open(os.path.join(src, "other", "library", "shared.py")) as f:
+            assert f.read() == "LIB = 'local'\n"
+        with open(os.path.join(src, "myset", "task", "param.py")) as f:
+            assert f.read() == "P = 1\n"
+
+    @patch('app.job_runner.job_lib.send_completion')
+    @patch('app.job_runner.subprocess.run')
+    @patch('app.lib.sets.subprocess.check_call')
+    @patch('app.lib.pyops.ServiceListener')
+    def test_run_test_syntax_error_fails_job(self, mock_listener, mock_check_call, mock_run, mock_send, tmp_path, mock_conf):
+        """A kind=test job whose task does not compile is reported failed
+        with the SyntaxError traceback."""
+        from app.job_runner import main as run
+        mock_listener.return_value = None
+        mock_check_call.return_value = None
+        mock_run.return_value = Mock(returncode=0)
+        data_base = os.path.join(tmp_path, "data")
+
+        run("id", "owner", "myset", "my_task", "test", "", "def (\n", [], "/tmp/pyops/runner.sock", 0, None,
+            {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}},
+            {"venv": os.path.join(tmp_path, "venv"), "pkg": os.path.join(tmp_path, "pkg")},
+            {"owner": {}}, {"bind": "bind"})
+
+        mock_send.assert_called_once()
+        sock_path, msg = mock_send.call_args.args
+        assert (msg["id"], msg["state"]) == ("id", "failed")
+        assert msg["detail"].startswith("Error executing test job id\n")
+        assert "SyntaxError" in msg["detail"]
+
+    @patch('app.job_runner.job_lib.send_completion')
+    @patch('app.job_runner.subprocess.run')
+    @patch('app.lib.sets.subprocess.check_call')
+    @patch('app.lib.pyops.ServiceListener')
     def test_run_test_user_module_registered_in_sys_modules(self, mock_listener, mock_check_call, mock_run, mock_send, tmp_path, mock_conf):
         """kind=test exec'ing libs into glob with __name__='__test__'
         leaves directive-merged classes with __module__='__test__'.

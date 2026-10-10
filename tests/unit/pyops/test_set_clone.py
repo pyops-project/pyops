@@ -140,3 +140,36 @@ class TestSetCloneCredentialRewrite:
         cred_file = target / ".git" / "credentials"
         assert cred_file.is_file()
         assert cred_file.read_text().strip() == "https://bot:t0k@example.com"
+
+
+class TestSetCloneValidation:
+    """Input checks before anything is cloned, and the optional git identity."""
+
+    _run_clone = TestSetCloneCredentialRewrite._run_clone
+
+    @pytest.mark.parametrize("url, message", [
+        ("", "url is required"),
+        ("https://example.com", "Cannot determine repo name from URL: https://example.com"),
+        ("https://example.com/g/.git", "Empty repo name inferred from URL: https://example.com/g/.git"),
+        ("https://example.com/g/pyops.git", "'pyops' is reserved for pyops-managed scriptlets"),
+    ], ids=["missing", "no_path", "empty_name", "reserved"])
+    def test_invalid_url_rejected(self, task, url, message):
+        calls = _install_recording_run_cmd(task)
+        with pytest.raises(ValueError) as exc:
+            self._run_clone(task, url=url)
+        assert str(exc.value) == message
+        assert calls == []
+
+    def test_existing_set_rejected(self, task):
+        (task["_git_base_path"] / "r").mkdir()
+        calls = _install_recording_run_cmd(task)
+        with pytest.raises(ValueError, match="Set 'r' already exists."):
+            self._run_clone(task, url="https://example.com/g/r.git")
+        assert calls == []
+
+    def test_git_identity_configured_in_clone(self, task):
+        calls = _install_recording_run_cmd(task)
+        self._run_clone(task, url="https://example.com/g/r.git", git_name="Ops Bot", git_email="ops@example.com")
+        target = str(task["_git_base_path"] / "r")
+        assert {"cmd": ["git", "config", "user.name", "Ops Bot"], "cwd": target} in calls
+        assert {"cmd": ["git", "config", "user.email", "ops@example.com"], "cwd": target} in calls

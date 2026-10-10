@@ -463,6 +463,43 @@ class TestListAndUnique:
         with patch('os.listdir', return_value=['unique.task.py']):
             assert git.check_name_unique(mock_repo, 'unique') is False
 
+    @staticmethod
+    def _set_with_docs_and_data(repo):
+        os.makedirs(os.path.join(repo, 'docs'))
+        os.makedirs(os.path.join(repo, 'data'))
+        with open(os.path.join(repo, 'docs', 'guide.md'), 'w') as f:
+            f.write('# Guide\n')
+        with open(os.path.join(repo, 'data', 'cfg.json'), 'w') as f:
+            f.write('{}\n')
+        with open(os.path.join(repo, 'job.task.py'), 'w') as f:
+            f.write('pass\n')
+
+    def test_check_name_unique_spans_docs_and_data(self, mock_repo):
+        """Scriptlets, docs/ pages and data/ files share one namespace per set."""
+        from app.lib import git
+        self._set_with_docs_and_data(mock_repo)
+        assert git.check_name_unique(mock_repo, 'guide') is False
+        assert git.check_name_unique(mock_repo, 'cfg') is False
+        assert git.check_name_unique(mock_repo, 'job') is False
+        assert git.check_name_unique(mock_repo, 'fresh') is True
+
+    def test_list_scriptlet_files_resolves_location(self, mock_repo):
+        """Repo-relative paths across top level, README.md, docs/ and data/."""
+        from app.lib import git
+        self._set_with_docs_and_data(mock_repo)
+        assert git.list_scriptlet_files(mock_repo, 'README') == ['README.md']
+        assert git.list_scriptlet_files(mock_repo, 'guide') == ['docs/guide.md']
+        assert git.list_scriptlet_files(mock_repo, 'cfg') == ['data/cfg.json']
+        assert git.list_scriptlet_files(mock_repo, 'job') == ['job.task.py']
+        assert git.list_scriptlet_files(mock_repo, 'fresh') == []
+
+    def test_get_file_path_data_uses_existing_format(self, mock_repo):
+        """A data file resolves to its on-disk format; a new one defaults to .yaml."""
+        from app.lib import git
+        self._set_with_docs_and_data(mock_repo)
+        assert git.get_file_path(mock_repo, 'cfg', 'data') == os.path.join(mock_repo, 'data', 'cfg.json')
+        assert git.get_file_path(mock_repo, 'new', 'data') == os.path.join(mock_repo, 'data', 'new.yaml')
+
 class TestContentOps:
     def test_read_content_unstaged_false(self, mock_repo):
         content = 'test code'

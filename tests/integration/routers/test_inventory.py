@@ -166,3 +166,57 @@ class TestInventoryPyopsGuard:
             headers={"X-User": "alice"},
         )
         assert response.status_code == 400
+
+
+class TestInventoryRealSet:
+    """Inventory routes against a real git set repo (no git mocks)."""
+
+    @pytest.mark.parametrize("type_, name, path, content", [
+        ("task", "job", "job.task.py", "pass\n"),
+        ("view", "page", "page.html", '<div class="container">\n  <!-- View content here -->\n</div>'),
+        ("jslibrary", "lib", "lib.js", "// JS Library\n"),
+        ("data", "cfg", "data/cfg.yaml", ""),
+    ])
+    def test_put_item_writes_initial_content(self, mock_client, set_repo, type_, name, path, content):
+        """A new scriptlet starts with its type's initial content, as an
+        uncommitted draft; a new data file is an empty YAML file."""
+        import os
+        repo = set_repo("s1")
+        response = mock_client.put("/scriptlet/inventory/item", json={"set": "s1", "name": name, "type": type_})
+        assert response.status_code == 200
+        assert response.json() == {"set": "s1", "name": name, "type": type_}
+        with open(os.path.join(repo, path), encoding="utf-8") as f:
+            assert f.read() == content
+
+    def test_draft_post_unknown_set_404(self, mock_client, set_repo):
+        set_repo("s1")
+        response = mock_client.post("/scriptlet/inventory/draft", json={"set": "nope", "name": "job", "code": "pass"})
+        assert response.status_code == 404
+        assert response.json()["detail"] == "Set 'nope' does not exist"
+
+    def test_item_delete_unknown_set_404(self, mock_client, set_repo):
+        set_repo("s1")
+        response = mock_client.delete("/scriptlet/inventory/item", params={"set": "nope", "name": "job"})
+        assert response.status_code == 404
+        assert response.json()["detail"] == "Set 'nope' does not exist"
+
+    def test_draft_delete_unknown_name_404(self, mock_client, set_repo):
+        set_repo("s1", committed={"job.task.py": "pass\n"})
+        response = mock_client.delete("/scriptlet/inventory/draft", params={"set": "s1", "name": "ghost"})
+        assert response.status_code == 404
+        assert response.json()["detail"] == "Scriptlet s1::ghost not existing"
+
+    def test_code_get_unknown_name_404(self, mock_client, set_repo):
+        set_repo("s1", committed={"job.task.py": "pass\n"})
+        response = mock_client.get("/scriptlet/inventory/code", params={"set": "s1", "name": "ghost"})
+        assert response.status_code == 404
+        assert response.json()["detail"] == "Scriptlet s1::ghost not existing"
+
+    @pytest.mark.parametrize("ext, content", [("json", '{"a": 1}\n'), ("yaml", "a: 1\n")])
+    def test_code_get_data_file_reports_its_extension(self, mock_client, set_repo, ext, content):
+        """A data file's code response carries the on-disk extension so the
+        editor can pick the json/yaml syntax mode."""
+        set_repo("s1", committed={f"data/cfg.{ext}": content})
+        response = mock_client.get("/scriptlet/inventory/code", params={"set": "s1", "name": "cfg"})
+        assert response.status_code == 200
+        assert response.json() == {"code": content, "type": "data", "ext": ext}

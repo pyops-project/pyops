@@ -271,3 +271,57 @@ def test_controller_proxy_closes_service_client_on_request_error(client, mock_gi
         assert response.status_code == 200
         assert response.json()["error"].startswith("Controller execution failed: ")
         mock_instance.close.assert_called_once()
+
+
+def _controller_code(debug=False, body="body"):
+    return (
+        "set = 's1'\nservice = 'svc'\nname = 'My Panel'\n"
+        f"debug = {debug}\nhead = 'head'\nmenu = 'menu'\nbody = {body!r}\n"
+    )
+
+
+_VIEWS = {"head.html": "<title>t</title>", "menu.html": "<li>m</li>", "body.html": "<p>committed</p>"}
+
+
+class TestControllerRealSet:
+    """/controller and /menu against a real git set repo (no git mocks)."""
+
+    def test_task_is_not_a_controller_405(self, client, set_repo):
+        set_repo("s1", committed={"job.task.py": "pass\n"})
+        response = client.get("/controller/s1/job")
+        assert response.status_code == 405
+        assert response.json()["detail"] == "Scriptlet s1::job is not a controller."
+
+    def test_controller_with_missing_view_404(self, client, set_repo):
+        set_repo("s1", committed={"panel.controller.py": _controller_code(body="nobody"), **_VIEWS})
+        response = client.get("/controller/s1/panel")
+        assert response.status_code == 404
+        assert response.json()["detail"] == "Scriptlet s1::nobody not existing"
+
+    @pytest.mark.parametrize("debug, shown, hidden", [
+        (True, "<p>draft</p>", "<p>committed</p>"),
+        (False, "<p>committed</p>", "<p>draft</p>"),
+    ], ids=["debug", "production"])
+    def test_controller_view_source_follows_debug_flag(self, client, set_repo, debug, shown, hidden):
+        """A debug (preview) controller renders its views' uncommitted drafts;
+        a production controller renders the committed views."""
+        set_repo(
+            "s1",
+            committed={"panel.controller.py": _controller_code(debug=debug), **_VIEWS},
+            drafts={"body.html": "<p>draft</p>"},
+        )
+        response = client.get("/controller/s1/panel")
+        assert response.status_code == 200
+        assert shown in response.text
+        assert hidden not in response.text
+
+    def test_menu_lists_controller_under_its_display_name(self, client, set_repo):
+        set_repo("s1", committed={"panel.controller.py": _controller_code(), **_VIEWS})
+        response = client.get("/menu")
+        assert response.status_code == 200
+        body = response.json()
+        section = next(m for m in body["menu"] if m["id"] == "s1")
+        assert section["items"] == [
+            {"id": "s1_panel", "name": "My Panel", "path": "/controller/s1/panel", "default": False},
+        ]
+        assert body["failures"] == []

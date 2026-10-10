@@ -221,6 +221,22 @@ class TestScheduleRouter:
         response = mock_client.delete("/scriptlet/schedule/item?id=999", headers={"X-User": "testuser"})
         assert response.status_code == 404
 
+    def test_put_schedule_item_update_not_found(self, mock_client, mock_db, mock_git_ops):
+        """Updating a schedule id that does not exist is a 404 — it does not
+        create a schedule under that request."""
+        update_data = {"id": 999, "set": "default", "name": "test_job", "drop_done": False, "schedule": "* * * * *", "param": "{}"}
+        with patch('app.lib.git.read_content', return_value='pass'):
+            response = mock_client.put("/scriptlet/schedule/item", json=update_data, headers={"X-User": "testuser"})
+        assert response.status_code == 404
+        assert response.json()["detail"] == "Schedule 999 not existing"
+        assert mock_client.get("/scriptlet/schedule/list").json() == []
+
+    @pytest.mark.parametrize("action", ["activate", "deactivate"])
+    def test_get_schedule_toggle_not_found(self, mock_client, mock_db, action):
+        response = mock_client.get(f"/scriptlet/schedule/{action}?id=999", headers={"X-User": "testuser"})
+        assert response.status_code == 404
+        assert response.json()["detail"] == "Schedule 999 not existing"
+
     def test_schedule_unauthorized(self, mock_client, mock_db):
         with Session(get_db_engine()) as session:
             other_schedule = Schedule(set="default", name="other", owner="otheruser", schedule="* * * * *", active=True, param="{}", last=None, drop_done=False)
