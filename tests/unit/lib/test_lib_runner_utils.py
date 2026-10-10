@@ -325,7 +325,7 @@ class TestLoadUtils:
 
         mock_git_ops.read_content.side_effect = cancel_races_in_during_io
         with patch('os.listdir', return_value=['name.task.py']):
-            with pytest.raises(Exception, match=r"state changed to cancel during loadJob"):
+            with pytest.raises(runner.JobStateChanged, match=r"state changed to cancel during loadJob"):
                 runner.loadJob("123")
         with Session(get_db_engine()) as test_session:
             fetched = test_session.get(Job, "123")
@@ -340,16 +340,18 @@ class TestLoadUtils:
         from app.orm.database import get_db_engine
         from app.orm.job import Job
         with Session(get_db_engine()) as test_session:
-            test_session.add(Job(id="123", set="set", name="name", kind="task", state="cancel", owner="owner"))
+            test_session.add(Job(id="123", set="set", name="name", kind="task", state="cancel", owner="owner",
+                                 detail="cancelled by operator"))
             test_session.commit()
         with patch('app.runner.git.read_content') as mock_read:
-            with pytest.raises(Exception, match=r"Job 123 state changed to cancel"):
+            with pytest.raises(runner.JobStateChanged, match=r"Job 123 state changed to cancel"):
                 runner.loadJob("123")
         mock_read.assert_not_called()
         with Session(get_db_engine()) as test_session:
             fetched = test_session.get(Job, "123")
             assert fetched.state == "cancel"
             assert fetched.start is None
+            assert fetched.detail == "cancelled by operator"  # the operator's reason is kept
 
 class TestProcessImports:
     @patch('app.lib.job.loadLib')

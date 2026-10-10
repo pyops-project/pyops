@@ -334,7 +334,7 @@ graph TD
     F --> G[Phase 2: Isolated Job Execution in Workspace]
 ```
 
-- `loadJob(job_id)`: fetches from DB, sets state `loading`, returns owner, set, name, kind, param, code, overrides, max_retries
+- `loadJob(job_id)`: fetches from DB, sets state `loading` (compare-and-set from `dequeued`), returns owner, set, name, kind, param, code, overrides, max_retries. If the job left `dequeued` first — a cancel or remove landed between the claim and the load — it raises `JobStateChanged`; `main` logs that at INFO and spawns nothing, the row keeps its state and detail, and the cancel path (`getNextToTerm`) finalises it. Any other load error fails the job with the traceback.
 - `assignJob(job_id, pid)`: sets pid + start timestamp on the row. **Does not** change state — the job process flips `loading` → `running` itself, via a `state=running` ZMQ completion message at the kind-specific boundary (task: after `exec(param)` on the first retry attempt; service / draft / debug / test: after `exec(libs)` + `exec(param)` both return). See `markRunning` and the `state=running` subsection below.
 - `markRunning(job_id)`: flips `loading` → `running` on the param-done signal from the job process. Honours the same terminal-state CASE protection as `finishJob`, so a cancel that committed before the signal arrived survives.
 - `finishJob(job_id, state, detail)`: atomic UPDATE with CAS — preserves any committed `cancel`/`cancelling` state, otherwise applies the supplied state; service jobs with drop_done and state "done" immediately get re-targeted to "remove"; if `old_pid` is set, spawns a daemon `terminate_job_processes` thread to clean up the process tree

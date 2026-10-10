@@ -1759,6 +1759,35 @@ class TestMainLoop:
         assert row.detail is None
         assert applied["_shutdown_job_processes"].call_args.args[0] == {99002: proc}
 
+    def test_cancel_before_load_is_not_an_error(self, run_main, caplog):
+        """A cancel that lands between the claim and loadJob is a normal
+        outcome: nothing is spawned, nothing is logged as an error, and the
+        row keeps its cancel state and detail for the cancel path."""
+        import logging
+        from sqlalchemy.orm import Session
+        from app.orm.database import get_db_engine
+        from app.runner import getNextToDo
+        from app.orm.job import Job
+        self._add_jobs(Job(id="raced", set="s", name="t", owner="o", kind="task", state="todo"))
+        killer = _Killer()
+
+        def claim_then_cancel():
+            killer.stop()
+            job_id = getNextToDo()
+            with Session(get_db_engine()) as session:  # the cancel API, concurrently
+                row = session.get(Job, job_id)
+                row.state, row.detail = "cancel", "cancelled by operator"
+                session.commit()
+            return job_id
+
+        with caplog.at_level(logging.INFO, logger="app.runner"):
+            applied = run_main(killer, getNextToDo=Mock(side_effect=claim_then_cancel), **{"subprocess.Popen": Mock()})
+
+        row = self._job("raced")
+        assert (row.state, row.detail) == ("cancel", "cancelled by operator")
+        applied["subprocess.Popen"].assert_not_called()
+        assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+
     def test_load_failure_fails_job_with_traceback(self, run_main):
         """A claimed job that cannot be loaded (here: its set was removed
         after enqueue) is failed with the traceback; nothing is spawned."""

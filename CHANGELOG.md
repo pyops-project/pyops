@@ -106,6 +106,12 @@ from 3.0.0 onward.
   e.g. a just-started job missing from the Monitor until the next
   auto-refresh. Only the most recently started refresh now updates the
   tree.
+- **A job cancelled just as the runner picked it up was logged as an
+  error.** The runner treated the cancel as a load failure: an ERROR with
+  a traceback in the server log, and the operator's cancel reason replaced
+  by "state no longer dequeued" or the traceback. The job still ended
+  cancelled. It is now a normal outcome: nothing is spawned, nothing is
+  logged as an error, and the cancel keeps its reason.
 
 ### CI
 - **VSIX "integration" suite renamed to the VSIX e2e axis.** It boots a

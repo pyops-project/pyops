@@ -294,6 +294,12 @@ def receive_and_process(socket):
 INCOMPLETE_ON_STARTUP_DETAIL = "incomplete execution detected on startup"
 
 
+class JobStateChanged(Exception):
+    """The claimed job left `dequeued` before it was loaded — a cancel or remove
+    landed in between. Not an error: the job is not spawned and keeps its state
+    and detail; the cancel path (getNextToTerm) finalises it."""
+
+
 def handleOddJobs():
     """Reconcile non-terminal rows left behind by a previous unclean run.
 
@@ -473,9 +479,7 @@ def loadJob(job_id: str):
         if job is None:
             raise Exception(f"Job {job_id} not existing")
         if job.state != "dequeued":
-            logger.info(f"Skipping loadJob {job_id}: state={job.state}")
-            finishJob(job_id, job.state, "state no longer dequeued")
-            raise Exception(f"Job {job_id} state changed to {job.state}")
+            raise JobStateChanged(f"Job {job_id} state changed to {job.state} before loadJob")
         # Snapshot fields needed for the return tuple — read before we release the
         # ORM identity for this session via the conditional UPDATE.
         owner, setname, name, kind, param, overrides, max_retries = (
@@ -525,8 +529,7 @@ def loadJob(job_id: str):
             session.expire_all()
             current = session.get(Job, job_id)
             current_state = current.state if current else "<missing>"
-            logger.info(f"loadJob: CAS lost — {job_id} state is now '{current_state}', aborting spawn")
-            raise Exception(f"Job {job_id} state changed to {current_state} during loadJob")
+            raise JobStateChanged(f"Job {job_id} state changed to {current_state} during loadJob")
 
         return owner, setname, name, kind, param, code, overrides, max_retries
 
@@ -995,6 +998,8 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
                         processes[p.pid] = p
                         logger.debug(f"main: started process for {job_id}, pid {p.pid}")
 
+                    except JobStateChanged as e:
+                        logger.info("main: not spawning: %s", e)
                     except Exception as e:
                         logger.debug(f"main: exception loading/running {job_id}: {e}")
                         logger.exception("Error loading/running job %s: %s", job_id, e)
