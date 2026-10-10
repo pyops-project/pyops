@@ -279,6 +279,8 @@ Manages setInterval-based auto-refresh for both tree providers.
 - `stopIfRunning()` — clears both manager and monitor timers
 - `dispose()` → calls `stopIfRunning()`
 
+Timer refreshes and the refresh commands (`pyops.refreshManager`, `pyops.refreshMonitor`) can overlap. Both tree providers number each `refresh()` (`_refreshSeq`) and only the most recently started one writes its result, so an older refresh that answers last cannot overwrite newer data.
+
 ---
 
 ## PyOpsPythonDebugConfigProvider (`src/services/PyOpsPythonDebugConfigProvider.ts`)

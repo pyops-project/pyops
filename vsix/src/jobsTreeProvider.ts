@@ -30,6 +30,9 @@ class JobsTreeDataProvider implements TreeDataProvider<JobTreeItem> {
     private _jobs: Job[] = [];
     private _loading: boolean = false;
     private _lastJobsErrorShown: number = 0;
+    // Overlapping refreshes (auto-refresh timer + refresh command) can answer out
+    // of order; only the most recently started one may update the tree.
+    private _refreshSeq: number = 0;
 
     constructor(context: vscode.ExtensionContext, apiClient: ApiClient) {
         this._context = context;
@@ -140,6 +143,7 @@ class JobsTreeDataProvider implements TreeDataProvider<JobTreeItem> {
     }
 
     async refresh(): Promise<void> {
+        const seq = ++this._refreshSeq;
         const isValidConfig = this._apiClient.hasValidConfig();
         if (!isValidConfig) {
             this._jobs = [];
@@ -152,6 +156,9 @@ class JobsTreeDataProvider implements TreeDataProvider<JobTreeItem> {
         this._onDidChangeTreeData.fire();
 
         const jobs = await this.fetchJobs();
+        if (seq !== this._refreshSeq) {
+            return;
+        }
         this._jobs = jobs;
         this._loading = false;
         this._onDidChangeTreeData.fire();

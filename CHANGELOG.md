@@ -7,7 +7,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 from 3.0.0 onward.
 
-## [3.3.7] — 2026-10-09
+## [3.3.7] — 2026-10-10
 
 ### Added
 - **Additive database schema sync at start-up.** Besides creating missing
@@ -100,6 +100,12 @@ from 3.0.0 onward.
   The `.vsix` now carries the compiled extension and its production
   dependencies only (no sources, tests or build scripts), and
   `vsix/build.sh` fails unless every runtime dependency is packaged.
+- **VSIX: Manager and Monitor could show outdated content.** An
+  auto-refresh and a manual refresh that overlapped could answer out of
+  order, and the older one, finishing last, overwrote the newer result —
+  e.g. a just-started job missing from the Monitor until the next
+  auto-refresh. Only the most recently started refresh now updates the
+  tree.
 
 ### CI
 - **VSIX "integration" suite renamed to the VSIX e2e axis.** It boots a

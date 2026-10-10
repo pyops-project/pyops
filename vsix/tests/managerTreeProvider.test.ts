@@ -326,6 +326,24 @@ describe('ManagerTreeDataProvider', () => {
       expect(mockApiClient.fetch).toHaveBeenCalled();
     });
 
+    it('keeps the newest of overlapping refreshes when an older one answers last', async () => {
+      require('./utils/helpers').setupConfigMock();
+      jest.spyOn(provider as any, 'scanLocalScriptlets').mockResolvedValue([]);
+      jest.spyOn(provider as any, 'downloadScriptlets').mockResolvedValue(undefined);
+      let answerOlder: (response: any) => void = () => {};
+      mockApiClient.fetch
+        .mockImplementationOnce(() => new Promise(resolve => { answerOlder = resolve; }))
+        .mockResolvedValueOnce({ ok: true, json: jest.fn().mockResolvedValue([{ set: 's', name: 'new', type: 'task' }]) });
+
+      const first = provider.refresh(); // e.g. the auto-refresh timer
+      const second = provider.refresh(); // the refresh command
+      await second;
+      answerOlder({ ok: true, json: jest.fn().mockResolvedValue([{ set: 's', name: 'old', type: 'task' }]) });
+      await first;
+
+      expect((provider as any)._scriptlets).toEqual([{ set: 's', name: 'new', type: 'task' }]);
+    });
+
     it('should handle refresh errors gracefully', async () => {
       require('./utils/helpers').setupConfigMock();
       mockApiClient.fetch.mockRejectedValue(new Error('Network error'));

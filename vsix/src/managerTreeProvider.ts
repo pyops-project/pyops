@@ -36,6 +36,9 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
     private _apiClient: ApiClient;
     private _scriptlets: ScriptletInfo[] = [];
     private _syncStatus: Map<string, boolean> = new Map();
+    // Overlapping refreshes (auto-refresh timer + refresh command) can answer out
+    // of order; only the most recently started one may update the tree.
+    private _refreshSeq: number = 0;
     private _lastScriptletErrorShown: number = 0;
 
     constructor(context: vscode.ExtensionContext, outputChannel: vscode.OutputChannel, apiClient: ApiClient) {
@@ -305,6 +308,7 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
     }
 
     async refresh(): Promise<void> {
+        const seq = ++this._refreshSeq;
         const isValidConfig = this._apiClient.hasValidConfig();
         if (!isValidConfig) {
             this._scriptlets = [];
@@ -315,6 +319,9 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
         const remoteScriptlets = await this.fetchScriptlets();
         const remoteKeys = new Set(remoteScriptlets.map(s => `${s.set}-${s.name}-${s.type}`));
         const localScriptlets = await this.scanLocalScriptlets();
+        if (seq !== this._refreshSeq) {
+            return;
+        }
         const localOnlyScriptlets = localScriptlets.filter(l => !remoteKeys.has(`${l.set}-${l.name}-${l.type}`));
         const allScriptlets = this.filterSets([...remoteScriptlets, ...localOnlyScriptlets]);
         this._scriptlets = allScriptlets;
