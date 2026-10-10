@@ -12,7 +12,6 @@ Covers the UI workflows not exercised by test_schedule_api.py:
 import time
 
 import pytest
-from playwright.sync_api import expect
 
 from tests.e2e.conftest import expand_set, set_ace_value
 
@@ -79,6 +78,14 @@ def _first_schedule_row(frame):
     row = frame.locator('[data-testid^="schedule-row-"]').first
     row.wait_for(state="visible", timeout=5_000)
     return row
+
+
+def _error_text(locator, timeout=5):
+    """The text of a modal's error line once the failed request has filled it ('' if it never does)."""
+    deadline = time.time() + timeout
+    while time.time() < deadline and not locator.inner_text().strip():
+        time.sleep(0.1)
+    return locator.inner_text()
 
 
 class TestSchedulerUI:
@@ -188,7 +195,7 @@ class TestSchedulerUI:
         # Out of range: the 422 shows its message and the modal stays open for the correction.
         max_fail_n.fill("101")
         frame.locator('[data-testid="scheduler-edit-submit"]').click()
-        expect(frame.locator('[data-testid="scheduler-edit-error"]')).to_contain_text("less than or equal to 100")
+        assert "less than or equal to 100" in _error_text(frame.locator('[data-testid="scheduler-edit-error"]'))
         max_fail_n.fill("9")
         frame.locator('[data-testid="scheduler-edit-submit"]').click()
 
@@ -241,12 +248,8 @@ class TestSchedulerUI:
         _open_create_modal(frame)
         _submit_create(frame, set=SET_NAME, name=TASK_NAME, schedule="0 0 * * *", drop_done=True, keep_n=101)
 
-        err_locator = frame.locator('[data-testid="scheduler-create-error"]')
-        deadline = time.time() + 5
-        while time.time() < deadline and not err_locator.inner_text().strip():
-            time.sleep(0.1)
-        err = err_locator.inner_text()
-        assert "100" in err and "[object Object]" not in err, err
+        err = _error_text(frame.locator('[data-testid="scheduler-create-error"]'))
+        assert "less than or equal to 100" in err and "[object Object]" not in err, err
         assert frame.locator('[data-testid="scheduler-create-modal"]').is_visible()
         assert api_anon.get("/scriptlet/schedule/list").json() == []
 
@@ -347,10 +350,7 @@ class TestSchedulerUI:
 
         err_locator = frame.locator('[data-testid="scheduler-edit-error"]')
         err_locator.wait_for(state="visible", timeout=5_000)
-        deadline = time.time() + 5
-        while time.time() < deadline and not err_locator.inner_text().strip():
-            time.sleep(0.1)
-        err = err_locator.inner_text()
+        err = _error_text(err_locator)
         assert err.strip(), "scheduler-edit-error was never populated"
         assert frame.locator('[data-testid="scheduler-edit-modal"]').is_visible()
 

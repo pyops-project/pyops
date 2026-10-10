@@ -74,7 +74,11 @@ describe('resolveConnectivity', () => {
       expect(c.authMode).toBe('x-user');
       expect(c.username).toBe('directuser');
       expect(c.profileApiKey).toBeUndefined();
-      expect(c.debugPorts).toEqual([5678]); // profile has no debug_ports
+    });
+
+    it('a profile without debug_ports falls back to the default port pool', () => {
+      setupConfigMock({ serverUrl: undefined, username: undefined, profile: 'direct' });
+      expect(resolveConnectivity().debugPorts).toEqual([5678]);
     });
 
     it('the pyops.profile setting selects a non-default profile', () => {

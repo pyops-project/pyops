@@ -8,10 +8,7 @@ import sqlite3
 import pytest
 from sqlalchemy import Column, Integer, MetaData, String, Table, text
 
-
-def _schema(path):
-    with contextlib.closing(sqlite3.connect(str(path))) as conn:
-        return conn.execute("SELECT type, name, sql FROM sqlite_master ORDER BY name").fetchall()
+from tests.conftest import sqlite_schema
 
 
 def _rows(path, table):
@@ -79,7 +76,7 @@ def test_job_schedule_id_added_to_3_3_6_db(empty_db, seed_db):
     init_db()
 
     assert [row["schedule_id"] for row in _rows(empty_db, "job")] == [None]
-    assert "ix_job_schedule_id" in {name for _, name, _ in _schema(empty_db)}
+    assert "ix_job_schedule_id" in {name for _, name, _ in sqlite_schema(empty_db)}
 
 
 def test_schedule_keep_n_added_to_3_3_6_db(empty_db, seed_db):
@@ -107,7 +104,7 @@ def test_columns_and_index_added_after_backup(empty_db, seed_db):
     from app.orm.database import get_db_engine, sync_schema
 
     seed_db(empty_db, "3.3.6")
-    schema, jobs = _schema(empty_db), _rows(empty_db, "job")
+    schema, jobs = sqlite_schema(empty_db), _rows(empty_db, "job")
 
     assert sync_schema(get_db_engine(), _probe_metadata()) == [
         "added column job.probe_note",
@@ -119,10 +116,10 @@ def test_columns_and_index_added_after_backup(empty_db, seed_db):
     rows = _rows(empty_db, "job")
     assert _projected(rows, jobs) == jobs
     assert [(row["probe_note"], row["probe_n"], row["probe_ref"]) for row in rows] == [(None, 3, None)]
-    assert "ix_job_probe_ref" in {name for _, name, _ in _schema(empty_db)}
+    assert "ix_job_probe_ref" in {name for _, name, _ in sqlite_schema(empty_db)}
     [backup] = _backups(empty_db)
     assert re.fullmatch(rf"test\.bck\.{re.escape(version())}\.[0-9a-f]{{12}}\.\d{{8}}T\d{{6}}\.db", backup.name)
-    assert _schema(backup) == schema
+    assert sqlite_schema(backup) == schema
 
 
 def test_second_run_changes_nothing(empty_db, seed_db):
@@ -130,10 +127,10 @@ def test_second_run_changes_nothing(empty_db, seed_db):
 
     seed_db(empty_db, "3.3.6")
     sync_schema(get_db_engine(), _probe_metadata())
-    schema, backups = _schema(empty_db), _backups(empty_db)
+    schema, backups = sqlite_schema(empty_db), _backups(empty_db)
 
     assert sync_schema(get_db_engine(), _probe_metadata()) == []
-    assert _schema(empty_db) == schema
+    assert sqlite_schema(empty_db) == schema
     assert _backups(empty_db) == backups
 
 
@@ -142,7 +139,7 @@ def test_failure_rolls_back_and_names_statement_and_backup(empty_db, seed_db):
     from app.orm.database import get_db_engine, sync_schema
 
     seed_db(empty_db, "3.3.6")
-    schema = _schema(empty_db)
+    schema = sqlite_schema(empty_db)
     md = _job_metadata(
         Column("probe_note", String),  # applied first, then rolled back
         Column("probe_bad", Integer, nullable=False),  # no server_default: rejected on a populated table
@@ -167,7 +164,7 @@ def test_failure_rolls_back_and_names_statement_and_backup(empty_db, seed_db):
                "Cannot add a NOT NULL column with default value NULL" in error
         assert "ALTER TABLE job ADD COLUMN probe_bad INTEGER NOT NULL" in error
         assert str(named) in error
-    assert _schema(empty_db) == schema
+    assert sqlite_schema(empty_db) == schema
 
 
 def test_stale_backup_tmp_does_not_block_backup(empty_db, seed_db):
@@ -175,7 +172,7 @@ def test_stale_backup_tmp_does_not_block_backup(empty_db, seed_db):
     from app.orm.database import get_db_engine, sync_schema
 
     seed_db(empty_db, "3.3.6")
-    schema = _schema(empty_db)
+    schema = sqlite_schema(empty_db)
     stale = empty_db.parent / "test.bck.tmp"
     stale.write_bytes(b"partial backup")
 
@@ -187,7 +184,7 @@ def test_stale_backup_tmp_does_not_block_backup(empty_db, seed_db):
     ]
 
     [backup] = _backups(empty_db)
-    assert _schema(backup) == schema
+    assert sqlite_schema(backup) == schema
     assert not stale.exists()
 
 

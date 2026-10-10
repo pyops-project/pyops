@@ -186,6 +186,11 @@ SCHEMA_BASELINES = {
     "3.3.6": V3_3_6_SCHEMA + V3_3_6_ROWS,
 }
 
+def sqlite_schema(path):
+    """The sqlite_master rows (type, name, sql) of the SQLite file at path, read with stdlib sqlite3."""
+    with contextlib.closing(sqlite3.connect(str(path))) as conn:
+        return conn.execute("SELECT type, name, sql FROM sqlite_master ORDER BY name").fetchall()
+
 """Factory fixture writing the populated baseline of a released version to a path with stdlib sqlite3 (no app code)."""
 @pytest.fixture(scope="function")
 def seed_db():

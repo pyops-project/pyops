@@ -304,7 +304,7 @@ describe('ManagerTreeDataProvider', () => {
         json: jest.fn().mockResolvedValue({ code: 'remote code' }),
       });
       (require('fs').existsSync as jest.Mock).mockReturnValue(false);
-      (require('fs').writeFileSync as jest.Mock).mockImplementation(() => {
+      (require('fs').writeFileSync as jest.Mock).mockImplementationOnce(() => {
         throw new Error('File system error');
       });
 

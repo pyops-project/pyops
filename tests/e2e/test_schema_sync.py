@@ -2,14 +2,14 @@
 a sync that fails aborts the start-up."""
 
 import contextlib
-import os
 import re
 import sqlite3
 import subprocess
 
 import pytest
 
-from tests.e2e.conftest import PROJECT_ROOT, SERVER_SHUTDOWN_TIMEOUT, SERVER_STARTUP_TIMEOUT, ServerLog, _kill_server
+from tests.conftest import sqlite_schema
+from tests.e2e.conftest import SERVER_SHUTDOWN_TIMEOUT, SERVER_STARTUP_TIMEOUT, ServerLog, _kill_server, _start_server
 
 
 @pytest.fixture
@@ -19,31 +19,13 @@ def e2e_env(e2e_env, seed_db):
     return e2e_env
 
 
-def _schema(path):
-    with contextlib.closing(sqlite3.connect(str(path))) as conn:
-        return conn.execute("SELECT type, name, sql FROM sqlite_master ORDER BY name").fetchall()
-
-
 def _run_until_exit(e2e_env):
     """Start the server like pyops_server, but wait for it to exit on its own instead of serving.
 
     Returns (exit code, ServerLog); the exit code is None when it was still running after the start-up timeout."""
     log_path = str(e2e_env["tmp_path"] / "server.log")
     with open(log_path, "w") as log_file:
-        proc = subprocess.Popen(
-            [
-                os.path.join(PROJECT_ROOT, ".venv", "bin", "gunicorn"),
-                "-c", "app/gunicorn.py",
-                "--access-logfile", "-",
-                "--error-logfile", "-",
-                "--capture-output",
-            ],
-            cwd=PROJECT_ROOT,
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-            env={**os.environ, "PYOPS_CONFIG": e2e_env["config_path"]},
-            preexec_fn=os.setsid,
-        )
+        proc = _start_server(e2e_env, log_file)
         try:
             returncode = proc.wait(timeout=SERVER_STARTUP_TIMEOUT)
         except subprocess.TimeoutExpired:
@@ -74,7 +56,7 @@ def test_failed_sync_aborts_startup(e2e_env):
     with contextlib.closing(sqlite3.connect(str(db))) as conn:
         # index names are global in SQLite: the sync's CREATE INDEX ix_job_schedule_id fails
         conn.executescript("CREATE TABLE stray (x INTEGER); CREATE INDEX ix_job_schedule_id ON stray (x);")
-    schema = _schema(db)
+    schema = sqlite_schema(db)
 
     returncode, log = _run_until_exit(e2e_env)
 
@@ -84,5 +66,5 @@ def test_failed_sync_aborts_startup(e2e_env):
     )
     [backup] = e2e_env["data_dir"].glob("app.bck.*.db")
     assert log.contains(rf"backup: {re.escape(str(backup))}")
-    assert _schema(db) == schema
+    assert sqlite_schema(db) == schema
     assert not log.contains("Runner logging configured")
