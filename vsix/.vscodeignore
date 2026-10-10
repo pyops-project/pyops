@@ -1,5 +1,12 @@
 .tmp/
 coverage/
 .vscode-test/
-node_modules/
 *.log
+src/
+tests/
+out/tests/
+tsconfig.json
+build.sh
+build.dev.sh
+node_install.sh
+.gitignore

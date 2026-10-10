@@ -94,6 +94,12 @@ from 3.0.0 onward.
   connection into a child process (latent locking/corruption risk); the
   master now disposes its engine after the start-up schema sync, so each
   process opens its own.
+- **The packaged VSIX failed to activate.** `vsix/.vscodeignore` excluded
+  `node_modules/`, so the `.vsix` lacked the runtime dependency `smol-toml`
+  and the extension installed from it failed at `require("smol-toml")`.
+  The `.vsix` now carries the compiled extension and its production
+  dependencies only (no sources, tests or build scripts), and
+  `vsix/build.sh` fails unless every runtime dependency is packaged.
 
 ### CI
 - **VSIX "integration" suite renamed to the VSIX e2e axis.** It boots a
@@ -102,6 +108,10 @@ from 3.0.0 onward.
   `vsix/tests/integration/` → `vsix/tests/e2e/`, npm script
   `test:integration` → `test:e2e`, CI job `test:vsix_integration` →
   `test:e2e:vsix`.
+- **Node-using jobs run on `node:24-trixie-slim`** (Node 24 LTS on Debian
+  trixie) instead of apt-installing trixie's Node 20 — the latest
+  `@vscode/vsce` needs Node >= 22. Applies to `test:e2e`, `test:e2e:vsix`,
+  `test:vsix` and `build`.
 
 ### Documentation
 - **Agent instructions moved from `CLAUDE.md` to `AGENTS.md`** (read by

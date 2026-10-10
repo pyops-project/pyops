@@ -36,8 +36,9 @@ test:
 
 test:e2e:
   stage: test
+  image: node:24-trixie-slim
   before_script:
-    - apt-get update && apt-get install -y python3 python3-pip python3-venv python3-argcomplete git sqlite3 nodejs npm procps
+    - apt-get update && apt-get install -y python3 python3-pip python3-venv python3-argcomplete git sqlite3 procps
     - git config --global user.email "ci@pyops.local"
     - git config --global user.name "PyOps CI"
     - python3 -m venv .venv
@@ -57,9 +58,10 @@ test:e2e:
 
 test:e2e:vsix:
   stage: test
+  image: node:24-trixie-slim
   before_script:
     # Python + server dependencies
-    - apt-get update && apt-get install -y python3 python3-pip python3-venv git sqlite3 nodejs npm curl procps
+    - apt-get update && apt-get install -y python3 python3-pip python3-venv git sqlite3 curl procps
     # Electron/VS Code runtime dependencies + Xvfb
     - apt-get install -y xvfb libnss3 libatk-bridge2.0-0 libdrm2 libxkbcommon0 libgbm1 libgtk-3-0 libasound2t64 libxshmfence1
     - git config --global user.email "ci@pyops.local"
@@ -97,12 +99,11 @@ test:e2e:vsix:
 
 test:vsix:
   stage: test
+  image: node:24-trixie-slim
   cache:
     paths:
       - vsix/node_modules/
   before_script:
-    - apt-get update
-    - apt-get install -y nodejs npm
     - npm config set cache $NPM_CACHE_DIR
   script:
     - cd vsix
@@ -158,12 +159,11 @@ test:image_build:
 build:
   stage: build
   needs: [test, test:vsix]
+  image: node:24-trixie-slim
   cache:
     paths:
       - vsix/node_modules/
   before_script:
-    - apt-get update
-    - apt-get install -y nodejs npm
     - npm config set cache $NPM_CACHE_DIR
   script:
     - vsix/build.sh

@@ -6,7 +6,7 @@ PyOps is an execution platform for Python operations scriptlets, licensed under 
 
 ### VSIX Installation and Configuration
 
-- **Install**: In VSCode, go to Extensions view > ... > Install from VSIX > select `vsix/pyops.vsix`.
+- **Install**: In VSCode, go to Extensions view > ... > Install from VSIX > select `vsix/pyops-<VERSION>.vsix` (built by `vsix/build.sh`).
 - **Configure** workspace settings (Ctrl+, > Workspace tab, or `Preferences: Open Workspace Settings (JSON)`):
   ```json
   {
