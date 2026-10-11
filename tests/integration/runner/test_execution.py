@@ -35,6 +35,31 @@ def sample_libs():
 
 class TestExecution:
 
+    @pytest.mark.parametrize("code, state", [("print('ok')", "done"), ("raise RuntimeError('boom')", "failed")])
+    @patch('app.lib.job.zmq.Context')
+    @patch('app.job_runner.subprocess.run')
+    @patch('app.lib.sets.subprocess.check_call')
+    @patch('app.lib.pyops.ServiceListener')
+    def test_run_task_writes_result_file(self, mock_listener, mock_check_call, mock_run, mock_context, job_env, code, state):
+        """The job writes its final result to result.json in its workspace —
+        also when the runner never acknowledges the report."""
+        import zmq
+        from app.job_runner import main as run
+        from app.lib import job as job_lib
+        mock_listener.return_value = None
+        mock_check_call.return_value = None
+        mock_run.return_value = Mock(returncode=0)
+        mock_context.return_value.socket.return_value.recv.side_effect = zmq.Again()  # no ACK
+        env = job_env
+
+        run("id", "owner", "set", "name", "task", "", code, [], "/tmp/pyops/runner.sock", 0, None,
+            env["conf_data"], env["conf_runner"], env["conf_users"], env["conf_web"])
+
+        workspace = os.path.join(env["conf_data"]["jobs"], "set", "id")
+        result = job_lib.read_result(workspace)
+        assert result["state"] == state
+        assert (result["detail"] is None) == (state == "done")
+
     @patch('app.job_runner.job_lib.send_completion')
     @patch('app.job_runner.subprocess.run')
     @patch('app.lib.sets.subprocess.check_call')
@@ -48,7 +73,7 @@ class TestExecution:
 
         run("id", "owner", "set", "name", "task", "print('param executed')", "print('code executed')", [], "/tmp/pyops/runner.sock", 0, None, env["conf_data"], env["conf_runner"], env["conf_users"], env["conf_web"])
 
-        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
+        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None}, result_file=ANY)
 
     @patch('app.job_runner.job_lib.send_completion')
     @patch('app.job_runner.subprocess.run')
@@ -70,7 +95,7 @@ class TestExecution:
 
         assert mock_sleep.call_count == 2  # Sleeps after first two fails
         # Check the final send is done
-        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
+        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None}, result_file=ANY)
 
     @patch('app.job_runner.job_lib.send_completion')
     @patch('app.job_runner.subprocess.run')
@@ -109,7 +134,7 @@ class TestExecution:
         run("id", "owner", "set", "name", "service", "", "print('code executed')", [], "/tmp/pyops/runner.sock", 0, None, env["conf_data"], env["conf_runner"], env["conf_users"], env["conf_web"])
 
         mock_listener.assert_called_once_with("owner", "id")
-        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
+        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None}, result_file=ANY)
 
     @patch('app.job_runner.job_lib.send_completion')
     @patch('app.job_runner.subprocess.run')
@@ -128,7 +153,7 @@ class TestExecution:
             run("id", "owner", "set", "name", "service", "", "raise Exception", [], "/tmp/pyops/runner.sock", 0, None, env["conf_data"], env["conf_runner"], env["conf_users"], env["conf_web"])
 
         assert mock_sleep.call_count == 0  # No retries for service
-        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "failed", "detail": ANY})
+        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "failed", "detail": ANY}, result_file=ANY)
 
     @patch('app.job_runner.job_lib.send_completion')
     @patch('app.lib.sets.subprocess.check_call')
@@ -151,7 +176,7 @@ class TestExecution:
             run("id", "owner", "set", "name", "debug", "", "raise Exception", [], "/tmp/pyops/runner.sock", 0, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {}}, {"bind": "bind"})
 
         assert mock_sleep.call_count == 0  # No retries for debug
-        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "failed", "detail": ANY})
+        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "failed", "detail": ANY}, result_file=ANY)
 
     @patch('app.job_runner.job_lib.send_completion')
     @patch('app.lib.sets.subprocess.check_call')
@@ -174,7 +199,7 @@ class TestExecution:
             run("id", "owner", "set", "name", "test", "", "raise Exception", [], "/tmp/pyops/runner.sock", 0, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {}}, {"bind": "bind"})
 
         assert mock_sleep.call_count == 0
-        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "failed", "detail": ANY})
+        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "failed", "detail": ANY}, result_file=ANY)
 
     @patch('app.job_runner.job_lib.send_completion')
     @patch('app.job_runner.subprocess.run')
@@ -201,7 +226,7 @@ class TestExecution:
             {"venv": venv_path, "pkg": pkg_path},
             {"owner": {}}, {"bind": "bind"})
 
-        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
+        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None}, result_file=ANY)
         name_file = os.path.join(data_base, "myset", "id", "name.json")
         assert os.path.exists(name_file), f"expected workspace artefact at {name_file}"
         with open(name_file) as f:
@@ -256,7 +281,7 @@ class TestExecution:
             {"venv": os.path.join(tmp_path, "venv"), "pkg": os.path.join(tmp_path, "pkg")},
             {"owner": {}}, {"bind": "bind"})
 
-        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
+        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None}, result_file=ANY)
         src = os.path.join(data_base, "myset", "id", ".test", "src")
         with open(os.path.join(src, "myset", "task", "my_task.py")) as f:
             assert f.read() == "TASK = 'local'\n"
@@ -333,7 +358,7 @@ class TestExecution:
                 {"venv": venv_path, "pkg": pkg_path},
                 {"owner": {}}, {"bind": "bind"})
 
-            mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
+            mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None}, result_file=ANY)
             marker = os.path.join(data_base, "myset", "id", "roundtrip.json")
             assert os.path.exists(marker), "main code did not write its marker — importlib roundtrip failed"
             with open(marker) as f:
@@ -391,7 +416,7 @@ class TestExecution:
                 {"venv": venv_path, "pkg": pkg_path},
                 {"owner": {}}, {"bind": "bind"})
 
-            mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
+            mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None}, result_file=ANY)
             marker = os.path.join(data_base, "myset", "id", "roundtrip.json")
             assert os.path.exists(marker), "main code did not write its marker — main-module roundtrip failed"
             with open(marker) as f:
@@ -433,7 +458,7 @@ class TestExecution:
             {"venv": venv_path, "pkg": pkg_path},
             {"owner": {}}, {"bind": "bind"})
 
-        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
+        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None}, result_file=ANY)
         name_file = os.path.join(data_base, "myset", "id", "name.json")
         assert os.path.exists(name_file)
         with open(name_file) as f:
@@ -495,7 +520,7 @@ class TestExecution:
             run("id", "owner", "set", "name", "testdebug", "", "raise Exception", [], "/tmp/pyops/runner.sock", 0, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {}}, {"bind": "bind"})
 
         assert mock_sleep.call_count == 0
-        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "failed", "detail": ANY})
+        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "failed", "detail": ANY}, result_file=ANY)
 
     @patch('app.job_runner.job_lib.send_completion')
     @patch('app.job_runner.subprocess.run')
@@ -512,7 +537,7 @@ class TestExecution:
 
         run("id", "owner", "set", "name", "draft", "print('param executed')", "print('code executed')", [], "/tmp/pyops/runner.sock", 0, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
 
-        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
+        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None}, result_file=ANY)
 
     @patch('app.job_runner.job_lib.send_completion')
     @patch('app.job_runner.subprocess.run')
@@ -532,7 +557,7 @@ class TestExecution:
         run("id", "owner", "set", "name", "draft", "", code, [], "/tmp/pyops/runner.sock", 0, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
 
         mock_listener.assert_called_once_with("owner", "id")
-        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
+        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None}, result_file=ANY)
 
     def test_draft_jobs_allow_concurrent_execution(self, mock_conf, mock_db):
         """Test that multiple draft jobs can run concurrently (unlike debug jobs)."""
@@ -939,7 +964,7 @@ logging.error('ERROR message')
         assert "INFO message" in stdout_content
         assert "WARNING message" in stderr_content
         assert "ERROR message" in stderr_content
-        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": job_id, "state": "done", "detail": None})
+        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": job_id, "state": "done", "detail": None}, result_file=ANY)
 
     @patch('app.job_runner.job_lib.send_completion')
     @patch('app.job_runner.subprocess.run')
@@ -965,7 +990,7 @@ logging.error('ERROR message')
         assert "INFO message" in stdout_content
         assert "WARNING message" in stderr_content
         assert "ERROR message" in stderr_content
-        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": job_id, "state": "done", "detail": None})
+        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": job_id, "state": "done", "detail": None}, result_file=ANY)
 
     @patch('app.job_runner.job_lib.send_completion')
     @patch('app.job_runner.subprocess.run')
@@ -1011,7 +1036,7 @@ logging.error('ERROR message')
 
         mock_listener.assert_called_once_with("owner", "id")
         mock_listener_instance.close.assert_called_once()
-        mock_check_call.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "failed", "detail": ANY})
+        mock_check_call.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "failed", "detail": ANY}, result_file=ANY)
 
     @patch('app.lib.sets.subprocess.check_call')
     @patch('subprocess.check_call')
@@ -1137,7 +1162,7 @@ logging.error('ERROR message')
 
         assert stdout_content == ""
         assert stderr_content == ""
-        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": job_id, "state": "done", "detail": None})
+        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": job_id, "state": "done", "detail": None}, result_file=ANY)
 
 
     @patch('app.job_runner.job_lib.send_completion')
@@ -1161,7 +1186,7 @@ logging.error('ERROR message')
         run(job_id, owner, set_name, "name", "task", "", "print('code')", [], "/tmp/pyops/runner.sock", 0, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
 
         mock_chdir.assert_called_once_with(workspace)
-        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": job_id, "state": "done", "detail": None})
+        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": job_id, "state": "done", "detail": None}, result_file=ANY)
 
 
     @patch('app.lib.pyops.Control', return_value=Mock())
@@ -1210,7 +1235,7 @@ print("jobsspace: " + globals()['jobsspace'])
             assert expected_gitspace in stdout_content
             assert expected_pkgspace in stdout_content
             assert expected_jobsspace in stdout_content
-            mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
+            mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None}, result_file=ANY)
 
     @patch('app.job_runner.job_lib.send_completion')
     @patch('app.job_runner.subprocess.run')
@@ -1593,7 +1618,7 @@ class TestDebugOverridesResolution(TestLoggingCapture):
         assert "INFO message" in stdout_content
         assert "WARNING message" in stderr_content
         assert "ERROR message" in stderr_content
-        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": job_id, "state": "done", "detail": None})
+        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": job_id, "state": "done", "detail": None}, result_file=ANY)
 
     @patch('app.job_runner.job_lib.send_completion')
     @patch('app.job_runner.subprocess.run')
@@ -1619,7 +1644,7 @@ class TestDebugOverridesResolution(TestLoggingCapture):
         assert "INFO message" in stdout_content
         assert "WARNING message" in stderr_content
         assert "ERROR message" in stderr_content
-        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": job_id, "state": "done", "detail": None})
+        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": job_id, "state": "done", "detail": None}, result_file=ANY)
 
     @patch('app.lib.job.send_completion')
     @patch('subprocess.check_call')
@@ -1740,7 +1765,7 @@ class TestDebugOverridesResolution(TestLoggingCapture):
 
         run(job_id, owner, set_name, "name", "task", param, code, [], "/tmp/pyops/runner.sock", 0, None, {"jobs": data_base, "git": f"{tmp_path}/data/git", "web": {"bind": "bind"}}, {"venv": venv_path, "pkg": pkg_path}, {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
 
-        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
+        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None}, result_file=ANY)
 
     @patch('app.job_runner.zmq.Context')
     def test_send_completion_zmq_retry_on_error(self, mock_context_class):
@@ -1919,7 +1944,7 @@ class TestDebugOverridesResolution(TestLoggingCapture):
 
         run("id", "owner", "set", "name", "draft", "print('param executed')", "print('code executed')", [], "/tmp/pyops/runner.sock", 0, None, env["conf_data"], env["conf_runner"], env["conf_users"], env["conf_web"])
 
-        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
+        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None}, result_file=ANY)
 
     def test_subprocess_popen_uses_direct_output_redirect(self):
         """Test that subprocess.Popen is called with sys.stdout/sys.stderr for direct output."""
@@ -1997,7 +2022,7 @@ class TestStdoutStderrRedirect:
             {"venv": venv_path, "pkg": pkg_path},
             {"owner": {}}, {"bind": "bind"})
 
-        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
+        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None}, result_file=ANY)
         ws = os.path.join(data_base, "myset", "id")
         stdout_log = os.path.join(ws, "stdout.log")
         stderr_log = os.path.join(ws, "stderr.log")
@@ -2037,7 +2062,7 @@ class TestStdoutStderrRedirect:
             {"venv": venv_path, "pkg": pkg_path},
             {"owner": {}}, {"bind": "bind"})
 
-        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
+        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None}, result_file=ANY)
         ws = os.path.join(data_base, "myset", "id")
         assert "subproc-stdout-marker" in open(os.path.join(ws, "stdout.log")).read()
         assert "subproc-stderr-marker" in open(os.path.join(ws, "stderr.log")).read()
@@ -2068,7 +2093,7 @@ class TestStdoutStderrRedirect:
             {"venv": venv_path, "pkg": pkg_path},
             {"owner": {"debug_port": 5678}}, {"bind": "127.0.0.1:8000"})
 
-        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None})
+        mock_send.assert_called_with("/tmp/pyops/runner.sock", {"id": "id", "state": "done", "detail": None}, result_file=ANY)
         ws = os.path.join(data_base, "myset", "id")
         assert "draft-fd2-marker" in open(os.path.join(ws, "stderr.log")).read()
 

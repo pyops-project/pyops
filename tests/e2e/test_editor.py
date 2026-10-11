@@ -656,20 +656,22 @@ class TestJsLibEndpoint:
         _full_cleanup(e2e_page, BASIC_NAMES)
         pyops_server.assert_no_unexpected_errors()
 
-    def test_jslib_wrong_type_returns_400(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
-        """Requesting a non-JS scriptlet via jslib endpoint returns 400."""
+    def test_jslib_wrong_type_returns_404(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
+        """Requesting a non-JS scriptlet via the jslib endpoint returns 404:
+        there is no JS library of that name."""
         _setup_basic(api_anon, set_factory, commit_set)
 
         # TASK_NAME is a task, not jslibrary.
         result = e2e_page.evaluate(
             """async (url) => {
                 const resp = await fetch(url);
-                return { status: resp.status };
+                return { status: resp.status, body: await resp.json() };
             }""",
             f"/scriptlet/jslib/{SET_NAME}/{TASK_NAME}",
         )
 
-        assert result["status"] == 400
+        assert result["status"] == 404
+        assert result["body"]["detail"].endswith(f"::{TASK_NAME} is not a jslibrary")
 
         _full_cleanup(e2e_page, BASIC_NAMES)
         pyops_server.assert_no_unexpected_errors()

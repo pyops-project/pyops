@@ -447,7 +447,7 @@ class TestJobRouter:
             session.commit()
 
         response = mock_client.delete(f"/scriptlet/job/item?id={job_id}", headers={"X-User": "testuser"})
-        assert response.status_code == 400
+        assert response.status_code == 409
         assert f"is in state '{state}' and cannot be deleted" in response.json()["detail"]
         assert "Allowed states: todo, cancelled, failed, done" in response.json()["detail"]
 
@@ -602,3 +602,112 @@ class TestJobRouter:
             assert kind == "testdebug"
             assert code == "# overridden testdebug code"
             assert overrides_str is not None
+
+
+class TestJobRealSet:
+    """/scriptlet/job/item against a real git base (no git mocks)."""
+
+    @pytest.mark.parametrize("kind", ["task", "draft"])
+    def test_put_unknown_set_404(self, mock_client, set_repo, kind):
+        """An unknown set is a missing resource, not a server error — for
+        every kind, before anything is enqueued."""
+        set_repo("s1", committed={"job.task.py": "pass\n"})
+        response = mock_client.put(
+            "/scriptlet/job/item",
+            json={"set": "nope", "name": "job", "drop_done": True, "param": "", "kind": kind},
+            headers={"X-User": "testuser"},
+        )
+        assert response.status_code == 404
+        assert response.json()["detail"] == "Set 'nope' does not exist"
+        assert mock_client.get("/scriptlet/job/list").json() == []
+
+    @staticmethod
+    def _put(client, **fields):
+        body = {"set": "s1", "name": "job", "drop_done": False, "param": "", **fields}
+        return client.put("/scriptlet/job/item", json=body, headers={"X-User": "testuser"})
+
+    @pytest.mark.parametrize("name", ["../escaped", "a/b", "t.x", "", "a\x00b"])
+    def test_put_invalid_name_400(self, mock_client, set_repo, name):
+        set_repo("s1", committed={"job.task.py": "pass\n"})
+        response = self._put(mock_client, name=name)
+        assert response.status_code == 400
+        assert response.json()["detail"].startswith("Invalid scriptlet name")
+        assert mock_client.get("/scriptlet/job/list").json() == []
+
+    def test_put_negative_max_retries_422(self, mock_client, set_repo):
+        """max_retries=-1 used to enqueue a task whose code never ran."""
+        set_repo("s1", committed={"job.task.py": "pass\n"})
+        assert self._put(mock_client, max_retries=-1).status_code == 422
+        assert mock_client.get("/scriptlet/job/list").json() == []
+
+    def test_put_while_shutting_down_503(self, mock_client, set_repo, caplog):
+        """While the runner drains (shutdown flag), enqueue is refused with
+        503 — logged as a warning, without an ERROR traceback."""
+        import logging
+        from app.lib import runner as lib_runner
+        set_repo("s1", committed={"job.task.py": "pass\n"})
+        os.makedirs(os.path.dirname(lib_runner.SHUTDOWN_FLAG_PATH), exist_ok=True)
+        open(lib_runner.SHUTDOWN_FLAG_PATH, "w").close()
+        with caplog.at_level(logging.DEBUG):
+            response = self._put(mock_client)
+        assert response.status_code == 503
+        assert response.json()["detail"] == "pyops shutdown in progress; refusing task enqueue for s1::job"
+        assert not [r for r in caplog.records if r.levelno >= logging.ERROR or r.exc_info]
+        assert any(r.levelno == logging.WARNING and "503 ShutdownPending" in r.getMessage() for r in caplog.records)
+
+    @staticmethod
+    def _job_row(state, detail="outcome"):
+        from datetime import datetime
+        with Session(get_db_engine()) as session:
+            session.add(Job(id="j1", owner="testuser", set="s1", name="job", kind="task", state=state,
+                            param="", detail=detail, end=datetime(2020, 1, 1)))
+            session.commit()
+
+    @staticmethod
+    def _job_state():
+        with Session(get_db_engine()) as session:
+            job = session.get(Job, "j1")
+            return job.state, job.detail
+
+    @pytest.mark.parametrize("state", ["done", "failed", "remove", "removed"])
+    def test_cancel_finished_job_409(self, mock_client, mock_conf, mock_db, state):
+        """Cancelling a finished or deleted job (a stale client snapshot) is
+        a conflict: the row keeps its outcome."""
+        self._job_row(state)
+        response = mock_client.get("/scriptlet/job/cancel", params={"id": "j1"})
+        assert response.status_code == 409
+        assert response.json()["detail"] == f"Job j1 is already {state}"
+        assert self._job_state() == (state, "outcome")
+
+    @pytest.mark.parametrize("state", ["cancel", "cancelled"])
+    def test_cancel_again_200(self, mock_client, mock_conf, mock_db, state):
+        self._job_row(state)
+        response = mock_client.get("/scriptlet/job/cancel", params={"id": "j1"})
+        assert response.status_code == 200
+        assert self._job_state()[0] == state
+
+    @pytest.mark.parametrize("state", ["todo", "running"])
+    def test_cancel_unfinished_job_200(self, mock_client, mock_conf, mock_db, state):
+        self._job_row(state)
+        response = mock_client.get("/scriptlet/job/cancel", params={"id": "j1"})
+        assert response.status_code == 200
+        assert self._job_state()[0] == "cancel"
+
+    def test_download_without_workspace_404(self, mock_client, mock_conf, mock_db):
+        """A job that has not started (or whose workspace was dropped) has no
+        workspace to download: 404, not a 500 with a traceback."""
+        self._job_row("todo")
+        response = mock_client.get("/scriptlet/job/download", params={"id": "j1"})
+        assert response.status_code == 404
+        assert response.json()["detail"] == "No workspace for job j1"
+
+    def test_owner_keeps_only_its_charset(self, mock_client, set_repo):
+        """The owner is the X-User value with every character other than
+        letters, digits, '_', '-', '.' and '@' replaced by '_'."""
+        set_repo("s1", committed={"job.task.py": "pass\n"})
+        body = {"set": "s1", "name": "job", "drop_done": False, "param": ""}
+        response = mock_client.put("/scriptlet/job/item", json=body, headers={"X-User": "ops+1 user@example.com"})
+        assert response.status_code == 200
+        job_id = response.json()["job"]
+        assert job_id.startswith("ops_1_user@example.com_s1_job_")
+        assert mock_client.get("/scriptlet/job/item", params={"id": job_id}).json()["owner"] == "ops_1_user@example.com"

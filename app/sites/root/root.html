@@ -12,6 +12,7 @@
         <script src="/files/js/jquery.min.js"></script>
         <script src="/files/js/js.cookie.min.js"></script>
         <script src="/files/js/bootstrap/bootstrap.bundle.min.js"></script>
+        <script src="/files/js/pyops-html.js"></script>
 
         <style>
             html, body { height: 100%; margin: 0; }
@@ -224,9 +225,10 @@
 
             function renderFailures(failures) {
                 if (!failures || failures.length === 0) return '';
+                const { esc } = window.pyopsHtml;
                 let html = '<div class="pyops-failures"><h6><span class="material-icons-round">error</span>Draft Errors</h6><ul>';
                 for (const f of failures) {
-                    html += `<li><strong>${f.set}::${f.name}:</strong> ${f.error}</li>`;
+                    html += `<li><strong>${esc(f.set)}::${esc(f.name)}:</strong> ${esc(f.error)}</li>`;
                 }
                 html += '</ul></div>';
                 return html;

@@ -30,7 +30,7 @@
             const seen = new Set();
             for (const s of (body.sets || [])) {
                 seen.add(s.name);
-                const html = renderRowContent(s.name, s.branch, !!s.has_drafts);
+                const html = renderRowContent(s.name, s.branch, !!s.has_drafts, s.initialized !== false);
                 if (existing[s.name]) {
                     existing[s.name].innerHTML = html;
                 } else {
@@ -48,17 +48,20 @@
         });
     }
 
-    function renderRowContent(setName, branch, hasDrafts) {
+    function renderRowContent(setName, branch, hasDrafts, initialized) {
         // The commit-drafts button is enabled only when /list reports
         // unstaged changes for the set. Without that gate the operator
         // would open the modal on a clean working tree and "Commit" would
         // be a no-op — clearer to grey the button out instead.
         const commitDisabled = hasDrafts ? "" : "disabled";
+        // A set directory without `.git` (not initialised) can only be
+        // removed: every other action is a git operation.
+        const gitDisabled = initialized ? "" : "disabled";
         return `
             <th scope="row">${setName}</th>
-            <th scope="row">${branch}</th>
+            <th scope="row">${initialized ? branch : "not initialised"}</th>
             <td>
-                <button type="button" onclick="onPull('${setName}')" class="btn btn-primary p-0" data-testid="set-pull-${setName}" title="Git pull">
+                <button type="button" onclick="onPull('${setName}')" class="btn btn-primary p-0" data-testid="set-pull-${setName}" title="Git pull" ${gitDisabled}>
                     <span class="material-icons-round">sync</span>
                 </button>
                 <button type="button" onclick="onCommitDrafts('${setName}')" class="btn btn-danger p-0" data-testid="set-commit-drafts-${setName}" title="Commit and push all unstaged scriptlets" ${commitDisabled}>
@@ -67,10 +70,10 @@
                 <button type="button" onclick="onDiscardDrafts('${setName}')" class="btn btn-warning p-0" data-testid="set-discard-drafts-${setName}" title="Discard all uncommitted drafts (restore the set to its last commit)" ${commitDisabled}>
                     <span class="material-icons-round">restore</span>
                 </button>
-                <button type="button" onclick="onUpdateDeps('${setName}')" class="btn btn-info p-0" data-testid="set-update-deps-${setName}" title="Update Dependencies">
+                <button type="button" onclick="onUpdateDeps('${setName}')" class="btn btn-info p-0" data-testid="set-update-deps-${setName}" title="Update Dependencies" ${gitDisabled}>
                     <span class="material-icons-round">system_update_alt</span>
                 </button>
-                <button type="button" onclick="onSwitchOpen('${setName}')" class="btn btn-warning p-0" data-testid="set-switch-${setName}" title="Switch branch">
+                <button type="button" onclick="onSwitchOpen('${setName}')" class="btn btn-warning p-0" data-testid="set-switch-${setName}" title="Switch branch" ${gitDisabled}>
                     <span class="material-icons-round">swap_horiz</span>
                 </button>
                 <button type="button" onclick="onRemove('${setName}')" class="btn btn-danger p-0" data-testid="set-remove-${setName}" title="Remove set">

@@ -112,3 +112,42 @@ class TestPyopsControllerProxyNeedsRunningService:
         body = r.json()
         assert "error" in body
         assert "service" in body["error"].lower()
+
+
+class TestPyopsSetJobRefusesInvalidSetName:
+    """A set_* task can be started directly via control.job.create, past
+    the sets data service's check. Run as a real job (job_runner.main with
+    the set library as its `#!{::set}` lib), the task gets the set-name
+    check from the runner's globals and fails the job before any path is
+    touched."""
+
+    def test_set_remove_job_with_traversing_name_fails_and_removes_nothing(self, job_env, tmp_path, monkeypatch):
+        from unittest.mock import patch
+        from app import job_runner
+        # `../victim` resolves to these from the git, venv and pkg bases.
+        victims = [tmp_path / "data" / "victim", tmp_path / "victim"]
+        for victim in victims:
+            victim.mkdir(parents=True, exist_ok=True)
+            (victim / "keep.txt").write_text("not a set\n")
+        with open(_path("set_remove.task.py")) as f:
+            code = f.read()
+        with open(_path("set.library.py")) as f:
+            lib = f.read()
+        env = job_env
+        # run_task_job chdirs into the job workspace; restored on teardown.
+        monkeypatch.chdir(tmp_path)
+
+        with patch.object(job_runner.job_lib, "send_completion") as send:
+            job_runner.main(
+                "jid", "alice", "pyops", "set_remove", "task",
+                "name = '../victim'\n", code,
+                [{"filename": "pyops::set", "code": lib}],
+                str(tmp_path / "runner.sock"), 0, None,
+                env["conf_data"], env["conf_runner"], env["conf_users"], env["conf_web"],
+            )
+
+        final = send.call_args.args[1]
+        assert final["state"] == "failed"
+        assert "InvalidSetNameError: Invalid set name '../victim'" in final["detail"]
+        for victim in victims:
+            assert (victim / "keep.txt").read_text() == "not a set\n"

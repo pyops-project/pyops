@@ -91,6 +91,66 @@ class TestDBUtils:
             fetched = test_session.get(Job, "123")
             assert fetched.state == "remove"
 
+    @staticmethod
+    def _row(state, detail=None):
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        with Session(get_db_engine()) as test_session:
+            test_session.add(Job(id="123", owner="test", set="test", name="test", kind="task", state=state,
+                                 param="{}", detail=detail, end=datetime(2020, 1, 1)))
+            test_session.commit()
+
+    @staticmethod
+    def _fetch():
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        with Session(get_db_engine()) as test_session:
+            job = test_session.get(Job, "123")
+            return job.state, job.detail, job.end
+
+    @pytest.mark.parametrize("state", ["todo", "dequeued", "loading", "running"])
+    def test_cancel_unfinished_job(self, mock_db, state):
+        from app.lib import runner
+        self._row(state)
+        assert runner.cancel("123") == {"id": "123", "state": "cancel"}
+        assert self._fetch()[0] == "cancel"
+
+    @pytest.mark.parametrize("state", ["done", "failed", "remove", "removed"])
+    def test_cancel_finished_job_conflicts_and_keeps_the_row(self, mock_db, state):
+        """A recorded outcome or a pending delete is never turned into a
+        cancel: the runner would rewrite done/failed to cancelled (new end)
+        and a remove would never be dropped."""
+        from app.lib import runner
+        from app.lib.errors import JobStateConflict
+        self._row(state, detail="outcome")
+        with pytest.raises(JobStateConflict, match=f"Job 123 is already {state}"):
+            runner.cancel("123")
+        assert self._fetch() == (state, "outcome", datetime(2020, 1, 1))
+
+    @pytest.mark.parametrize("state", ["cancel", "cancelling", "cancelled"])
+    def test_cancel_again_is_a_no_op(self, mock_db, state):
+        from app.lib import runner
+        self._row(state, detail="reason")
+        assert runner.cancel("123") == {"id": "123", "state": state}
+        assert self._fetch() == (state, "reason", datetime(2020, 1, 1))
+
+    def test_cancel_unknown_job(self, mock_db):
+        from app.lib import runner
+        assert runner.cancel("nope") is None
+
+    @pytest.mark.parametrize("state", ["dequeued", "loading", "running", "cancel", "cancelling", "remove", "removed"])
+    def test_remove_conflicts_while_not_removable(self, mock_db, state):
+        from app.lib import runner
+        from app.lib.errors import JobStateConflict
+        self._row(state)
+        with pytest.raises(JobStateConflict, match=f"Job 123 is in state '{state}' and cannot be deleted"):
+            runner.remove("123")
+        assert self._fetch()[0] == state
+
+    def test_remove_unknown_job(self, mock_db):
+        from app.lib import runner
+        assert runner.remove("nope") is None
+
     @patch('app.lib.runner.files.conf_data', return_value={"jobs": "/tmp/mock/data/jobs"})
     @patch('tempfile.gettempdir')
     @patch('os.path.exists')
@@ -145,129 +205,114 @@ class TestDBUtils:
         assert result is False
 
 class TestLoadUtils:
-    def test_load_job(self, mock_db, mock_git_ops):
-        from app import runner
+    @staticmethod
+    def _job(id="123", set="set", name="name", kind="task", overrides=None):
         from app.orm.database import get_db_engine
         from app.orm.job import Job
-        mock_read_content = mock_git_ops.read_content
-        mock_infer = mock_git_ops.infer_type_from_filename
-        # Create job first
         with Session(get_db_engine()) as test_session:
-            job = Job(id="123", set="set", name="name", kind="task", param="param", state="dequeued", owner="owner")
-            test_session.add(job)
+            test_session.add(Job(id=id, set=set, name=name, kind=kind, param="param", state="dequeued",
+                                 owner="owner", overrides=overrides))
             test_session.commit()
-        mock_infer.return_value = 'task'
-        def mock_read_side(*args, **kwargs):
-            return 'code'
-        mock_read_content.side_effect = mock_read_side
-        with patch('os.listdir', return_value=['name.task.py']):
-            result = runner.loadJob("123")
-            with Session(get_db_engine()) as test_session:
-                fetched = test_session.get(Job, "123")
-                assert fetched.state == "loading"  # State set to loading by loadJob
-            mock_read_content.assert_called_once_with('data/git/set', 'name', 'task', committed=True)
-            assert result == ("owner", "set", "name", "task", "param", 'code', None, 0)
 
-    def test_load_job_debug_unstaged(self, mock_db, mock_git_ops):
-        from app import runner
+    @staticmethod
+    def _state(id="123"):
         from app.orm.database import get_db_engine
         from app.orm.job import Job
-        # Debug mode without override uses committed=False (unstaged)
-        mock_read_content = mock_git_ops.read_content
-        mock_infer = mock_git_ops.infer_type_from_filename
-        # Create job first
         with Session(get_db_engine()) as test_session:
-            job = Job(id="123", set="set", name="name", kind="debug", param="param", state="dequeued", owner="owner")
-            test_session.add(job)
-            test_session.commit()
-        mock_infer.return_value = 'task'
-        def mock_read_side(*args, **kwargs):
-            return 'debug unstaged code'
-        mock_read_content.side_effect = mock_read_side
-        with patch('os.listdir', return_value=['name.task.py']):
-            result = runner.loadJob("123")
-            with Session(get_db_engine()) as test_session:
-                fetched = test_session.get(Job, "123")
-                assert fetched.state == "loading"  # State set to loading by loadJob
-            mock_read_content.assert_called_once_with('data/git/set', 'name', 'task', committed=False)
-            assert result == ("owner", "set", "name", "debug", "param", 'debug unstaged code', None, 0)
+            return test_session.get(Job, id).state
 
-    def test_load_job_debug(self, mock_db, mock_git_ops):
+    def test_load_job(self, mock_db, set_repo):
+        """kind=task loads the committed task, not the draft."""
         from app import runner
-        from app.orm.database import get_db_engine
-        from app.orm.job import Job
+        set_repo("set", committed={"name.task.py": "committed code\n"}, drafts={"name.task.py": "draft code\n"})
+        self._job()
+        result = runner.loadJob("123")
+        assert self._state() == "loading"
+        assert result == ("owner", "set", "name", "task", "param", "committed code", None, 0)
+
+    def test_load_job_debug_unstaged(self, mock_db, set_repo):
+        """Debug without an override loads the working tree (the draft)."""
+        from app import runner
+        set_repo("set", committed={"name.task.py": "committed code\n"}, drafts={"name.task.py": "draft code\n"})
+        self._job(kind="debug")
+        result = runner.loadJob("123")
+        assert self._state() == "loading"
+        assert result == ("owner", "set", "name", "debug", "param", "draft code\n", None, 0)
+
+    def test_load_job_runs_tasks_only(self, mock_db, set_repo):
+        """A job runs a task: a library or controller of that name is no task
+        (it is never loaded as one), and the row stays dequeued."""
+        from app import runner
+        from app.lib.errors import WrongScriptletTypeError
+        set_repo("set", committed={"name.library.py": "lib code\n"})
+        self._job()
+        with pytest.raises(WrongScriptletTypeError, match="Scriptlet set::name is not a task"):
+            runner.loadJob("123")
+        assert self._state() == "dequeued"
+
+    def test_load_job_exact_name(self, mock_db, set_repo):
+        """`name.x.library.py` (another name) does not answer for `name`,
+        whatever the directory order — the old prefix scan took its type."""
+        from app import runner
+        set_repo("set", committed={"name.x.library.py": "other\n", "name.task.py": "code\n"})
+        self._job()
+        with patch("os.listdir", return_value=["name.x.library.py", "name.task.py"]):
+            assert runner.loadJob("123")[5] == "code"
+
+    def test_load_job_debug(self, mock_db, set_repo):
+        """Debug with an override for the job's own key runs the override —
+        the set's file is not read (it need not exist)."""
+        from app import runner
         import json
-        # Debug mode: unstaged git like draft, returns overrides, uses override for main if present
-        mock_read_content = mock_git_ops.read_content
-        mock_infer = mock_git_ops.infer_type_from_filename
-        # Create job first
-        with Session(get_db_engine()) as test_session:
-            job = Job(id="123", set="set", name="name", kind="debug", param="param", state="dequeued", owner="owner")
-            job.overrides = json.dumps({"set::name": "override"})
-            test_session.add(job)
-            test_session.commit()
-        mock_infer.return_value = 'task'
-        def mock_read_side(*args, **kwargs):
-            return 'debug_code'
-        mock_read_content.side_effect = mock_read_side
-        with patch('os.listdir', return_value=['name.task.py']):
+        set_repo("set")
+        self._job(kind="debug", overrides=json.dumps({"set::name": "override"}))
+        with patch("app.runner.git.read_content") as mock_read:
             result = runner.loadJob("123")
-            with Session(get_db_engine()) as test_session:
-                fetched = test_session.get(Job, "123")
-                assert fetched.state == "loading"  # State set to loading by loadJob
-            # Since overrides has set::name, read_content should not be called
-            mock_read_content.assert_not_called()
-            assert result == ("owner", "set", "name", "debug", "param", "override", '{"set::name": "override"}', 0)
+        mock_read.assert_not_called()
+        assert self._state() == "loading"
+        assert result == ("owner", "set", "name", "debug", "param", "override", '{"set::name": "override"}', 0)
 
-    def test_load_lib(self, mock_git_ops):
-        from app.lib import job
-        mock_read_content = mock_git_ops.read_content
-        mock_infer = mock_git_ops.infer_type_from_filename
-        mock_infer.return_value = 'task'
-        def mock_read_side(*args, **kwargs):
-            return 'lib code'
-        mock_read_content.side_effect = mock_read_side
-        with patch('os.listdir', return_value=['name.py']):
-            result = job.loadLib("set", "name", "task", mock_git_ops)
-            mock_read_content.assert_called_once_with('data/git/set', 'name', 'task', committed=True)
-            assert result == 'lib code'
+    def test_load_lib(self, set_repo):
+        """kind=task includes the committed library."""
+        from app.lib import job, git
+        set_repo("set", committed={"name.library.py": "lib code\n"}, drafts={"name.library.py": "draft lib\n"})
+        assert job.loadLib("set", "name", "task", git) == "lib code"
 
-    @pytest.mark.parametrize("kind,committed", [
+    @pytest.mark.parametrize("kind,expected", [
         # Iterate-on-local-code kinds: must read unstaged so a freshly
         # drafted library is the one tests/debug/draft actually run.
-        ("debug", False),
-        ("draft", False),
-        ("test", False),
-        ("testdebug", False),
+        ("debug", "draft lib\n"),
+        ("draft", "draft lib\n"),
+        ("test", "draft lib\n"),
+        ("testdebug", "draft lib\n"),
         # Production kinds: read the committed copy.
-        ("task", True),
-        ("service", True),
+        ("task", "lib code"),
+        ("service", "lib code"),
     ])
-    def test_load_lib_kind_controls_unstaged_read(self, mock_git_ops, kind, committed):
+    def test_load_lib_kind_controls_unstaged_read(self, set_repo, kind, expected):
         """`loadLib` must mirror `loadJob`'s unstaged-set
         (`debug`/`draft`/`test`/`testdebug`). Older revisions excluded
         `test`/`testdebug` here, which caused a `kind=test` job that
         depends on a drafted library (the common iterate-on-local-tests
         case) to load the library's committed snapshot — silently
-        running the test against the wrong code.
+        running the test against the wrong code."""
+        from app.lib import job, git
+        set_repo("set", committed={"name.library.py": "lib code\n"}, drafts={"name.library.py": "draft lib\n"})
+        assert job.loadLib("set", "name", kind, git) == expected
 
-        Only the `committed=` arg matters here; the conftest's mock
-        `infer_type_from_filename` maps `*.py` → `'task'`."""
-        from app.lib import job
-        mock_git_ops.read_content.return_value = 'lib code'
-        with patch('os.listdir', return_value=['name.py']):
-            job.loadLib("set", "name", kind, mock_git_ops)
-        mock_git_ops.read_content.assert_called_once_with(
-            'data/git/set', 'name', 'task', committed=committed,
-        )
+    def test_load_lib_prefers_library(self, set_repo):
+        """A cloned set may carry a task and a library of one name: the
+        directive includes the library, whatever the directory order."""
+        from app.lib import job, git
+        set_repo("set", committed={"name.task.py": "task code\n", "name.library.py": "lib code\n"})
+        assert job.loadLib("set", "name", "task", git) == "lib code"
 
-    def test_load_lib_no_file(self, mock_git_ops):
-        from app.lib import job
-        mock_read_content = mock_git_ops.read_content
-        mock_infer = mock_git_ops.infer_type_from_filename
-        with patch('os.listdir', return_value=[]):
-            with pytest.raises(Exception, match=r"Scriptlet set::name not existing"):
-                job.loadLib("set", "name", "task", mock_git_ops)
+    def test_load_lib_no_file(self, set_repo):
+        from app.lib import job, git
+        from app.lib.errors import ScriptletNotFoundError
+        set_repo("set")
+        with pytest.raises(ScriptletNotFoundError, match=r"Scriptlet set::name not existing"):
+            job.loadLib("set", "name", "task", git)
 
     def test_load_job_no_file(self, mock_db, mock_git_ops):
         from app import runner
@@ -297,7 +342,7 @@ class TestLoadUtils:
                 fetched = test_session.get(Job, "123")
                 assert fetched.state == "dequeued"  # State not updated on missing scriptlet
 
-    def test_load_job_cas_aborts_when_cancel_races_mid_flight(self, mock_db, mock_git_ops):
+    def test_load_job_cas_aborts_when_cancel_races_mid_flight(self, mock_db, set_repo):
         """Cancel arrives between loadJob's initial 'dequeued' read and its commit.
 
         The conditional UPDATE must affect 0 rows, loadJob must raise, and the
@@ -308,11 +353,8 @@ class TestLoadUtils:
         from app import runner
         from app.orm.database import get_db_engine
         from app.orm.job import Job
-        with Session(get_db_engine()) as test_session:
-            job = Job(id="123", set="set", name="name", kind="task", param="param", state="dequeued", owner="owner")
-            test_session.add(job)
-            test_session.commit()
-        mock_git_ops.infer_type_from_filename.return_value = 'task'
+        set_repo("set", committed={"name.task.py": "code\n"})
+        self._job()
 
         def cancel_races_in_during_io(*args, **kwargs):
             # Simulate the HTTP cancel handler flipping the state from another
@@ -323,8 +365,7 @@ class TestLoadUtils:
                 cancel_session.commit()
             return 'code'
 
-        mock_git_ops.read_content.side_effect = cancel_races_in_during_io
-        with patch('os.listdir', return_value=['name.task.py']):
+        with patch('app.runner.git.read_content', side_effect=cancel_races_in_during_io):
             with pytest.raises(runner.JobStateChanged, match=r"state changed to cancel during loadJob"):
                 runner.loadJob("123")
         with Session(get_db_engine()) as test_session:
@@ -656,19 +697,6 @@ class TestKillProcTree:
         result = runner.drop("123", "set")
         assert result is False
 
-    def test_load_lib_debug(self, mock_git_ops):
-        from app.lib import job
-        mock_read_content = mock_git_ops.read_content
-        mock_infer = mock_git_ops.infer_type_from_filename
-        mock_infer.return_value = 'task'
-        def mock_read_side(*args, **kwargs):
-            return 'lib code'
-        mock_read_content.side_effect = mock_read_side
-        with patch('os.listdir', return_value=['name.py']):
-            result = job.loadLib("set", "name", "debug", mock_git_ops)
-            mock_read_content.assert_called_once_with('data/git/set', 'name', 'task', committed=False)
-            assert result == 'lib code'
-
 
 class TestAssignJob:
     def test_assign_job_records_pid_and_start(self, mock_db):
@@ -908,21 +936,25 @@ class TestPostTerm:
             assert job.pid is None
             assert job.end is not None
 
-    def test_post_term_graceful_done_nochange(self, mock_db):
+    @pytest.mark.parametrize("state", ["done", "failed"])
+    def test_post_term_keeps_outcome_and_finish_time_of_decided_row(self, state, mock_db):
+        """A row the job's own completion decided (it finished before the
+        termination started) keeps its outcome, detail and finish time when
+        the termination completes; only the pid is cleared."""
         from app.runner import postTerm
         from app.orm.database import get_db_engine
         from app.orm.job import Job
         from sqlalchemy.orm import Session
+        finished = datetime(2026, 10, 10, 12, 0, 0, 123456)
         with Session(get_db_engine()) as session:
-            job = Job(id="testid", name="testname", state="done", owner="owner", set="set", kind="task")
+            job = Job(id="testid", name="testname", state=state, owner="owner", set="set", kind="task",
+                      pid=4242, end=finished, detail="the job's message")
             session.add(job)
             session.commit()
         postTerm("testid")
         with Session(get_db_engine()) as session:
             job = session.get(Job, "testid")
-            assert job.state == "done"
-            assert job.pid is None
-            assert job.end is not None
+            assert (job.state, job.detail, job.end, job.pid) == (state, "the job's message", finished, None)
 
     @patch('app.lib.runner.drop')
     def test_post_term_remove_delete_drop(self, mock_drop, mock_db):

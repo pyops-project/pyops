@@ -146,17 +146,25 @@
                 `
             }
 
+            // Set and task names are made of letters, digits, '_' and '-'; the
+            // runner skips a schedule whose names are not, so it is flagged.
+            const NAME_RE = /^[A-Za-z0-9_-]+$/;
+
+            function genNameWarning(s) {
+                if (NAME_RE.test(s.set) && NAME_RE.test(s.name)) return '';
+                return ` <span class="material-icons-round text-warning align-middle" title="Invalid set or task name (allowed: letters, digits, '_' and '-'): this schedule is skipped" data-testid="schedule-invalid-name-${s.id}">warning</span>`;
+            }
+
             function genScheduleRowContent(s) {
                 // Set is now the collapsible group header — dropped from the row.
                 return `
                     <th scope="row">${s.id}</th>
-                    <th scope="row">${s.name}</th>
+                    <th scope="row">${s.name}${genNameWarning(s)}</th>
                     <th scope="row">${s.drop_done ? '<span class="material-icons-round text-success align-middle" title="drops logs/data on success" data-testid="schedule-drops-' + s.id + '" data-drops="true">check</span>' : '<span data-testid="schedule-drops-' + s.id + '" data-drops="false"></span>'}</th>
                     <td>${s.max_retries}</td>
                     <td>${s.schedule}</td>
                     <td>${s.last}</td>
                     <td>${genActions(s)}</td>
-                    <td id="param_${s.id}" style="display:none;">${s.param}</td>
                 `;
             }
 
@@ -193,7 +201,6 @@
                                             <th scope="col">Schedule</th>
                                             <th scope="col">Last</th>
                                             <th scope="col">Actions</th>
-                                            <th style="display:none;"></th>
                                         </tr>
                                     </thead>
                                     <tbody data-set-body="${set}"></tbody>
@@ -220,9 +227,12 @@
                 return container.children(`[data-set="${set}"]`);
             }
 
+            // Schedule params by schedule id, for copyParam: a param is copied
+            // as it is, never parsed as HTML.
+            const params = new Map();
+
             function copyParam(id) {
-                const param = $(`#param_${id}`).text();
-                navigator.clipboard.writeText(param);
+                navigator.clipboard.writeText(params.get(String(id)) ?? "");
             }
 
             function refreshList() {
@@ -237,6 +247,8 @@
                         // the (numeric) schedule id.
                         const bySet = {};
                         for(const i of d) (bySet[i.set] = bySet[i.set] || []).push(i);
+                        params.clear();
+                        for(const i of d) params.set(String(i.id), i.param);
 
                         for(const set of Object.keys(bySet)) {
                             const card = ensureSetSection(set);

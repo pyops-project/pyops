@@ -94,11 +94,39 @@ def test_get_file_not_found():
         with pytest.raises(FileNotFoundError):
             files.get("nonexistent/path")
 
-def test_get_valid_path():
-    content = b"test content"
-    with patch('builtins.open', mock_open(read_data=content)):
-        result = files.get("test/path")
-        assert result == content
+@pytest.fixture
+def asset_root(tmp_path, monkeypatch):
+    """`files.files_path` pointed at tmp_path/files with one asset, a
+    directory, a file next to (outside) the root and a symlink inside the
+    root that points at it."""
+    root = tmp_path / "files"
+    (root / "css").mkdir(parents=True)
+    (root / "css" / "site.css").write_bytes(b"body{}")
+    (tmp_path / "secret.json").write_text("{}")
+    (root / "link.json").symlink_to(tmp_path / "secret.json")
+    monkeypatch.setattr(files, "files_path", str(root))
+    return root
+
+
+def test_get_valid_path(asset_root):
+    assert files.get("css/site.css") == b"body{}"
+
+
+@pytest.mark.parametrize("path", [
+    "css/missing.css",      # no such file
+    "css",                  # a directory
+    "../secret.json",       # `..` out of the root
+    "css/../../secret.json",
+    "/etc/hostname",        # an absolute path would win in os.path.join
+    "link.json",            # a symlink resolving outside the root
+    "a\x00b",               # NUL byte: no path at all
+])
+def test_get_refuses_what_is_no_asset(asset_root, path):
+    """Only a regular file inside app/files/ is served — anything else is
+    NotFoundError (404), never a read outside the root or a 500."""
+    from app.lib.errors import NotFoundError
+    with pytest.raises(NotFoundError, match="File not found"):
+        files.get(path)
 
 
 def test_conf_data_idempotent(mock_conf):

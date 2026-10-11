@@ -178,6 +178,7 @@ export class JobService {
         if (confirm !== 'Yes') return;
         let successCount = 0;
         let errorCount = 0;
+        let finishedCount = 0;
         for (const job of jobsToAct) {
             try {
                 let response;
@@ -188,6 +189,9 @@ export class JobService {
                 }
                 if (response.ok) {
                     successCount++;
+                } else if (action === 'cancel' && response.status === 409) {
+                    // Finished since the list was fetched: nothing to cancel.
+                    finishedCount++;
                 } else {
                     errorCount++;
                 }
@@ -198,7 +202,8 @@ export class JobService {
         if (this.jobsTreeProvider) {
             this.jobsTreeProvider.refresh();
         }
-        vscode.window.showInformationMessage(`Bulk ${action}: ${successCount} successful, ${errorCount} failed.`);
+        const finished = finishedCount > 0 ? `, ${finishedCount} already finished` : '';
+        vscode.window.showInformationMessage(`Bulk ${action}: ${successCount} successful, ${errorCount} failed${finished}.`);
     }
 
     async cancelAllJobs(): Promise<void> {

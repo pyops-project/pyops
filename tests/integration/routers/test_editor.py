@@ -25,7 +25,7 @@ class TestEditorRouter:
     def test_post_completion(self, mock_client, mock_jedi, test_temp_dir, patch_tempfile, mock_datetime):
         completion_data = {
             "code": "def test_func():\n    pass\n\ntest_",
-            "line": 3,
+            "line": 4,
             "column": 5
         }
         response = mock_client.post("/scriptlet/completion", json=completion_data)
@@ -38,19 +38,37 @@ class TestEditorRouter:
         assert "Test function doc" in data[0]["meta"]
         assert data[0]["score"] == 8  # function type
 
-    def test_post_completion_invalid_input(self, mock_client, test_temp_dir, patch_tempfile, mock_datetime):
-        invalid_data = {"code": "", "line": -1, "column": 0}
-        response = mock_client.post("/scriptlet/completion", json=invalid_data)
-        assert response.status_code == 500  # Jedi ValueError caught as 500
+    @pytest.mark.parametrize("code, line, column, detail", [
+        ("", -1, 0, "line -1 is not in the code (1-1)"),
+        ("import os\n", 99, 0, "line 99 is not in the code (1-2)"),
+        ("import os\n", 1, 99, "column 99 is not in line 1 (0-9)"),
+        ("import os\n", 1, -1, "column -1 is not in line 1 (0-9)"),
+    ])
+    def test_post_completion_position_outside_code(self, mock_client, test_temp_dir, patch_tempfile, mock_datetime,
+                                                   code, line, column, detail):
+        """A cursor position outside the code (e.g. stale after an edit) is
+        the client's error: 400, not a 500 with a traceback from jedi."""
+        response = mock_client.post("/scriptlet/completion", json={"code": code, "line": line, "column": column})
+        assert response.status_code == 400
+        assert response.json()["detail"] == detail
+
+    @pytest.mark.parametrize("code, line, column", [("import os\n", 1, 9), ("import os\n", 2, 0), ("", 1, 0), ("a\r\nb", 1, 1)])
+    def test_post_completion_positions_jedi_accepts(self, mock_client, test_temp_dir, patch_tempfile, mock_datetime,
+                                                    code, line, column):
+        """The accepted range is jedi's own: every position it accepts is
+        answered 200 (real jedi, no mock)."""
+        response = mock_client.post("/scriptlet/completion", json={"code": code, "line": line, "column": column})
+        assert response.status_code == 200
 
     def test_post_completion_jedi_error(self, mock_client, test_temp_dir, patch_tempfile, mock_datetime):
+        """A genuine jedi failure stays a server fault (500)."""
         with patch("jedi.Script.complete", side_effect=Exception("Jedi error")):
-            response = mock_client.post("/scriptlet/completion", json={"code": "def test:", "line": 0, "column": 4})
+            response = mock_client.post("/scriptlet/completion", json={"code": "def test:", "line": 1, "column": 4})
             assert response.status_code == 500
 
     def test_post_completion_no_auth(self, mock_client, mock_jedi, test_temp_dir, patch_tempfile, mock_datetime):
         # Assuming no auth required for completions
-        response = mock_client.post("/scriptlet/completion", json={"code": "print(", "line": 0, "column": 6})
+        response = mock_client.post("/scriptlet/completion", json={"code": "print(", "line": 1, "column": 6})
         assert response.status_code == 200
 
     @pytest.mark.parametrize("editor_type", ["task", "library", "view", "md"])

@@ -2,7 +2,7 @@ import subprocess
 
 import pytest
 from unittest.mock import Mock, patch, call
-from datetime import datetime
+from datetime import datetime, timedelta
 import croniter
 
 from sqlalchemy import select
@@ -56,6 +56,23 @@ def run_main(mock_db):
     return _run
 
 
+"""A real runner ROUTER socket (setup_runner_socket) at tmp_path/runner.sock, for
+run_main(setup_runner_socket=...); yields (context, socket, poller, path). main()
+closes it on exit; teardown closes whatever a failing test left open."""
+@pytest.fixture
+def runner_socket(tmp_path):
+    from app.runner import setup_runner_socket
+    path = str(tmp_path / "runner.sock")
+    context, socket, poller = setup_runner_socket(path)
+    try:
+        yield context, socket, poller, path
+    finally:
+        if not socket.closed:
+            socket.close(linger=0)
+        if not context.closed:
+            context.term()
+
+
 class TestDaemon:
     def test_handleOddJobs_dequeued_to_todo(self, mock_db):
         from app.runner import handleOddJobs
@@ -103,6 +120,31 @@ class TestDaemon:
         handleOddJobs()
         with Session(get_db_engine()) as test_session:
             assert test_session.get(Job, "load_id").state == "todo"
+
+    @pytest.mark.parametrize("state, detail", [("done", None), ("failed", "Traceback: boom")])
+    def test_handleOddJobs_running_job_with_result_file_gets_its_result(self, mock_db, state, detail):
+        """A running row whose job wrote its result file finished while the
+        previous runner never recorded it: the row gets that result and its
+        finish time instead of the incomplete-on-startup marker."""
+        import json
+        import os
+        from datetime import datetime
+        from app.runner import handleOddJobs
+        from app.lib import files
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        workspace = os.path.join(files.conf_data()["jobs"], "s", "fin")
+        os.makedirs(workspace)
+        with open(os.path.join(workspace, "result.json"), "w") as f:
+            json.dump({"state": state, "detail": detail, "time": 1700000000.5}, f)
+        with Session(get_db_engine()) as test_session:
+            test_session.add(Job(id="fin", set="s", name="n", owner="o", kind="task", state="running",
+                                 detail=None, param=None, pid=4242, drop_done=False))
+            test_session.commit()
+        handleOddJobs()
+        with Session(get_db_engine()) as test_session:
+            row = test_session.get(Job, "fin")
+            assert (row.state, row.detail, row.end) == (state, detail, datetime.fromtimestamp(1700000000.5))
 
     def test_handleOddJobs_deduplicates_incomplete_marker(self, mock_db):
         """Repeated unclean container restarts shouldn't accumulate ghost
@@ -399,14 +441,17 @@ class TestDaemon:
         """The job's REQ socket waits for the runner's reply: the ACK goes
         out even if recording the completion fails (e.g. a locked DB), so
         the job process never blocks on it."""
+        import time
         import msgpack
         import zmq
         from app.runner import receive_and_process
         sock = Mock()
         sock.recv.side_effect = [b"job-identity", b"",
-                                 msgpack.packb({"id": "x", "state": "done", "detail": None})]
-        with patch('app.runner.finishJob', side_effect=RuntimeError("database is locked")):
+                                 msgpack.packb({"id": "x", "state": "done", "detail": None,
+                                                "time": time.time()})]
+        with patch('app.runner.finishJob', side_effect=RuntimeError("database is locked")) as finish:
             receive_and_process(sock)
+        finish.assert_called_once()
         assert sock.send.call_args_list == [call(b"job-identity", zmq.SNDMORE), call(b"", zmq.SNDMORE), call(b"ack")]
 
     def test_finishJob_cas_preserves_terminal_state(self, mock_db):
@@ -450,11 +495,12 @@ class TestDaemon:
     def test_finishJob_cas_preserves_cancel_on_concurrent_commit(self, mock_db):
         """Cancel commits between finishJob's snapshot read and its CAS UPDATE.
 
-        finishJob computes candidate='done' from the stale 'running' snapshot,
-        but the atomic CASE evaluates the state at UPDATE time and preserves
-        the now-committed 'cancel' — the runner term-loop can then clean up.
-        Without CAS, the commit overwrites cancel with done and the cancel
-        request is silently lost.
+        The stale-PID check fails a job whose process is gone; finishJob
+        computes candidate='failed' from the stale 'running' snapshot, but
+        the atomic CASE evaluates the row at UPDATE time: the now-committed
+        'cancel' and its reason stay, the runner's message is appended — the
+        runner term-loop can then clean up. Without CAS, the commit
+        overwrites cancel with failed and the cancel request is silently lost.
         """
         from app.runner import finishJob
         from app.orm.database import get_db_engine
@@ -471,18 +517,18 @@ class TestDaemon:
             if not fired["done"] and result is not None and getattr(result, "id", None) == "rj":
                 fired["done"] = True
                 with Session(get_db_engine()) as cs:
-                    cs.get(Job, "rj").state = "cancel"
+                    row = cs.get(Job, "rj")
+                    row.state, row.detail = "cancel", "cancelled by operator"
                     cs.commit()
             return result
 
         with patch.object(Session, 'get', get_then_cancel):
-            finishJob("rj", "done", "ok")
+            finishJob("rj", "failed", "dead (pid=4242)")
 
         with Session(get_db_engine()) as test_session:
             fetched = test_session.get(Job, "rj")
-            # CAS preserved the cancel that committed under us; finishJob did not
-            # overwrite it with the candidate 'done'.
             assert fetched.state == "cancel"
+            assert fetched.detail == "cancelled by operator\ndead (pid=4242)"
 
     @patch('app.runner.PYOPS_ESSENTIAL_SERVICES', [])
     @patch('app.runner.lib_runner.find')
@@ -942,6 +988,82 @@ class TestDaemon:
             assert row.state == "failed"
             assert row.detail == "ConnectionError: broker gone"
 
+    def test_shutdown_job_processes_completion_after_sigterm_keeps_operator_cancel(self, mock_db):
+        """An operator cancel the runner had not acted on yet when shutdown
+        started: the service, SIGTERM'd by the shutdown, reports `done` while
+        the runner drains. It finished after its termination started, so the
+        cancel stands — `cancelled` (blocks the restart), not `done` (row
+        deleted, service restarted on the next boot)."""
+        import time
+        import msgpack
+        from app.runner import _shutdown_job_processes
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+
+        with Session(get_db_engine()) as session:
+            session.add(Job(id="op_cancel", set="s", name="n", owner="o", kind="service",
+                            state="cancel", pid=806, drop_done=False, detail="cancelled by operator"))
+            session.commit()
+
+        def frames():  # the report is stamped when it is read, i.e. after the SIGTERM
+            yield b"job-identity"
+            yield b""
+            yield msgpack.packb({"id": "op_cancel", "state": "done", "detail": None, "time": time.time()})
+        sent = frames()
+        sock = Mock(**{"recv.side_effect": lambda *_: next(sent)})
+        poller = Mock(**{"poll.side_effect": [[(sock, None)], [], []]})
+        service = Mock(**{"poll.side_effect": [None, None, 0, 0]})
+
+        with patch('app.runner.job_lib.kill_proc_group'), \
+             patch('app.runner.job_lib.proc_group_alive', return_value=False), \
+             patch('app.runner.threading.Thread'), \
+             patch('app.runner.time.sleep'):
+            _shutdown_job_processes({806: service}, timeout=2.0,
+                                    runner_socket=sock, runner_poller=poller)
+
+        with Session(get_db_engine()) as session:
+            row = session.get(Job, "op_cancel")
+            assert row is not None
+            assert (row.state, row.detail) == ("cancelled", "cancelled by operator")
+
+    def test_shutdown_job_processes_sigkill_keeps_reported_failure(self, mock_db):
+        """A service reports `failed` while the runner drains (its shutdown
+        raised) but its process does not exit (e.g. a non-daemon thread) and
+        is SIGKILL'd: it stays `failed` with the reported traceback, the kill
+        is appended to it."""
+        import signal
+        import time
+        import msgpack
+        from app.runner import _shutdown_job_processes
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+
+        with Session(get_db_engine()) as session:
+            session.add(Job(id="hung_svc", set="s", name="n", owner="o", kind="service",
+                            state="running", pid=807, drop_done=False))
+            session.commit()
+
+        traceback_ = "Error executing service job hung_svc\nTraceback ...\nConnectionError: broker gone"
+        sock = Mock(**{"recv.side_effect": [b"job-identity", b"", msgpack.packb(
+            {"id": "hung_svc", "state": "failed", "detail": traceback_, "time": time.time()})]})
+        events = [[(sock, None)]]
+        poller = Mock(**{"poll.side_effect": lambda *_: events.pop(0) if events else []})
+        signals = []
+        service = Mock(**{"poll.side_effect": lambda: 0 if signal.SIGKILL in signals else None})
+
+        with patch('app.runner.job_lib.kill_proc_group', side_effect=lambda _pid, sig: signals.append(sig)), \
+             patch('app.runner.job_lib.proc_group_alive', side_effect=lambda _pid: signal.SIGKILL not in signals), \
+             patch('app.runner.threading.Thread'), \
+             patch('app.runner.time.sleep'):
+            _shutdown_job_processes({807: service}, timeout=0.1,
+                                    runner_socket=sock, runner_poller=poller)
+
+        assert signals == [signal.SIGTERM, signal.SIGKILL]
+        with Session(get_db_engine()) as session:
+            row = session.get(Job, "hung_svc")
+            assert (row.state, row.pid) == ("failed", None)
+            assert row.detail == traceback_ + "\ndid not respond to shutdown SIGTERM"
+
     def test_shutdown_job_processes_sigkill_wait_ends_when_group_is_gone(self, mock_db):
         """Real process group that ignores SIGTERM: after the graceful
         timeout it is SIGKILL'd, and the sweep returns as soon as the group
@@ -980,6 +1102,113 @@ class TestDaemon:
             row = session.get(Job, "deaf_svc")
             assert row.state == "failed"
             assert row.detail == "did not respond to shutdown SIGTERM"
+
+
+class TestCompletionPrecedence:
+    """finishJob with a completion the job process reported (`finished` = the
+    job's own finish time) against the runner's cancel: the job's outcome is
+    recorded when the job finished before the runner started terminating it
+    (term_start); otherwise the cancel stands and the job's message is
+    appended. An outcome already recorded is never replaced. A recorded
+    outcome ends at the job's own finish time, not when the runner
+    processed the report."""
+
+    TERM_START = datetime(2026, 10, 11, 12, 0, 0)
+    FINISHED = TERM_START - timedelta(milliseconds=5)
+    CANCEL_END = TERM_START + timedelta(seconds=2)
+    REASON = "cancelled by operator"
+    TRACEBACK = "Error executing service job j\nTraceback ...\nConnectionError: broker gone"
+
+    @staticmethod
+    def _add(**columns):
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        with Session(get_db_engine()) as session:
+            session.add(Job(id="j", set="s", name="n", owner="o", kind="service", drop_done=False, **columns))
+            session.commit()
+
+    @staticmethod
+    def _row():
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        with Session(get_db_engine()) as session:
+            return session.get(Job, "j")
+
+    def test_reported_outcome_ends_at_the_jobs_finish_time(self, mock_db):
+        """A running job reported its outcome; the runner processes the
+        report later (its loop was busy). The row ends at the time the job
+        finished, not at the processing time."""
+        from app.runner import finishJob
+        self._add(state="running", pid=4242)
+
+        with patch('app.runner.threading.Thread'):
+            finishJob("j", "done", None, finished=self.FINISHED)
+
+        row = self._row()
+        assert (row.state, row.end, row.pid) == ("done", self.FINISHED, None)
+
+    def test_completion_beats_a_cancel_the_runner_has_not_acted_on(self, mock_db):
+        """Cancel requested (`cancel`, the runner has not started terminating)
+        when the job's completion arrives: the job finished first, so its
+        state, message and finish time are recorded — the cancel came too
+        late."""
+        from app.runner import finishJob
+        self._add(state="cancel", pid=4242, detail=self.REASON)
+
+        with patch('app.runner.threading.Thread'):
+            finishJob("j", "failed", self.TRACEBACK, finished=self.FINISHED)
+
+        row = self._row()
+        assert (row.state, row.end, row.detail, row.pid) == ("failed", self.FINISHED, self.TRACEBACK, None)
+
+    @pytest.mark.parametrize("state", ["cancel", "cancelled"])
+    def test_completion_finished_before_termination_started_wins(self, mock_db, state):
+        """The job finished just before the runner started terminating it,
+        but its report is processed only afterwards — with the termination
+        under way (`cancel`) or already finalised (`cancelled`): the job's
+        state and message are recorded, and it ends when it finished —
+        before the termination started, not at the cancel's end."""
+        from app.runner import finishJob
+        self._add(state=state, term_start=self.TERM_START, end=self.CANCEL_END, detail=self.REASON)
+
+        finishJob("j", "failed", self.TRACEBACK, finished=self.FINISHED)
+
+        row = self._row()
+        assert (row.state, row.end, row.detail) == ("failed", self.FINISHED, self.TRACEBACK)
+
+    @pytest.mark.parametrize("state", ["cancel", "cancelled"])
+    @pytest.mark.parametrize("report, message, detail", [
+        ("done", None, REASON),
+        ("failed", TRACEBACK, REASON + "\n" + TRACEBACK),
+    ], ids=["done-without-message", "failed-with-traceback"])
+    def test_completion_finished_after_termination_started_keeps_cancel(self, mock_db, state, report, message, detail):
+        """The job finished only after the runner started terminating it —
+        it was cancelled. State and end stay; a message the job reported is
+        appended to the cancel reason, a report without one leaves it."""
+        from app.runner import finishJob
+        self._add(state=state, term_start=self.TERM_START, end=self.CANCEL_END, detail=self.REASON)
+
+        finishJob("j", report, message, finished=self.TERM_START + timedelta(milliseconds=5))
+
+        row = self._row()
+        assert (row.state, row.end, row.detail) == (state, self.CANCEL_END, detail)
+
+    @pytest.mark.parametrize("state, recorded, detail", [
+        ("done", None, "Traceback ...\nRuntimeError: close failed"),
+        ("failed", TRACEBACK, TRACEBACK + "\nTraceback ...\nRuntimeError: close failed"),
+    ], ids=["done", "failed"])
+    def test_later_report_keeps_recorded_outcome_and_appends_message(self, mock_db, state, recorded, detail):
+        """A second report for a job whose outcome is recorded (the job's
+        result was reported, then its finally-block listener.close() raised
+        and run_*_job reported `failed` again): the first state and end
+        stand, the later message is appended."""
+        from app.runner import finishJob
+        self._add(state=state, end=self.CANCEL_END, detail=recorded)
+
+        finishJob("j", "failed", "Traceback ...\nRuntimeError: close failed", finished=datetime.now())
+
+        row = self._row()
+        assert (row.state, row.end, row.detail) == (state, self.CANCEL_END, detail)
 
 
 class TestCleanupDropDoneKeepN:
@@ -1186,6 +1415,37 @@ class TestScheduleShutdownPending:
         assert spy.call_count == 1
         with Session(get_db_engine()) as session:
             assert session.scalars(select(Job)).all() == []
+
+
+class TestScheduleInvalidStoredName:
+    """A schedule whose set or task name is outside the name charset
+    [A-Za-z0-9_-]+ cannot run: schedule() skips it — no job, no change to
+    the schedule — and carries on with the other schedules."""
+
+    @pytest.mark.parametrize("schedule_expr", ["* * * * *", ""], ids=["cron_task", "service"])
+    def test_invalid_name_skipped(self, mock_db, schedule_expr):
+        from app.runner import schedule
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+        from app.orm.schedule import Schedule
+        with Session(get_db_engine()) as session:
+            session.add_all([
+                Schedule(set="ops.tools", name="job", owner="o", schedule=schedule_expr, active=True,
+                         drop_done=False, param=None, last=None),
+                Schedule(set="s1", name="my.job", owner="o", schedule=schedule_expr, active=True,
+                         drop_done=False, param=None, last=None),
+                Schedule(set="s1", name="job", owner="o", schedule=schedule_expr, active=True,
+                         drop_done=False, param=None, last=None),
+            ])
+            session.commit()
+
+        with patch('app.runner.PYOPS_ESSENTIAL_SERVICES', []):
+            schedule()
+
+        with Session(get_db_engine()) as session:
+            assert [(s.set, s.name, s.active, s.last) for s in session.scalars(select(Schedule).order_by(Schedule.id))][:2] == [
+                ("ops.tools", "job", True, None), ("s1", "my.job", True, None)]
+            assert [(j.set, j.name) for j in session.scalars(select(Job))] == [("s1", "job")]
 
 
 class TestServiceMaxFailN:
@@ -1466,6 +1726,7 @@ class TestShutdownContract:
     def test_completion_after_shutdown_wait_is_processed(self, run_main):
         """A completion that arrives after the shutdown wait is still
         recorded and ACKed before main() exits."""
+        import time
         import msgpack
         import zmq
         from app.orm.database import get_db_engine
@@ -1475,7 +1736,7 @@ class TestShutdownContract:
             session.commit()
         sock = Mock()
         sock.recv.side_effect = [b"job-identity", b"",
-                                 msgpack.packb({"id": "late", "state": "done", "detail": None})]
+                                 msgpack.packb({"id": "late", "state": "done", "detail": None, "time": time.time()})]
         poller = Mock()
         poller.poll.side_effect = [[(sock, zmq.POLLIN)], []]
         killer = _Killer()
@@ -1658,10 +1919,11 @@ class TestMainLoop:
         with Session(get_db_engine()) as session:
             return session.get(Job, job_id)
 
-    def test_stale_pid_rows_are_failed(self, run_main):
-        """A loading/running row whose process no longer exists (crash in
-        job_setup's install phase or in the job itself) is finished as
-        failed; a row with a live pid is left alone."""
+    def test_dead_rows_are_failed(self, run_main):
+        """A loading/running row whose process no longer exists and that
+        wrote no result file (crash in job_setup's install phase or in the
+        job itself) is finished as failed "dead (pid=N)"; a row with a live
+        pid is left alone."""
         import os
         from app.orm.job import Job
         gone = subprocess.Popen(["true"])
@@ -1677,12 +1939,37 @@ class TestMainLoop:
 
         for job_id in ("stale_loading", "stale_running"):
             row = self._job(job_id)
-            assert (row.state, row.detail, row.pid) == ("failed", f"stale process pid={gone.pid}", None), job_id
+            assert (row.state, row.detail, row.pid) == ("failed", f"dead (pid={gone.pid})", None), job_id
         assert (self._job("alive").state, self._job("alive").pid) == ("running", os.getpid())
+
+    @pytest.mark.parametrize("state, detail", [("done", None), ("failed", "Traceback: boom")])
+    def test_dead_row_takes_the_result_file(self, run_main, state, detail):
+        """A job that finished but whose report never reached the runner
+        (no ACK, runner busy/restarting) left its result in result.json:
+        the row gets that result and its finish time, not "dead"."""
+        import json
+        import os
+        from datetime import datetime
+        from app.lib import files
+        from app.orm.job import Job
+        gone = subprocess.Popen(["true"])
+        gone.wait()
+        workspace = os.path.join(files.conf_data()["jobs"], "s", "finished")
+        os.makedirs(workspace)
+        with open(os.path.join(workspace, "result.json"), "w") as f:
+            json.dump({"state": state, "detail": detail, "time": 1700000000.5}, f)
+        self._add_jobs(Job(id="finished", set="s", name="n", owner="o", kind="task", state="running", pid=gone.pid))
+        killer = _Killer()
+
+        run_main(killer, getNextToDo=Mock(side_effect=killer.stop))
+
+        row = self._job("finished")
+        assert (row.state, row.detail, row.end) == (state, detail, datetime.fromtimestamp(1700000000.5))
 
     def test_cancel_of_tracked_process_starts_termination_and_keeps_detail(self, run_main):
         """A cancel whose pid is one of the runner's processes is handed to
-        a terminate thread; the operator's cancel detail survives."""
+        a terminate thread and the time the termination started is recorded;
+        the operator's cancel detail survives."""
         from app import runner
         from app.orm.job import Job
         self._add_jobs(Job(id="cj", set="s", name="n", owner="o", kind="debug", state="cancel", pid=4242,
@@ -1699,6 +1986,8 @@ class TestMainLoop:
         row = self._job("cj")
         assert row.detail == "Cancelled by new debug job start for o"
         assert row.pid is None
+        assert row.state == "cancel"  # postTerm finalises it on a later iteration
+        assert row.term_start is not None
 
     def test_cancel_of_untracked_job_is_finalised(self, run_main):
         """A cancel for a job the runner has no process for (claimed but not
@@ -1807,6 +2096,127 @@ class TestMainLoop:
         assert "Traceback" in row.detail
         assert "Set 'removed_set' does not exist" in row.detail
         applied["subprocess.Popen"].assert_not_called()
+
+    @staticmethod
+    def _job_reports(path, msg):
+        """The job side, unstarted: send_completion in its own thread (it blocks
+        until the runner ACKs). Built here so the real Thread class is used even
+        when started inside run_main, which patches threading.Thread."""
+        import threading
+        from app.lib import job as job_lib
+        return threading.Thread(target=job_lib.send_completion, args=(path, msg), daemon=True)
+
+    def test_completion_reported_before_termination_started_wins(self, run_main, runner_socket):
+        """Real wire: the job finished and sent its completion; in the same
+        iteration the runner first acts on the cancel (starts terminating),
+        then reads the socket. The finish time the job stamped precedes the
+        termination start, so the job's outcome is recorded, ending at that
+        finish time."""
+        from app.orm.job import Job
+        context, socket, poller, path = runner_socket
+        self._add_jobs(Job(id="cj", set="s", name="n", owner="o", kind="task", state="cancel", pid=4242,
+                           detail="cancelled by operator"))
+        job = self._job_reports(path, {"id": "cj", "state": "done", "detail": None})
+        job.start()
+        assert poller.poll(5000), "completion not queued at the runner"
+        killer = _Killer()
+
+        run_main(killer, setup_runner_socket=Mock(return_value=(context, socket, poller)),
+                 getNextToDo=Mock(side_effect=killer.stop),
+                 cleanProcesses=Mock(return_value={4242: Mock(**{"poll.return_value": 0})}))
+        job.join(5)
+
+        assert not job.is_alive(), "the job got no ACK"
+        row = self._job("cj")
+        assert (row.state, row.detail) == ("done", None)
+        assert row.term_start is not None
+        assert row.end < row.term_start
+
+    def test_completion_winning_keeps_its_finish_time_when_termination_completes(self, run_main, runner_socket):
+        """Real wire and a real terminate thread: the thread starts terminating
+        the cancelled job (the row still `cancel`), the runner then records the
+        job's earlier completion, and only afterwards does the process group
+        drain. The termination completing leaves the recorded outcome and the
+        job's own finish time as they are."""
+        import threading
+        from app import runner
+        from app.orm.job import Job
+        context, socket, poller, path = runner_socket
+        self._add_jobs(Job(id="cj", set="s", name="n", owner="o", kind="task", state="cancel", pid=4244,
+                           detail="cancelled by operator"))
+        job = self._job_reports(path, {"id": "cj", "state": "done", "detail": None})
+        job.start()
+        assert poller.poll(5000), "completion not queued at the runner"
+        killer = _Killer()
+        sigterm_sent, completion_recorded = threading.Event(), threading.Event()
+        recorded = {}
+        terminators = []
+        real_thread = threading.Thread  # run_main patches threading.Thread itself
+
+        def terminator(target, args, daemon):  # the real thread finishJob starts
+            terminators.append(real_thread(target=target, args=args, daemon=daemon))
+            return terminators[-1]
+
+        def read_completion(sock):  # once the thread passed its state check and sent SIGTERM
+            assert sigterm_sent.wait(5), "the terminate thread sent no SIGTERM"
+            runner_receive(sock)
+            recorded["end"] = self._job("cj").end
+            completion_recorded.set()
+
+        def group_alive(pid):  # the job's group drains only after the completion was recorded
+            assert completion_recorded.wait(5)
+            return False
+
+        runner_receive = runner.receive_and_process
+        with patch("app.runner.job_lib.kill_proc_group", side_effect=lambda *_: sigterm_sent.set()), \
+                patch("app.runner.job_lib.proc_group_alive", side_effect=group_alive):
+            run_main(killer, setup_runner_socket=Mock(return_value=(context, socket, poller)),
+                     getNextToDo=Mock(side_effect=killer.stop),
+                     cleanProcesses=Mock(return_value={4244: Mock(**{"poll.return_value": 0})}),
+                     receive_and_process=Mock(side_effect=read_completion),
+                     **{"threading.Thread": Mock(side_effect=terminator)})
+            assert len(terminators) == 1
+            terminators[0].join(5)
+        job.join(5)
+
+        assert not terminators[0].is_alive(), "the termination did not complete"
+        assert not job.is_alive(), "the job got no ACK"
+        row = self._job("cj")
+        assert (row.state, row.detail, row.pid) == ("done", None, None)
+        assert row.end == recorded["end"]
+        assert row.end < row.term_start
+
+    def test_completion_reported_after_termination_started_keeps_cancel(self, run_main, runner_socket):
+        """Real wire: the runner starts terminating the cancelled job, then the
+        job reports `failed` (its shutdown raised). It finished after the
+        termination started: the row ends `cancelled`, the job's message is
+        appended to the cancel reason."""
+        from app.orm.job import Job
+        context, socket, poller, path = runner_socket
+        self._add_jobs(Job(id="cj", set="s", name="n", owner="o", kind="task", state="cancel", pid=4243,
+                           detail="cancelled by operator"))
+        traceback_ = "Error executing task job cj\nTraceback ...\nConnectionError: broker gone"
+        job = self._job_reports(path, {"id": "cj", "state": "failed", "detail": traceback_})
+        killer = _Killer()
+        queued = []
+
+        def next_todo():
+            if not queued:  # iteration 1 started the termination; now the job reports
+                job.start()
+                queued.append(bool(poller.poll(5000)))
+            else:  # iteration 2 finalised the cancel and read the report
+                killer.stop()
+
+        run_main(killer, setup_runner_socket=Mock(return_value=(context, socket, poller)),
+                 getNextToDo=Mock(side_effect=next_todo),
+                 cleanProcesses=Mock(return_value={4243: Mock(**{"poll.return_value": 0})}))
+        job.join(5)
+
+        assert queued == [True]
+        assert not job.is_alive(), "the job got no ACK"
+        row = self._job("cj")
+        assert row.state == "cancelled"
+        assert row.detail == "cancelled by operator\n" + traceback_
 
     def test_loop_survives_errors(self, run_main):
         """Errors in the iteration (e.g. a locked DB) are logged and the

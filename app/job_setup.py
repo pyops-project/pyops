@@ -119,6 +119,7 @@ def main(json_kwargs: str) -> None:
             job_lib.send_completion(
                 runner_sock_path,
                 {"id": job_id, "state": "failed", "detail": detail},
+                result_file=job_lib.result_file(workspace),
             )
         except Exception:
             pass

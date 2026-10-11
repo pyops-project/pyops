@@ -3,7 +3,9 @@
 #
 # Mirrors the semantics of the (now-retired) app.lib.sets.update_set_environment:
 #  - ensures the per-set venv exists (creates with python -m venv if not)
-#  - upgrades pip / setuptools / wheel, then pyops CORE_DEPS
+#  - upgrades pip / setuptools / wheel, then pyops CORE_DEPS (the
+#    `CORE_DEPS` global the job runner injects for pyops-set jobs — the
+#    list every set venv is created with)
 #  - scans every *.py scriptlet in the set for #! pip / git directives
 #  - resolves spec/branch conflicts via newest-mtime-wins
 #  - runs pip install --upgrade --upgrade-strategy eager per resolved pip
@@ -18,7 +20,8 @@
 # same set queue behind the upgrade. Other sets are unaffected.
 #
 # Params:
-#   name: set to upgrade (required)
+#   name: set to upgrade (required; a single directory name, checked with
+#         the injected `validate_set_name` before anything is touched)
 
 #!{::set}
 import json
@@ -27,14 +30,14 @@ import re
 import subprocess
 import sys
 
-CORE_DEPS = ("pyzmq", "msgpack", "psutil", "requests")
 _PIP_PKG_RE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9_.\-]*)(.*)$")
 
 
 def _ensure_venv(name):
     """Create the per-set venv if missing and ensure CORE_DEPS are present.
     Mirrors app.lib.sets.ensure_set_environment but inlined so this task
-    has no app.lib imports."""
+    has no app.lib imports; CORE_DEPS itself is the runner-injected
+    global, so both install the same list."""
     venv = _venv_dir(name)
     pkg = _pkg_dir(name)
     os.makedirs(venv, exist_ok=True)
@@ -90,16 +93,15 @@ _LIB_INCLUDE_RE = re.compile(r"^\s*#!\{([a-zA-Z0-9_-]*)::([a-zA-Z0-9_-]+)\}")
 
 def _find_lib_path(set_, name):
     """Resolve a `set::name` library include to its file path in the
-    working tree. Returns None if the lib doesn't exist (the per-job
-    directive processor would raise, but for update-deps we silently
-    skip — the resolver only needs to see the directives that *are*
-    declared)."""
-    set_dir = _set_dir(set_)
-    if not os.path.isdir(set_dir):
-        return None
-    for entry in os.listdir(set_dir):
-        if entry.startswith(f"{name}.") and entry.endswith(".py"):
-            return os.path.join(set_dir, entry)
+    working tree: exactly `{name}.{type}.py` for a Python scriptlet type,
+    never another scriptlet whose name merely starts with `{name}.`.
+    Returns None if the lib doesn't exist (the per-job directive
+    processor would raise, but for update-deps we silently skip — the
+    resolver only needs to see the directives that *are* declared)."""
+    for type_ in ("library", "task", "controller"):
+        path = os.path.join(_set_dir(set_), f"{name}.{type_}.py")
+        if os.path.isfile(path):
+            return path
     return None
 
 
@@ -240,6 +242,7 @@ def _install_git(pip_bin, directive, name):
 def main():
     if not name:
         raise ValueError("name is required")
+    validate_set_name(name)
     if name == "pyops":
         raise ValueError("'pyops' is pyops-managed; updates flow via pyops deployment, not this task")
 

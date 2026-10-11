@@ -344,3 +344,60 @@ class TestScheduleRouter:
             response = mock_client.get("/scriptlet/schedule/item?id=1", headers={"X-User": "testuser"})
             assert response.status_code == 500
             assert "db error" in response.json()["detail"]
+
+
+class TestScheduleRealSet:
+    """/scriptlet/schedule/item against a real git base (no git mocks)."""
+
+    def test_put_unknown_set_404(self, mock_client, set_repo):
+        """An unknown set is a missing resource, not a server error; no
+        schedule is created."""
+        set_repo("s1", committed={"job.task.py": "pass\n"})
+        response = mock_client.put(
+            "/scriptlet/schedule/item",
+            json={"set": "nope", "name": "job", "drop_done": True, "schedule": "* * * * *", "param": ""},
+            headers={"X-User": "testuser"},
+        )
+        assert response.status_code == 404
+        assert response.json()["detail"] == "Set 'nope' does not exist"
+        assert mock_client.get("/scriptlet/schedule/list").json() == []
+
+    @staticmethod
+    def _put(client, **fields):
+        body = {"set": "s1", "name": "job", "drop_done": True, "schedule": "* * * * *", "param": "", **fields}
+        return client.put("/scriptlet/schedule/item", json=body, headers={"X-User": "testuser"})
+
+    @staticmethod
+    def _schedule(set_="s1", name="job"):
+        with Session(get_db_engine()) as session:
+            schedule = Schedule(set=set_, name=name, owner="testuser", schedule="* * * * *", active=True,
+                                param="", last=None, drop_done=False)
+            session.add(schedule)
+            session.commit()
+            return schedule.id
+
+    @pytest.mark.parametrize("name", ["../escaped", "t.x", "", "a b"])
+    def test_put_invalid_name_400(self, mock_client, set_repo, name):
+        set_repo("s1", committed={"job.task.py": "pass\n"})
+        response = self._put(mock_client, name=name)
+        assert response.status_code == 400
+        assert response.json()["detail"].startswith("Invalid scriptlet name")
+        assert mock_client.get("/scriptlet/schedule/list").json() == []
+
+    def test_put_negative_max_retries_422(self, mock_client, set_repo):
+        set_repo("s1", committed={"job.task.py": "pass\n"})
+        assert self._put(mock_client, max_retries=-1).status_code == 422
+        assert mock_client.get("/scriptlet/schedule/list").json() == []
+
+    def test_run_while_shutting_down_503(self, mock_client, set_repo, caplog):
+        import logging
+        import os
+        from app.lib import runner as lib_runner
+        set_repo("s1", committed={"job.task.py": "pass\n"})
+        schedule_id = self._schedule()
+        os.makedirs(os.path.dirname(lib_runner.SHUTDOWN_FLAG_PATH), exist_ok=True)
+        open(lib_runner.SHUTDOWN_FLAG_PATH, "w").close()
+        with caplog.at_level(logging.DEBUG):
+            response = mock_client.get("/scriptlet/schedule/run", params={"id": schedule_id})
+        assert response.status_code == 503
+        assert not [r for r in caplog.records if r.levelno >= logging.ERROR or r.exc_info]

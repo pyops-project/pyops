@@ -123,7 +123,7 @@ def test_controller_proxy_path_exec_fail(client, mock_git_ops, mock_db):
         assert "controller syntax error" in data["error"]
 
 def test_controller_proxy_service_error_status(client, mock_git_ops, mock_db):
-    # Test that non-200 status from service raises HTTPException with correct code
+    # A non-200 status from the service is the response's status
     with patch("app.lib.runner.find", return_value=["mock_job_id"]), \
          patch("app.lib.pyops.ServiceClient") as mock_service:
         mock_instance = MagicMock()
@@ -244,8 +244,8 @@ def test_controller_proxy_closes_service_client_on_success(client, mock_git_ops,
 
 
 def test_controller_proxy_closes_service_client_on_error_status(client, mock_git_ops, mock_db):
-    """close() also runs when the service returns a non-200 (which then
-    raises HTTPException) — the client is not leaked on the error status."""
+    """close() also runs when the service returns a non-200 — the client
+    is not leaked on the error status."""
     with patch("app.lib.runner.find", return_value=["mock_job_id"]), \
          patch("app.lib.pyops.ServiceClient") as mock_service:
         mock_instance = MagicMock()
@@ -259,18 +259,71 @@ def test_controller_proxy_closes_service_client_on_error_status(client, mock_git
 
 def test_controller_proxy_closes_service_client_on_request_error(client, mock_git_ops, mock_db):
     """close() runs via finally when request() raises — a recv that timed out
-    (zmq.Again) on a slow or dead service does not leak the client."""
-    import zmq
+    on a slow or dead service does not leak the client, and the proxy
+    answers 504 Gateway Timeout."""
+    from app.lib.errors import ServiceTimeout
     with patch("app.lib.runner.find", return_value=["mock_job_id"]), \
          patch("app.lib.pyops.ServiceClient") as mock_service:
         mock_instance = MagicMock()
         mock_service.return_value = mock_instance
-        mock_instance.request.side_effect = zmq.Again()
+        mock_instance.request.side_effect = ServiceTimeout("Service job mock_job_id did not answer within 1s")
 
         response = client.get("/controller/testset/testname/", headers={"X-User": "testuser"})
-        assert response.status_code == 200
-        assert response.json()["error"].startswith("Controller execution failed: ")
+        assert response.status_code == 504
+        assert response.json() == {"error": "Service job mock_job_id did not answer within 1s"}
         mock_instance.close.assert_called_once()
+
+
+@pytest.mark.parametrize("status, body", [
+    (201, {"id": 5}),
+    (400, {"error": "Invalid set name 'a.b'"}),
+    (404, {"error": "set 'x' not found"}),
+    (409, {"error": "Set 's1' already exists."}),
+    (503, {"error": "pyops shutdown in progress"}),
+    (200, ["a", "b"]),
+    (200, "plain text"),
+])
+def test_controller_proxy_passes_service_answer_through(client, mock_git_ops, mock_db, status, body):
+    """The service's status and body are the response, unchanged — no
+    {"detail": ...} wrapping of error bodies, no mangled 2xx bodies."""
+    with patch("app.lib.runner.find", return_value=["mock_job_id"]), \
+         patch("app.lib.pyops.ServiceClient") as mock_service:
+        mock_service.return_value.request.return_value = (status, body)
+        response = client.post("/controller/testset/testname/x", json={}, headers={"X-User": "testuser"})
+    assert response.status_code == status
+    assert response.json() == body
+
+
+def test_controller_proxy_passes_bodyless_status_through(client, mock_git_ops, mock_db):
+    with patch("app.lib.runner.find", return_value=["mock_job_id"]), \
+         patch("app.lib.pyops.ServiceClient") as mock_service:
+        mock_service.return_value.request.return_value = (204, None)
+        response = client.delete("/controller/testset/testname/item/1", headers={"X-User": "testuser"})
+    assert response.status_code == 204
+    assert response.content == b""
+
+
+def test_controller_proxy_times_out_against_a_silent_service(client, mock_git_ops, mock_db, tmp_path):
+    """A running service row whose socket never answers (hung, or not yet
+    bound): after web.timeout the proxy answers 504 with a WARNING — not a
+    200 error body with an ERROR traceback."""
+    import logging
+    import zmq
+    sock_dir = tmp_path / "pyops"
+    sock_dir.mkdir()
+    ctx = zmq.Context()
+    silent = ctx.socket(zmq.ROUTER)
+    silent.bind(f"ipc://{sock_dir}/silent_job.sock")
+    try:
+        with patch("app.lib.runner.find", return_value=["silent_job"]), \
+             patch("app.lib.files.conf_web", return_value={"timeout": 1}), \
+             patch("tempfile.gettempdir", return_value=str(tmp_path)):
+            response = client.get("/controller/testset/testname/x", headers={"X-User": "testuser"})
+    finally:
+        silent.close(linger=0)
+        ctx.term()
+    assert response.status_code == 504
+    assert response.json() == {"error": "Service job silent_job did not answer within 1s"}
 
 
 def _controller_code(debug=False, body="body"):
@@ -286,11 +339,24 @@ _VIEWS = {"head.html": "<title>t</title>", "menu.html": "<li>m</li>", "body.html
 class TestControllerRealSet:
     """/controller and /menu against a real git set repo (no git mocks)."""
 
-    def test_task_is_not_a_controller_405(self, client, set_repo):
+    def test_task_is_not_a_controller_404(self, client, set_repo):
+        """No controller of that name: 404, for the page and the proxy alike."""
         set_repo("s1", committed={"job.task.py": "pass\n"})
         response = client.get("/controller/s1/job")
-        assert response.status_code == 405
-        assert response.json()["detail"] == "Scriptlet s1::job is not a controller."
+        assert response.status_code == 404
+        assert response.json() == {"detail": "Scriptlet s1::job is not a controller"}
+        response = client.get("/controller/s1/job/x")
+        assert response.status_code == 404
+        assert response.json() == {"detail": "Scriptlet s1::job is not a controller"}
+
+    def test_controller_beside_a_prefix_clash(self, client, set_repo):
+        """`panel.x.task.py` (another, invalid name) never answers for the
+        controller `panel`, whatever the directory order."""
+        set_repo("s1", committed={"panel.x.task.py": "pass\n", "panel.controller.py": _controller_code(), **_VIEWS})
+        with patch("os.listdir", return_value=["panel.x.task.py", "panel.controller.py"]):
+            response = client.get("/controller/s1/panel")
+        assert response.status_code == 200
+        assert "<p>committed</p>" in response.text
 
     def test_controller_with_missing_view_404(self, client, set_repo):
         set_repo("s1", committed={"panel.controller.py": _controller_code(body="nobody"), **_VIEWS})
@@ -325,3 +391,30 @@ class TestControllerRealSet:
             {"id": "s1_panel", "name": "My Panel", "path": "/controller/s1/panel", "default": False},
         ]
         assert body["failures"] == []
+
+    def test_unknown_set_page_404(self, client, set_repo):
+        """The controller page for an unknown set answers 404 with the
+        controller error page."""
+        set_repo("s1", committed={"panel.controller.py": _controller_code(), **_VIEWS})
+        response = client.get("/controller/nope/panel")
+        assert response.status_code == 404
+        assert "Controller Draft Error" in response.text
+        assert "Set 'nope' does not exist" in response.text
+
+    def test_error_page_escapes_request_values(self, client, set_repo):
+        """The error page shows the set and name from the URL, and the error
+        text (which quotes the set), as text: markup in them is escaped, not
+        rendered."""
+        set_repo("s1")
+        response = client.get("/controller/<img src=x onerror=alert(1)>/<svg onload=alert(2)>")
+        assert response.status_code == 400
+        assert "<img" not in response.text
+        assert "<svg" not in response.text
+        assert "for &lt;img src=x onerror=alert(1)&gt;::&lt;svg onload=alert(2)&gt; failed" in response.text
+        assert "Invalid set name '&lt;img src=x onerror=alert(1)&gt;'" in response.text
+
+    def test_unknown_set_proxy_404(self, client, set_repo):
+        set_repo("s1", committed={"panel.controller.py": _controller_code(), **_VIEWS})
+        response = client.get("/controller/nope/panel/items")
+        assert response.status_code == 404
+        assert response.json() == {"error": "Controller execution failed: Set 'nope' does not exist"}

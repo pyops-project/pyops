@@ -162,12 +162,14 @@ def _cancel_all(args):
             targets = [r for r in targets if r.get("owner") == args.owner]
         if args.set:
             targets = [r for r in targets if r.get("set") == args.set]
-        cancelled = []
+        # A job that finished since the listing answers 409: nothing to
+        # cancel, so it is counted and skipped.
+        cancelled, finished = [], []
         for r in targets:
-            c.get("/scriptlet/job/cancel", params={"id": r["id"]})
-            cancelled.append(r["id"])
+            (cancelled if c.cancel_job(r["id"]) else finished).append(r["id"])
         emit(args, cancelled, id_field=None,
-             human=f"cancelled {len(cancelled)} job(s)")
+             human=f"cancelled {len(cancelled)} job(s)"
+                   + (f"; {len(finished)} already finished" if finished else ""))
 
 
 def _clean(args):

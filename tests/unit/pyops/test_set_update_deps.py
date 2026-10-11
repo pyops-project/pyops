@@ -1,13 +1,15 @@
 """Unit tests for app/pyops/set_update_deps.task.py — directive parsing,
 conflict resolution, and the per-set filesystem scan.
 
-The task script normally runs inside the pyops runner with `appspace` and
-`config` injected as job globals (see job_runner.setup_job_globals for the
-`setname == "pyops"` branch) and with set.library.py's symbols added
-via the `#!{::set}` directive. The fixture below mirrors that setup by
-exec'ing both files into one shared namespace, so each pure function
-(`_parse_directives`, `_resolve`, `_scan`) is callable directly without
-spinning up the runner.
+The task script normally runs inside the pyops runner with `appspace`,
+`config`, `validate_set_name` and `CORE_DEPS` injected as job globals (see
+job_runner.setup_job_globals for the `setname == "pyops"` branch) and with
+set.library.py's symbols added via the `#!{::set}` directive. The fixture
+below mirrors that setup by exec'ing both files into one shared namespace,
+so each pure function (`_parse_directives`, `_resolve`, `_scan`) is
+callable directly without spinning up the runner. The injected `CORE_DEPS`
+is a stand-in list, so a test can tell it apart from any list the task
+might carry or derive itself.
 
 End-to-end behaviour (pip subprocess, lock acquisition, .update_warnings.json
 write) is covered by tests/e2e/test_sets_via_controller.py — only the
@@ -22,10 +24,14 @@ import pytest
 PYOPS_SET_DIR = os.path.normpath(os.path.join(
     os.path.dirname(__file__), "..", "..", "..", "app", "pyops"
 ))
+# Stand-in for the runner-injected CORE_DEPS (app.lib.sets.CORE_DEPS at
+# runtime — asserted in tests/unit/runner/test_job_globals.py).
+INJECTED_CORE_DEPS = ("core-dep-a", "core-dep-b")
 
 
 @pytest.fixture
 def task(tmp_path):
+    from app.lib.git import validate_set_name
     glob = {
         "__name__": "set_update_deps_loaded",
         "appspace": str(tmp_path / "app"),
@@ -36,6 +42,8 @@ def task(tmp_path):
                 "pkg": str(tmp_path / "data" / "pkg"),
             },
         },
+        "validate_set_name": validate_set_name,
+        "CORE_DEPS": INJECTED_CORE_DEPS,
         "name": None,
     }
     (tmp_path / "app").mkdir(exist_ok=True)
@@ -534,9 +542,10 @@ class TestMain:
     @pytest.mark.parametrize("venv_exists", [False, True], ids=["new_venv", "existing_venv"])
     def test_upgrades_set_and_writes_warnings(self, task, capsys, venv_exists):
         """Ensures the venv (created only if missing), upgrades pip and the
-        core deps, installs the newest-mtime winners of conflicting pip pins
-        and git branches, all under the set's install lock, and writes the
-        conflict summary /health reads."""
+        core deps — exactly the CORE_DEPS the runner injects, the list a set
+        venv is created with — installs the newest-mtime winners of
+        conflicting pip pins and git branches, all under the set's install
+        lock, and writes the conflict summary /health reads."""
         import json
         import sys
         tmp = task["_tmp_path"]
@@ -557,7 +566,7 @@ class TestMain:
         task["main"]()
 
         pip = str(venv / "bin" / "pip")
-        core_deps = list(task["CORE_DEPS"])
+        core_deps = list(INJECTED_CORE_DEPS)
         assert calls == ([] if venv_exists else [[sys.executable, "-m", "venv", str(venv)]]) + [
             [pip, "install", *core_deps],
             [pip, "install", "--upgrade", "pip", "setuptools<82", "wheel"],
@@ -592,3 +601,28 @@ class TestMain:
         assert "pip conflict: requests → chose ==2.1 from new.task.py" in out
         assert "git conflict: https://h.example/g/tool.git → chose branch=dev from new.task.py" in out
         assert "Update completed for 'myset' — 2 conflict(s)." in out
+
+
+class TestLibraryIncludeResolution:
+    """`#!{set::name}` resolves to the scriptlet file `name.<type>.py` —
+    never to another scriptlet whose name merely starts with `name.`
+    (e.g. `causal.x.task.py` from a cloned repository), whatever order the
+    directory lists in."""
+
+    def test_exact_file_resolved_whatever_the_listing_order(self, task, monkeypatch):
+        tmp = task["_tmp_path"]
+        system = tmp / "data" / "git" / "system"
+        system.mkdir(parents=True)
+        (system / "causal.library.py").write_text("#!https://h.example/g/causal.git\n")
+        (system / "causal.x.task.py").write_text("#!unrelated\n")
+        cami = tmp / "data" / "git" / "cami"
+        cami.mkdir(parents=True)
+        (cami / "main.task.py").write_text("#!{system::causal}\n")
+        real_listdir = os.listdir
+        # The clashing file first, as an unsorted listing may return it.
+        monkeypatch.setattr(os, "listdir", lambda path: sorted(real_listdir(path), reverse=True))
+
+        pips, gits = task["_scan"]("cami")
+
+        assert pips == []
+        assert [(g["url"], g["source"]) for g in gits] == [("https://h.example/g/causal.git", "causal.library.py")]

@@ -12,6 +12,7 @@ from app.orm.database import get_db_engine
 from app.orm.job import Job
 
 from app.lib import files
+from app.lib.errors import JobStateConflict, ShutdownPending
 
 import logging
 logger = logging.getLogger(__name__)
@@ -22,10 +23,6 @@ logger = logging.getLogger(__name__)
 # work, so already-running jobs can drain without us piling more on. The
 # file lives under /tmp/pyops/ which the runner socket already provisions.
 SHUTDOWN_FLAG_PATH = "/tmp/pyops/shutdown.flag"
-
-
-class ShutdownPending(RuntimeError):
-    """enqueue() refuses while the runner has been signalled to shut down."""
 
 
 def is_shutdown_pending() -> bool:
@@ -128,41 +125,71 @@ def find(owner: str | None, set: str, name: str, kind: str, states: list[str], s
         stmt = stmt.order_by(Job.id.desc())
         return [j.id for j in session.execute(stmt)]
 
+# States a job can be cancelled from: it has not finished yet.
+CANCELLABLE_STATES = ("todo", "dequeued", "loading", "running")
+# States of a cancel already requested or done: cancelling again is a no-op.
+CANCEL_STATES = ("cancel", "cancelling", "cancelled")
+# States a job can be removed (deleted) from: no process of it is running.
+REMOVABLE_STATES = ("todo", "cancelled", "failed", "done")
+
+
+def _transition(id: str, from_states: tuple, to_state: str):
+    """Sets `to_state` on job `id` in one conditional UPDATE, only while the
+    row is in one of `from_states`. Returns (updated, state): whether the
+    row changed and its state afterwards; (False, None) for an unknown id."""
+    with Session(get_db_engine()) as session:
+        updated = session.query(Job).filter(
+            Job.id == id, Job.state.in_(from_states),
+        ).update({Job.state: to_state}, synchronize_session=False)
+        session.commit()
+        state = session.scalar(select(Job.state).where(Job.id == id))
+        return updated > 0, state
+
+
 def cancel(id: str):
-    """Marks job for cancellation.
-    
+    """Marks a job for cancellation — only a job that has not finished.
+
     Args:
         id (str): Job ID.
-    
+
     Returns:
-        Job: Updated job or None.
+        dict | None: {"id", "state"} of the job, None for an unknown id.
+            A job already cancelled (or being cancelled) is returned
+            unchanged: cancelling again is a no-op.
+
+    Raises:
+        JobStateConflict: The job already finished (done, failed) or is
+            being deleted (remove, removed); the row is left unchanged.
     """
-    with Session(get_db_engine()) as session:
-        job = session.get(Job, id)
-
-        if job != None:
-            job.state = "cancel"
-            session.commit()
-
-        return job.__dict__ if job else None
+    updated, state = _transition(id, CANCELLABLE_STATES, "cancel")
+    if state is None:
+        return None
+    if not updated and state not in CANCEL_STATES:
+        raise JobStateConflict(f"Job {id} is already {state}")
+    return {"id": id, "state": state}
 
 def remove(id: str):
-    """Marks job for removal.
-    
+    """Marks a job for removal — only a job with no running process.
+
     Args:
         id (str): Job ID.
-    
+
     Returns:
-        Job: Updated job or None.
+        dict | None: {"id", "state"} of the job, None for an unknown id.
+
+    Raises:
+        JobStateConflict: The job is in a state it cannot be deleted from;
+            the row is left unchanged.
     """
-    with Session(get_db_engine()) as session:
-        job = session.get(Job, id)
-
-        if job != None:
-            job.state = "remove"
-            session.commit()
-
-        return job.__dict__ if job else None
+    updated, state = _transition(id, REMOVABLE_STATES, "remove")
+    if state is None:
+        return None
+    if not updated:
+        raise JobStateConflict(
+            f"Job {id} is in state '{state}' and cannot be deleted. "
+            f"Allowed states: {', '.join(REMOVABLE_STATES)}"
+        )
+    return {"id": id, "state": state}
 
 def drop(id: str, set: str):
     """Drops job workspace and socket files.

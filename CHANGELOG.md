@@ -68,11 +68,72 @@ from 3.0.0 onward.
   behaviour. In x-user mode the password prompt is skipped and a 401 is
   reported as a plain connection failure instead of triggering a
   password re-prompt.
+- **Sets view: a set directory without `.git` can be removed.** A
+  directory under the git base that holds no git repository (not
+  initialised, e.g. created by hand) is now listed as "not initialised";
+  only Remove is enabled for it, and it removes the directory like any
+  set. `GET /controller/pyops/sets/list` reports `initialized` per set.
 - **VSIX: set whitelist for the Manager tree.** A new `pyops.includedSets`
   setting complements the existing `pyops.excludedSets` blacklist: when
   `includedSets` is non-empty the Manager tree shows only those sets and
   the blacklist is ignored; when it is empty the `excludedSets` blacklist
   applies as before.
+
+### Changed
+- **Set and scriptlet names use only letters, digits, `_` and `-`.**
+  Every set name and every scriptlet name (tasks, libraries,
+  controllers, views, JS libraries, markdown pages, data files) must
+  match `[A-Za-z0-9_-]+`, the grammar the `#!{set::name}` directive
+  already used. The API answers 400 for any other name (`Invalid set
+  name '<name>': use only letters, digits, '_' and '-' (at least one
+  character)`, likewise `Invalid scriptlet name ...`), and so do the
+  Sets view and the `set_*` tasks. Directories and files with other
+  names are not listed or served. A job's `data` global refuses such a
+  name (`InvalidScriptletNameError`, a `ValueError`; `data.list()` skips
+  such a file). The runner skips a schedule with such a name; the Web UI
+  Scheduler marks it with a warning.
+- **Owners keep only letters, digits, `_`, `-`, `.` and `@`.** The
+  owner taken from the `X-User` header (its part before the first `/`)
+  has every other character replaced by `_`, so it is safe in job ids,
+  paths and URLs. Identities that differ only in replaced characters
+  become one owner (e.g. `user+1` and `user_1`) and share their jobs,
+  schedules and debug ports.
+- **Statuses of the API.** The lib layer raises typed errors
+  (`app/lib/errors.py`) that one handler maps to HTTP; error bodies stay
+  `{"detail": message}`. Changed answers:
+  - a name that exists only as another type: 404 on the controller page
+    and proxy (was 405) and on `GET /scriptlet/jslib/{set}/{name}` (was
+    400);
+  - cancelling a job that already finished (`done`/`failed`) or is being
+    deleted: 409 `Job <id> is already <state>`, the job unchanged (see
+    Fixed); deleting a job that is not `todo`/`cancelled`/`failed`/`done`:
+    409 (was 400). pyopsctl `job cancel-all` and the VSIX "Cancel All
+    Jobs" count such a job as already finished; pyopsctl `debug stop` and
+    the VSIX stop-debug action report it as already finished, and
+    `debug stop` still releases the port lease;
+  - an enqueue while pyops shuts down (`PUT /scriptlet/job/item`,
+    `GET /scriptlet/schedule/run`, the Sets view): 503 (was 500);
+  - `GET /files/{path}` for a missing file or a directory, and
+    `GET /scriptlet/job/download` for a job without a workspace: 404
+    (was 500); `POST /scriptlet/completion` with a cursor outside the
+    code: 400 (was 500);
+  - `GET /repo/status?set=pyops`: 400;
+  - a negative `max_retries` on `PUT /scriptlet/job/item` and
+    `PUT /scriptlet/schedule/item`: 422 (see Fixed).
+- **The controller proxy passes the service's answer through.** A
+  status other than 200 arrived wrapped as `{"detail": <body>}`; the
+  body now arrives exactly as the service sent it, e.g. 400
+  `{"error": "..."}`, so the Sets view shows the service's error instead
+  of `[object Object]`. A status that allows no body (204, 304) arrives
+  without one. A service that does not answer within `web.timeout`
+  answers 504 (was 200 `{"error": ...}`).
+
+### Removed
+- **`DELETE /scriptlet/inventory/draft` no longer takes a `type_` query
+  parameter** (public API). The type is always inferred from the existing
+  file, so the 400 for a `type_` that did not match is gone. A `type_` a
+  caller still sends is ignored. No bundled client (Web UI, VSIX,
+  pyopsctl) sent it.
 
 ### Fixed
 - **Web workers leaked a ZMQ context and two threads per controller
@@ -112,6 +173,128 @@ from 3.0.0 onward.
   by "state no longer dequeued" or the traceback. The job still ended
   cancelled. It is now a normal outcome: nothing is spawned, nothing is
   logged as an error, and the cancel keeps its reason.
+- **A job's result was lost or overwritten around a cancel.** A
+  completion that arrived after a cancel replaced the job's detail (the
+  operator's cancel reason, or an earlier traceback) with the job's
+  message, or with nothing. A job that had already finished when the
+  cancel took effect was still recorded as cancelled. The job now stamps
+  its finish time into its completion, and the runner records when it
+  starts terminating a job, in the new column `job.term_start` (added to
+  existing databases at start-up). If the job finished first, its result
+  decides the state; otherwise the cancel stands. Whenever a job keeps
+  its state (after a cancel, or when a later report arrives for a job
+  that already finished), the new message is appended to the detail
+  instead of replacing it, and the end time is kept. When the job's
+  report decides the state, the job's end time is its own finish time,
+  not the time the runner processed the report or completed the
+  termination it had started for the cancel (`end` orders the
+  `keep_n`/`max_fail_n` retention and starts the drop-done delay).
+- **Unknown sets answered 500 or 200 instead of 404.**
+  `GET /scriptlet/jslib/{set}/{name}`, `PUT /scriptlet/job/item` and
+  `PUT /scriptlet/schedule/item` answered 500 and logged a traceback. The
+  controller page and proxy answered 200 with the "Controller Draft
+  Error" page or the `{"error": ...}` body. All now answer 404 (`Set
+  '<name>' does not exist`); the controller page and proxy keep their
+  page and body.
+- **Discarding the draft of a never-committed scriptlet returned a raw git
+  error.** `DELETE /scriptlet/inventory/draft` failed in `git checkout`,
+  answered 500 with the command's error and logged a traceback. It now
+  answers 409 Conflict `No committed version to revert to` and leaves the
+  draft untouched.
+- **Update Dependencies did not install `pyyaml`.** The task kept its
+  own copy of the core dependency list, and that copy lacked `pyyaml`.
+  The job runner now hands it `CORE_DEPS`, the list every set venv is
+  created with, as a job global for the pyops set.
+- **Cancelling a finished job rewrote its outcome.**
+  `GET /scriptlet/job/cancel` set any job to `cancel`: a `done` or
+  `failed` job then ended `cancelled` with a new end time, and a job
+  being deleted (`remove`) was never deleted. Cancel and delete now
+  change a job only from the states that allow it, in one conditional
+  update; a job already cancelled stays as it is (200).
+- **A finished job could end up as a stale process.** When the runner
+  did not acknowledge a job's report within 30 s (busy or restarting),
+  the job ended anyway and its result was lost: the runner later failed
+  it as `stale process pid=N`, or at start-up as an incomplete execution.
+  A job now writes its final result to `result.json` in its workspace
+  (next to `stdout.log` and `stderr.log`) before it reports it; the
+  runner takes the result from there for a job whose process is gone. A
+  job without a result file died: `failed` with the detail
+  `dead (pid=N)`.
+- **Scriptlets were looked up by filename prefix.** The controller page
+  and proxy, the inventory routes, jslib, job loading, library imports
+  and Update Dependencies took the first file starting with `<name>.`,
+  in directory order, so `c` could resolve to `c.x.task.py` or to a task
+  instead of the controller. `GET /scriptlet/inventory/status` did not
+  find markdown pages under `docs/` or data files, which kept the Revert
+  button of the markdown and data editors disabled. Every lookup now
+  matches the exact filename of each type; `#!{set::name}` prefers a
+  library, then a task, then a controller.
+- **Reading a set changed it.** Any request on a set ran `git init` in a
+  set directory without `.git`, and committed a `.gitignore` (and a
+  `README.md` if missing) into a set that lacked them — e.g. into every
+  cloned set on its first read. Reading a set no longer changes it; a
+  directory without `.git` is an unknown set (404), and the Sets view
+  can remove it (see Added).
+- **The bundled set ran git against the pyops source tree.**
+  `GET /repo/status?set=pyops` reported the branch of the pyops
+  repository (500 in the container image), and the draft status of its
+  scriptlets came from that repository too. `/repo/status` answers 400
+  for it, and its scriptlets never report drafts.
+- **Client errors and a shutdown answered 500 with a traceback.** A
+  missing static file, the download of a job that has not started, a
+  stale editor cursor and an enqueue while pyops shuts down logged an
+  ERROR traceback (the e2e suite fails on those); see Changed for their
+  statuses.
+- **A negative `max_retries` was accepted.** A task runs
+  `max_retries + 1` attempts, so its code never ran and the runner later
+  failed it as dead. The job and schedule APIs now answer 422.
+- **Monitor and Scheduler copied params wrongly.** "Copy param" read the
+  param from a hidden table cell, so a param with markup lost it
+  (`if a<b and c>d` became `if ad`), and a job of an owner with a `.`
+  (e.g. `ralph.bariz`) copied nothing; an owner with an `@` made the
+  Monitor throw. The param is now copied as it is, and the Monitor and
+  the sidebar menu's list of draft errors show job ids, params, details
+  and error texts (e.g. `<string>`) as text.
+- **A set without scriptlets was not shown.** The Web UI Manager, the
+  VSIX Manager tree and the VSIX Create Scriptlet took their sets from
+  the scriptlet list, so a new, empty set had no section, VSCode could
+  not give it its first scriptlet ("No existing sets found"), and a set
+  vanished with its last scriptlet. They now take the sets from
+  `GET /scriptlet/inventory/sets`.
+
+### Security
+- **Invalid set names reached the filesystem.** A set name of `""`, `.`,
+  `..` or one containing a path separator resolved to the git base or its
+  parent (`data/`), which pyops then git-init'ed and committed in. This
+  was reachable via `PUT /scriptlet/job/item`, the inventory routes,
+  `/repo/status`, jslib, `PUT /scriptlet/schedule/item` and
+  `/controller/%2E%2E/...`. Sets management went further: a name like
+  `../x` sent to `DELETE /controller/pyops/sets/remove/...` made
+  `set_remove` delete directories outside the git, venv and pkg bases,
+  and `GET /controller/pyops/sets/status/...` read the git status of a
+  repository outside the git base. The routes above now reject such a
+  name with 400 before touching the filesystem, and so does
+  `GET /controller/pyops/sets/status/<name>`. Every `set_*` task
+  refuses such a name before touching the filesystem, also when started
+  directly via `control.job.create`; `set_clone` checks the name it takes
+  from the URL. A set name containing a NUL byte is rejected with 400 as
+  well; before, it was reported as an unknown set or answered 500.
+- **Reflected XSS on the controller error page.** The "Controller Draft
+  Error" page of `GET /controller/{set}/{name}` embedded the set and name
+  from the URL, and the error text that quotes them, as raw HTML, so a
+  crafted link could inject markup and script into the page. All three
+  are now HTML-escaped.
+- **Scriptlet names reached the filesystem.** Scriptlet names were not
+  checked. `PUT /scriptlet/inventory/item` with a name like `../../x`
+  created a file outside the set, and in a set with a `data/` directory
+  the inventory routes read, overwrote or deleted a `.yaml`/`.json` file
+  outside it (e.g. `etc/pyops.json`) for a name like
+  `../../../../etc/pyops`. Every scriptlet name is now checked against
+  the name charset before a path is built from it (400).
+- **`GET /files/{path}` served files outside `app/files/`.** An encoded
+  traversal (`/files/..%2F..%2Fetc/pyops.json`) or an absolute path read
+  any file the server can read. The path is now confined to
+  `app/files/` (404 otherwise).
 
 ### CI
 - **VSIX "integration" suite renamed to the VSIX e2e axis.** It boots a
@@ -148,9 +331,16 @@ from 3.0.0 onward.
   of host-venv (bundled `pyops` set) jobs and test-started subprocesses
   now count; uvicorn workers and per-set venvs do not. The `omit`
   pattern is anchored (`*/app/gunicorn.py`) so subprocesses running in a
-  job workspace apply it too. `app/pyops` scriptlets that no test execs
-  under their real path (367 statements) are not in the reported total;
-  see "Coverage measurement" in `docs/insights_app.md`.
+  job workspace apply it too. An `app/pyops` scriptlet is in the
+  reported total only when a test execs it under its real path; the only
+  one left out is `sets.controller.py` (7 statements). See "Coverage
+  measurement" in `docs/insights_app.md`.
+- **Behaviour tests for the pyops-set scriptlets.** The sets data
+  service and the `set_create`, `set_pull`, `set_switch`,
+  `set_commit_drafts`, `set_discard_drafts` and `set_remove` tasks are
+  tested in-process, as the job runner runs them, against real
+  repositories and bare remotes (`tests/unit/pyops/test_data_service.py`,
+  `test_set_tasks.py`), so their code counts towards the > 90% target.
 
 ### Documentation
 - **Agent instructions moved from `CLAUDE.md` to `AGENTS.md`** (read by

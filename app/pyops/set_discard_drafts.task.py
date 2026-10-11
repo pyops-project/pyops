@@ -33,6 +33,7 @@ def _check(cmd, cwd):
 def main():
     if not name:
         raise ValueError("name is required")
+    validate_set_name(name)
     if name == "pyops":
         raise ValueError("'pyops' is write-protected")
 

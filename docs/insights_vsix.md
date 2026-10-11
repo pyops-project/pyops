@@ -33,7 +33,7 @@ flowchart TD
 | `src/managerTreeProvider.ts` | `ManagerTreeDataProvider`: sets → scriptlets hierarchy, sync status, local-only discovery |
 | `src/jobsTreeProvider.ts` | `JobsTreeDataProvider`: jobs grouped by state, sorted by start time |
 | `src/providers/RemoteContentProvider.ts` | `TextDocumentContentProvider` for `pyops-remote://` scheme |
-| `src/commands/CreateScriptletCommand.ts` | Create new scriptlet: prompts type/set/name, writes template, opens editor |
+| `src/commands/CreateScriptletCommand.ts` | Create new scriptlet: prompts type/set/name (sets from `GET /scriptlet/inventory/sets`, so a set without scriptlets is offered; existing names from `GET /scriptlet/inventory/list`), writes template, opens editor |
 | `src/services/AuthService.ts` | Static: prompts and stores Basic Auth password |
 | `src/services/JobService.ts` | Job lifecycle: cancel, delete, download, view, bulk ops, polling |
 | `src/services/ScriptletService.ts` | Scriptlet sync: local↔remote draft, diff, delete, open |
@@ -87,10 +87,11 @@ The **PyOps client config** (`~/.config/pyops/config.toml`, path override via `P
 Displays scriptlet sets with their scriptlets. Each refresh:
 
 1. `fetchScriptlets()` — `GET /scriptlet/inventory/list` → `ScriptletInfo[]`
-2. `scanLocalScriptlets()` — walks `{localPyopsDir}/pyops/{set}/{type}/` for files matching `inferExt(type)`; marks `isLocalOnly: true`
-3. Merges remote and local lists; applies the set filter (`filterSets`): if `includedSets` is non-empty, keep only those sets (whitelist wins, `excludedSets` ignored); otherwise drop sets in `excludedSets`
-4. Downloads remote-only scriptlets to `{localPyopsDir}/pyops/{set}/{type}/{name}{ext}`
-5. Checks `has_unstaged_changes` per scriptlet to set sync status icon
+2. `fetchSets()` — `GET /scriptlet/inventory/sets` → every set on the server, also one without scriptlets. A failure is shown like a failed scriptlet list (an error message at most every 30 s, shared with `fetchScriptlets`, and the output channel) and yields no sets
+3. `scanLocalScriptlets()` — walks `{localPyopsDir}/pyops/{set}/{type}/` for files matching `inferExt(type)`; marks `isLocalOnly: true`
+4. Merges remote and local lists; applies the set filter (`isSetShown` / `filterSets`): if `includedSets` is non-empty, keep only those sets (whitelist wins, `excludedSets` ignored); otherwise drop sets in `excludedSets`. The root set nodes (`_sets`) are the filtered server sets plus the sets of the merged scriptlets, so a set stays in the tree when its last scriptlet is deleted
+5. Downloads remote-only scriptlets to `{localPyopsDir}/pyops/{set}/{type}/{name}{ext}`
+6. Checks `has_unstaged_changes` per scriptlet to set sync status icon
 
 **ScriptletInfo interface:**
 
@@ -193,12 +194,12 @@ Manages job lifecycle operations used by Monitor view commands.
 | Method | Description |
 |--------|-------------|
 | `listJobs()` | Fetches all jobs; used by `attachDebugJob` command |
-| `cancelJob(item)` | `PUT /scriptlet/job/item` state=cancel |
+| `cancelJob(item)` | `GET /scriptlet/job/cancel?id=`; the server answers 409 for a job that already finished (`done`/`failed`) or is being deleted, shown as `Failed to cancel job: Conflict` |
 | `deleteJob(item)` | `DELETE /scriptlet/job/item` (confirmation required) |
 | `downloadJob(item)` | Downloads job workspace as ZIP |
 | `viewJob(item)` | Opens output channel; polls stdout/stderr until terminal state |
 | `copyJobParam(item)` | Copies job `param` to clipboard |
-| `cancelAllJobs()` | Cancels all non-terminal jobs |
+| `cancelAllJobs()` | Cancels the jobs of the just-fetched list that are not `done`/`failed`/`cancelled`; a job that finishes between the list and its cancel answers 409 and is counted as already finished (`Bulk cancel: N successful, F failed, M already finished.`), not as failed |
 | `deleteAllDone()` | Deletes all `done`/`cancelled` jobs |
 | `deleteAllFailed()` | Deletes all `failed`/`killed` jobs |
 | `dispose()` | Clears active polling intervals |
@@ -265,7 +266,7 @@ Polls job output (stdout/stderr) and streams it to a named output channel.
 | Method | Description |
 |--------|-------------|
 | `startMonitoring(key, jobId)` | Begins 1s polling cycle; appends new output incrementally |
-| `stopMonitoring(key)` | Stops polling; cancels the job |
+| `stopMonitoring(key)` | Cancels the job (`GET /scriptlet/job/cancel`) and stops polling once the cancel is answered OK, or 409 — the job already finished, nothing left to stop (`Debug job <id> already finished`); any other answer is shown as `Failed to stop debug: <status>` and polling continues |
 | `isMonitoring(key)` | Returns true if actively polling |
 | `dispose()` | Clears all active timeouts |
 
@@ -308,7 +309,7 @@ Full debug lifecycle connects VSIX, PyOps server, and the runner:
 
 ### Runner Override Injection
 
-`app/runner.py loadJob()` parses `job.overrides` as JSON regardless of kind; if the dict contains a `"{set}::{name}"` key, the runner skips the `os.listdir`/`git.read_content` repo lookup and uses `override_dict[main_key]` as the scriptlet body. Missing key falls back to `git.read_content`; invalid JSON aborts the job. `committed=False` for `kind` in `("debug", "draft", "test", "testdebug")` so the fallback reads the unstaged working tree, matching what `writeLocalToRemoteDraft` would have shipped.
+`app/runner.py loadJob()` parses `job.overrides` as JSON regardless of kind; if the dict contains a `"{set}::{name}"` key, the runner skips the `git.resolve_scriptlet`/`git.read_content` repo lookup and uses `override_dict[main_key]` as the scriptlet body. Missing key falls back to `git.read_content`; invalid JSON aborts the job. `committed=False` for `kind` in `("debug", "draft", "test", "testdebug")` so the fallback reads the unstaged working tree, matching what `writeLocalToRemoteDraft` would have shipped.
 
 ### Debugger bootstrap (client-composed)
 
@@ -375,16 +376,16 @@ Coverage targets: branches 80%, functions 80%, lines 90%, statements 80%.
 | `ConnectionStatusManager.test.ts` | Status bar updates, auth retry logic |
 | `extension.test.ts` | Activation, command registration |
 | `utils.test.ts` | `inferExt` all cases including unknown type |
-| `managerTreeProvider.test.ts` | `getTreeItem`/`getChildren`, fetch/download, error handling, refresh graceful failure |
+| `managerTreeProvider.test.ts` | `getTreeItem`/`getChildren`, fetch/download, error handling, refresh graceful failure, set nodes from `/scriptlet/inventory/sets` (empty sets, set filter, fallback when the set list fails, a set kept after its last scriptlet is deleted) |
 | `jobsTreeProvider.test.ts` | Job state display, bulk operations |
 | `providers/RemoteContentProvider.test.ts` | `provideTextDocumentContent`, `registerRemoteLanguageModeSetter` conditional logic, missing language mappings, event emitter |
-| `commands/createScriptletCommand.test.ts` | Dialog flow, type/set/name validation, template write |
+| `commands/createScriptletCommand.test.ts` | Dialog flow, type/set/name validation, template write, a set without scriptlets offered, scriptlet list failure |
 | `services/AuthService.test.ts` | `setupAuth` prompts and storage |
-| `services/JobService.test.ts` | CRUD operations, bulk cancel/delete, `viewJob` polling with stdout/stderr updates, terminal state transitions, error handling, undefined provider handling, timer cleanup |
+| `services/JobService.test.ts` | CRUD operations, bulk cancel/delete (incl. a cancel answered 409 counted as already finished), `viewJob` polling with stdout/stderr updates, terminal state transitions, error handling, undefined provider handling, timer cleanup |
 | `services/ScriptletService.test.ts` | Local/remote sync, network error handling, `existsSync` filesystem branches, multi-step error scenarios |
 | `services/DebugService.test.ts` | `buildOverrides`, `composeDebugpyBootstrap` (in-process-adapter required, port plugged verbatim), port lease/release/rebind/`findPortForJob`, `enqueueDebugJob` success-lease-rebind / HTTP-fail-releases / network-exception / empty-pool / overrides passthrough / kind defaults to `'debug'` / `kind='testdebug'` flows through, `getDebugHost` |
 | `services/debugSessionWatcher.test.ts` | Ignores no-jobId sessions, polls cadence + endpoint, terminal-state stop (incl. 404), transient HTTP / network error retry, `cancel`, idempotent `watch`, `dispose` |
-| `services/DebugOutputMonitor.test.ts` | Start/stop monitoring, incremental stdout/stderr append, channel display, stop on terminal states, error log fetch |
+| `services/DebugOutputMonitor.test.ts` | Start/stop monitoring (incl. a stop answered 409 for a finished job), incremental stdout/stderr append, channel display, stop on terminal states, error log fetch |
 | `services/RefreshTimerManager.test.ts` | `ensureRunning`, `stopIfRunning` |
 | `services/PyOpsPythonDebugConfigProvider.test.ts` | Config provision for task files |
 

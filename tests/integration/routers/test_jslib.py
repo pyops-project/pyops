@@ -31,7 +31,10 @@ class TestJSLibRouter:
 
         with patch("app.lib.git.get_repo_path", return_value=str(repo_dir)):
             response = mock_client.get("/scriptlet/jslib/default/mylib")
-            assert response.status_code == 400
+            # No JS library of that name — the same status as every other
+            # "exists, but not as the requested type" case.
+            assert response.status_code == 404
+            assert response.json()["detail"].endswith("::mylib is not a jslibrary")
 
     def test_get_jslib_committed_param(self, mock_client, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
         repo_dir = Path(test_temp_dir) / "git" / "default"
@@ -58,3 +61,13 @@ class TestJSLibRouter:
             assert response.headers["content-type"] == "application/javascript"
             assert response.text == "unstaged code"
             mock_read.assert_called_with(str(repo_dir), "mylib", "jslibrary", False)
+
+
+class TestJSLibRealSet:
+    """/scriptlet/jslib against a real git set repo (no git mocks)."""
+
+    def test_unknown_set_404(self, mock_client, set_repo):
+        set_repo("s1", committed={"lib.js": "// lib\n"})
+        response = mock_client.get("/scriptlet/jslib/nope/lib")
+        assert response.status_code == 404
+        assert response.json()["detail"] == "Set 'nope' does not exist"

@@ -1,5 +1,7 @@
 import os.path, json
 import logging
+
+from .errors import NotFoundError
 logger = logging.getLogger(__name__)
 
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
@@ -32,7 +34,21 @@ def is_bundled_set(name: str) -> bool:
     return name == BUNDLED_SET_NAME
 
 def get(path: str):
-    with open(os.path.join(files_path, path), "rb") as file:
+    """Content of the static asset `path` (relative to `app/files/`).
+
+    The path is resolved (symlinks, `..`, an absolute path) and must name a
+    regular file inside `app/files/`; anything else is not an asset.
+
+    Raises:
+        NotFoundError: `path` does not resolve to a file inside `app/files/`.
+    """
+    root = os.path.realpath(files_path)
+    target = None
+    if "\0" not in path:
+        target = os.path.realpath(os.path.join(root, path))
+    if target is None or os.path.commonpath([root, target]) != root or not os.path.isfile(target):
+        raise NotFoundError(f"File not found: {path}")
+    with open(target, "rb") as file:
         return file.read()
 
 def version() -> str:

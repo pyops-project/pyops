@@ -285,27 +285,29 @@ class TestPullIfNeeded:
         assert result is False
 
 class TestRepoPathAndFiles:
-    def test_get_repo_path_new(self, tmp_path, mock_subprocess, mock_files_conf):
-        mock_run, mock_check = mock_subprocess
-        mock_run.return_value.returncode = 0
-        # Create the repo directory manually since os.makedirs is removed
-        repo_path = tmp_path / '.cache/git/new_set'
-        repo_path.mkdir(parents=True, exist_ok=True)
-        with patch('os.path.exists') as mock_exists:
-            def exists_side(p):
-                if '.git' in p or p.endswith('.gitignore') or p.endswith('README.md'):
-                    return False
-                return True
-            mock_exists.side_effect = exists_side
-            repo = git.get_repo_path('new_set')
-            assert str(tmp_path / '.cache/git/new_set') in repo
-            mock_run.assert_any_call(['git', 'init'], cwd=ANY, capture_output=True, text=True, check=True)
-            # .gitignore and README commits
-            assert any(call.args[0] == ['git', 'commit', '-m', 'Initial .gitignore for new_set'] for call in mock_run.call_args_list)
-            assert any(call.args[0] == ['git', 'commit', '-m', 'Initial README for new_set'] for call in mock_run.call_args_list)
+    def test_get_repo_path_directory_without_git_is_no_set(self, tmp_path, mock_files_conf):
+        """A plain directory under the git base is not a set (no .git): a read
+        path neither initialises nor commits anything in it."""
+        plain = tmp_path / '.cache/git/plain'
+        plain.mkdir(parents=True)
+        with patch('subprocess.run') as mock_run, pytest.raises(git.SetNotFoundError, match="Set 'plain' does not exist"):
+            git.get_repo_path('plain')
+        mock_run.assert_not_called()
+        assert list(plain.iterdir()) == []
+
+    def test_get_repo_path_lock_file_is_no_set(self, tmp_path, mock_files_conf):
+        """repo_lock leaves a `<git base>/<set>.lock` file per set: its name is
+        no valid set name (400, not a 500 'Not a directory'), and a plain file
+        under a valid name is no set either (404)."""
+        (tmp_path / '.cache/git/s1.lock').write_text('')
+        (tmp_path / '.cache/git/s2').write_text('')
+        with pytest.raises(git.InvalidSetNameError):
+            git.get_repo_path('s1.lock')
+        with pytest.raises(git.SetNotFoundError):
+            git.get_repo_path('s2')
 
     def test_get_repo_path_directory_not_exist(self, mock_files_conf):
-        with pytest.raises(git.GitNotFoundError, match="Set 'nonexistent' does not exist"):
+        with pytest.raises(git.SetNotFoundError, match="Set 'nonexistent' does not exist"):
             git.get_repo_path('nonexistent')
 
     def test_get_repo_path_existing(self, mock_repo, mock_subprocess, mock_files_conf):
@@ -458,10 +460,17 @@ class TestListAndUnique:
             assert result == [{'set': 'set1', 'name': 'x', 'type': 'task', 'has_unstaged': False}]
 
     def test_check_name_unique(self, mock_repo):
-        with patch('os.listdir', return_value=[]):
-            assert git.check_name_unique(mock_repo, 'unique') is True
-        with patch('os.listdir', return_value=['unique.task.py']):
-            assert git.check_name_unique(mock_repo, 'unique') is False
+        assert git.check_name_unique(mock_repo, 'unique') is True
+        with open(os.path.join(mock_repo, 'unique.task.py'), 'w') as f:
+            f.write('pass\n')
+        assert git.check_name_unique(mock_repo, 'unique') is False
+
+    def test_check_name_unique_matches_exact_names(self, mock_repo):
+        """A file of another name that merely starts with `<name>.` (here
+        `c.x.task.py`, cloned in) does not take the name `c`."""
+        with open(os.path.join(mock_repo, 'c.x.task.py'), 'w') as f:
+            f.write('pass\n')
+        assert git.check_name_unique(mock_repo, 'c') is True
 
     @staticmethod
     def _set_with_docs_and_data(repo):
@@ -483,15 +492,63 @@ class TestListAndUnique:
         assert git.check_name_unique(mock_repo, 'job') is False
         assert git.check_name_unique(mock_repo, 'fresh') is True
 
-    def test_list_scriptlet_files_resolves_location(self, mock_repo):
-        """Repo-relative paths across top level, README.md, docs/ and data/."""
+    def test_resolve_scriptlet_resolves_location(self, mock_repo):
+        """Repo-relative paths and types across top level, README.md, docs/ and data/."""
         from app.lib import git
         self._set_with_docs_and_data(mock_repo)
-        assert git.list_scriptlet_files(mock_repo, 'README') == ['README.md']
-        assert git.list_scriptlet_files(mock_repo, 'guide') == ['docs/guide.md']
-        assert git.list_scriptlet_files(mock_repo, 'cfg') == ['data/cfg.json']
-        assert git.list_scriptlet_files(mock_repo, 'job') == ['job.task.py']
-        assert git.list_scriptlet_files(mock_repo, 'fresh') == []
+        resolved = {name: git.resolve_scriptlet(mock_repo, name) for name in ('README', 'guide', 'cfg', 'job')}
+        assert {n: (r.rel_path, r.type) for n, r in resolved.items()} == {
+            'README': ('README.md', 'markdown'),
+            'guide': ('docs/guide.md', 'markdown'),
+            'cfg': ('data/cfg.json', 'data'),
+            'job': ('job.task.py', 'task'),
+        }
+        assert resolved['cfg'].ext == 'json'
+        assert resolved['job'].path == os.path.join(mock_repo, 'job.task.py')
+        with pytest.raises(git.ScriptletNotFoundError, match="Scriptlet test_set::fresh not existing"):
+            git.resolve_scriptlet(mock_repo, 'fresh')
+
+    def test_resolve_scriptlet_by_type(self, mock_repo):
+        """With a type, the file of that type wins over another of the same
+        name; a name of another type only is no scriptlet of that type."""
+        from app.lib import git
+        for filename in ('c.task.py', 'c.controller.py', 'v.html'):
+            with open(os.path.join(mock_repo, filename), 'w') as f:
+                f.write('x\n')
+        assert git.resolve_scriptlet(mock_repo, 'c', 'controller').rel_path == 'c.controller.py'
+        assert git.resolve_scriptlet(mock_repo, 'c', ('library', 'task')).rel_path == 'c.task.py'
+        with pytest.raises(git.WrongScriptletTypeError, match="Scriptlet test_set::v is not a controller"):
+            git.resolve_scriptlet(mock_repo, 'v', 'controller')
+
+    def test_resolve_scriptlet_matches_exact_filenames(self, mock_repo):
+        """`c.x.task.py` (another, invalid name) never answers for `c`,
+        whatever the directory order — the old prefix scans picked it."""
+        from app.lib import git
+        for filename in ('c.x.task.py', 'c.controller.py'):
+            with open(os.path.join(mock_repo, filename), 'w') as f:
+                f.write('x\n')
+        with patch('os.listdir', return_value=['c.x.task.py', 'c.controller.py']):
+            assert git.resolve_scriptlet(mock_repo, 'c').rel_path == 'c.controller.py'
+            assert git.resolve_scriptlet(mock_repo, 'c', 'controller').type == 'controller'
+
+    @pytest.mark.parametrize('name', ['', '../../../../etc/pyops', 'a/b', 't.x', 'a\x00b', 'sp ace', 'ü', 'x\n'])
+    def test_resolve_scriptlet_rejects_invalid_names(self, mock_repo, tmp_path, name):
+        """A name outside [A-Za-z0-9_-]+ never reaches the filesystem — not
+        even a traversal to an existing data file outside the set."""
+        from app.lib import git
+        os.makedirs(os.path.join(mock_repo, 'data'))
+        (tmp_path / 'pyops.json').write_text('{}')
+        with pytest.raises(git.InvalidScriptletNameError, match="Invalid scriptlet name"):
+            git.resolve_scriptlet(mock_repo, name)
+        with pytest.raises(git.InvalidScriptletNameError):
+            git.get_file_path(mock_repo, name, 'data')
+        with pytest.raises(git.InvalidScriptletNameError):
+            git.check_name_unique(mock_repo, name)
+
+    def test_get_file_path_rejects_unknown_type(self, mock_repo):
+        from app.lib import git
+        with pytest.raises(ValueError, match="Invalid type: bogus"):
+            git.get_file_path(mock_repo, 'x', 'bogus')
 
     def test_get_file_path_data_uses_existing_format(self, mock_repo):
         """A data file resolves to its on-disk format; a new one defaults to .yaml."""
@@ -703,7 +760,7 @@ class TestPyopsSetResolver:
     def test_get_repo_path_pyops_raises_if_missing(self, tmp_path):
         missing = tmp_path / "app" / "pyops_missing"
         with patch.object(files, "bundled_set_path", str(missing)):
-            with pytest.raises(git.GitNotFoundError):
+            with pytest.raises(git.SetNotFoundError):
                 git.get_repo_path("pyops")
 
     def test_get_repo_path_pyops_skips_git_init(self, tmp_path):
@@ -731,6 +788,49 @@ class TestPyopsSetResolver:
         with patch.object(files, "bundled_set_path", str(fake_pyops)):
             with pytest.raises(FileNotFoundError):
                 git.read_content(str(fake_pyops), "no_such", "task", committed=False)
+
+
+class TestSetNameValidation:
+    """get_repo_path only resolves names of a directory directly under the
+    git base: "" / "." resolve to the git base itself, ".." to its parent,
+    a separator to any other directory — all of which it would git-init.
+    A NUL byte cannot be part of a path at all."""
+
+    @pytest.mark.parametrize("name", ["", ".", "..", "../outside", "nul\x00byte"])
+    def test_get_repo_path_rejects_invalid_name_without_touching_fs(self, tmp_path, mock_files_conf, name):
+        from app.lib import git as git_lib
+        (tmp_path / ".cache" / "outside").mkdir()
+        before = sorted(tmp_path.rglob("*"))
+        with pytest.raises(git_lib.InvalidSetNameError, match="Invalid set name"):
+            git_lib.get_repo_path(name)
+        assert sorted(tmp_path.rglob("*")) == before
+
+    @pytest.mark.parametrize("name", ["ops.tools", "a b", "a'b", 'a"b', "x<y", "ü", "s1\n", "s1.lock", 5, None])
+    def test_validate_set_name_rejects_outside_charset(self, name):
+        """Set names are [A-Za-z0-9_-]+ — the charset of `#!{set::name}`: a
+        dotted name (e.g. from cloning `ops.tools.git`), markup or quote
+        characters, non-ASCII letters, a trailing newline and non-strings
+        are refused."""
+        from app.lib import git as git_lib
+        with pytest.raises(git_lib.InvalidSetNameError, match="Invalid set name"):
+            git_lib.validate_set_name(name)
+
+    @pytest.mark.parametrize("name", ["s1", "my_set", "My-Set-2", "_", "-"])
+    def test_validate_set_name_accepts_charset(self, name):
+        from app.lib import git as git_lib
+        git_lib.validate_set_name(name)
+        git_lib.validate_scriptlet_name(name)
+
+    def test_list_sets_is_the_one_set_rule(self, tmp_path, mock_files_conf):
+        """A set is a directory with .git and a valid name; lock files, plain
+        directories, invalid names and the bundled set's name are not."""
+        from app.lib import git as git_lib
+        base = tmp_path / ".cache" / "git"
+        for name in ("s1", "s2", "bad.name", "pyops"):
+            (base / name / ".git").mkdir(parents=True)
+        (base / "plain").mkdir()
+        (base / "s1.lock").write_text("")
+        assert git_lib.list_sets() == ["s1", "s2"]
 
 
 # Additional edge cases can be added as needed

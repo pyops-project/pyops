@@ -1,8 +1,10 @@
 # Library: shared helpers for the set_* tasks in the pyops set.
 #
 # Loaded via `#!{::set}` from each set_*.task.py. Executed in the task's
-# global namespace, so the `config` and `appspace` globals injected by the
-# job runner for `setname == "pyops"` are available here.
+# global namespace, so the `config`, `appspace`, `validate_set_name` and
+# `CORE_DEPS` globals injected by the job runner for `setname == "pyops"`
+# are available here. Every set_* task runs `validate_set_name` on its set
+# name before any helper below builds a path from it.
 #
 # Purpose: lock helpers and subprocess wrappers — stdlib only, no pip
 # dependencies, no imports from app.lib.* (scriptlets must stay

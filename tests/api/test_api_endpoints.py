@@ -1,6 +1,5 @@
 import pytest
 from unittest.mock import patch, MagicMock, mock_open
-from fastapi import HTTPException
 from app.web import app
 from app.routers.scriptlet.inventory import CreateArgument, SaveArgument
 
@@ -41,6 +40,7 @@ def test_put_inventory_item_create(mock_client, mock_git_ops, item_type, test_te
         assert data["type"] == item_type
 
 def test_put_inventory_item_create_conflict(mock_client, mock_git_ops, test_temp_dir, patch_tempfile, mock_datetime):
+    from app.lib.errors import NameTakenError
     # First create
     create_data = {"set": "testset", "name": "conflict", "type": "task"}
     with patch("os.path.exists", return_value=True), \
@@ -48,7 +48,7 @@ def test_put_inventory_item_create_conflict(mock_client, mock_git_ops, test_temp
         mock_client.put("/scriptlet/inventory/item", json=create_data, headers={"X-User": "testuser"})
     # Second attempt - conflict: create_scriptlet raises FileExistsError under the lock.
     with patch("os.path.exists", return_value=True), \
-         patch("app.lib.git.create_scriptlet", side_effect=FileExistsError("Name 'conflict' already exists")):
+         patch("app.lib.git.create_scriptlet", side_effect=NameTakenError("Name 'conflict' already exists")):
         response = mock_client.put("/scriptlet/inventory/item", json=create_data, headers={"X-User": "testuser"})
         assert response.status_code == 409
 
@@ -108,7 +108,7 @@ def test_controller_body_handling_json(mock_client, mock_controller_glob, method
     with patch("app.lib.pyops.ServiceClient") as mock_service:
         mock_instance = MagicMock()
         mock_service.return_value = mock_instance
-        mock_instance.request.return_value = {"success": True}
+        mock_instance.request.return_value = (200, {"success": True})
         
         if method == "post":
             response = mock_client.post("/controller/testset/testname/q", json=json_data, headers=headers)
@@ -130,7 +130,7 @@ def test_controller_body_handling_invalid_json(mock_client, mock_controller_glob
     with patch("app.lib.pyops.ServiceClient") as mock_service:
         mock_instance = MagicMock()
         mock_service.return_value = mock_instance
-        mock_instance.request.return_value = {"success": True}
+        mock_instance.request.return_value = (200, {"success": True})
         
         if method == "post":
             response = mock_client.post("/controller/testset/testname/q", content=body, headers=headers)
@@ -153,7 +153,7 @@ def test_controller_body_handling_text(mock_client, mock_controller_glob, method
     with patch("app.lib.pyops.ServiceClient") as mock_service:
         mock_instance = MagicMock()
         mock_service.return_value = mock_instance
-        mock_instance.request.return_value = {"success": True}
+        mock_instance.request.return_value = (200, {"success": True})
         
         if method == "post":
             response = mock_client.post("/controller/testset/testname/q", content=body, headers=headers)
@@ -192,7 +192,7 @@ def test_controller_body_handling_binary(mock_client, mock_controller_glob, meth
     with patch("app.lib.pyops.ServiceClient") as mock_service:
         mock_instance = MagicMock()
         mock_service.return_value = mock_instance
-        mock_instance.request.return_value = {"success": True}
+        mock_instance.request.return_value = (200, {"success": True})
         
         if method == "post":
             response = mock_client.post("/controller/testset/testname/q", content=body, headers=headers)
@@ -213,7 +213,7 @@ def test_controller_body_handling_empty(mock_client, mock_controller_glob, metho
     with patch("app.lib.pyops.ServiceClient") as mock_service:
         mock_instance = MagicMock()
         mock_service.return_value = mock_instance
-        mock_instance.request.return_value = {"success": True}
+        mock_instance.request.return_value = (200, {"success": True})
         
         if method == "post":
             response = mock_client.post("/controller/testset/testname/q", headers=headers)
@@ -281,8 +281,9 @@ def test_controller_q_exec_fail(mock_client, mock_git_ops):
         assert "execution failed" in data["error"]
 
 def test_controller_q_http_exception(mock_client, mock_git_ops):
-    # Test /q with HTTPException (e.g., missing file) raises as before
-    with patch("app.web.get_controller_code", side_effect=HTTPException(status_code=404, detail="Not found")):
+    # /q for a controller that does not exist: the typed error's status
+    from app.lib.errors import ScriptletNotFoundError
+    with patch("app.web.get_controller_code", side_effect=ScriptletNotFoundError("Not found")):
         response = mock_client.get("/controller/nonexistent/missing/q", headers={"X-User": "testuser"})
         assert response.status_code == 404
         assert "Not found" in response.json()["detail"]
@@ -343,28 +344,55 @@ def test_file_exception(mock_client):
         assert response.status_code == 500
         assert "file error" in response.json()["detail"]
 
+@pytest.mark.parametrize("path", [
+    "does/not/exist.css",      # missing file
+    "css",                     # a directory
+    "a%00b",                   # NUL byte
+    "..%2F..%2FVERSION",       # %2F-encoded traversal (uvicorn decodes it before routing)
+    "..%2F..%2Fetc%2Fpyops.json",
+    "%2Fetc%2Fhostname",       # an absolute path would win in os.path.join
+])
+def test_file_outside_assets_404(mock_client, caplog, path):
+    """Only files inside app/files/ are served: everything else is 404 —
+    no 500 with a traceback, and no read outside the asset root."""
+    import logging
+    with caplog.at_level(logging.DEBUG):
+        response = mock_client.get(f"/files/{path}")
+    assert response.status_code == 404
+    assert response.json()["detail"].startswith("File not found: ")
+    assert "3.3" not in response.text
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR or r.exc_info]
+
+def test_file_serves_bundled_asset(mock_client):
+    response = mock_client.get("/files/js/jquery.min.js")
+    assert response.status_code == 200
+    assert response.content.startswith(b"/*!")
+
 def test_controller_get_controller_code_404(mock_client, mock_git_ops):
     # Test controller GET with missing controller file
-    with patch("app.web.get_controller_code", side_effect=HTTPException(status_code=404, detail="Not found")):
+    from app.lib.errors import ScriptletNotFoundError
+    with patch("app.web.get_controller_code", side_effect=ScriptletNotFoundError("Not found")):
         response = mock_client.get("/controller/testset/missing")
         assert response.status_code == 404
 
 def test_controller_get_view_content_404(mock_client, mock_git_ops):
     # Test controller GET with missing view files
-    with patch("app.web.get_view_content", side_effect=HTTPException(status_code=404, detail="Not found")):
+    from app.lib.errors import ScriptletNotFoundError
+    with patch("app.web.get_view_content", side_effect=ScriptletNotFoundError("Not found")):
         response = mock_client.get("/controller/testset/missing")
         assert response.status_code == 404
 
 def test_controller_get_wrong_type_controller(mock_client, mock_git_ops):
-    # Test controller GET with wrong type (not controller)
-    with patch("app.web.get_controller_code", side_effect=HTTPException(status_code=405, detail="Not a controller")):
+    # Test controller GET with wrong type (not controller): no controller of that name
+    from app.lib.errors import WrongScriptletTypeError
+    with patch("app.web.get_controller_code", side_effect=WrongScriptletTypeError("Not a controller")):
         response = mock_client.get("/controller/testset/wrongtype")
-        assert response.status_code == 405
+        assert response.status_code == 404
 
 def test_controller_get_wrong_type_view(mock_client, mock_git_ops):
-    # Test controller GET with wrong type view
+    # Test controller GET with wrong type view: no view of that name
     response = mock_client.get("/controller/testset/wrongtype")
-    assert response.status_code == 405
+    assert response.status_code == 404
 
 def test_menu_exception(mock_client):
     # Test menu endpoint exception handling
@@ -493,7 +521,7 @@ def test_controller_path_forwarding(mock_client, mock_controller_glob):
     with patch("app.lib.pyops.ServiceClient") as mock_service:
         mock_instance = MagicMock()
         mock_service.return_value = mock_instance
-        mock_instance.request.return_value = {"path": "/v1/chat/completions"}
+        mock_instance.request.return_value = (200, {"path": "/v1/chat/completions"})
 
         # Test GET with subpath
         response = mock_client.get("/controller/testset/testname/v1/chat/completions?param=value", headers={"X-User": "testuser"})

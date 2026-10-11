@@ -24,15 +24,15 @@ export class CreateScriptletCommand {
         let typeLower = typePick.label.toLowerCase();
         if (typeLower === 'js library') typeLower = 'jslibrary';
 
-        // Fetch existing sets
+        // Fetch existing sets — every set, also one without scriptlets yet
         outputChannel.appendLine(`[Create Scriptlet] Fetching existing sets...`);
         let scriptlets: unknown[] = [];
         try {
-            const response = await apiClient.fetch('/scriptlet/inventory/list');
+            const response = await apiClient.fetch('/scriptlet/inventory/sets');
             outputChannel.appendLine(`[Create Scriptlet] Sets list fetch status: ${response.status} ${response.statusText}`);
             if (response.ok) {
-                scriptlets = await response.json() as unknown[];
-                const existingSets = [...new Set(scriptlets.map((s: unknown) => (s as { set: string }).set))].sort();
+                const body = await response.json() as { sets?: string[] };
+                const existingSets = [...(body.sets ?? [])].sort();
                 outputChannel.appendLine(`[Create Scriptlet] Found sets: ${JSON.stringify(existingSets)}`);
                 if (existingSets.length === 0) {
                     vscode.window.showErrorMessage('No existing sets found. Cannot create scriptlet without a set.');
@@ -48,6 +48,14 @@ export class CreateScriptletCommand {
                 outputChannel.appendLine(`[Create Scriptlet] Selected set: ${set}`);
 
                 // Fetch scriptlets for selected set to check names
+                const listResponse = await apiClient.fetch('/scriptlet/inventory/list');
+                if (!listResponse.ok) {
+                    const errorMsg = `Failed to fetch scriptlets: ${listResponse.statusText}`;
+                    vscode.window.showErrorMessage(errorMsg);
+                    outputChannel.appendLine(`[Create Scriptlet] Scriptlets fetch failed: ${errorMsg}`);
+                    return;
+                }
+                scriptlets = await listResponse.json() as unknown[];
                 const setScriptlets = scriptlets.filter((s: unknown) => (s as { set: string }).set === set);
                 const existingNames = new Set(setScriptlets.map((s: unknown) => (s as { name: string }).name));
                 outputChannel.appendLine(`[Create Scriptlet] Existing names in set '${set}': ${JSON.stringify(Array.from(existingNames))}`);

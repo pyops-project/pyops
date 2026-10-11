@@ -531,6 +531,41 @@ describe('JobService', () => {
 
       expect(mockVscode.window.showInformationMessage).toHaveBeenCalledWith('Bulk cancel: 1 successful, 1 failed.');
     });
+
+    it('bulk cancel counts a job finished since the listing (409) as already finished', async () => {
+      const mockVscode = require('vscode');
+
+      jest.spyOn(service as any, 'fetchJobs').mockResolvedValue([
+        { id: 'job1', state: 'running' },
+        { id: 'job2', state: 'running' },
+        { id: 'job3', state: 'running' },
+      ]);
+      mockVscode.window.showWarningMessage.mockResolvedValue('Yes');
+      (mockApiClient.fetch as jest.Mock)
+        .mockResolvedValueOnce({ ok: true } as Response)
+        .mockResolvedValueOnce({ ok: false, status: 409, statusText: 'Conflict' } as Response)
+        .mockResolvedValueOnce({ ok: true } as Response);
+
+      await service.cancelAllJobs();
+
+      expect(mockApiClient.fetch).toHaveBeenCalledWith('/scriptlet/job/cancel?id=job3');
+      expect(mockVscode.window.showInformationMessage).toHaveBeenCalledWith('Bulk cancel: 2 successful, 0 failed, 1 already finished.');
+    });
+
+    it('bulk delete counts a 409 as failed', async () => {
+      const mockVscode = require('vscode');
+
+      jest.spyOn(service as any, 'fetchJobs').mockResolvedValue([
+        { id: 'job1', state: 'done' },
+      ]);
+      mockVscode.window.showWarningMessage.mockResolvedValue('Yes');
+      (mockApiClient.fetch as jest.Mock)
+        .mockResolvedValueOnce({ ok: false, status: 409, statusText: 'Conflict' } as Response);
+
+      await service.deleteAllDone();
+
+      expect(mockVscode.window.showInformationMessage).toHaveBeenCalledWith('Bulk delete: 0 successful, 1 failed.');
+    });
   });
 
   describe('service with undefined jobsTreeProvider', () => {

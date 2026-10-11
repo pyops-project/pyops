@@ -10,6 +10,11 @@
 # Scope: pyops-managed operations on the data layer (data/git/, venvs,
 # pkg dirs). Future pyops-set services can sit next to this one for other
 # domains.
+#
+# The set_* tasks check the set name they get with the `validate_set_name`
+# global the job runner injects for pyops-set jobs (the check the scriptlet
+# routes apply); an invalid name fails the job. The service checks a name
+# only where it reads a path from it itself (/status: 400).
 import json
 import logging
 import os
@@ -25,15 +30,22 @@ def _git_base():
 
 
 def _list_sets():
+    """The set directories under the git base. A directory without `.git`
+    (not initialised — e.g. created by hand) is listed with
+    `initialized: false` so the Sets view can remove it; no git command
+    runs in it."""
     base = _git_base()
     if not os.path.isdir(base):
         return []
     out = []
     for entry in sorted(os.listdir(base)):
-        if entry == "pyops":
+        if entry == "pyops" or _invalid_name(entry):
             continue
         full = os.path.join(base, entry)
-        if not (os.path.isdir(full) and os.path.exists(os.path.join(full, ".git"))):
+        if not os.path.isdir(full):
+            continue
+        if not os.path.exists(os.path.join(full, ".git")):
+            out.append({"name": entry, "branch": None, "has_drafts": False, "initialized": False})
             continue
         try:
             branch = subprocess.check_output(
@@ -48,7 +60,7 @@ def _list_sets():
             ).strip()
         except subprocess.CalledProcessError:
             dirty = ""
-        out.append({"name": entry, "branch": branch, "has_drafts": bool(dirty)})
+        out.append({"name": entry, "branch": branch, "has_drafts": bool(dirty), "initialized": True})
     return out
 
 
@@ -66,6 +78,17 @@ def _status_of(set_name):
     except subprocess.CalledProcessError as ex:
         logger.warning("git status failed for %s: %s", set_name, ex)
         return ""
+
+
+def _invalid_name(name):
+    """The 400 response for a set name outside the name charset
+    (`validate_set_name` raises a ValueError for it), None for a valid
+    one."""
+    try:
+        validate_set_name(name)
+    except ValueError as ex:
+        return {"error": str(ex)}, 400
+    return None
 
 
 def _format_param(kwargs):
@@ -109,6 +132,9 @@ def handle_request(msg):
         name = path[len("/status/"):]
         if not name:
             return {"error": "name is required in path"}, 400
+        invalid = _invalid_name(name)
+        if invalid:
+            return invalid
         status = _status_of(name)
         if status is None:
             return {"error": f"set '{name}' not found"}, 404
@@ -188,8 +214,15 @@ def main():
         try:
             result, status_code = handle_request(msg)
         except Exception as e:
-            logger.exception("handler failed")
-            result, status_code = {"error": str(e)}, 500
+            # `control` raises the pyops API's refusals with the API's
+            # `status_code`: a 503 — pyops is shutting down and enqueues no
+            # job — is the answer to relay, not a fault of this service.
+            if getattr(e, "status_code", None) == 503:
+                logger.warning("request refused: %s", e)
+                result, status_code = {"error": str(e)}, 503
+            else:
+                logger.exception("handler failed")
+                result, status_code = {"error": str(e)}, 500
         listener.response(result, status_code)
 
 

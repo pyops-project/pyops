@@ -9,6 +9,7 @@ Verifies the load-bearing request the CLI builds:
 body separated by a newline. The port plugged into the bootstrap is
 leased from the profile's `debug_ports` pool.
 """
+import json
 import os
 from unittest.mock import MagicMock, patch
 
@@ -218,3 +219,56 @@ def test_debug_start_lease_rewritten_to_real_job_id(tmp_path):
         leases = ports.list_leases("t")
     assert [l.job_id for l in leases] == ["REAL_JOB_ID"]
     assert [l.port for l in leases] == [45679]
+
+
+def _stop(job_id, lease_dir, cancel_error=None):
+    """Run `pyopsctl debug stop JOB_ID --json` with JOB_ID holding a lease
+    on port 45679 under `lease_dir`. The server's cancel answers 200, or
+    raises `cancel_error` (an HTTPError) as `Client.request` does for an
+    error status; the real `Client.cancel_job` interprets it. Returns
+    (exit code, client mock, leases left)."""
+    from pyopsctl import __main__ as cli
+    from pyopsctl import ports
+    from pyopsctl.client import Client
+
+    client_mock = MagicMock()
+    client_mock.__enter__ = MagicMock(return_value=client_mock)
+    client_mock.__exit__ = MagicMock(return_value=False)
+    client_mock.get.side_effect = cancel_error
+    client_mock.cancel_job.side_effect = lambda jid: Client.cancel_job(client_mock, jid)
+    with patch.dict(os.environ, {"PYOPS_DEBUG_PORTS_DIR": str(lease_dir)}):
+        ports.lease("t", (45679,), job_id, is_stale=lambda _j: False)
+        with patch("pyopsctl.commands.debug.load", return_value=_profile()), \
+             patch("pyopsctl.commands.debug.Client", return_value=client_mock):
+            rc = cli.main(["debug", "stop", job_id, "--json"])
+        leases = [(l.job_id, l.port) for l in ports.list_leases("t")]
+    return rc, client_mock, leases
+
+
+def test_debug_stop_cancels_and_releases_lease(tmp_path, capsys):
+    rc, c, leases = _stop("J1", tmp_path / "leases")
+    assert rc == 0
+    c.get.assert_called_once_with("/scriptlet/job/cancel", params={"id": "J1"})
+    assert leases == []
+    assert json.loads(capsys.readouterr().out) == {"job_id": "J1", "state": "cancel", "released_port": 45679}
+
+
+def test_debug_stop_of_finished_job_releases_lease(tmp_path, capsys):
+    """The debuggee already exited: the server answers the cancel 409
+    (the job is done or failed). Nothing is left to stop, so the command
+    succeeds and the port goes back to the pool right away."""
+    from pyopsctl.client import HTTPError
+    rc, _c, leases = _stop("J1", tmp_path / "leases",
+                           HTTPError(409, "GET /scriptlet/job/cancel: Job J1 is already done"))
+    assert rc == 0
+    assert leases == []
+    assert json.loads(capsys.readouterr().out) == {"job_id": "J1", "state": "finished", "released_port": 45679}
+
+
+def test_debug_stop_keeps_lease_when_cancel_fails(tmp_path):
+    """Any other error leaves the job's state unknown — it may still run
+    and listen on the port — so the lease stays and the command fails."""
+    from pyopsctl.client import HTTPError
+    rc, _c, leases = _stop("J1", tmp_path / "leases", HTTPError(500, "GET /scriptlet/job/cancel: boom"))
+    assert rc == 5
+    assert leases == [("J1", 45679)]

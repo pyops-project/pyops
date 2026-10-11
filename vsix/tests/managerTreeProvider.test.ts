@@ -446,6 +446,71 @@ describe('ManagerTreeDataProvider', () => {
     });
   });
 
+  describe('sets', () => {
+    // GET /scriptlet/inventory/list answers `scriptlets`, GET
+    // /scriptlet/inventory/sets answers `sets` (or fails when `setsOk` is false).
+    const mockInventory = (scriptlets: any[], sets: string[], setsOk = true) => {
+      mockApiClient.fetch.mockImplementation(async (url: string) => {
+        if (url === '/scriptlet/inventory/sets') {
+          return { ok: setsOk, statusText: setsOk ? 'OK' : 'Server Error', json: jest.fn().mockResolvedValue({ sets }) };
+        }
+        return { ok: true, json: jest.fn().mockResolvedValue(url === '/scriptlet/inventory/list' ? scriptlets : { code: 'pass' }) };
+      });
+    };
+
+    it('shows a set that has no scriptlets', async () => {
+      mockInventory([{ set: 'set1', name: 's1', type: 'task' }], ['empty', 'set1']);
+      await provider.refresh();
+      const roots = await provider.getChildren();
+      expect(roots.map(r => r.label)).toEqual(['empty', 'set1']);
+      expect(roots[0].contextValue).toBe('pyopsSet');
+      expect(await provider.getChildren(roots[0])).toEqual([]);
+    });
+
+    it('shows the server sets when no scriptlet exists at all', async () => {
+      mockInventory([], ['empty']);
+      await provider.refresh();
+      const roots = await provider.getChildren();
+      expect(roots.map(r => r.label)).toEqual(['empty']);
+    });
+
+    it('applies the set filter to server sets', async () => {
+      require('./utils/helpers').setupConfigMock({ excludedSets: ['drop'] });
+      mockInventory([], ['drop', 'keep']);
+      await provider.refresh();
+      const roots = await provider.getChildren();
+      expect(roots.map(r => r.label)).toEqual(['keep']);
+    });
+
+    it('falls back to the sets of the scriptlets when the set list fails', async () => {
+      mockInventory([{ set: 'set1', name: 's1', type: 'task' }], [], false);
+      await provider.refresh();
+      const roots = await provider.getChildren();
+      expect(roots.map(r => r.label)).toEqual(['set1']);
+      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith('Failed to fetch sets: Server Error');
+      expect(require('vscode').window.showErrorMessage).toHaveBeenCalledWith('Failed to fetch sets: Server Error');
+    });
+
+    it('shows an error when the set list cannot be fetched', async () => {
+      mockApiClient.fetch.mockImplementation(async (url: string) => {
+        if (url === '/scriptlet/inventory/sets') throw new Error('Network error');
+        return { ok: true, json: jest.fn().mockResolvedValue([]) };
+      });
+      await provider.refresh();
+      expect(require('vscode').window.showErrorMessage).toHaveBeenCalledWith('Error fetching sets: Network error');
+      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith('Error fetching sets: Network error');
+    });
+
+    it('keeps a set shown after its last scriptlet is deleted', async () => {
+      mockInventory([{ set: 'set1', name: 's1', type: 'task' }], ['set1']);
+      await provider.refresh();
+      mockInventory([], ['set1']);
+      await provider.refresh();
+      const roots = await provider.getChildren();
+      expect(roots.map(r => r.label)).toEqual(['set1']);
+    });
+  });
+
   describe('getChildren with empty workspaceFolders array', () => {
     it('should return no workspace item when workspace folders is empty array', async () => {
       (require('vscode').workspace.workspaceFolders as any) = [];

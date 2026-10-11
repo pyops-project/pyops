@@ -15,7 +15,7 @@ import psutil
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from app.lib import git
 from app.lib import pyops
-from app.lib.sets import ensure_set_environment
+from app.lib.sets import ensure_set_environment, CORE_DEPS
 from app.lib import job as job_lib
 from app.lib.data import SetData
 
@@ -90,13 +90,19 @@ def setup_job_globals(owner: str, setspace: str, workspace: str, web_bind: str, 
         "__name__": "__main__",
         "__builtins__": __builtins__
     }
-    # Pyops-set scriptlets get two extra globals so they can introspect
-    # the running pyops installation without importing from `app.*`
-    # (which is forbidden — scriptlets must stay self-contained,
+    # Pyops-set scriptlets get extra globals so they can introspect and
+    # act on the running pyops installation without importing from
+    # `app.*` (which is forbidden — scriptlets must stay self-contained,
     # interfacing with pyops only via `control` / `listener` / globals).
     # `appspace` exposes the app source tree (e.g. for reading bundled
     # files like default templates); `config` is the full pyops.json so
     # the scriptlet can resolve git_base / venv_base / loglevel etc.
+    # `validate_set_name` is the set-name check the scriptlet routes
+    # apply (raises a ValueError for a name that is not a single
+    # directory under the git base) — the sets data service and every
+    # set_* task run it before touching the filesystem. `CORE_DEPS` is
+    # the list every set venv is created with; set_update_deps
+    # upgrades exactly it.
     if setname == "pyops":
         glob["appspace"] = os.path.join(_project_root, "app")
         glob["config"] = {
@@ -106,6 +112,8 @@ def setup_job_globals(owner: str, setspace: str, workspace: str, web_bind: str, 
             "web": _conf_web,
             "log": _conf_log,
         }
+        glob["validate_set_name"] = git.validate_set_name
+        glob["CORE_DEPS"] = CORE_DEPS
     return glob
 
 @contextmanager
@@ -230,7 +238,7 @@ def _register_user_module(glob: dict) -> None:
     sys.modules[name] = mod
 
 
-def execute_job_code(param: str, compiled_code, compiled_libs, glob: dict, job_type: str, job_id: str, runner_sock_path: str, max_retries: int = 0):
+def execute_job_code(param: str, compiled_code, compiled_libs, glob: dict, job_type: str, job_id: str, runner_sock_path: str, max_retries: int = 0, result_file: str | None = None):
     """Execute code with appropriate retry/error handling based on job_type.
 
     The transition to state `running` fires the first time `exec(param)`
@@ -284,7 +292,7 @@ def execute_job_code(param: str, compiled_code, compiled_libs, glob: dict, job_t
                         exec(cl, glob)
                     _register_user_module(glob)
                     exec(compiled_code, glob)
-                    job_lib.send_completion(runner_sock_path, {"id": job_id, "state": "done", "detail": None})
+                    job_lib.send_completion(runner_sock_path, {"id": job_id, "state": "done", "detail": None}, result_file=result_file)
                     break
                 except Exception:
                     error_msg = f"Failed after {max_retries} retries\n{traceback.format_exc()}"
@@ -293,7 +301,7 @@ def execute_job_code(param: str, compiled_code, compiled_libs, glob: dict, job_t
                         logger.warning(f"Task job {job_id} attempt {attempt + 1}/{max_retries + 1} failed, retrying in 60s")
                         time.sleep(60)
                     else:
-                        job_lib.send_completion(runner_sock_path, {"id": job_id, "state": "failed", "detail": error_msg})
+                        job_lib.send_completion(runner_sock_path, {"id": job_id, "state": "failed", "detail": error_msg}, result_file=result_file)
                         break
         else:
             # Service / draft / debug / test — no retry. Libraries
@@ -313,11 +321,11 @@ def execute_job_code(param: str, compiled_code, compiled_libs, glob: dict, job_t
             _signal_running()
             _register_user_module(glob)
             exec(compiled_code, glob)
-            job_lib.send_completion(runner_sock_path, {"id": job_id, "state": "done", "detail": None})
+            job_lib.send_completion(runner_sock_path, {"id": job_id, "state": "done", "detail": None}, result_file=result_file)
     except Exception:
         error_msg = f"Error executing {job_type} job {job_id}\n{traceback.format_exc()}"
         logger.error(error_msg)
-        job_lib.send_completion(runner_sock_path, {"id": job_id, "state": "failed", "detail": error_msg})
+        job_lib.send_completion(runner_sock_path, {"id": job_id, "state": "failed", "detail": error_msg}, result_file=result_file)
     finally:
         if 'listener' in glob and glob['listener']:
             glob['listener'].close()
@@ -349,6 +357,7 @@ def run_debug_job(job_id: str, owner: str, setname: str, name: str, param: str, 
         same tree.
     """
     data_jobs = os.path.join(_project_root, _conf_data["jobs"])
+    result_file = job_lib.result_file(os.path.abspath(os.path.join(data_jobs, setname, job_id)))
     venv_path = os.path.join(_project_root, _conf_runner["venv"])
     pkg_path = os.path.join(_project_root, _conf_runner["pkg"])
     web_bind = _conf_web["bind"]
@@ -444,7 +453,7 @@ def run_debug_job(job_id: str, owner: str, setname: str, name: str, param: str, 
 
                 info_handler, warn_handler = setup_logging(logging.DEBUG, stdout_file, stderr_file)
 
-                execute_job_code(param, compiled_code, compiled_libs, glob, kind, job_id, runner_sock_path)
+                execute_job_code(param, compiled_code, compiled_libs, glob, kind, job_id, runner_sock_path, result_file=result_file)
 
             finally:
                 # Remove logging handlers before exiting redirect scope
@@ -458,13 +467,13 @@ def run_debug_job(job_id: str, owner: str, setname: str, name: str, param: str, 
         # Handle JSON parsing errors (overrides parsing)
         error_msg = f"Invalid overrides for {kind} job {job_id}: {e}\n{traceback.format_exc()}"
         logger.error(error_msg)
-        job_lib.send_completion(runner_sock_path, {"id": job_id, "state": "failed", "detail": error_msg})
+        job_lib.send_completion(runner_sock_path, {"id": job_id, "state": "failed", "detail": error_msg}, result_file=result_file)
 
     except Exception as e:
         # Catch-all for workspace/environment setup errors and any other unexpected errors
         error_msg = f"Error executing {kind} job {job_id}\n{traceback.format_exc()}"
         logger.error(error_msg)
-        job_lib.send_completion(runner_sock_path, {"id": job_id, "state": "failed", "detail": error_msg})
+        job_lib.send_completion(runner_sock_path, {"id": job_id, "state": "failed", "detail": error_msg}, result_file=result_file)
 
     finally:
         # Cleanup: flush/close files
@@ -496,6 +505,7 @@ def run_test_job(job_id: str, owner: str, setname: str, name: str, param: str, c
     invoke any other test framework from the __test__ block.
     """
     data_jobs = os.path.join(_project_root, _conf_data["jobs"])
+    result_file = job_lib.result_file(os.path.abspath(os.path.join(data_jobs, setname, job_id)))
     venv_path = os.path.join(_project_root, _conf_runner["venv"])
     pkg_path = os.path.join(_project_root, _conf_runner["pkg"])
     web_bind = _conf_web["bind"]
@@ -567,7 +577,7 @@ def run_test_job(job_id: str, owner: str, setname: str, name: str, param: str, c
 
                 info_handler, warn_handler = setup_logging(logging.DEBUG, stdout_file, stderr_file)
 
-                execute_job_code(param, compiled_code, compiled_libs, glob, "test", job_id, runner_sock_path)
+                execute_job_code(param, compiled_code, compiled_libs, glob, "test", job_id, runner_sock_path, result_file=result_file)
 
             finally:
                 root = logging.getLogger()
@@ -579,12 +589,12 @@ def run_test_job(job_id: str, owner: str, setname: str, name: str, param: str, c
     except json.JSONDecodeError as e:
         error_msg = f"Invalid overrides for test job {job_id}: {e}\n{traceback.format_exc()}"
         logger.error(error_msg)
-        job_lib.send_completion(runner_sock_path, {"id": job_id, "state": "failed", "detail": error_msg})
+        job_lib.send_completion(runner_sock_path, {"id": job_id, "state": "failed", "detail": error_msg}, result_file=result_file)
 
     except Exception as e:
         error_msg = f"Error executing test job {job_id}\n{traceback.format_exc()}"
         logger.error(error_msg)
-        job_lib.send_completion(runner_sock_path, {"id": job_id, "state": "failed", "detail": error_msg})
+        job_lib.send_completion(runner_sock_path, {"id": job_id, "state": "failed", "detail": error_msg}, result_file=result_file)
 
     finally:
         if stdout_file:
@@ -599,6 +609,7 @@ def run_test_job(job_id: str, owner: str, setname: str, name: str, param: str, c
 def run_draft_job(job_id: str, owner: str, setname: str, name: str, param: str, code: str, libs: list[dict[str, str]], runner_sock_path: str):
     """Executes draft job in isolated workspace with in-memory compilation."""
     data_jobs = os.path.join(_project_root, _conf_data["jobs"])
+    result_file = job_lib.result_file(os.path.abspath(os.path.join(data_jobs, setname, job_id)))
     venv_path = os.path.join(_project_root, _conf_runner["venv"])
     pkg_path = os.path.join(_project_root, _conf_runner["pkg"])
     web_bind = _conf_web["bind"]
@@ -635,7 +646,7 @@ def run_draft_job(job_id: str, owner: str, setname: str, name: str, param: str, 
 
                 info_handler, warn_handler = setup_logging(logging.INFO, stdout_file, stderr_file)
 
-                execute_job_code(param, compiled_code, compiled_libs, glob, "draft", job_id, runner_sock_path)
+                execute_job_code(param, compiled_code, compiled_libs, glob, "draft", job_id, runner_sock_path, result_file=result_file)
 
             finally:
                 # Remove logging handlers before exiting redirect scope
@@ -651,13 +662,13 @@ def run_draft_job(job_id: str, owner: str, setname: str, name: str, param: str, 
         # CalledProcessError.
         error_msg = f"Install processing failed for draft job {job_id}: {e}\n{traceback.format_exc()}"
         logger.error(error_msg)
-        job_lib.send_completion(runner_sock_path, {"id": job_id, "state": "failed", "detail": error_msg})
+        job_lib.send_completion(runner_sock_path, {"id": job_id, "state": "failed", "detail": error_msg}, result_file=result_file)
 
     except Exception as e:
         # Catch-all for workspace/environment setup errors and any other unexpected errors
         error_msg = f"Error executing draft job {job_id}\n{traceback.format_exc()}"
         logger.error(error_msg)
-        job_lib.send_completion(runner_sock_path, {"id": job_id, "state": "failed", "detail": error_msg})
+        job_lib.send_completion(runner_sock_path, {"id": job_id, "state": "failed", "detail": error_msg}, result_file=result_file)
 
     finally:
         # Cleanup: flush/close files
@@ -672,6 +683,7 @@ def run_draft_job(job_id: str, owner: str, setname: str, name: str, param: str, 
 def run_task_job(job_id: str, owner: str, setname: str, name: str, param: str, code: str, libs: list[dict[str, str]], runner_sock_path: str, max_retries: int = 0):
     """Executes task job in isolated workspace with in-memory compilation and retry logic."""
     data_jobs = os.path.join(_project_root, _conf_data["jobs"])
+    result_file = job_lib.result_file(os.path.abspath(os.path.join(data_jobs, setname, job_id)))
     venv_path = os.path.join(_project_root, _conf_runner["venv"])
     pkg_path = os.path.join(_project_root, _conf_runner["pkg"])
     web_bind = _conf_web["bind"]
@@ -708,7 +720,7 @@ def run_task_job(job_id: str, owner: str, setname: str, name: str, param: str, c
 
                 info_handler, warn_handler = setup_logging(logging.INFO, stdout_file, stderr_file)
 
-                execute_job_code(param, compiled_code, compiled_libs, glob, "task", job_id, runner_sock_path, max_retries)
+                execute_job_code(param, compiled_code, compiled_libs, glob, "task", job_id, runner_sock_path, max_retries, result_file=result_file)
 
             finally:
                 # Remove logging handlers before exiting redirect scope
@@ -724,13 +736,13 @@ def run_task_job(job_id: str, owner: str, setname: str, name: str, param: str, c
         # CalledProcessError.
         error_msg = f"Install processing failed for task job {job_id}: {e}\n{traceback.format_exc()}"
         logger.error(error_msg)
-        job_lib.send_completion(runner_sock_path, {"id": job_id, "state": "failed", "detail": error_msg})
+        job_lib.send_completion(runner_sock_path, {"id": job_id, "state": "failed", "detail": error_msg}, result_file=result_file)
 
     except Exception as e:
         # Catch-all for workspace/environment setup errors and any other unexpected errors
         error_msg = f"Error executing task job {job_id}\n{traceback.format_exc()}"
         logger.error(error_msg)
-        job_lib.send_completion(runner_sock_path, {"id": job_id, "state": "failed", "detail": error_msg})
+        job_lib.send_completion(runner_sock_path, {"id": job_id, "state": "failed", "detail": error_msg}, result_file=result_file)
 
     finally:
         # Cleanup: flush/close files
@@ -745,6 +757,7 @@ def run_task_job(job_id: str, owner: str, setname: str, name: str, param: str, c
 def run_service_job(job_id: str, owner: str, setname: str, name: str, param: str, code: str, libs: list[dict[str, str]], runner_sock_path: str):
     """Executes service job in isolated workspace with in-memory compilation."""
     data_jobs = os.path.join(_project_root, _conf_data["jobs"])
+    result_file = job_lib.result_file(os.path.abspath(os.path.join(data_jobs, setname, job_id)))
     venv_path = os.path.join(_project_root, _conf_runner["venv"])
     pkg_path = os.path.join(_project_root, _conf_runner["pkg"])
     web_bind = _conf_web["bind"]
@@ -781,7 +794,7 @@ def run_service_job(job_id: str, owner: str, setname: str, name: str, param: str
 
                 info_handler, warn_handler = setup_logging(logging.INFO, stdout_file, stderr_file)
 
-                execute_job_code(param, compiled_code, compiled_libs, glob, "service", job_id, runner_sock_path)
+                execute_job_code(param, compiled_code, compiled_libs, glob, "service", job_id, runner_sock_path, result_file=result_file)
 
             finally:
                 # Remove logging handlers before exiting redirect scope
@@ -797,13 +810,13 @@ def run_service_job(job_id: str, owner: str, setname: str, name: str, param: str
         # CalledProcessError.
         error_msg = f"Install processing failed for service job {job_id}: {e}\n{traceback.format_exc()}"
         logger.error(error_msg)
-        job_lib.send_completion(runner_sock_path, {"id": job_id, "state": "failed", "detail": error_msg})
+        job_lib.send_completion(runner_sock_path, {"id": job_id, "state": "failed", "detail": error_msg}, result_file=result_file)
 
     except Exception as e:
         # Catch-all for workspace/environment setup errors and any other unexpected errors
         error_msg = f"Error executing service job {job_id}\n{traceback.format_exc()}"
         logger.error(error_msg)
-        job_lib.send_completion(runner_sock_path, {"id": job_id, "state": "failed", "detail": error_msg})
+        job_lib.send_completion(runner_sock_path, {"id": job_id, "state": "failed", "detail": error_msg}, result_file=result_file)
 
     finally:
         # Cleanup: flush/close files

@@ -4,7 +4,7 @@ import subprocess
 from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Depends
-from starlette.status import HTTP_404_NOT_FOUND, HTTP_400_BAD_REQUEST, HTTP_500_INTERNAL_SERVER_ERROR
+from starlette.status import HTTP_404_NOT_FOUND, HTTP_400_BAD_REQUEST
 from pydantic import BaseModel, Field
 from typing import Optional
 
@@ -29,7 +29,7 @@ class ScheduleArgument(BaseModel):
     set: str
     name: str
     drop_done: bool
-    max_retries: int = 0
+    max_retries: int = Field(default=0, ge=0)
     # Done jobs kept despite drop_done (cron schedules only; 0 = none).
     keep_n: int = Field(default=0, ge=0, le=100)
     # Failed jobs kept (cron) / failures that stop the restarts (service).
@@ -49,194 +49,148 @@ async def list_get():
     """
     Returns a list of available Schedules
     """
-    try:
-        with Session(get_db_engine()) as session:
-            stmt = select(Schedule.id,
-                          Schedule.set,
-                          Schedule.name,
-                          Schedule.active,
-                          Schedule.drop_done,
-                          Schedule.max_retries,
-                          Schedule.keep_n,
-                          Schedule.max_fail_n,
-                          Schedule.schedule,
-                          Schedule.last,
-                          Schedule.param)
-            schedules = session.execute(stmt)
+    with Session(get_db_engine()) as session:
+        stmt = select(Schedule.id,
+                      Schedule.set,
+                      Schedule.name,
+                      Schedule.active,
+                      Schedule.drop_done,
+                      Schedule.max_retries,
+                      Schedule.keep_n,
+                      Schedule.max_fail_n,
+                      Schedule.schedule,
+                      Schedule.last,
+                      Schedule.param)
+        schedules = session.execute(stmt)
 
-            return [dict(r._mapping) for r in schedules]
-    except Exception as ex:
-        logger.exception("Error in list_get: %s", ex)
-        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
+        return [dict(r._mapping) for r in schedules]
 
 @router.get("/scriptlet/schedule/item", tags=["schedule"])
 async def item_get(id: int):
     """
     Gets a Schedule by ID
     """
-    try:
-        with Session(get_db_engine()) as session:
-            schedule = session.get(Schedule, id)
-            if schedule == None:
-                raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Schedule {} not existing".format(id))
+    with Session(get_db_engine()) as session:
+        schedule = session.get(Schedule, id)
+        if schedule == None:
+            raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Schedule {} not existing".format(id))
 
-            return schedule.__dict__ if schedule else None
-
-    except HTTPException as ex:
-        raise ex
-    except Exception as ex:
-        logger.exception("Error in item_get: %s", ex)
-        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
+        return schedule.__dict__ if schedule else None
 
 @router.get("/scriptlet/schedule/run", tags=["schedule"])
 async def run_get(id: int):
     """
     Manually runs a Schedule as a job
     """
-    try:
-        with Session(get_db_engine()) as session:
-            schedule = session.get(Schedule, id)
-        if schedule == None:
-            raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Schedule {} not existing".format(id))
+    with Session(get_db_engine()) as session:
+        schedule = session.get(Schedule, id)
+    if schedule == None:
+        raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Schedule {} not existing".format(id))
 
-        job_id = runner.enqueue(schedule.set, schedule.name, schedule.owner, "task" if schedule.schedule else "service", schedule.drop_done, schedule.param, schedule.max_retries, None, schedule_id=schedule.id)
+    job_id = runner.enqueue(schedule.set, schedule.name, schedule.owner, "task" if schedule.schedule else "service", schedule.drop_done, schedule.param, schedule.max_retries, None, schedule_id=schedule.id)
 
-        with Session(get_db_engine()) as session:
-            updated_schedule = session.get(Schedule, id)
-            updated_schedule.last = datetime.now()
-            session.commit()
+    with Session(get_db_engine()) as session:
+        updated_schedule = session.get(Schedule, id)
+        updated_schedule.last = datetime.now()
+        session.commit()
 
-        return {"job": job_id}
+    return {"job": job_id}
 
-    except HTTPException as ex:
-        raise ex
-    except Exception as ex:
-        logger.exception("Error in run_get: %s", ex)
-        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
-    
 @router.put("/scriptlet/schedule/item", tags=["schedule"])
 async def item_put(cr: ScheduleArgument, user: str = Depends(get_current_user)):
     """
     Creates or updates a Schedule
     """
+    repo = await run_in_executor(git.get_repo_path, cr.set)
+    # Check exists (committed or unstaged via fallback).
     try:
-        repo = await run_in_executor(git.get_repo_path, cr.set)
-        # Check exists (committed or unstaged via fallback).
+        await run_in_executor(git.read_content, repo, cr.name, "task", committed=True)
+    except FileNotFoundError:
+        raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail=f"Scriptlet {cr.set}::{cr.name} not existing.")
+
+    if cr.schedule:
+        now = datetime.now()
         try:
-            await run_in_executor(git.read_content, repo, cr.name, "task", committed=True)
-        except FileNotFoundError:
-            raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail=f"Scriptlet {cr.set}::{cr.name} not existing.")
+            croniter.croniter(cr.schedule, now)
+        except (croniter.CroniterBadCronError, ValueError) as ex:
+            raise HTTPException(
+                status_code=HTTP_400_BAD_REQUEST,
+                detail=f"Invalid cron expression: {ex}",
+            )
 
-        if cr.schedule:
-            now = datetime.now()
-            try:
-                croniter.croniter(cr.schedule, now)
-            except (croniter.CroniterBadCronError, ValueError) as ex:
-                raise HTTPException(
-                    status_code=HTTP_400_BAD_REQUEST,
-                    detail=f"Invalid cron expression: {ex}",
-                )
+    with Session(get_db_engine()) as session:
+        if cr.id is not None:
+            # Update existing
+            schedule = session.get(Schedule, cr.id)
+            if schedule == None:
+                raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Schedule {} not existing".format(cr.id))
+            schedule.set = cr.set
+            schedule.name = cr.name
+            schedule.drop_done = cr.drop_done
+            schedule.max_retries = cr.max_retries
+            schedule.keep_n = cr.keep_n
+            schedule.max_fail_n = cr.max_fail_n
+            schedule.schedule = cr.schedule
+            schedule.param = cr.param
+            # Do not update owner, active, last
+        else:
+            # Create new
+            schedule = Schedule(
+                set       = cr.set,
+                name        = cr.name,
+                owner       = user,
+                active      = cr.active,
+                drop_done   = cr.drop_done,
+                max_retries = cr.max_retries,
+                keep_n      = cr.keep_n,
+                max_fail_n  = cr.max_fail_n,
+                schedule    = cr.schedule,
+                param       = cr.param,
+                last        = datetime.now()
+            )
+            session.add(schedule)
 
-        with Session(get_db_engine()) as session:
-            if cr.id is not None:
-                # Update existing
-                schedule = session.get(Schedule, cr.id)
-                if schedule == None:
-                    raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Schedule {} not existing".format(cr.id))
-                schedule.set = cr.set
-                schedule.name = cr.name
-                schedule.drop_done = cr.drop_done
-                schedule.max_retries = cr.max_retries
-                schedule.keep_n = cr.keep_n
-                schedule.max_fail_n = cr.max_fail_n
-                schedule.schedule = cr.schedule
-                schedule.param = cr.param
-                # Do not update owner, active, last
-            else:
-                # Create new
-                schedule = Schedule(
-                    set       = cr.set,
-                    name        = cr.name,
-                    owner       = user,
-                    active      = cr.active,
-                    drop_done   = cr.drop_done,
-                    max_retries = cr.max_retries,
-                    keep_n      = cr.keep_n,
-                    max_fail_n  = cr.max_fail_n,
-                    schedule    = cr.schedule,
-                    param       = cr.param,
-                    last        = datetime.now()
-                )
-                session.add(schedule)
+        session.commit()
 
-            session.commit()
-
-            return {"schedule": schedule.id}
-
-    except HTTPException as ex:
-        raise ex
-    except Exception as ex:
-        logger.exception("Error in item_put: %s", ex)
-        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail=str(ex))
+        return {"schedule": schedule.id}
 
 @router.delete("/scriptlet/schedule/item", tags=["schedule"])
 async def item_del(id: int):
     """
     Deletes a Schedule
     """
-    try:
-        with Session(get_db_engine()) as session:
-            schedule = session.get(Schedule, id)
-            if schedule == None:
-                raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Schedule {} not existing".format(id))
-            
-            session.delete(schedule)
-            session.commit()
-
-    except HTTPException as ex:
-        raise ex
-    except Exception as ex:
-        logger.exception("Error in item_del: %s", ex)
-        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
+    with Session(get_db_engine()) as session:
+        schedule = session.get(Schedule, id)
+        if schedule == None:
+            raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Schedule {} not existing".format(id))
+        
+        session.delete(schedule)
+        session.commit()
 
 @router.get("/scriptlet/schedule/activate", tags=["schedule"])
 async def activate_get(id: int):
     """
     Activates a Schedule
     """
-    try:
-        with Session(get_db_engine()) as session:
-            schedule = session.get(Schedule, id)
-            if schedule == None:
-                raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Schedule {} not existing".format(id))
+    with Session(get_db_engine()) as session:
+        schedule = session.get(Schedule, id)
+        if schedule == None:
+            raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Schedule {} not existing".format(id))
 
-            now = datetime.now()
-            schedule.active = True
-            schedule.last = now
-            session.commit()
-
-    except HTTPException as ex:
-        raise ex
-    except Exception as ex:
-        logger.exception("Error in activate_get: %s", ex)
-        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
+        now = datetime.now()
+        schedule.active = True
+        schedule.last = now
+        session.commit()
 
 @router.get("/scriptlet/schedule/deactivate", tags=["schedule"])
 async def deactivate_get(id: int):
     """
     Deactivates a Schedule
     """
-    try:
-        with Session(get_db_engine()) as session:
-            schedule = session.get(Schedule, id)
-            if schedule == None:
-                raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Schedule {} not existing".format(id))
+    with Session(get_db_engine()) as session:
+        schedule = session.get(Schedule, id)
+        if schedule == None:
+            raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="Schedule {} not existing".format(id))
 
-            schedule.active = False
-            session.commit()
-            
-    except HTTPException as ex:
-        raise ex
-    except Exception as ex:
-        logger.exception("Error in deactivate_get: %s", ex)
-        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
+        schedule.active = False
+        session.commit()

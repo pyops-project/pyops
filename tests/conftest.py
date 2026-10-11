@@ -92,6 +92,44 @@ def mock_conf(tmp_path, monkeypatch):
     files.Config.init(str(conf_path))
     yield
 
+@pytest.fixture
+def set_repo(mock_conf):
+    """Factory for real git set repos under the configured git base.
+
+    `set_repo(name, committed={}, drafts={})` creates `<git base>/<name>`,
+    commits `committed` ({repo-relative path: content}) together with the
+    README.md and `*.bck` .gitignore a set created by `set_create` starts
+    with, then writes `drafts` to the working tree without committing.
+    Returns the repo path. The repo lives under the per-test tmp_path, so
+    it goes with it."""
+    import subprocess
+    from app.lib import files
+
+    def git(repo, *args):
+        subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+
+    def write(repo, tree):
+        for rel, content in tree.items():
+            path = os.path.join(repo, rel)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(content)
+
+    def make(name, committed=None, drafts=None):
+        repo = os.path.join(files.conf_data()["git"], name)
+        os.makedirs(repo)
+        git(repo, "init", "-q")
+        git(repo, "config", "user.email", "tests@pyops.local")
+        git(repo, "config", "user.name", "pyops tests")
+        git(repo, "config", "commit.gpgsign", "false")
+        write(repo, {"README.md": f"# {name}\n", ".gitignore": "*.bck\n", **(committed or {})})
+        git(repo, "add", "-A")
+        git(repo, "commit", "-q", "-m", "initial")
+        write(repo, drafts or {})
+        return repo
+
+    return make
+
 """Base DB fixture: the configured temp DB path (tmp_path/test.db), absent, with the models
 registered and no global engine bound; yields the path."""
 @pytest.fixture(scope="function")
@@ -310,7 +348,7 @@ def mock_git_ops(mock_git_dir):
             set_dir_path = str(mock_data_dir / set_name)
             files = ["sample_task.py", "sample_view.html", "README.md", "dummy.py", "sample.controller.py"]
             for file in files:
-                name = Path(file).stem
+                name = file.split(".")[0]
                 type_ = "task" if file.endswith(".py") and "controller" not in file else "controller" if "controller" in file else "view" if file.endswith(".html") else "markdown"
                 scriptlets.append({"set": set_name, "name": name, "type": type_})
         return scriptlets
@@ -393,6 +431,24 @@ def mock_git_ops(mock_git_dir):
     def mock_get_repo_status(set_name):
         return {"branch": "main", "status": "clean"}
 
+    def mock_find_scriptlets(repo, name):
+        """git.find_scriptlets over the mocked listing: the files of `repo`
+        (os.listdir, patched by mock_git_dir or the test) whose name part
+        before the first dot is `name`, typed by the mocked
+        infer_type_from_filename. The real git.resolve_scriptlet selects
+        from these."""
+        from app.lib.git import Scriptlet, validate_scriptlet_name
+        validate_scriptlet_name(name)
+        try:
+            listing = os.listdir(repo)
+        except FileNotFoundError:
+            listing = []
+        return [
+            Scriptlet(name, mock_infer_type_mock(f), f, os.path.join(repo, f))
+            for f in listing
+            if f.split(".", 1)[0] == name and f.endswith((".py", ".html", ".js", ".md"))
+        ]
+
     from unittest.mock import MagicMock
 
     mock_list_scriptlets_mock = MagicMock(side_effect=mock_list_scriptlets)
@@ -407,6 +463,7 @@ def mock_git_ops(mock_git_dir):
     mock_delete_file_unstaged_mock = MagicMock(side_effect=mock_delete_file_unstaged)
     mock_rollback_committed_mock = MagicMock(side_effect=mock_rollback_committed)
     mock_get_repo_status_mock = MagicMock(return_value={"branch": "main"})
+    mock_find_scriptlets_mock = MagicMock(side_effect=mock_find_scriptlets)
     mock_subprocess_run = MagicMock(return_value=Mock(returncode=0, stdout="", stderr=""))
     mock_check_output = MagicMock(return_value=b"")
 
@@ -422,6 +479,7 @@ def mock_git_ops(mock_git_dir):
     mock.delete_file_unstaged = mock_delete_file_unstaged_mock
     mock.rollback_committed = mock_rollback_committed_mock
     mock.get_repo_status = mock_get_repo_status_mock
+    mock.find_scriptlets = mock_find_scriptlets_mock
 
     with patch("app.lib.git.list_scriptlets", mock_list_scriptlets_mock), \
         patch("app.lib.git.get_git_base", mock_get_git_base_mock), \
@@ -435,6 +493,7 @@ def mock_git_ops(mock_git_dir):
         patch("app.lib.git.delete_file_unstaged", mock_delete_file_unstaged_mock), \
         patch("app.lib.git.rollback_committed", mock_rollback_committed_mock), \
         patch("app.lib.git.get_repo_status", mock_get_repo_status_mock), \
+        patch("app.lib.git.find_scriptlets", mock_find_scriptlets_mock), \
         patch("subprocess.run", mock_subprocess_run), \
         patch("subprocess.check_output", mock_check_output):
         yield mock
@@ -586,3 +645,54 @@ def job_env(tmp_path, mock_conf):
         "conf_users": {"anonymous": {"debug_port": 5678}},
         "conf_web": {"bind": "127.0.0.1:8000"}
     }
+
+
+@pytest.fixture
+def pyops_job():
+    """Factory: `pyops_job(script, conf, kind="task", run=False, **bound)`
+    returns the globals of a pyops-set job running `<script>.task.py`.
+
+    The globals are the ones the job runner builds
+    (`job_runner.setup_job_globals`, including the `setname == "pyops"`
+    extras `appspace`, `config`, `validate_set_name` and `CORE_DEPS`) from
+    `conf`, the config sections it hands to the job: `data` and `runner`,
+    optionally `users` and `web`. `bound` is bound into the globals before
+    any scriptlet code runs: the job parameter's variables, or a stand-in
+    for a runner-provided global (`control`, `listener`).
+    set.library.py — the scripts' `#!{::set}` include — and the script are
+    then exec'd in that order, under their real paths so coverage
+    attributes them. With `run=True` the script runs as the job runner
+    runs it (`__name__ == "__main__"`), so its main() executes and any
+    exception it raises propagates; otherwise main() is left to the test."""
+    from unittest.mock import MagicMock
+    from app import job_runner
+    pyops_set_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "app", "pyops")
+
+    def build(script, conf, kind="task", run=False, **bound):
+        setspace = os.path.join(conf["data"]["jobs"], "pyops")
+        with patch.object(job_runner, "_conf_data", conf["data"]), \
+             patch.object(job_runner, "_conf_runner", conf["runner"]), \
+             patch.object(job_runner, "_conf_users", conf.get("users", {})), \
+             patch.object(job_runner, "_conf_web", conf.get("web", {"bind": "127.0.0.1:8000"})), \
+             patch.object(job_runner, "_conf_log", {}), \
+             patch.object(job_runner.pyops, "ServiceListener", return_value=MagicMock()):
+            glob = job_runner.setup_job_globals(
+                owner="alice",
+                setspace=setspace,
+                workspace=os.path.join(setspace, "jid"),
+                web_bind=conf.get("web", {"bind": "127.0.0.1:8000"})["bind"],
+                job_id="jid",
+                kind=kind,
+                setname="pyops",
+                name=script,
+            )
+        glob.update(bound)
+        if not run:
+            glob["__name__"] = f"{script}_loaded"
+        for fname in ("set.library.py", f"{script}.task.py"):
+            path = os.path.join(pyops_set_dir, fname)
+            with open(path) as f:
+                exec(compile(f.read(), path, "exec"), glob)
+        return glob
+
+    return build

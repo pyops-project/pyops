@@ -272,7 +272,10 @@ to isolate per-tmp_path stores.
 
 `debug stop` calls `ports.release_for_job(profile, job_id)` so the
 pool reclaims the port immediately rather than waiting for stale
-sweep on the next lease.
+sweep on the next lease — after the job is cancelled, and also when it
+had already finished (the cancel's 409: exit 0, JSON
+`"state": "finished"`). On any other cancel error the job may still be
+running on the port, so the lease stays and the command fails.
 
 ## Endpoint coverage
 
@@ -299,6 +302,17 @@ with `--kind test|debug`; the CLI then calls the shared
 `pyopsctl.overrides.build_overrides()` and ships the resulting
 `{set::name: body}` map in the `overrides` JSON key, letting the
 operator iterate on local edits without committing first.
+`GET /scriptlet/job/cancel` answers 409 for a job that already
+finished (`done`/`failed`) or is being deleted, so `job cancel` exits
+4 for it. `Client.cancel_job(job_id)` is the cancel of the commands
+that only want a job to stop: True when the job is cancelled, False
+for the 409 (the job already finished — nothing to stop), HTTPError
+for any other error. `job cancel-all` cancels the non-terminal jobs of
+the list it fetched first; a job that finishes in between answers 409
+and is skipped (`cancelled N job(s); M already finished`, the JSON list
+holds the cancelled ids); any other error stops the command.
+Set and scriptlet names are letters, digits, `_` and `-` only; the
+server answers 400 for any other name.
 
 **debug** — `PUT /scriptlet/job/item` (with `kind` in `{"debug", "testdebug"}`, selected via `debug start --kind {debug,testdebug}`; default is `debug`), plus the
 job list/item/cancel endpoints above. The debug session runs

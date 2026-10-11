@@ -46,6 +46,17 @@ class TestControlRequest:
         with pytest.raises(Exception, match="GET /test: 500 Internal Server Error"):
             mock_control_request.handle_response("GET /test", mock_response)
 
+    @pytest.mark.parametrize("status", [400, 404, 409, 503])
+    def test_handle_response_error_carries_status(self, mock_control_request, status):
+        """A refused call raises ControlRequestError with the HTTP status, so
+        a service can relay it (e.g. 503 while pyops shuts down) instead of
+        answering 500."""
+        from app.lib.pyops import ControlRequestError
+        mock_response = Mock(status_code=status, content=b'{"detail": "x"}', reason="R")
+        with pytest.raises(ControlRequestError) as info:
+            mock_control_request.handle_response("PUT scriptlet/job/item", mock_response)
+        assert info.value.status_code == status
+
     @patch('requests.get')
     def test_get_success(self, mock_get, mock_control_request):
         mock_response = Mock()
@@ -646,6 +657,28 @@ class TestServiceListener:
         listener.close()
 
 class TestServiceClient:
+    def test_silent_service_raises_service_timeout(self, tmp_path):
+        """A service that never answers: request() raises the typed
+        ServiceTimeout (mapped to 504), not a bare zmq.Again."""
+        from app.lib import pyops
+        from app.lib.errors import ServiceTimeout
+        (tmp_path / "pyops").mkdir()
+        ctx = zmq.Context()
+        silent = ctx.socket(zmq.ROUTER)
+        silent.bind(f"ipc://{tmp_path}/pyops/j1.sock")
+        try:
+            with patch("tempfile.gettempdir", return_value=str(tmp_path)):
+                client = pyops.ServiceClient("j1", recv_timeout_ms=200)
+            try:
+                with pytest.raises(ServiceTimeout, match="Service job j1 did not answer within 0.2s") as info:
+                    client.request({"type": "GET", "path": "/"})
+                assert info.value.status_code == 504
+            finally:
+                client.close()
+        finally:
+            silent.close(linger=0)
+            ctx.term()
+
     @patch('zmq.Context')
     @patch('os.path.join')
     def test_init_success(self, mock_join, mock_context):

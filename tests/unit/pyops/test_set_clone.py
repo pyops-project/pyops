@@ -2,11 +2,12 @@
 in particular.
 
 The task normally runs inside the pyops runner with `appspace`,
-`config`, and the param-injected globals (`url`, `username`,
-`password`, `git_name`, `git_email`); `#!{::set}` adds set.library's
-symbols to the exec namespace. The fixture below mirrors that setup
-and replaces `run_cmd` + the file-write side-effect so the credential
-rewrite logic can be inspected in isolation."""
+`config`, `validate_set_name` (runner-injected for the pyops set) and the
+param-injected globals (`url`, `username`, `password`, `git_name`,
+`git_email`); `#!{::set}` adds set.library's symbols to the exec
+namespace. The fixture below mirrors that setup and replaces `run_cmd` +
+the file-write side-effect so the credential rewrite logic can be
+inspected in isolation."""
 
 import os
 
@@ -20,6 +21,7 @@ PYOPS_SET_DIR = os.path.normpath(os.path.join(
 
 @pytest.fixture
 def task(tmp_path, monkeypatch):
+    from app.lib.git import validate_set_name
     git_base = tmp_path / "data" / "git"
     git_base.mkdir(parents=True)
 
@@ -33,6 +35,7 @@ def task(tmp_path, monkeypatch):
                 "pkg": str(tmp_path / "data" / "pkg"),
             },
         },
+        "validate_set_name": validate_set_name,
         "name": None,
     }
     (tmp_path / "app").mkdir(exist_ok=True)
@@ -158,6 +161,20 @@ class TestSetCloneValidation:
         with pytest.raises(ValueError) as exc:
             self._run_clone(task, url=url)
         assert str(exc.value) == message
+        assert calls == []
+
+    @pytest.mark.parametrize("url", [
+        "https://example.com/g/..",
+        "https://example.com/g/..git",
+    ], ids=["dotdot", "dot"])
+    def test_invalid_derived_set_name_rejected(self, task, url):
+        """The URL's last segment names the set directory; one that is not
+        a single directory name under the git base ('..' is its parent,
+        '.' the base itself) is refused before anything is touched."""
+        from app.lib.git import InvalidSetNameError
+        calls = _install_recording_run_cmd(task)
+        with pytest.raises(InvalidSetNameError):
+            self._run_clone(task, url=url)
         assert calls == []
 
     def test_existing_set_rejected(self, task):

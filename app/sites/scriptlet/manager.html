@@ -220,15 +220,22 @@
 
             function refreshList() {
                 const scrollY = window.scrollY;
-                fetch("/scriptlet/inventory/list").then(async (r)=>{
+                Promise.all([fetch("/scriptlet/inventory/list"), fetch("/scriptlet/inventory/sets")]).then(async ([r, rs])=>{
                     console.debug("GET", "/scriptlet/inventory/list", r)
+                    if(!rs.ok) {
+                        console.error("GET", "/scriptlet/inventory/sets", rs.statusText);
+                        return;
+                    }
                     if(r.ok) {
                         const d = await r.json();
-                        console.debug("scriptlets", d);
+                        const sets = (await rs.json()).sets;
+                        console.debug("scriptlets", d, "sets", sets);
 
-                        // Group incoming scriptlets by set; within a set the
-                        // row key is the scriptlet name.
+                        // Every set gets a section — also one without
+                        // scriptlets yet. Group incoming scriptlets by set;
+                        // within a set the row key is the scriptlet name.
                         const bySet = {};
+                        for(const set of sets) bySet[set] = [];
                         for(const i of d) (bySet[i.set] = bySet[i.set] || []).push(i);
 
                         for(const set of Object.keys(bySet)) {
@@ -266,7 +273,7 @@
                             card.find("[data-set-count]").text(items.length);
                         }
 
-                        // Drop sets that no longer have any scriptlets.
+                        // Drop sets that no longer exist.
                         const liveSets = new Set(Object.keys(bySet));
                         $("#sets-container").children("[data-set]").each(function() {
                             if(!liveSets.has($(this).attr("data-set"))) $(this).remove();
@@ -275,7 +282,7 @@
                         window.scrollTo(0, scrollY);
                     } else
                         console.error("GET", "/scriptlet/inventory/list", r.statusText);
-                }).catch((e)=>console.error("GET", "/scriptlet/inventory/list", e.toString()));
+                }).catch((e)=>console.error("GET", "/scriptlet/inventory/list or /sets", e.toString()));
             }
 
             function enqueueRefreshList() {

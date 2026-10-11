@@ -106,6 +106,20 @@ class Client:
         resp = self.request("DELETE", path, **kw)
         return _decode(resp)
 
+    def cancel_job(self, job_id: str) -> bool:
+        """`GET /scriptlet/job/cancel` for `job_id`. True when the job is
+        cancelled (or was being cancelled already); False when it had
+        already finished or is being deleted — the server's 409, which
+        leaves the job unchanged and is a no-op for a caller that only
+        wants the job to stop. Any other error raises HTTPError."""
+        try:
+            self.get("/scriptlet/job/cancel", params={"id": job_id})
+        except HTTPError as ex:
+            if ex.status == 409:
+                return False
+            raise
+        return True
+
     def get_bytes(self, path: str, **kw) -> bytes:
         resp = self.request("GET", path, stream=True, **kw)
         return resp.content

@@ -11,6 +11,7 @@
 - **Views**: HTML fragments (head for styles/JS, menu for nav, body for content) rendered by controllers.
 - **Markdown**: Documentation files in sets.
 - **JS Libraries**: JavaScript modules for client-side code.
+- **Names**: set and scriptlet names use only letters, digits, `_` and `-` (`[A-Za-z0-9_-]+`); the server answers 400 for any other name, and files with other names are not scriptlets (not listed, not importable).
 - **Execution Model**: Jobs execute in isolated per-set venv subprocesses with global dict (`glob`) containing:
   - `control`: Pyops.Control for API calls (e.g., `control.job.list()` returns dict of jobs).
   - `listener`: ServiceListener for inbound requests (services only; see Services).
@@ -98,7 +99,7 @@ Request: `listener.listen()` returns dict with:
 - `"user"`: Requesting user (from `X-User` header)
 - Query params as direct keys (e.g., `?target=foo` → `msg["target"] = "foo"`)
 - `"TERM"`: Shutdown signal (string, not dict).
-- Respond: `listener.response(result_dict, status=200)` — the `status` int maps to the HTTP status code returned to the caller. Non-200 codes (e.g., 400, 404, 500) cause the controller proxy to raise an HTTP error to the client.
+- Respond: `listener.response(result_dict, status=200)` — the controller proxy answers the caller with this status and body unchanged, e.g. `listener.response({"error": "bad input"}, 400)` reaches the client as 400 `{"error": "bad input"}` (a status that allows no body, e.g. 204, arrives without one). If the service does not answer within `web.timeout`, the proxy answers 504.
 
 **REST-style endpoints** (recommended): Use URL path for routing.
 - `GET /controller/{set}/{name}/items?limit=10` → `path="/items"`, `msg["limit"]="10"`
@@ -179,7 +180,7 @@ if __name__ == "__main__":
 **Response:**
 - `listener.response(result_dict, status)` — `status` is the HTTP status code (200, 400, 404, 500, etc.)
 - `listener.async_response(identity, result_dict, status)` — same, for async handlers
-- Non-200 status codes cause the controller proxy to return an HTTP error to the client
+- The controller proxy returns `status` and `result_dict` to the client unchanged (for 200 and every other status)
 
 **URL patterns:**
 - REST style (recommended): `GET /controller/{set}/{name}/fetch?target=foo` → `path="/fetch"`

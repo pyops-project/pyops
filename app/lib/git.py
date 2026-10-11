@@ -1,4 +1,5 @@
 import os
+import re
 import time
 from typing import Dict
 
@@ -6,10 +7,20 @@ import os.path
 import shutil
 import subprocess
 import tempfile
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Iterable, List, NamedTuple, Optional, Tuple
 from datetime import datetime
 
 from . import files
+from .errors import (
+    BundledSetError,
+    InvalidScriptletNameError,
+    InvalidSetNameError,
+    NameTakenError,
+    NoCommittedVersionError,
+    ScriptletNotFoundError,
+    SetNotFoundError,
+    WrongScriptletTypeError,
+)
 
 import logging
 logger = logging.getLogger(__name__)
@@ -17,11 +28,48 @@ logger = logging.getLogger(__name__)
 import fcntl
 from contextlib import contextmanager
 
-class GitNotFoundError(FileNotFoundError):
-    """Raised when a Git set or repository is not found."""
-
 class GitConflictError(RuntimeError):
     """Raised for Git operation conflicts, e.g., committing on a tag."""
+
+# The one identifier charset of set and scriptlet names. It is the grammar
+# the `#!{set::name}` import directive and the debug override keys already
+# use, it keeps every name a single path segment, and it is inert in HTML
+# text and attributes, JS strings, URL segments and CSS selectors.
+_NAME_RE = re.compile(r"[A-Za-z0-9_-]+")
+NAME_RULE = "use only letters, digits, '_' and '-' (at least one character)"
+
+
+def is_valid_name(name) -> bool:
+    """True iff `name` is a string made only of the identifier charset."""
+    return isinstance(name, str) and _NAME_RE.fullmatch(name) is not None
+
+
+def validate_set_name(set: str) -> None:
+    """Rejects a set name outside the identifier charset `[A-Za-z0-9_-]+`.
+
+    Such a name is never a single directory under the git base (empty,
+    ".", "..", a path separator or a NUL byte cannot pass), and it can be
+    put into markup, URLs and scripts unescaped. Pure string check — no
+    filesystem access.
+
+    Raises:
+        InvalidSetNameError: The name is not made of the charset.
+    """
+    if not is_valid_name(set):
+        raise InvalidSetNameError(f"Invalid set name {set!r}: {NAME_RULE}")
+
+
+def validate_scriptlet_name(name: str) -> None:
+    """Rejects a scriptlet name outside the identifier charset
+    `[A-Za-z0-9_-]+` — the same rule as `validate_set_name`. Covers every
+    name of the set's namespace: tasks, libraries, controllers, views, JS
+    libraries, markdown pages and data files.
+
+    Raises:
+        InvalidScriptletNameError: The name is not made of the charset.
+    """
+    if not is_valid_name(name):
+        raise InvalidScriptletNameError(f"Invalid scriptlet name {name!r}: {NAME_RULE}")
 
 def _retry_call(cmd: list, cwd, max_retries: int = 3) -> None:
     for attempt in range(max_retries):
@@ -201,57 +249,167 @@ def pull(repo: str) -> bool:
             logger.error(f"Reset failed for {set_name} (rc={e.returncode}): stdout='{out}', stderr='{err}'")
             raise
 
+def _is_set_dir(path: str) -> bool:
+    """The one definition of "this directory is a set": a directory that
+    holds a git repository (`.git`)."""
+    return os.path.isdir(path) and os.path.exists(os.path.join(path, ".git"))
+
+
+def list_sets() -> List[str]:
+    """Names of the user sets under the git base, sorted: the directories
+    whose name is a valid set name and that hold a git repository. The
+    bundled set is not among them (it lives with the application), nor is
+    a directory whose name `get_repo_path` would refuse."""
+    git_base = get_git_base()
+    if not os.path.isdir(git_base):
+        return []
+    return sorted(
+        entry for entry in os.listdir(git_base)
+        if is_valid_name(entry)
+        and not files.is_bundled_set(entry)
+        and _is_set_dir(os.path.join(git_base, entry))
+    )
+
+
 def get_repo_path(set: str) -> str:
-    """Ensures repo exists and is initialized, sets up .gitignore and README.md.
+    """Resolves a set name to its repository directory. Read-only: it
+    neither creates nor initialises anything — sets are created by the
+    `set_create` / `set_clone` tasks.
 
     Args:
-        set (str): Repo directory name.
+        set (str): Set name.
 
     Returns:
-        str: Absolute path to repo directory.
+        str: Absolute path to repo directory (`app/pyops/` for the bundled set).
 
     Raises:
-        HTTPException: 404 if set directory does not exist.
+        InvalidSetNameError: `set` is not a valid set name (raised before
+            any filesystem access).
+        SetNotFoundError: `<git base>/<set>` is not a directory with `.git`.
     """
+    validate_set_name(set)
+
     # The pyops set ships with the application source — it's checked
-    # into the pyops repo under app/pyops/. No per-set .git, no init,
-    # no commit dance: scriptlets there are versioned with pyops itself.
-    if set == files.BUNDLED_SET_NAME:
+    # into the pyops repo under app/pyops/. No per-set .git: scriptlets
+    # there are versioned with pyops itself.
+    if files.is_bundled_set(set):
         if not os.path.isdir(files.bundled_set_path):
-            raise GitNotFoundError(f"Set '{set}' does not exist")
+            raise SetNotFoundError(f"Set '{set}' does not exist")
         return files.bundled_set_path
 
-    git_base = get_git_base()
-    repo = os.path.abspath(os.path.join(git_base, set))
-    if not os.path.exists(repo):
-        raise GitNotFoundError(f"Set '{set}' does not exist")
-
-    with repo_lock(git_base, set):
-        git_dir = os.path.join(repo, ".git")
-        if not os.path.exists(git_dir):
-            _call(["git", "init"], repo)
-        
-        # Ensure .gitignore includes *.bck.
-        gitignore = os.path.join(repo, ".gitignore")
-        lines = []
-        if os.path.exists(gitignore):
-            with open(gitignore, 'r') as f:
-                lines = f.readlines()
-        if "*.bck\n" not in lines:
-            with open(gitignore, "a") as f:
-                f.write("*.bck\n")
-            _call(["git", "add", ".gitignore"], repo)
-            _call(["git", "commit", "-m", f"Initial .gitignore for {set}"], repo)
-        
-        # Ensure README.md.
-        readme = os.path.join(repo, "README.md")
-        if not os.path.exists(readme):
-            with open(readme, "w") as f:
-                f.write(f"# {set}\n")
-            _call(["git", "add", "README.md"], repo)
-            _call(["git", "commit", "-m", f"Initial README for {set}"], repo)
-    
+    repo = os.path.abspath(os.path.join(get_git_base(), set))
+    if not _is_set_dir(repo):
+        raise SetNotFoundError(f"Set '{set}' does not exist")
     return repo
+
+
+def _is_bundled_repo(repo: str) -> bool:
+    return os.path.abspath(repo) == os.path.abspath(files.bundled_set_path)
+
+
+def _require_editable(repo: str) -> None:
+    """Refuses a write to the bundled set: its scriptlets ship with the
+    application source and are versioned with the pyops repository, not
+    edited through the API."""
+    if _is_bundled_repo(repo):
+        raise BundledSetError(
+            f"Set '{files.BUNDLED_SET_NAME}' is bundled with pyops and not editable via the API."
+        )
+
+
+def get_editable_repo_path(set: str) -> str:
+    """`get_repo_path` for a write: the bundled set is refused first.
+
+    Raises:
+        InvalidSetNameError, SetNotFoundError: see `get_repo_path`.
+        BundledSetError: `set` is the bundled set.
+    """
+    validate_set_name(set)
+    if files.is_bundled_set(set):
+        _require_editable(files.bundled_set_path)
+    return get_repo_path(set)
+
+
+def _set_name_of(repo: str) -> str:
+    return os.path.basename(os.path.normpath(repo))
+
+
+class Scriptlet(NamedTuple):
+    """A scriptlet file resolved from its name (see `resolve_scriptlet`)."""
+    name: str
+    type: str
+    rel_path: str  # repo-relative, '/'-separated
+    path: str      # absolute
+
+    @property
+    def ext(self) -> str:
+        """The on-disk extension without the dot (yaml/yml/json for data)."""
+        return os.path.splitext(self.rel_path)[1].lstrip(".")
+
+
+def _scriptlet_shapes(name: str) -> Tuple[Tuple[str, str], ...]:
+    """Every file a scriptlet named `name` can be, as (type, repo-relative
+    path), in resolution order."""
+    markdown = "README.md" if name == "README" else f"docs/{name}.md"
+    return (
+        ("task", f"{name}.task.py"),
+        ("library", f"{name}.library.py"),
+        ("controller", f"{name}.controller.py"),
+        ("view", f"{name}.html"),
+        ("jslibrary", f"{name}.js"),
+        ("markdown", markdown),
+        ("data", f"data/{name}.yaml"),
+        ("data", f"data/{name}.yml"),
+        ("data", f"data/{name}.json"),
+    )
+
+
+def find_scriptlets(repo: str, name: str) -> List[Scriptlet]:
+    """Every existing file of the scriptlet `name` in `repo` (working tree),
+    matched by exact filename, in resolution order. One per name in a set
+    created through pyops (`check_name_unique`); a cloned repository can
+    carry several.
+
+    Raises:
+        InvalidScriptletNameError: `name` is not a valid scriptlet name.
+    """
+    validate_scriptlet_name(name)
+    found = []
+    for type_, rel in _scriptlet_shapes(name):
+        path = os.path.join(repo, *rel.split("/"))
+        if os.path.isfile(path):
+            found.append(Scriptlet(name, type_, rel, path))
+    return found
+
+
+def resolve_scriptlet(repo: str, name: str, types: str | Iterable[str] | None = None) -> Scriptlet:
+    """The one name-to-file lookup for scriptlets.
+
+    `types` restricts the result to one type or a sequence of acceptable
+    types (in preference order); None accepts any type.
+
+    Raises:
+        InvalidScriptletNameError: `name` is not a valid scriptlet name.
+        ScriptletNotFoundError: No file of that name exists.
+        WrongScriptletTypeError: The name exists, but not as one of `types`.
+    """
+    found = find_scriptlets(repo, name)
+    set_name = _set_name_of(repo)
+    if types is None:
+        if found:
+            return found[0]
+    else:
+        wanted = (types,) if isinstance(types, str) else tuple(types)
+        for type_ in wanted:
+            for scriptlet in found:
+                if scriptlet.type == type_:
+                    return scriptlet
+        if found:
+            raise WrongScriptletTypeError(
+                f"Scriptlet {set_name}::{name} is not a {' or '.join(wanted)}"
+            )
+    raise ScriptletNotFoundError(f"Scriptlet {set_name}::{name} not existing")
+
 
 def get_file_path(repo: str, name: str, type_: str) -> str:
     """Returns the full path to the scriptlet file.
@@ -275,8 +433,12 @@ def get_file_path(repo: str, name: str, type_: str) -> str:
         str: File path.
 
     Raises:
+        InvalidScriptletNameError: `name` is not a valid scriptlet name —
+            checked before the path is built, so no name reaches outside
+            the set.
         ValueError: Invalid type.
     """
+    validate_scriptlet_name(name)
     if type_ == "markdown":
         if name == "README":
             return os.path.join(repo, "README.md")
@@ -377,18 +539,19 @@ def infer_type_from_filename(filename: str) -> str:
 
 def _scan_set_top_level(set_name: str, repo: str) -> List[Dict[str, str]]:
     """Scan the repo root for `.py` / `.html` / `.js` scriptlets and
-    the top-level `README.md`. Type inferred via `infer_type_from_filename`."""
+    the top-level `README.md`. Type inferred via `infer_type_from_filename`.
+    A file whose name is not a valid scriptlet name is not a scriptlet and
+    is skipped, like a file of no known shape."""
     out: List[Dict[str, str]] = []
     for filename in os.listdir(repo):
         if filename.endswith(('.py', '.html', '.js')) or filename == "README.md":
             try:
-                out.append({
-                    "set": set_name,
-                    "name": get_name_from_file(filename),
-                    "type": infer_type_from_filename(filename),
-                })
+                name = get_name_from_file(filename)
+                type_ = infer_type_from_filename(filename)
             except ValueError:
                 continue  # Skip filenames that don't match a known shape.
+            if is_valid_name(name):
+                out.append({"set": set_name, "name": name, "type": type_})
     return out
 
 
@@ -400,7 +563,8 @@ def _scan_set_subdir(set_name: str, repo: str, subdir: str,
     `include_ext=True` adds the actual on-disk extension as the `ext`
     field on each entry (used for `data/*.{yaml,yml,json}` so clients
     can mirror the format locally — yaml vs json affects both filename
-    and syntax mode).
+    and syntax mode). Files whose name is not a valid scriptlet name are
+    skipped.
     """
     out: List[Dict[str, str]] = []
     dir_path = os.path.join(repo, subdir)
@@ -411,16 +575,16 @@ def _scan_set_subdir(set_name: str, repo: str, subdir: str,
             continue
         rel = f"{subdir}/{filename}"
         try:
-            entry: Dict[str, str] = {
-                "set": set_name,
-                "name": get_name_from_file(rel),
-                "type": infer_type_from_filename(rel),
-            }
-            if include_ext:
-                entry["ext"] = os.path.splitext(filename)[1].lstrip(".")
-            out.append(entry)
+            name = get_name_from_file(rel)
+            type_ = infer_type_from_filename(rel)
         except ValueError:
             continue
+        if not is_valid_name(name):
+            continue
+        entry: Dict[str, str] = {"set": set_name, "name": name, "type": type_}
+        if include_ext:
+            entry["ext"] = os.path.splitext(filename)[1].lstrip(".")
+        out.append(entry)
     return out
 
 
@@ -479,7 +643,7 @@ def _stamp_has_unstaged(entries: List[Dict[str, str]], repo: str, dirty_paths: s
 
 
 def list_scriptlets() -> List[Dict[str, str]]:
-    """Lists all scriptlets across repos.
+    """Lists all scriptlets across the user sets (`list_sets`).
 
     Per set, three scanners run in sequence:
       - top-level: `*.py` / `*.html` / `*.js` / `README.md`
@@ -494,13 +658,8 @@ def list_scriptlets() -> List[Dict[str, str]]:
         List[Dict]: [{"set", "name", "type", "has_unstaged"[, "ext"]}, ...]
             sorted by (set, name).
     """
-    git_base = get_git_base()
-    sets = [d for d in os.listdir(git_base)
-              if os.path.isdir(os.path.join(git_base, d))
-              and os.path.exists(os.path.join(git_base, d, ".git"))]
-
     scriptlets: List[Dict[str, str]] = []
-    for set_name in sorted(sets):
+    for set_name in list_sets():
         repo = get_repo_path(set_name)
         dirty_paths = _per_set_dirty_paths(repo)
         set_entries: List[Dict[str, str]] = []
@@ -514,56 +673,15 @@ def list_scriptlets() -> List[Dict[str, str]]:
 
     return sorted(scriptlets, key=lambda x: (x["set"], x["name"]))
 
-def list_scriptlet_files(repo: str, name: str) -> List[str]:
-    """Lists scriptlet files for a given name in repo.
-
-    Returned paths are relative to `repo`. Top-level scriptlet files
-    stay bare (e.g. 'my_task.task.py'); a markdown file under `docs/`
-    or a data file under `data/` is returned as 'docs/{name}.md' /
-    'data/{name}.yaml' so callers can resolve the location without
-    inspecting type separately.
-
-    Matching uses filename-prefix-plus-extension rather than calling
-    `get_name_from_file` per entry, so callers don't depend on every
-    file in the repo being a well-formed scriptlet filename.
-
-    Args:
-        repo (str): Repo path.
-        name (str): Scriptlet name.
-
-    Returns:
-        List[str]: Matching filenames (repo-relative).
-    """
-    files = []
-    for filename in os.listdir(repo):
-        # Top-level scriptlet shapes: {name}.{type}.py, {name}.html, {name}.js
-        if filename.startswith(f"{name}.") and filename.endswith(('.py', '.html', '.js')):
-            files.append(filename)
-        # README.md at the top level is the only zero-extension match
-        elif filename == "README.md" and name == "README":
-            files.append(filename)
-    docs_dir = os.path.join(repo, "docs")
-    if os.path.isdir(docs_dir):
-        for filename in os.listdir(docs_dir):
-            if filename == f"{name}.md":
-                files.append(f"docs/{filename}")
-    data_dir = os.path.join(repo, "data")
-    if os.path.isdir(data_dir):
-        for ext in (".yaml", ".yml", ".json"):
-            candidate = f"{name}{ext}"
-            if os.path.isfile(os.path.join(data_dir, candidate)):
-                files.append(f"data/{candidate}")
-    return files
-
-
 
 def check_name_unique(repo: str, name: str) -> bool:
     """Checks if name is unique across the set.
 
-    Matches scriptlet filenames at the repo root ({name}.*.py / .html /
-    .js / README.md), markdown files under docs/{name}.md, and data
-    files under data/{name}.{yaml,yml,json}. Names share one namespace
-    so the editor can resolve `{set}::{name}` unambiguously.
+    True iff no scriptlet file of that name exists (`find_scriptlets`):
+    no `{name}.{task,library,controller}.py`, `{name}.html`, `{name}.js`,
+    `docs/{name}.md` (or `README.md` for "README") and no
+    `data/{name}.{yaml,yml,json}`. Names share one namespace so the editor
+    can resolve `{set}::{name}` unambiguously.
 
     Args:
         repo (str): Repo path.
@@ -571,19 +689,11 @@ def check_name_unique(repo: str, name: str) -> bool:
 
     Returns:
         bool: True if unique.
+
+    Raises:
+        InvalidScriptletNameError: `name` is not a valid scriptlet name.
     """
-    files = [f for f in os.listdir(repo) if f.startswith(f"{name}.") and (f.endswith(('.py', '.html', '.js')) or f == "README.md")]
-    if files:
-        return False
-    docs_path = os.path.join(repo, "docs", f"{name}.md")
-    if os.path.exists(docs_path):
-        return False
-    data_dir = os.path.join(repo, "data")
-    if os.path.isdir(data_dir):
-        for ext in ("yaml", "yml", "json"):
-            if os.path.isfile(os.path.join(data_dir, f"{name}.{ext}")):
-                return False
-    return True
+    return not find_scriptlets(repo, name)
 
 
 def check_data_name_unique(repo: str, name: str) -> bool:
@@ -613,7 +723,9 @@ def read_content(repo: str, name: str, type_: str, committed: bool = False, stri
         str: Content.
     
     Raises:
-        FileNotFoundError: File missing in both, or strict committed missing.
+        InvalidScriptletNameError, ValueError: see `get_file_path`.
+        ScriptletNotFoundError: File missing in both.
+        NoCommittedVersionError: strict committed read without a committed version.
         subprocess.CalledProcessError: Git error.
     """
     file_path = get_file_path(repo, name, type_)
@@ -621,9 +733,9 @@ def read_content(repo: str, name: str, type_: str, committed: bool = False, stri
 
     # Pyops set has no per-set .git — read directly from disk, ignore
     # the committed/strict flags (they don't apply to pyops-shipped code).
-    if os.path.abspath(repo) == files.bundled_set_path:
+    if _is_bundled_repo(repo):
         if not os.path.exists(file_path):
-            raise FileNotFoundError(f"File not found: {file_path}")
+            raise ScriptletNotFoundError(f"File not found: {file_path}")
         with open(file_path, "r", encoding="utf-8") as f:
             return f.read()
 
@@ -637,13 +749,13 @@ def read_content(repo: str, name: str, type_: str, committed: bool = False, stri
         return out
     except subprocess.CalledProcessError:
         if committed and strict:
-            raise FileNotFoundError(f"No committed version for {rel_path}")
+            raise NoCommittedVersionError(f"No committed version for {rel_path}")
         if os.path.exists(file_path):
             logger.warning(f"Committed content missing for {rel_path}; falling back to unstaged: {file_path}")
             with open(file_path, "r", encoding="utf-8") as f:
                 return f.read()
         else:
-            raise FileNotFoundError(f"File not found: {file_path}") from None
+            raise ScriptletNotFoundError(f"File not found: {file_path}") from None
 
 def write_content(repo: str, name: str, type_: str, content: str) -> None:  # Renamed from write_code
     """Writes content to file.
@@ -659,12 +771,15 @@ def write_content(repo: str, name: str, type_: str, content: str) -> None:  # Re
         content (str): Content to write.
 
     Raises:
+        BundledSetError: `repo` is the bundled set.
+        InvalidScriptletNameError, ValueError: see `get_file_path`.
         IOError: Write failure.
     """
+    _require_editable(repo)
+    file_path = get_file_path(repo, name, type_)
     git_base = get_git_base()
     set_name = os.path.basename(repo)
     with repo_lock(git_base, set_name):
-        file_path = get_file_path(repo, name, type_)
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(content)
@@ -688,15 +803,17 @@ def create_scriptlet(set_name: str, name: str, type_: str, content: str) -> str:
         str: Absolute path of the created file.
 
     Raises:
-        GitNotFoundError: Set does not exist.
-        FileExistsError: Name already taken in the set.
+        InvalidSetNameError, SetNotFoundError, BundledSetError: see
+            `get_editable_repo_path`.
+        InvalidScriptletNameError, ValueError: see `get_file_path`.
+        NameTakenError: Name already taken in the set.
     """
-    repo = get_repo_path(set_name)
+    repo = get_editable_repo_path(set_name)
+    file_path = get_file_path(repo, name, type_)
     git_base = get_git_base()
     with repo_lock(git_base, set_name):
         if not check_name_unique(repo, name):
-            raise FileExistsError(f"Name '{name}' already exists in set '{set_name}'")
-        file_path = get_file_path(repo, name, type_)
+            raise NameTakenError(f"Name '{name}' already exists in set '{set_name}'")
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(content)
@@ -713,8 +830,13 @@ def delete_file_unstaged(repo: str, file_path: str) -> None:
 
     Args:
         repo (str): Repo path.
-        file_path (str): Absolute path of the file to remove.
+        file_path (str): Absolute path of the file to remove (as resolved
+            by `resolve_scriptlet`).
+
+    Raises:
+        BundledSetError: `repo` is the bundled set.
     """
+    _require_editable(repo)
     git_base = get_git_base()
     set_name = os.path.basename(repo)
     with repo_lock(git_base, set_name):
@@ -731,8 +853,14 @@ def get_repo_status(set: str) -> Dict[str, any]:
         Dict: {"branch": str, "is_tag": bool, "flag": str|None}
     
     Raises:
+        InvalidSetNameError, SetNotFoundError: see `get_repo_path`.
+        BundledSetError: `set` is the bundled set, which has no repository
+            of its own (no git command runs against the application tree).
         subprocess.CalledProcessError: Git failure.
     """
+    validate_set_name(set)
+    if files.is_bundled_set(set):
+        raise BundledSetError(f"Set '{set}' is bundled with pyops and has no repository.")
     repo = get_repo_path(set)
     git_base = get_git_base()
     with repo_lock(git_base, set):
@@ -760,9 +888,11 @@ def rollback_staged(set: str, name: str, type_: str) -> None:
         type_ (str): Type.
     
     Raises:
+        InvalidSetNameError, SetNotFoundError, BundledSetError: see
+            `get_editable_repo_path`.
         subprocess.CalledProcessError: Git failure.
     """
-    repo = get_repo_path(set)
+    repo = get_editable_repo_path(set)
     file_path = get_file_path(repo, name, type_)
     bck_path = file_path + ".bck"
     if os.path.exists(file_path):
@@ -772,27 +902,46 @@ def rollback_staged(set: str, name: str, type_: str) -> None:
     with repo_lock(git_base, set):
         _call(["git", "checkout", "HEAD", "--", rel_path], repo)
 
+def _in_head(repo: str, rel_path: str) -> bool:
+    """True iff HEAD's tree contains `rel_path` (a committed version exists)."""
+    return subprocess.run(
+        ["git", "cat-file", "-e", f"HEAD:{rel_path}"],
+        cwd=repo, capture_output=True,
+    ).returncode == 0
+
 def rollback_committed(set: str, name: str, type_: str) -> None:
     """Directly checks out HEAD (discards unstaged).
-    
+
     Args:
         set (str): Set.
         name (str): Name.
         type_ (str): Type.
-    
+
     Raises:
+        InvalidSetNameError, SetNotFoundError, BundledSetError: see
+            `get_editable_repo_path`.
+        NoCommittedVersionError: The file has no committed version in HEAD
+            (never committed); the working tree is left untouched.
         subprocess.CalledProcessError: Git failure.
     """
-    repo = get_repo_path(set)
+    repo = get_editable_repo_path(set)
     file_path = get_file_path(repo, name, type_)
     rel_path = os.path.relpath(file_path, repo)
     git_base = get_git_base()
     with repo_lock(git_base, set):
+        if not _in_head(repo, rel_path):
+            raise NoCommittedVersionError(f"No committed version for {rel_path}")
         _call(["git", "checkout", "HEAD", "--", rel_path], repo)
 
 
 def has_unstaged_changes(repo: str, name: str, type_: str) -> bool:
+    """True iff the scriptlet's file has unstaged changes (modified,
+    staged-but-uncommitted or untracked). Always False for the bundled
+    set: it has no repository of its own, so no git command runs against
+    the application tree."""
     file_path = get_file_path(repo, name, type_)
+    if _is_bundled_repo(repo):
+        return False
     rel_path = os.path.relpath(file_path, repo)
     for attempt in range(3):
         try:

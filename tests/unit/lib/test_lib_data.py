@@ -154,6 +154,45 @@ class TestEscapeRejection:
                 pass
 
 
+class TestNameRule:
+    """A data name follows the rule of every scriptlet name,
+    `[A-Za-z0-9_-]+`: what a job writes, the inventory API lists and
+    serves (it refuses any other name)."""
+
+    @pytest.mark.parametrize("name", ["a.b", "app.config", "my cfg", "café", "x\x00"])
+    def test_name_outside_charset_refused(self, repo, name):
+        from app.lib.data import SetData
+        from app.lib.errors import InvalidScriptletNameError
+        sd = SetData("myset", repo)
+        with pytest.raises(InvalidScriptletNameError):
+            with sd.write(name, format="yaml") as c:
+                c["x"] = 1
+        with pytest.raises(InvalidScriptletNameError):
+            with sd.read(name) as _:
+                pass
+        assert not os.path.exists(os.path.join(repo, "data"))
+
+    def test_valid_names_accepted(self, repo):
+        from app.lib.data import SetData
+        sd = SetData("myset", repo)
+        with sd.write("app_config-2", format="yaml") as c:
+            c["x"] = 1
+        with sd.read("app_config-2") as c:
+            assert c == {"x": 1}
+
+    def test_list_skips_file_with_invalid_name(self, repo):
+        """A file put there by other means (e.g. a commit) whose name the
+        rule refuses is not listed — `read` would refuse it, and so does
+        the inventory API."""
+        from app.lib.data import SetData
+        sd = SetData("myset", repo)
+        with sd.write("good", format="yaml") as c:
+            c["x"] = 1
+        with open(os.path.join(repo, "data", "app.config.yaml"), "w") as f:
+            f.write("x: 2\n")
+        assert sd.list() == ["good"]
+
+
 class TestList:
     def test_list_empty(self, repo):
         from app.lib.data import SetData

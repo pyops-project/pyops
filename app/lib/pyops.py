@@ -3,8 +3,21 @@ import os, signal, zmq, msgpack, json
 import requests as rq
 import tempfile
 
+from .errors import ServiceTimeout
+
 import logging
 logger = logging.getLogger(__name__)
+
+class ControlRequestError(Exception):
+    """A pyops API call answered with a status other than 200.
+
+    `status_code` is the HTTP status, so a caller — e.g. a service relaying
+    a refused enqueue (503 while pyops shuts down) — can pass it on."""
+
+    def __init__(self, message: str, status_code: int):
+        super().__init__(message)
+        self.status_code = status_code
+
 
 class ControlRequest:
     def __init__(self, owner, web_bind: str):
@@ -16,9 +29,9 @@ class ControlRequest:
             #print("{} status: {}".format(m, r.status_code))
             return json.loads(r.content)
         elif r.status_code == 404:
-            raise Exception("{}: {} {}".format(m, r.status_code, r.reason))
+            raise ControlRequestError("{}: {} {}".format(m, r.status_code, r.reason), r.status_code)
         else:
-            raise Exception("{}: {} {}\n{}".format(m, r.status_code, r.reason, r.content))
+            raise ControlRequestError("{}: {} {}\n{}".format(m, r.status_code, r.reason, r.content), r.status_code)
 
     def get(self, path, params = {}, headers = {}):
         headers = {**headers, "X-User": self.owner} if self.owner else headers
@@ -254,6 +267,7 @@ class ServiceClient:
 
     def __init__(self, job_id: str, recv_timeout_ms: int = None):
         self.job_id = job_id
+        self.recv_timeout_ms = recv_timeout_ms
         self._closed = False
 
         temp_dir = tempfile.gettempdir()
@@ -289,7 +303,18 @@ class ServiceClient:
         self.close()
 
     def request(self, msg):
+        """Sends `msg` to the service and returns its `(status, data)` reply.
+
+        Raises:
+            ServiceTimeout: No reply within `recv_timeout_ms`.
+        """
         b = msgpack.packb(msg)
         self.socket.send(b)
-        status, data = msgpack.unpackb(self.socket.recv())
+        try:
+            reply = self.socket.recv()
+        except zmq.Again:
+            raise ServiceTimeout(
+                f"Service job {self.job_id} did not answer within {self.recv_timeout_ms / 1000:g}s"
+            ) from None
+        status, data = msgpack.unpackb(reply)
         return status, data

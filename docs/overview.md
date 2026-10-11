@@ -80,12 +80,14 @@ graph TD
 - ZMQ IPC (ROUTER/REQ over /tmp/pyops/runner.sock) signals completion; json-serialized kwargs ensure config isolation.
 - Process checks: p.poll() for liveness; psutil for tree-kill (SIGTERM → SIGKILL after 15s).
 - Stale PID handling: After cleanProcesses, sync DB running jobs to 'failed' if !psutil.Process(pid).is_running().
-- Job states: todo, dequeued, loading, running, done, failed, cancel, cancelling, cancelled, remove, removed.
+- Job states: todo, dequeued, loading, running, done, failed, cancel, cancelled, remove, removed. A job being cancelled stays `cancel` until the runner's next loop iteration, where `postTerm()` finalises it to `cancelled`, unless it had already finished (see `finishJob()` below); the process-group termination continues in a background thread, and `term_start` marks when it started. `cancelling` is never written; it is only accepted where states are read (see `docs/insights_app.md`).
 - Debug mode: pyops doesn't inject a debugger. The client's `param` carries the bootstrap (debugpy / gdbserver / cuda-gdbserver / lldb-server / anything that speaks the wire its consumer understands). The runner only flips `running` after `exec(param)` returns. `kind=debug` keeps no timeout, no retry, and materialises sources under `.debug/src/<set>/{task,library}/<name>.py`.
 - Test mode: peer of debug. `kind=test` materialises sources under `.test/src/<set>/{task,library}/<name>.py`, sets `__name__='__test__'` (so the same `*.task.py` can act as both production task and its own test suite), and exec's. Pyops is pytest-agnostic — invocation/coverage live in the `pyops::pytest` library or whatever the author imports.
 
 ### Web (`app/web.py`)
 - Serves /controller/{set}/{name}, /menu, and static /files/
+- Maps the lib layer's typed errors (`app/lib/errors.py`: 400 invalid name, 404 unknown set/scriptlet, 409 state conflict, 503 shutdown pending, 504 service timeout) to HTTP in one exception handler (`{"detail": message}`); any other exception is a server fault, answered 500 and logged with its traceback
+- Set and scriptlet names use one charset, `[A-Za-z0-9_-]+`, checked in `app/lib/git.py` before a path is built (400 otherwise)
 
 ### PyOps (`app/lib/pyops.py`)
 - Provides `Control` for API calls
@@ -185,12 +187,12 @@ flowchart TD
 
 #### Job Execution
 
-- `loadJob()`: Fetches from DB, returns owner, set, name, kind, param, code, overrides
+- `loadJob()`: Fetches from DB, returns owner, set, name, kind, param, code, overrides; the code is the override for `{set}::{name}` or the task `{name}.task.py` (exact name)
 - `run()`: Dispatches to `run_task_job`, `run_service_job`, `run_debug_job`, or `run_draft_job`; processes param, libs, code in subprocess with venv activation
 - Handles directives: pip packages, git repos, libraries
 - For debug: uses unstaged code (preview) or overrides (VSIX)
 - Compiles with custom filenames for accurate stacktraces
-- `finishJob()`: Sets state, end, detail, pid=None
+- `finishJob()`: Records the outcome (state, end, detail) and clears pid. When the job's own completion decides the state, `end` is the job's finish time (the `time` in its message), not the time the runner processed it. A job's completion overrides a cancel only if the job finished before the runner started terminating it (`term_start`); a recorded outcome is never replaced. When the row keeps its state, the message is appended to detail and `end` is kept (rules in `docs/insights_app.md`)
 
 #### Directive Processing
 
@@ -208,18 +210,18 @@ Distinguishes types by argument:
 
 #### Post-Termination
 
-- `postTerm()`: Updates state to cancelled if not done/failed, deletes if remove
+- `postTerm()`: Clears pid; a row not done/failed becomes cancelled with `end` set to its own time, a done/failed row keeps its state and `end`; deletes if remove
 - `terminate_job_processes()`: HTTP-cancel path — SIGTERM the tree, wait up to 15s, SIGKILL if still alive (runs in a daemon thread spawned by `finishJob`)
-- `_shutdown_job_processes()`: shutdown path — synchronous; SIGTERMs all live trees, drains ZMQ completion ACKs during the wait so services can finish cleanly, uses `Popen.poll()` (not psutil) to reap zombies, SIGKILLs survivors, then sweeps any non-terminal rows to `cancelled` with detail "killed during shutdown" / "terminated during shutdown"
+- `_shutdown_job_processes()`: shutdown path — synchronous; SIGTERMs all live trees, drains ZMQ completion ACKs during the wait so services can finish cleanly, uses `Popen.poll()` (not psutil) to reap zombies, SIGKILLs survivors, then a final sweep: SIGKILL'd rows → `failed`, pending cancels → `cancelled`, `cancelled`/`failed` kept, all other rows deleted (see `docs/insights_app.md` Shutdown)
 
 #### Shutdown Gate
 
 - `lib_runner.SHUTDOWN_FLAG_PATH` (`/tmp/pyops/shutdown.flag`): created by `GracefulKiller.exit_gracefully`, removed on clean startup and exit
-- `lib_runner.enqueue()` raises `ShutdownPending` when the flag is present — gunicorn-worker HTTP enqueues and `pyops::data` service callbacks refuse new work as soon as the runner has been signalled
+- `lib_runner.enqueue()` raises `ShutdownPending` (503) when the flag is present — gunicorn-worker HTTP enqueues and `pyops::data` service callbacks refuse new work as soon as the runner has been signalled
 
 #### Scheduling
 
-- `schedule()`: enqueues from cron Schedules via croniter; also re-enqueues `PYOPS_ESSENTIAL_SERVICES` (currently the `pyops::data` service that backs `/controller/pyops/sets`) under a fixed `<3-failed` gate (services with a Schedule row use its `max_fail_n`)
+- `schedule()`: enqueues from cron Schedules via croniter; also re-enqueues `PYOPS_ESSENTIAL_SERVICES` (currently the `pyops::data` service that backs `/controller/pyops/sets`) under a fixed `<3-failed` gate (services with a Schedule row use its `max_fail_n`); skips a schedule whose set or task name is outside the name charset
 
 #### Subprocess Execution Isolation
 
@@ -241,7 +243,7 @@ The runner uses ZMQ ROUTER/REQ over IPC sockets for reliable job completion sign
 ##### Pattern
 
 - **Socket**: Runner binds ROUTER to `/tmp/pyops/runner.sock`; children connect REQ.
-- **Message Format**: `{"id": str, "state": str, "detail": str|None}` (msgpack-packed).
+- **Message Format**: `{"id": str, "state": str, "detail": str|None, "time": float}` (msgpack-packed; `time` is the job's own epoch time when it sends, i.e. its finish time for done/failed).
 - **Protocol**: Child sends REQ (single frame), runner receives multipart (identity + empty + packed), processes `finishJob`, replies empty REP (identity + empty + b'ack').
 - **Guarantees**: REQ/REP ensures delivery; no message loss like Queue.
 - **Polling**: Integrated in main loop with `zmq.Poller` timeout=0 for non-blocking.
@@ -314,14 +316,14 @@ flowchart TD
 
 - `root()`: Serves root.html
 - `favicon()`: Serves favicon.ico
-- `file(path)`: Serves static /files/{path}
+- `file(path)`: Serves static /files/{path} — only regular files inside `app/files/` (404 otherwise)
 
 #### Controller Proxy
 
 - `controller(set, name)`: Renders UI via `get_controller_code` & `get_view_content`
 - Injects {{SET}} {{NAME}} in views
 - `controller_proxy()`: Handles HTTP methods to /controller/{set}/{name}/{rest:path}
-- Sends ZMQ msg to service with type, path, query, body, data_type
+- Sends ZMQ msg to service with type, path, query, body, data_type; answers with the service's status and body unchanged (503 no running service, 504 no answer within `web.timeout`)
 - `menu()`: Lists controllers from Git
 
 #### View Rendering
@@ -350,6 +352,7 @@ Designed for Zabbix/Prometheus polling; see `docs/insights_app.md` § "Monitorin
 - `conftest.py`: Fixtures mock_conf, mock_db, mock_client, mock_git_dir, mock_git_ops, etc.
 - unit/lib/: Tests lib_files, lib_git, lib_pyops, lib_runner_utils, lib_sites
 - unit/orm/: Tests job, schedule
+- unit/pyops/: Tests the pyops-set scriptlets (sets data service, `set_*` tasks, libraries) exec'd under their real paths
 - integration/: Tests git, orm, routers, runner execution
 - api/: Tests api_editor, api_endpoints, api_job, api_schedule
 - e2e/: Playwright E2E tests against real server instances

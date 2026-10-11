@@ -21,14 +21,14 @@ def integration_repo(tmp_path, monkeypatch):
     monkeypatch.setattr(files, 'conf_data', lambda: {'git': str(test_git_base)})
     monkeypatch.setattr(files, 'conf_runner', lambda: {'git_pull_interval': 0, 'venv': str(test_venv), 'pkg': str(test_pkg)})
 
-    # Create local repo. After the sets-management migration, set CRUD
-    # lives in app/pyops/ scriptlets — for this fixture we just need
-    # an empty dir; get_repo_path runs `git init` and writes the standard
-    # .gitignore + README on first access.
+    # Create local repo. Set CRUD lives in app/pyops/ scriptlets and
+    # get_repo_path only resolves an existing repository, so the fixture
+    # initialises one itself.
     set_name = 'test_set'
     (test_git_base / set_name).mkdir()
+    subprocess.run(['git', 'init', '-q'], cwd=str(test_git_base / set_name), check=True)
     repo = git.get_repo_path(set_name)
-    assert os.path.exists(os.path.join(repo, '.git'))
+    assert repo == str(test_git_base / set_name)
 
     # Init remote (simple bare repo in tmp)
     remote_path = tmp_path / 'remote'
@@ -346,3 +346,15 @@ class TestScriptletLayout:
 
         subprocess.run(["git", "checkout", "-q", "v1.0"], cwd=integration_repo, check=True)
         assert git.get_repo_status("test_set") == {"branch": "", "is_tag": True, "flag": "TAG"}
+
+    def test_rollback_committed_never_committed_file_raises_and_keeps_it(self, integration_repo):
+        """A scriptlet that was created but never committed has no version
+        to roll back to: FileNotFoundError, and the draft stays as it is."""
+        from app.lib import git
+        path = git.create_scriptlet("test_set", "fresh", "task", "draft\n")
+
+        with pytest.raises(FileNotFoundError, match="No committed version for fresh.task.py"):
+            git.rollback_committed("test_set", "fresh", "task")
+
+        with open(path) as f:
+            assert f.read() == "draft\n"

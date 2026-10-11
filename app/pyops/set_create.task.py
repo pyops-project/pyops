@@ -28,6 +28,7 @@ DEFAULT_GIT_EMAIL = "pyops@localhost"
 def main():
     if not name:
         raise ValueError("name is required")
+    validate_set_name(name)
     if name == "pyops":
         raise ValueError("'pyops' is reserved for pyops-managed scriptlets")
 

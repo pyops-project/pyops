@@ -1,9 +1,9 @@
 """Unit tests for job_lib.send_completion ZMQ lifecycle.
 
 Covers the hardening added for the ZMQ thread-leak/hang bug: LINGER 0 +
-bounded RCVTIMEO on the REQ socket, the timeout (zmq.Again) path being
-swallowed rather than raised, and the context always being terminated so
-no ZMQbg thread pair is orphaned.
+bounded RCVTIMEO on the REQ socket, a missing ACK (zmq.Again) logged as a
+warning, and the context always being terminated so no ZMQbg thread pair
+is orphaned — plus the job's result file, written before a final report.
 """
 import zmq
 from unittest.mock import patch, Mock
@@ -54,3 +54,31 @@ class TestSendCompletion:
         job_lib.send_completion("/tmp/pyops/runner.sock", {"id": "j4", "state": "done"})
         sock.close.assert_called_once()
         mock_context.return_value.term.assert_called_once()
+
+    @patch('zmq.Context')
+    def test_final_report_writes_result_file_first(self, mock_context, tmp_path):
+        """done/failed are written to the result file before they are sent:
+        the runner finds the result even when the report never arrives."""
+        import json
+        from app.lib import job as job_lib
+        sock = Mock()
+        sock.recv.side_effect = zmq.Again()  # the report is not acknowledged
+        mock_context.return_value.socket.return_value = sock
+        result_file = job_lib.result_file(str(tmp_path))
+        job_lib.send_completion("/tmp/pyops/runner.sock", {"id": "j5", "state": "failed", "detail": "boom"},
+                                result_file=result_file)
+        with open(result_file) as f:
+            written = json.load(f)
+        assert (written["state"], written["detail"]) == ("failed", "boom")
+        assert written["time"] == job_lib.msgpack.unpackb(sock.send.call_args.args[0])["time"]
+        assert job_lib.read_result(str(tmp_path)) == written
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["result.json"]
+
+    @patch('zmq.Context')
+    def test_running_report_writes_no_result_file(self, mock_context, tmp_path):
+        from app.lib import job as job_lib
+        mock_context.return_value.socket.return_value = Mock()
+        job_lib.send_completion("/tmp/pyops/runner.sock", {"id": "j6", "state": "running", "detail": None},
+                                result_file=job_lib.result_file(str(tmp_path)))
+        assert list(tmp_path.iterdir()) == []
+        assert job_lib.read_result(str(tmp_path)) is None

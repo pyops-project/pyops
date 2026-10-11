@@ -7,6 +7,8 @@ Covers:
   - GET    /repo/status                  repo branch / tag info
   - DELETE /scriptlet/inventory/draft    discard unstaged changes to HEAD
   - POST   /scriptlet/inventory/draft    save draft without commit (roundtrip)
+  - invalid set names ("", "..", NUL byte) rejected with 400
+  - unknown set on job / schedule PUT answered with 404
 
 Smoke test_smoke.py covers /sets/list (which returns {name, branch}); this file
 covers the separate /inventory/sets endpoint that returns just names.
@@ -263,15 +265,56 @@ class TestInventoryDraftRoundtrip:
         assert r.status_code == 404
         pyops_server.assert_no_unexpected_errors()
 
-    def test_draft_delete_wrong_type_returns_400(self, api, pyops_server, set_factory, commit_set):
-        """Providing type_ that mismatches inferred filetype rejects with 400."""
-        _setup_task(api, set_factory, commit_set)
+    def test_draft_delete_never_committed_reports_no_committed_version(self, api, pyops_server, set_factory):
+        """A scriptlet created but never committed has nothing to revert to:
+        the route says so with a 409 Conflict (no raw git error, no
+        traceback) and keeps the draft."""
+        set_factory(SET)
+        r = api.put("/scriptlet/inventory/item", json={"set": SET, "name": TASK, "type": "task"})
+        assert r.status_code == 200, r.text
         api.post(
             "/scriptlet/inventory/draft",
             json={"set": SET, "name": TASK, "code": DRAFT_CODE},
         )
-        r = api.delete(
-            f"/scriptlet/inventory/draft?set={SET}&name={TASK}&type_=view"
-        )
-        assert r.status_code == 400, f"expected 400, got {r.status_code}: {r.text}"
+
+        r = api.delete(f"/scriptlet/inventory/draft?set={SET}&name={TASK}")
+        assert r.status_code == 409
+        assert r.json()["detail"] == "No committed version to revert to"
+
+        code = api.get(f"/scriptlet/inventory/code?set={SET}&name={TASK}").json()["code"]
+        assert code == DRAFT_CODE
+        pyops_server.assert_no_unexpected_errors()
+
+
+class TestInvalidSetName:
+    """A set name that does not name a directory under the git base ("" is
+    the git base itself, ".." its parent; a NUL byte cannot be in a path)
+    is rejected with 400 before anything is git-init'ed there."""
+
+    def test_rejected_without_git_init(self, api, pyops_server, e2e_env):
+        data_dir = e2e_env["data_dir"]
+        r = api.put("/scriptlet/job/item", json={"set": "", "name": "job", "drop_done": True, "param": ""})
+        assert r.status_code == 400, r.text
+        r = api.put("/scriptlet/schedule/item", json={"set": "nul\x00byte", "name": "job", "drop_done": True, "schedule": "", "param": ""})
+        assert r.status_code == 400, r.text
+        # %2E%2E reaches the controller route as the set "..".
+        r = api.get("/controller/%2E%2E/panel")
+        assert r.status_code == 400, r.text
+
+        assert not (data_dir / "git" / ".git").exists()
+        assert not (data_dir / ".git").exists()
+        pyops_server.assert_no_unexpected_errors()
+
+
+class TestUnknownSet:
+    """Starting a job or saving a schedule for a set that does not exist is
+    a missing resource (404), not a server error with a traceback."""
+
+    def test_job_and_schedule_put_404(self, api, pyops_server):
+        r = api.put("/scriptlet/job/item", json={"set": "nope", "name": "job", "drop_done": True, "param": ""})
+        assert r.status_code == 404, r.text
+        assert r.json()["detail"] == "Set 'nope' does not exist"
+        r = api.put("/scriptlet/schedule/item", json={"set": "nope", "name": "job", "drop_done": True, "schedule": "", "param": ""})
+        assert r.status_code == 404, r.text
+        assert r.json()["detail"] == "Set 'nope' does not exist"
         pyops_server.assert_no_unexpected_errors()
