@@ -182,7 +182,9 @@ describe('ManagerTreeDataProvider', () => {
       require('./utils/helpers').setupConfigMock();
       mockApiClient.fetch.mockResolvedValue({
         ok: false,
-        statusText: 'Error',
+        status: 500,
+        statusText: 'Internal Server Error',
+        json: () => Promise.resolve({ detail: 'boom' }),
       });
       const result = await (provider as any).fetchScriptlets();
       expect(result).toEqual([]);
@@ -261,7 +263,9 @@ describe('ManagerTreeDataProvider', () => {
       require('./utils/helpers').setupConfigMock();
       mockApiClient.fetch.mockResolvedValue({
         ok: false,
-        statusText: 'Server Error',
+        status: 500,
+        statusText: 'Internal Server Error',
+        json: () => Promise.resolve({ detail: 'boom' }),
       });
       const result = await (provider as any).fetchScriptlets();
       expect(result).toEqual([]);
@@ -286,13 +290,15 @@ describe('ManagerTreeDataProvider', () => {
       require('./utils/helpers').setupConfigMock();
       mockApiClient.fetch.mockResolvedValue({
         ok: false,
+        status: 404,
         statusText: 'Not Found',
+        json: () => Promise.resolve({ detail: 'Scriptlet set1::script1 not existing' }),
       });
       (require('fs').existsSync as jest.Mock).mockReturnValue(false);
 
       await (provider as any).downloadScriptlets([{ set: 'set1', name: 'script1', type: 'task' }]);
 
-      expect(consoleErrorSpy).toHaveBeenCalledWith('Failed to fetch set1::script1: Not Found');
+      expect(consoleErrorSpy).toHaveBeenCalledWith('Failed to fetch set1::script1: 404 Scriptlet set1::script1 not existing');
       consoleErrorSpy.mockRestore();
     });
 
@@ -304,7 +310,7 @@ describe('ManagerTreeDataProvider', () => {
         json: jest.fn().mockResolvedValue({ code: 'remote code' }),
       });
       (require('fs').existsSync as jest.Mock).mockReturnValue(false);
-      (require('fs').writeFileSync as jest.Mock).mockImplementation(() => {
+      (require('fs').writeFileSync as jest.Mock).mockImplementationOnce(() => {
         throw new Error('File system error');
       });
 
@@ -324,6 +330,24 @@ describe('ManagerTreeDataProvider', () => {
       });
       await provider.refresh();
       expect(mockApiClient.fetch).toHaveBeenCalled();
+    });
+
+    it('keeps the newest of overlapping refreshes when an older one answers last', async () => {
+      require('./utils/helpers').setupConfigMock();
+      jest.spyOn(provider as any, 'scanLocalScriptlets').mockResolvedValue([]);
+      jest.spyOn(provider as any, 'downloadScriptlets').mockResolvedValue(undefined);
+      let answerOlder: (response: any) => void = () => {};
+      mockApiClient.fetch
+        .mockImplementationOnce(() => new Promise(resolve => { answerOlder = resolve; }))
+        .mockResolvedValueOnce({ ok: true, json: jest.fn().mockResolvedValue([{ set: 's', name: 'new', type: 'task' }]) });
+
+      const first = provider.refresh(); // e.g. the auto-refresh timer
+      const second = provider.refresh(); // the refresh command
+      await second;
+      answerOlder({ ok: true, json: jest.fn().mockResolvedValue([{ set: 's', name: 'old', type: 'task' }]) });
+      await first;
+
+      expect((provider as any)._scriptlets).toEqual([{ set: 's', name: 'new', type: 'task' }]);
     });
 
     it('should handle refresh errors gracefully', async () => {
@@ -347,6 +371,151 @@ describe('ManagerTreeDataProvider', () => {
       expect((provider as any)._scriptlets).toEqual([
         { set: 'includedSet', name: 'script1', type: 'task' },
       ]);
+    });
+
+    it('should show only whitelisted sets when includedSets is set', async () => {
+      require('./utils/helpers').setupConfigMock({includedSets: ['keep']});
+      mockApiClient.fetch.mockResolvedValue({
+        ok: true,
+        json: jest.fn().mockResolvedValue([
+          { set: 'keep', name: 'script1', type: 'task' },
+          { set: 'drop', name: 'script2', type: 'task' },
+        ]),
+      });
+      await provider.refresh();
+      expect((provider as any)._scriptlets).toEqual([
+        { set: 'keep', name: 'script1', type: 'task' },
+      ]);
+    });
+
+    it('should ignore excludedSets when includedSets is non-empty', async () => {
+      require('./utils/helpers').setupConfigMock({includedSets: ['keep'], excludedSets: ['keep']});
+      mockApiClient.fetch.mockResolvedValue({
+        ok: true,
+        json: jest.fn().mockResolvedValue([
+          { set: 'keep', name: 'script1', type: 'task' },
+          { set: 'other', name: 'script2', type: 'task' },
+        ]),
+      });
+      await provider.refresh();
+      // 'keep' appears despite being in excludedSets; 'other' is not whitelisted.
+      expect((provider as any)._scriptlets).toEqual([
+        { set: 'keep', name: 'script1', type: 'task' },
+      ]);
+    });
+
+    it('should fall back to excludedSets when includedSets is empty', async () => {
+      require('./utils/helpers').setupConfigMock({includedSets: [], excludedSets: ['drop']});
+      mockApiClient.fetch.mockResolvedValue({
+        ok: true,
+        json: jest.fn().mockResolvedValue([
+          { set: 'keep', name: 'script1', type: 'task' },
+          { set: 'drop', name: 'script2', type: 'task' },
+        ]),
+      });
+      await provider.refresh();
+      expect((provider as any)._scriptlets).toEqual([
+        { set: 'keep', name: 'script1', type: 'task' },
+      ]);
+    });
+
+    it('applies the set filter to local-only scriptlets and downloads only kept sets', async () => {
+      require('./utils/helpers').setupConfigMock({includedSets: ['keep']});
+      mockApiClient.fetch.mockImplementation(async (url: string) => ({
+        ok: true,
+        json: jest.fn().mockResolvedValue(
+          url === '/scriptlet/inventory/list'
+            ? [{ set: 'keep', name: 's1', type: 'task' }, { set: 'drop', name: 's2', type: 'task' }]
+            : { code: 'print(1)' }
+        ),
+      }));
+      // Workspace holds a local-only file of a kept set, one of a non-whitelisted
+      // set, and a previously synced copy of the filtered remote drop/s2.
+      jest.spyOn(provider as any, 'scanLocalScriptlets').mockResolvedValue([
+        { set: 'keep', name: 'local1', type: 'task', isLocalOnly: true },
+        { set: 'other', name: 'local2', type: 'task', isLocalOnly: true },
+        { set: 'drop', name: 's2', type: 'task', isLocalOnly: true },
+      ]);
+
+      await provider.refresh();
+
+      expect((provider as any)._scriptlets).toEqual([
+        { set: 'keep', name: 's1', type: 'task' },
+        { set: 'keep', name: 'local1', type: 'task', isLocalOnly: true },
+      ]);
+      const fetchedUrls = mockApiClient.fetch.mock.calls.map((c: any[]) => c[0]);
+      expect(fetchedUrls).toContain('/scriptlet/inventory/code?set=keep&name=s1');
+      expect(fetchedUrls.filter((u: string) => u.includes('set=drop'))).toEqual([]);
+      const writtenPaths = (require('fs').writeFileSync as jest.Mock).mock.calls.map((c: any[]) => c[0]);
+      expect(writtenPaths).toContain('/test/workspace/pyops/keep/task/s1.py');
+      expect(writtenPaths.filter((p: string) => p.includes('/pyops/drop/'))).toEqual([]);
+    });
+  });
+
+  describe('sets', () => {
+    // GET /scriptlet/inventory/list answers `scriptlets`, GET
+    // /scriptlet/inventory/sets answers `sets` (or fails when `setsOk` is false).
+    const mockInventory = (scriptlets: any[], sets: string[], setsOk = true) => {
+      mockApiClient.fetch.mockImplementation(async (url: string) => {
+        if (url === '/scriptlet/inventory/sets') {
+          return setsOk
+            ? { ok: true, status: 200, statusText: 'OK', json: jest.fn().mockResolvedValue({ sets }) }
+            : { ok: false, status: 500, statusText: 'Internal Server Error', json: jest.fn().mockRejectedValue(new SyntaxError('not JSON')) };
+        }
+        return { ok: true, json: jest.fn().mockResolvedValue(url === '/scriptlet/inventory/list' ? scriptlets : { code: 'pass' }) };
+      });
+    };
+
+    it('shows a set that has no scriptlets', async () => {
+      mockInventory([{ set: 'set1', name: 's1', type: 'task' }], ['empty', 'set1']);
+      await provider.refresh();
+      const roots = await provider.getChildren();
+      expect(roots.map(r => r.label)).toEqual(['empty', 'set1']);
+      expect(roots[0].contextValue).toBe('pyopsSet');
+      expect(await provider.getChildren(roots[0])).toEqual([]);
+    });
+
+    it('shows the server sets when no scriptlet exists at all', async () => {
+      mockInventory([], ['empty']);
+      await provider.refresh();
+      const roots = await provider.getChildren();
+      expect(roots.map(r => r.label)).toEqual(['empty']);
+    });
+
+    it('applies the set filter to server sets', async () => {
+      require('./utils/helpers').setupConfigMock({ excludedSets: ['drop'] });
+      mockInventory([], ['drop', 'keep']);
+      await provider.refresh();
+      const roots = await provider.getChildren();
+      expect(roots.map(r => r.label)).toEqual(['keep']);
+    });
+
+    it('falls back to the sets of the scriptlets when the set list fails', async () => {
+      mockInventory([{ set: 'set1', name: 's1', type: 'task' }], [], false);
+      await provider.refresh();
+      const roots = await provider.getChildren();
+      expect(roots.map(r => r.label)).toEqual(['set1']);
+      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith('Failed to fetch sets: 500 Internal Server Error');
+      expect(require('vscode').window.showErrorMessage).toHaveBeenCalledWith('Failed to fetch sets: 500 Internal Server Error');
+    });
+
+    it('shows an error when the set list cannot be fetched', async () => {
+      mockApiClient.fetch.mockImplementation(async (url: string) => {
+        if (url === '/scriptlet/inventory/sets') throw new Error('Network error');
+        return { ok: true, json: jest.fn().mockResolvedValue([]) };
+      });
+      await provider.refresh();
+      expect(require('vscode').window.showErrorMessage).toHaveBeenCalledWith('Error fetching sets: Network error');
+      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith('Error fetching sets: Network error');
+    });
+
+    it('keeps a set shown after its last scriptlet is deleted', async () => {
+      mockInventory([{ set: 'set1', name: 's1', type: 'task' }], ['set1']);
+      await provider.refresh();
+      mockInventory([], ['set1']);
+      await provider.refresh();
+      const roots = await provider.getChildren();
+      expect(roots.map(r => r.label)).toEqual(['set1']);
     });
   });
 
@@ -387,12 +556,14 @@ describe('ManagerTreeDataProvider', () => {
       mockContext.workspaceState.get.mockReturnValue('password');
       mockApiClient.fetch.mockResolvedValue({
         ok: false,
-        statusText: 'Server Error',
+        status: 500,
+        statusText: 'Internal Server Error',
+        json: () => Promise.resolve({ detail: 'boom' }),
       });
 
       // First call should show error message
       await (provider as any).fetchScriptlets();
-      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith('Failed to fetch scriptlets: Server Error');
+      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith('Failed to fetch scriptlets: 500 boom');
 
       // Reset mocks
       jest.clearAllMocks();
@@ -401,7 +572,7 @@ describe('ManagerTreeDataProvider', () => {
       // Second call within 30 seconds should not show error message again
       await (provider as any).fetchScriptlets();
       expect(require('vscode').window.showErrorMessage).toHaveBeenCalledTimes(0);
-      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith('Failed to fetch scriptlets: Server Error');
+      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith('Failed to fetch scriptlets: 500 boom');
     });
 
     it('should throttle error messages for exceptions', async () => {
@@ -645,13 +816,15 @@ describe('ManagerTreeDataProvider', () => {
       const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation();
       mockApiClient.fetch.mockResolvedValueOnce({
         ok: false,
+        status: 404,
         statusText: 'Not Found',
+        json: () => Promise.resolve({ detail: 'Scriptlet set1::script1 not existing' }),
       });
 
       const treeItem = { set: 'set1', scriptletName: 'script1', scriptletType: 'task' } as any;
       await provider.downloadScriptlet(treeItem);
 
-      expect(consoleErrorSpy).toHaveBeenCalledWith('Failed to fetch set1::script1: Not Found');
+      expect(consoleErrorSpy).toHaveBeenCalledWith('Failed to fetch set1::script1: 404 Scriptlet set1::script1 not existing');
       consoleErrorSpy.mockRestore();
     });
   });
@@ -698,12 +871,14 @@ describe('ManagerTreeDataProvider', () => {
       mockContext.workspaceState.get.mockReturnValue('password');
       mockApiClient.fetch.mockResolvedValue({
         ok: false,
-        statusText: 'Server Error',
+        status: 500,
+        statusText: 'Internal Server Error',
+        json: () => Promise.resolve({ detail: 'boom' }),
       });
 
       // First call should show error message
       await (provider as any).fetchScriptlets();
-      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith('Failed to fetch scriptlets: Server Error');
+      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith('Failed to fetch scriptlets: 500 boom');
 
       // Reset mocks
       jest.clearAllMocks();

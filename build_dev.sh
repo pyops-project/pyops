@@ -3,10 +3,10 @@
 # Local dev build of the pyops image.
 #
 # Builds for the host's native architecture only and keeps the resulting
-# `:dev` tag local — does NOT push to the registry. The remote `:dev` tag
-# is intentionally absent from registry.ralph.or.at; dev iterations stay
-# on the developer's machine. CI's build.sh handles the published multi-arch
-# build for `:main` / release tags.
+# `:dev` tag local — does NOT push to the registry. Local only; CI does not
+# use it. The registry's `:dev` tag comes from CI (`./build.sh dev`, multi-arch,
+# on non-main branches); release tags come from `./build.sh` on main. A local
+# build_dev.sh image shadows the registry's `:dev` on this host.
 #
 # Why not multi-arch here: cross-arch builds on aarch64 hosts require either
 # qemu-user emulation (broken with 64K kernel pages typical on DGX Spark, and

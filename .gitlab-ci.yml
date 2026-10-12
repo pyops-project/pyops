@@ -2,7 +2,6 @@ image: debian:trixie-slim
 
 variables:
   PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
-  PYTHON_VERSION: "3.12"
   NPM_CACHE_DIR: "$CI_PROJECT_DIR/.cache/npm"
 
 stages:
@@ -20,7 +19,9 @@ test:
     - python3 -m venv .venv
     - source .venv/bin/activate
     - pip install --upgrade pip
-    - pip install psutil fastapi uvicorn sqlalchemy pyzmq msgpack croniter jedi requests zipstream-ng gunicorn pyyaml pytest httpx pytest-cov debugpy
+    # pytest-playwright: `pytest tests/` also collects tests/e2e (skipped there,
+    # but imported), as in the local venv
+    - pip install psutil fastapi uvicorn sqlalchemy pyzmq msgpack croniter jedi requests zipstream-ng gunicorn pyyaml pytest httpx pytest-cov debugpy pytest-playwright pytest-base-url
   script:
     - source .venv/bin/activate
     - ./test.sh
@@ -36,8 +37,9 @@ test:
 
 test:e2e:
   stage: test
+  image: node:24-trixie-slim
   before_script:
-    - apt-get update && apt-get install -y python3 python3-pip python3-venv python3-argcomplete git sqlite3 nodejs npm procps
+    - apt-get update && apt-get install -y python3 python3-pip python3-venv python3-argcomplete git sqlite3 procps
     - git config --global user.email "ci@pyops.local"
     - git config --global user.name "PyOps CI"
     - python3 -m venv .venv
@@ -55,11 +57,12 @@ test:e2e:
       when: always
     - when: manual
 
-test:vsix_integration:
+test:e2e:vsix:
   stage: test
+  image: node:24-trixie-slim
   before_script:
     # Python + server dependencies
-    - apt-get update && apt-get install -y python3 python3-pip python3-venv git sqlite3 nodejs npm curl procps
+    - apt-get update && apt-get install -y python3 python3-pip python3-venv git sqlite3 curl procps
     # Electron/VS Code runtime dependencies + Xvfb
     - apt-get install -y xvfb libnss3 libatk-bridge2.0-0 libdrm2 libxkbcommon0 libgbm1 libgtk-3-0 libasound2t64 libxshmfence1
     - git config --global user.email "ci@pyops.local"
@@ -82,8 +85,8 @@ test:vsix_integration:
         sleep 1
       done
     - "curl -sf http://localhost:8000 > /dev/null || { echo 'Server failed to start'; exit 1; }"
-    # Run integration tests under Xvfb
-    - xvfb-run --auto-servernum --server-args="-screen 0 1024x768x24" npm run test:integration --prefix vsix/
+    # Run the VSIX e2e suite (real extension host vs real server) under Xvfb
+    - xvfb-run --auto-servernum --server-args="-screen 0 1024x768x24" npm run test:e2e --prefix vsix/
   variables:
     PYOPS_SERVER_URL: "http://localhost:8000"
     PYOPS_JOB_STATE_TIMEOUT: "30000"
@@ -97,12 +100,11 @@ test:vsix_integration:
 
 test:vsix:
   stage: test
+  image: node:24-trixie-slim
   cache:
     paths:
       - vsix/node_modules/
   before_script:
-    - apt-get update
-    - apt-get install -y nodejs npm
     - npm config set cache $NPM_CACHE_DIR
   script:
     - cd vsix
@@ -138,32 +140,14 @@ test:pyopsctl:
       when: always
     - when: manual
 
-# Test that the Dockerfile still builds on the runner's native arch. NOT
-# a real build: `build_dev.sh` keeps `:dev` local and doesn't push. The
-# point is to fail CI fast when a Dockerfile change breaks the image
-# definition, instead of only finding out during the manual `build:image:`
-# multi-arch run on main.
-test:image_build:
-  stage: test
-  image: docker:latest
-  before_script:
-    - apk add --no-cache bash
-  script:
-    - ./build_dev.sh
-  rules:
-    - if: '$CI_COMMIT_BRANCH == "main" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"'
-      when: always
-    - when: manual
-
 build:
   stage: build
   needs: [test, test:vsix]
+  image: node:24-trixie-slim
   cache:
     paths:
       - vsix/node_modules/
   before_script:
-    - apt-get update
-    - apt-get install -y nodejs npm
     - npm config set cache $NPM_CACHE_DIR
   script:
     - vsix/build.sh
@@ -320,13 +304,14 @@ verify:version_bumped:
 
 # Multi-arch container image build. Runs `./build.sh` which reads VERSION
 # and pushes :VERSION + :MAJOR + :MINOR + :latest + tagless to
-# registry.ralph.or.at/pyops/pyops. Manual trigger only — the operator goes
-# into the pipeline after a main-merge and starts this when they actually
-# want a published image.
+# registry.ralph.or.at/pyops/pyops — automatically on every main pipeline.
+# The predefined job-token credentials (CI_REGISTRY_USER / CI_REGISTRY_PASSWORD)
+# may push to the project's own registry; no extra CI/CD variables needed.
 #
 # Host requirements on the runner (graz-2 — see /srv/docker02/gitlab/README.md):
-#   1. qemu-user-static + binfmt-support installed → ARM64 emulation for the
-#      multi-arch buildx step
+#   1. ARM64 emulation for the multi-arch buildx step: qemu-user-static +
+#      binfmt-support are installed there; the docker-container builder would
+#      also emulate arm64 without them (BuildKit ships its own QEMU)
 #   2. /var/run/docker.sock mounted into job containers via runner config
 #      volumes — required because the runner runs with privileged=false so
 #      docker:dind is not an option, we share the host docker daemon instead
@@ -336,12 +321,32 @@ build:image:
   image: docker:latest
   before_script:
     - apk add --no-cache bash
-    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" registry.ralph.or.at
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin registry.ralph.or.at
   script:
     - ./build.sh
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'
-      when: manual
+
+# Dev image of every non-main build: `./build.sh dev` builds the same
+# multi-arch image and pushes only registry.ralph.or.at/pyops/pyops:dev
+# (never :latest or version tags). Starts right away (needs: []) so a
+# Dockerfile change that breaks the image fails the pipeline early.
+# Automatic in MR pipelines targeting main, manual on other branches like the
+# other jobs, never on main (build:image publishes the release there).
+build:image:dev:
+  stage: image
+  needs: []
+  image: docker:latest
+  before_script:
+    - apk add --no-cache bash
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin registry.ralph.or.at
+  script:
+    - ./build.sh dev
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      when: never
+    - if: '$CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"'
+    - when: manual
 
 # Tags the current main HEAD with vVERSION, uploads the VSIX as a Generic
 # Package, and creates a GitLab Release linking back to it. Manual — the

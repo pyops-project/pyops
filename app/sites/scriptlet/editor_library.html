@@ -11,6 +11,7 @@
         <script src="/files/js/jquery.min.js"></script>
         <script src="/files/js/js.cookie.min.js"></script>
         <script src="/files/js/bootstrap/bootstrap.bundle.min.js"></script>
+        <script src="/files/js/pyops-alert.js"></script>
         <script src="/files/js/ace/ace.js"></script>
         <script src="/files/js/ace/mode-python.js"></script>
         <script src="/files/js/ace/ext-linking.js"></script>
@@ -45,11 +46,12 @@
                         body: JSON.stringify(data)
                     }).then(async (r)=>{
                         if(r.ok) {
+                            pyopsAlert.loaded("Completion");
                             const d = await r.json();
                             callback(null, d);
                         } else
-                            console.error(r.statusText);
-                    }).catch((e)=>console.error("completion", e.toString()));
+                            await pyopsAlert.loadFailed("Completion", r);
+                    }).catch((e)=>pyopsAlert.loadError("Completion", e));
                 }
             }
             langTools.setCompleters([]);
@@ -63,13 +65,14 @@
                 draftLock = true;
                 fetch(`/scriptlet/inventory/code?set=${set}&name=${name}`).then(async (r)=>{
                     if(r.ok) {
+                        pyopsAlert.loaded("Code");
                         const d = await r.json();
                         editor.setValue(d.code);
                         editor.moveCursorTo(0,0);
                         draftLock = false;
                     } else
-                        console.error("refresh", r.statusText);
-                }).catch((e)=>console.error(e.toString()));
+                        await pyopsAlert.loadFailed("Code", r);
+                }).catch((e)=>pyopsAlert.loadError("Code", e));
             }
 
             function fontSizeChanged() {
@@ -95,8 +98,8 @@
                         if(r.ok)
                             console.debug("save", "Draft Stored");
                         else
-                            console.error(r.statusText);
-                    }).catch((e)=>console.error("save", e.toString()));
+                            await pyopsAlert.failed(`Save draft ${set}::${name}`, r);
+                    }).catch((e)=>pyopsAlert.error(`Save draft ${set}::${name}`, e));
                 }
             }
 
@@ -117,8 +120,8 @@
                         console.debug("rollback", "to last revision");
                         refresh();
                     } else
-                        console.error(r.statusText);
-                }).catch((e)=>console.error(e.toString()));
+                        await pyopsAlert.failed(`Revert ${set}::${name}`, r);
+                }).catch((e)=>pyopsAlert.error(`Revert ${set}::${name}`, e));
             }
 
             $(document).ready(() =>{
@@ -158,16 +161,17 @@
                 try {
                     const resp = await fetch(`/scriptlet/inventory/status?set=${set}&name=${name}`);
                     if (resp.ok) {
+                        pyopsAlert.loaded("Draft status");
                         const d = await resp.json();
                         console.log(`Status for ${set}::${name}:`, d.has_unstaged);
                         const has = d.has_unstaged;
                         $("#btn-revert").prop("disabled", !has);
                     } else {
                         $("#btn-revert").prop("disabled", true);
-                        console.error("Status fetch failed", resp.statusText);
+                        await pyopsAlert.loadFailed("Draft status", resp);
                     }
                 } catch (e) {
-                    console.error("Status check error", e.toString());
+                    pyopsAlert.loadError("Draft status", e);
                     $("#btn-revert").prop("disabled", true);
                 }
             }
@@ -193,6 +197,9 @@
                         <option value="12pt">12pt</option>
                         <option value="13pt">13pt</option>
                     </select>
+                </li>
+                <li class="nav-item m-1 align-self-center">
+                    <span id="pyops-load-status" class="navbar-text text-warning" data-testid="pyops-load-status" hidden></span>
                 </li>
             </ul>
         </nav>

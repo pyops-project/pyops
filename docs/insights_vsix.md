@@ -29,11 +29,12 @@ flowchart TD
 | `src/extension.ts` | Main activation: initializes all services, registers providers/commands, handles deactivation |
 | `src/apiClient.ts` | Shared HTTP client: `fetch(path, init?)`, `fetchJson<T>(path, init?)`, `getServerUrl()`, `getHeaders()`, `hasValidConfig()` |
 | `src/utils.ts` | `inferExt(type)`: maps scriptlet type → file extension |
+| `src/errorText.ts` | `errorText(response)`: the text every failed request is reported with — `<status> <message>`, the message from the body's `detail` (a 422's list as `<field>: <msg>; …`) or `error`, else the status text; e.g. `Failed to write draft: 400 Invalid scriptlet name 'a.b': …` |
 | `src/ConnectionStatusManager.ts` | Status bar item showing server connectivity |
 | `src/managerTreeProvider.ts` | `ManagerTreeDataProvider`: sets → scriptlets hierarchy, sync status, local-only discovery |
 | `src/jobsTreeProvider.ts` | `JobsTreeDataProvider`: jobs grouped by state, sorted by start time |
 | `src/providers/RemoteContentProvider.ts` | `TextDocumentContentProvider` for `pyops-remote://` scheme |
-| `src/commands/CreateScriptletCommand.ts` | Create new scriptlet: prompts type/set/name, writes template, opens editor |
+| `src/commands/CreateScriptletCommand.ts` | Create new scriptlet: prompts type/set/name (sets from `GET /scriptlet/inventory/sets`, so a set without scriptlets is offered; existing names from `GET /scriptlet/inventory/list`), writes template, opens editor |
 | `src/services/AuthService.ts` | Static: prompts and stores Basic Auth password |
 | `src/services/JobService.ts` | Job lifecycle: cancel, delete, download, view, bulk ops, polling |
 | `src/services/ScriptletService.ts` | Scriptlet sync: local↔remote draft, diff, delete, open |
@@ -49,16 +50,32 @@ flowchart TD
 
 | Key | Type | Default | Purpose |
 |-----|------|---------|---------|
-| `serverUrl` | string | `http://localhost:8000` | PyOps server base URL |
-| `username` | string | — | Basic Auth username (optional) |
-| `timeout` | number | 30 | HTTP request timeout in seconds |
-| `useRemoteLinter` | boolean | true | Enable Jedi completion via server |
-| `localPyopsDir` | string | `pyops` | Workspace-relative path to local scriptlet directory |
-| `autoRefreshInterval` | number | 10 | Tree auto-refresh interval in seconds |
-| `excludedSets` | string[] | `[]` | Sets excluded from Manager tree |
-| `debugPorts` | number[] | `[5678]` | Per-VSCode-session pool of TCP ports leased one-per-concurrent-debug-job by `DebugService` |
+| `profile` | string | `""` | Name of the PyOps client-config connectivity profile this workspace adopts. Empty → the config's `default_profile`. Supplies the **connectivity base layer** (see below) |
+| `serverUrl` | string | `http://localhost:8000` | PyOps server base URL. Overrides the profile's `url` when explicitly set |
+| `username` | string | — | Basic Auth username / X-User identity. Unset with a profile → the profile's `user`; set → **remaps** a different user onto the profile connection (see username rule) |
+| `authMode` | enum `basic`\|`x-user` | `basic` | Auth pathway; unset → `basic`, also with a profile. `basic` → `Authorization: Basic base64(username:password)`; `x-user` → `X-User: <username or "vsix">` sent directly |
+| `timeout` | number | 30 | HTTP request timeout in seconds (VSCode-only) |
+| `useRemoteLinter` | boolean | true | Enable Jedi completion via server (VSCode-only) |
+| `localPyopsDir` | string | `pyops` | Workspace-relative path to local scriptlet directory (VSCode-only) |
+| `autoRefreshInterval` | number | 10 | Tree auto-refresh interval in seconds (VSCode-only) |
+| `excludedSets` | string[] | `[]` | Blacklist of sets hidden from the Manager tree. Ignored when `includedSets` is non-empty (VSCode-only) |
+| `includedSets` | string[] | `[]` | Whitelist of sets shown in the Manager tree. Non-empty → only these are shown and `excludedSets` is ignored; empty → `excludedSets` applies (VSCode-only) |
+| `debugPorts` | number[] | `[5678]` | Pool of TCP ports leased one-per-concurrent-debug-job by `DebugService`. Overrides (fully replaces) the profile's `debug_ports` when set |
 
-`hasValidConfig()` (in `apiClient.ts`) returns false if `serverUrl` is empty/undefined — it does **not** check any other config keys. Auth is optional: `getHeaders()` returns Basic Auth header only if both `username` and a stored password exist.
+### Connectivity: PyOps client-config profile as base layer, VSCode settings as override
+
+The **PyOps client config** (`~/.config/pyops/config.toml`, path override via `PYOPSCTL_CONFIG`) is the shared connectivity source of truth read by every PyOps client — the pyopsctl CLI and this extension both consume the same profiles. Connectivity (`serverUrl`, `username`, auth, `debugPorts`) is layered: a **client-config profile** is the base, and each explicitly-set `pyops.*` setting **fully overrides** the corresponding profile field. VSCode-only keys (`timeout`, `useRemoteLinter`, `localPyopsDir`, `autoRefreshInterval`, `excludedSets`, `includedSets`) never participate — the set black/whitelist always lives in VSCode settings.
+
+- `src/services/ProfileService.ts` — parses the TOML (via the `smol-toml` runtime dependency, VSIX's first) into `ResolvedProfile { name, url, user, apiKey, debugPorts }`. Profile selection is the same across all clients: `pyops.profile` > `PYOPSCTL_PROFILE` env > config `default_profile`. Parse is cached by file mtime. Missing file / unknown profile → `null` (legacy VSCode-only connectivity). A config file that cannot be parsed raises `ProfileConfigError` (`Cannot parse PyOps client config <path>: <reason>`); `resolveConnectivity` shows it as an error message — once per distinct error, again after the file was valid in between — and lets it propagate, so no connection is made with a fallback.
+- `src/connectivity.ts` — `resolveConnectivity()` returns the effective `Connectivity { serverUrl, username, userOverridden, authMode, profileApiKey?, debugPorts, profileName? }`. Per field: **explicit VSCode override** (detected via `config.inspect()`, so a schema default is *not* an override) `??` **profile value** `??` **hard default**; `authMode` has no profile value — unset it is `basic`, the setting's default. All connectivity consumers (`ApiClient`, `AuthService`, `ConnectionStatusManager`, `DebugService`) route through it — none read raw settings for connectivity.
+
+**Username rule.** With a profile resolved and `pyops.username` unset, the effective identity is the profile's `user` (`userOverridden=false`). Setting `pyops.username` remaps another user onto that profile's connection (`userOverridden=true`). Without a config file there is no profile to map onto, so `username` is just the raw legacy value.
+
+**Password / api_key coupling.** In `basic` mode the Basic password is the profile's `api_key` **only when the user is not overridden** — the key belongs to the profile's own identity. `resolveConnectivity` exposes it as `profileApiKey` in that case (and `getHeaders()` uses it with no secret read / no prompt). When the user is remapped (or there is no profile), the key is withheld and the password comes from the `pyops.password` secret, prompted for by `AuthService`. `usesPromptPassword(c)` = `basic && (userOverridden || !profileApiKey)` gates the prompt (`AuthService`) and the 401 clear-and-reprompt (`ConnectionStatusManager`) — a bad api_key is fixed in the TOML, not by re-entering a password.
+
+`hasValidConfig()` (in `apiClient.ts`) returns false if the **resolved** `serverUrl` (override or profile) is empty — it does **not** check any other config keys. Auth is `authMode`-dependent:
+- **`basic`**: `getHeaders()` returns a Basic Auth header only if both `username` and a password (profile `api_key` or stored secret) exist. `AuthService.setupAuth()` prompts/stores only when `usesPromptPassword`; `ConnectionStatusManager` clears the stored password and re-prompts on a 401 (then retries once) only when `usesPromptPassword`.
+- **`x-user`**: `getHeaders()` returns `{ 'X-User': username || DEFAULT_X_USER }` (`DEFAULT_X_USER = 'vsix'`, exported from `apiClient.ts`, mirroring pyopsctl's `'pyopsctl'`); no Authorization header and the stored password is never read. `AuthService.setupAuth()` is a no-op. `ConnectionStatusManager` treats a 401 as a plain failure — no clear/re-prompt/retry — matching pyopsctl's `api_key`-absent branch (`ctl/pyopsctl/client.py`).
 
 `ApiClient.fetch(path, init?)` is the primary HTTP method: prepends `getServerUrl()` to the path, merges auth headers from `getHeaders()` with any headers in `init`, and delegates to `global.fetch()`. `fetchJson<T>()` adds response-ok validation and JSON parsing. All services (`DebugService`, `JobService`, `ScriptletService`, `DebugOutputMonitor`, `ConnectionStatusManager`, `CreateScriptletCommand`) and tree providers use `apiClient.fetch()` — no service builds its own URL/header combination.
 
@@ -71,10 +88,11 @@ flowchart TD
 Displays scriptlet sets with their scriptlets. Each refresh:
 
 1. `fetchScriptlets()` — `GET /scriptlet/inventory/list` → `ScriptletInfo[]`
-2. `scanLocalScriptlets()` — walks `{localPyopsDir}/pyops/{set}/{type}/` for files matching `inferExt(type)`; marks `isLocalOnly: true`
-3. Merges remote and local lists; applies `excludedSets` filter
-4. Downloads remote-only scriptlets to `{localPyopsDir}/pyops/{set}/{type}/{name}{ext}`
-5. Checks `has_unstaged_changes` per scriptlet to set sync status icon
+2. `fetchSets()` — `GET /scriptlet/inventory/sets` → every set on the server, also one without scriptlets. A failure is shown like a failed scriptlet list (an error message at most every 30 s, shared with `fetchScriptlets`, and the output channel) and yields no sets
+3. `scanLocalScriptlets()` — walks `{localPyopsDir}/pyops/{set}/{type}/` for files matching `inferExt(type)`; marks `isLocalOnly: true`
+4. Merges remote and local lists; applies the set filter (`isSetShown` / `filterSets`): if `includedSets` is non-empty, keep only those sets (whitelist wins, `excludedSets` ignored); otherwise drop sets in `excludedSets`. The root set nodes (`_sets`) are the filtered server sets plus the sets of the merged scriptlets, so a set stays in the tree when its last scriptlet is deleted
+5. Downloads remote-only scriptlets to `{localPyopsDir}/pyops/{set}/{type}/{name}{ext}`
+6. Checks `has_unstaged_changes` per scriptlet to set sync status icon
 
 **ScriptletInfo interface:**
 
@@ -163,10 +181,10 @@ Used by `diffLocalRemote` to show the remote version read-only in the VSCode dif
 
 ### AuthService (`src/services/AuthService.ts`)
 
-`static setupAuth(context, outputChannel)`:
-- Skips if `username` not configured
-- Prompts for password if none stored in workspace state
-- Stores password via `context.workspaceState.update()`
+`static setupAuth(context, outputChannel)` (operates on the resolved `Connectivity`):
+- x-user mode → no-op (no password required)
+- basic mode where the profile `api_key` supplies the password (`!usesPromptPassword`) → no-op, logs the source profile
+- otherwise, if `username` is set and no password is stored → prompts and stores it via `context.secrets.store('pyops.password', …)`
 
 ### JobService (`src/services/JobService.ts`)
 
@@ -177,12 +195,12 @@ Manages job lifecycle operations used by Monitor view commands.
 | Method | Description |
 |--------|-------------|
 | `listJobs()` | Fetches all jobs; used by `attachDebugJob` command |
-| `cancelJob(item)` | `PUT /scriptlet/job/item` state=cancel |
+| `cancelJob(item)` | `GET /scriptlet/job/cancel?id=`; the server answers 409 for a job that already finished (`done`/`failed`) or is being deleted, shown as `Failed to cancel job: Conflict` |
 | `deleteJob(item)` | `DELETE /scriptlet/job/item` (confirmation required) |
 | `downloadJob(item)` | Downloads job workspace as ZIP |
 | `viewJob(item)` | Opens output channel; polls stdout/stderr until terminal state |
 | `copyJobParam(item)` | Copies job `param` to clipboard |
-| `cancelAllJobs()` | Cancels all non-terminal jobs |
+| `cancelAllJobs()` | Cancels the jobs of the just-fetched list that are not `done`/`failed`/`cancelled`; a job that finishes between the list and its cancel answers 409 and is counted as already finished (`Bulk cancel: N successful, F failed, M already finished.`), not as failed |
 | `deleteAllDone()` | Deletes all `done`/`cancelled` jobs |
 | `deleteAllFailed()` | Deletes all `failed`/`killed` jobs |
 | `dispose()` | Clears active polling intervals |
@@ -249,7 +267,7 @@ Polls job output (stdout/stderr) and streams it to a named output channel.
 | Method | Description |
 |--------|-------------|
 | `startMonitoring(key, jobId)` | Begins 1s polling cycle; appends new output incrementally |
-| `stopMonitoring(key)` | Stops polling; cancels the job |
+| `stopMonitoring(key)` | Cancels the job (`GET /scriptlet/job/cancel`) and stops polling once the cancel is answered OK, or 409 — the job already finished, nothing left to stop (`Debug job <id> already finished`); any other answer is shown as `Failed to stop debug: <status>` and polling continues |
 | `isMonitoring(key)` | Returns true if actively polling |
 | `dispose()` | Clears all active timeouts |
 
@@ -262,6 +280,8 @@ Manages setInterval-based auto-refresh for both tree providers.
 - `ensureRunning()` — starts timers using `pyops.autoRefreshInterval` (default 10s); skips if already running
 - `stopIfRunning()` — clears both manager and monitor timers
 - `dispose()` → calls `stopIfRunning()`
+
+Timer refreshes and the refresh commands (`pyops.refreshManager`, `pyops.refreshMonitor`) can overlap. Both tree providers number each `refresh()` (`_refreshSeq`) and only the most recently started one writes its result, so an older refresh that answers last cannot overwrite newer data.
 
 ---
 
@@ -290,7 +310,7 @@ Full debug lifecycle connects VSIX, PyOps server, and the runner:
 
 ### Runner Override Injection
 
-`app/runner.py loadJob()` parses `job.overrides` as JSON regardless of kind; if the dict contains a `"{set}::{name}"` key, the runner skips the `os.listdir`/`git.read_content` repo lookup and uses `override_dict[main_key]` as the scriptlet body. Missing key falls back to `git.read_content`; invalid JSON aborts the job. `committed=False` for `kind` in `("debug", "draft", "test", "testdebug")` so the fallback reads the unstaged working tree, matching what `writeLocalToRemoteDraft` would have shipped.
+`app/runner.py loadJob()` parses `job.overrides` as JSON regardless of kind; if the dict contains a `"{set}::{name}"` key, the runner skips the `git.resolve_scriptlet`/`git.read_content` repo lookup and uses `override_dict[main_key]` as the scriptlet body. Missing key falls back to `git.read_content`; invalid JSON aborts the job. `committed=False` for `kind` in `("debug", "draft", "test", "testdebug")` so the fallback reads the unstaged working tree, matching what `writeLocalToRemoteDraft` would have shipped.
 
 ### Debugger bootstrap (client-composed)
 
@@ -357,16 +377,16 @@ Coverage targets: branches 80%, functions 80%, lines 90%, statements 80%.
 | `ConnectionStatusManager.test.ts` | Status bar updates, auth retry logic |
 | `extension.test.ts` | Activation, command registration |
 | `utils.test.ts` | `inferExt` all cases including unknown type |
-| `managerTreeProvider.test.ts` | `getTreeItem`/`getChildren`, fetch/download, error handling, refresh graceful failure |
+| `managerTreeProvider.test.ts` | `getTreeItem`/`getChildren`, fetch/download, error handling, refresh graceful failure, set nodes from `/scriptlet/inventory/sets` (empty sets, set filter, fallback when the set list fails, a set kept after its last scriptlet is deleted) |
 | `jobsTreeProvider.test.ts` | Job state display, bulk operations |
 | `providers/RemoteContentProvider.test.ts` | `provideTextDocumentContent`, `registerRemoteLanguageModeSetter` conditional logic, missing language mappings, event emitter |
-| `commands/createScriptletCommand.test.ts` | Dialog flow, type/set/name validation, template write |
+| `commands/createScriptletCommand.test.ts` | Dialog flow, type/set/name validation, template write, a set without scriptlets offered, scriptlet list failure |
 | `services/AuthService.test.ts` | `setupAuth` prompts and storage |
-| `services/JobService.test.ts` | CRUD operations, bulk cancel/delete, `viewJob` polling with stdout/stderr updates, terminal state transitions, error handling, undefined provider handling, timer cleanup |
+| `services/JobService.test.ts` | CRUD operations, bulk cancel/delete (incl. a cancel answered 409 counted as already finished), `viewJob` polling with stdout/stderr updates, terminal state transitions, error handling, undefined provider handling, timer cleanup |
 | `services/ScriptletService.test.ts` | Local/remote sync, network error handling, `existsSync` filesystem branches, multi-step error scenarios |
 | `services/DebugService.test.ts` | `buildOverrides`, `composeDebugpyBootstrap` (in-process-adapter required, port plugged verbatim), port lease/release/rebind/`findPortForJob`, `enqueueDebugJob` success-lease-rebind / HTTP-fail-releases / network-exception / empty-pool / overrides passthrough / kind defaults to `'debug'` / `kind='testdebug'` flows through, `getDebugHost` |
 | `services/debugSessionWatcher.test.ts` | Ignores no-jobId sessions, polls cadence + endpoint, terminal-state stop (incl. 404), transient HTTP / network error retry, `cancel`, idempotent `watch`, `dispose` |
-| `services/DebugOutputMonitor.test.ts` | Start/stop monitoring, incremental stdout/stderr append, channel display, stop on terminal states, error log fetch |
+| `services/DebugOutputMonitor.test.ts` | Start/stop monitoring (incl. a stop answered 409 for a finished job), incremental stdout/stderr append, channel display, stop on terminal states, error log fetch |
 | `services/RefreshTimerManager.test.ts` | `ensureRunning`, `stopIfRunning` |
 | `services/PyOpsPythonDebugConfigProvider.test.ts` | Config provision for task files |
 
@@ -376,10 +396,13 @@ Coverage targets: branches 80%, functions 80%, lines 90%, statements 80%.
 - `fs`/`path` mocks for filesystem operations
 - VSCode API mocks: `window.createOutputChannel`, `workspace.getConfiguration`, etc.
 - `beforeEach(jest.clearAllMocks())` for isolation; `beforeAll` for shared activation
+- Profile fixtures: `setProfileConfig(toml)` writes a client config under `vsix/.cache/tests/` (`testCacheDir()`) and points `PYOPSCTL_CONFIG` at it; `clearProfileConfig()` (in `afterEach`) resets the variable and deletes those dirs. `tests/jest.setup.ts` points `PYOPSCTL_CONFIG` at an absent file so the host's real client config never leaks in. `vsix/.vscodeignore` excludes `.cache/`
 
-### Integration Tests (`vsix/tests/integration/`, VSCode electron)
+### E2E Tests — VSIX axis (`vsix/tests/e2e/`, VSCode electron)
 
-Run with `npm run test:integration --prefix vsix/`. Requires a running PyOps server on `localhost:8000` without authentication. In CI the `test:vsix_integration` stage starts the server, waits for it to respond, and drives the suite with `xvfb-run` so Electron/VSCode has a virtual display.
+This is the VSIX client's **e2e** axis: a real VSCode/Electron extension host driving a **real** PyOps server. It is the VSIX peer of the WebUI e2e (`tests/e2e/`, Playwright) and the pyopsctl e2e (`tests/pyopsctl/e2e/`, real gunicorn + real `pyopsctl` binary) — the taxonomy is "the server is one end, each client is a test axis." The Jest suite (`vsix/tests/`) is the **unit** tier (mocked vscode + fetch); there is currently no VSIX **integration** (pure-interface/contract) tier, so that name is reserved for a future contract suite rather than used for what is really e2e.
+
+Run with `npm run test:e2e --prefix vsix/`. Requires a running PyOps server on `localhost:8000` without authentication. In CI the `test:e2e:vsix` job starts the server, waits for it to respond, and drives the suite with `xvfb-run` so Electron/VSCode has a virtual display.
 
 Uses `@vscode/test-electron` and a simple console-based test runner. Test suites:
 
@@ -395,11 +418,11 @@ Uses `@vscode/test-electron` and a simple console-based test runner. Test suites
 
 Extension services accessed via `(global as any).serviceName` — not direct TypeScript imports. Static methods accessed via `serviceInstance.constructor.methodName` or class name.
 
-### Integration Test TypeScript Config
+### E2E Test TypeScript Config
 
-Integration tests use a **separate** `tests/integration/tsconfig.json` from the main extension `tsconfig.json`:
+The VSIX e2e suite uses a **separate** `tests/e2e/tsconfig.json` from the main extension `tsconfig.json`:
 - Different `rootDir` and `include` patterns (must list both suite files and utility files explicitly)
-- Separate `outDir` (`tests/integration/out/`)
+- `rootDir: ../..` (the `vsix/` root) with `outDir: ../../out`, so the suite compiles to `out/tests/e2e/suite/index.js` — the exact path `runTests.js` passes as `extensionTestsPath`
 - `rootDir` must exactly match the directory containing all compiled source files
 
 ---
@@ -412,10 +435,12 @@ Integration tests use a **separate** `tests/integration/tsconfig.json` from the 
 | `npm run watch` | `tsc -watch -p ./` |
 | `npm run test` | Jest unit tests |
 | `npm run test:coverage` | Jest with coverage report |
-| `npm run test:integration` | Compile + compile integration tests + run electron |
+| `npm run test:e2e` | Compile + compile e2e tests + run electron (VSIX e2e axis) |
 | `npm run lint` | ESLint on `src/` |
 | `vscode:prepublish` | `compile` |
 
-**TypeScript config**: `target: ES2020`, `module: CommonJS`, `strict: true`, `outDir: out/`, `rootDir: src/`. Compiled JS files must only exist in `out/` — any `.js` in `src/` indicates misconfiguration.
+**TypeScript config**: `target: ES2020`, `module: CommonJS`, `strict: true`, `outDir: out/`, `rootDir: .` with `include: src/**/*`, so `src/` compiles to `out/src/` (`main` is `out/src/extension.js`); the e2e suite compiles to `out/tests/` via its own `tests/e2e/tsconfig.json`. Compiled JS files must only exist in `out/` — any `.js` in `src/` indicates misconfiguration.
 
 **Versioning**: the project-root `VERSION` file is the single source of truth for both the Python app and the VSIX. `vsix/build.sh` reads `../VERSION` and rewrites the `version` field in `package.json` before invoking `vsce package`. `tests/version.test.ts` asserts `package.json.version` equals the `VERSION` file, so drift between the two fails the unit suite.
+
+**Packaging**: there is no bundler — `out/src/extension.js` `require()`s the runtime `dependencies` of `package.json` (`smol-toml`) from `node_modules/` at activation, so the `.vsix` must carry them. `vsce` collects the production dependency tree itself (dev dependencies never enter the `.vsix`) and applies `.vscodeignore` to those files too, so `.vscodeignore` must not exclude `node_modules/`. It excludes the sources, tests (`src/`, `tests/`, `out/tests/`), `tsconfig.json` and the build/install scripts, so the `.vsix` carries `out/src/`, `media/`, `package.json`, `LICENSE` and the production dependencies. `vsix/build.sh` guards this: before `vsce package` it runs `vsce ls` (the same file collection) and fails, naming the dependency, unless `node_modules/<dep>/package.json` is listed for every runtime dependency. `vsce` is fetched as the latest `@vscode/vsce` via `npx --yes` and needs Node >= 22; the CI jobs that use Node run on `node:24-trixie-slim`.

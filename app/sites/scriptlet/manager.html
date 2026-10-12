@@ -26,6 +26,7 @@
         <script src="/files/js/jquery.min.js"></script>
         <script src="/files/js/js.cookie.min.js"></script>
         <script src="/files/js/bootstrap/bootstrap.bundle.min.js"></script>
+        <script src="/files/js/pyops-alert.js"></script>
 
         <script>
             const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
@@ -220,15 +221,24 @@
 
             function refreshList() {
                 const scrollY = window.scrollY;
-                fetch("/scriptlet/inventory/list").then(async (r)=>{
+                Promise.all([fetch("/scriptlet/inventory/list"), fetch("/scriptlet/inventory/sets")]).then(async ([r, rs])=>{
                     console.debug("GET", "/scriptlet/inventory/list", r)
+                    if(!rs.ok) {
+                        await pyopsAlert.loadFailed("Set list", rs);
+                        return;
+                    }
+                    pyopsAlert.loaded("Set list");
                     if(r.ok) {
+                        pyopsAlert.loaded("Scriptlet list");
                         const d = await r.json();
-                        console.debug("scriptlets", d);
+                        const sets = (await rs.json()).sets;
+                        console.debug("scriptlets", d, "sets", sets);
 
-                        // Group incoming scriptlets by set; within a set the
-                        // row key is the scriptlet name.
+                        // Every set gets a section — also one without
+                        // scriptlets yet. Group incoming scriptlets by set;
+                        // within a set the row key is the scriptlet name.
                         const bySet = {};
+                        for(const set of sets) bySet[set] = [];
                         for(const i of d) (bySet[i.set] = bySet[i.set] || []).push(i);
 
                         for(const set of Object.keys(bySet)) {
@@ -266,7 +276,7 @@
                             card.find("[data-set-count]").text(items.length);
                         }
 
-                        // Drop sets that no longer have any scriptlets.
+                        // Drop sets that no longer exist.
                         const liveSets = new Set(Object.keys(bySet));
                         $("#sets-container").children("[data-set]").each(function() {
                             if(!liveSets.has($(this).attr("data-set"))) $(this).remove();
@@ -274,8 +284,8 @@
 
                         window.scrollTo(0, scrollY);
                     } else
-                        console.error("GET", "/scriptlet/inventory/list", r.statusText);
-                }).catch((e)=>console.error("GET", "/scriptlet/inventory/list", e.toString()));
+                        await pyopsAlert.loadFailed("Scriptlet list", r);
+                }).catch((e)=>pyopsAlert.loadError("Scriptlet list", e));
             }
 
             function enqueueRefreshList() {
@@ -292,6 +302,7 @@
             function populateSets() {
                 fetch("/scriptlet/inventory/sets").then(async (r)=>{
                     if(r.ok) {
+                        pyopsAlert.loaded("Set list");
                         const d = await r.json();
                         console.debug("sets", d.sets);
                         const select = $("#createModal-set");
@@ -300,8 +311,8 @@
                             select.append(`<option value="${set}">${set}</option>`);
                         }
                     } else
-                        console.error("GET", "/scriptlet/inventory/sets", r.statusText);
-                }).catch((e)=>console.error("GET", "/scriptlet/inventory/sets", e.toString()));
+                        await pyopsAlert.loadFailed("Set list", r);
+                }).catch((e)=>pyopsAlert.loadError("Set list", e));
             }
 
             function onEditTask(set, name) {
@@ -326,15 +337,9 @@
                     if (r.ok) {
                         const d = await r.json();
                         console.debug("run draft", d.job);
-                    } else {
-                        const t = await r.text();
-                        console.error("run draft failed", r.status, t);
-                        alert(`Failed to enqueue draft for ${set}/${name}: ${t}`);
-                    }
-                }).catch((e) => {
-                    console.error("run draft error", e.toString());
-                    alert(`Failed to enqueue draft for ${set}/${name}: ${e}`);
-                });
+                    } else
+                        await pyopsAlert.failed(`Run draft ${set}::${name}`, r);
+                }).catch((e) => pyopsAlert.error(`Run draft ${set}::${name}`, e));
             }
 
             function onRunTestTask(set, name) {
@@ -353,15 +358,9 @@
                     if (r.ok) {
                         const d = await r.json();
                         console.debug("run test", d.job);
-                    } else {
-                        const t = await r.text();
-                        console.error("run test failed", r.status, t);
-                        alert(`Failed to enqueue test for ${set}/${name}: ${t}`);
-                    }
-                }).catch((e) => {
-                    console.error("run test error", e.toString());
-                    alert(`Failed to enqueue test for ${set}/${name}: ${e}`);
-                });
+                    } else
+                        await pyopsAlert.failed(`Run test ${set}::${name}`, r);
+                }).catch((e) => pyopsAlert.error(`Run test ${set}::${name}`, e));
             }
 
             function onEditLibrary(set, name) {
@@ -445,8 +444,8 @@
                         if(r.ok)
                             enqueueRefreshList();
                         else
-                            console.error("DELETE", `/scriptlet/inventory/item?set=${set}&name=${name}`, r.statusText);
-                    }).catch((e)=>console.error("DELETE", `/scriptlet/inventory/item?set=${set}&name=${name}`, e.toString()));
+                            await pyopsAlert.failed(`Delete ${set}::${name}`, r);
+                    }).catch((e)=>pyopsAlert.error(`Delete ${set}::${name}`, e));
                 }
             }
 
@@ -482,7 +481,7 @@
                             </button>
                         </li>
 
-                        <li class="nav-item mx-auto"></li>
+                        <li class="nav-item mx-auto"><span id="pyops-load-status" class="navbar-text text-warning" data-testid="pyops-load-status" hidden></span></li>
 
                         <li class="nav-item m-1">
                             <button type="button" class="btn btn-success" onclick="refreshList()" title="Reload the scriptlet list" data-testid="manager-refresh">

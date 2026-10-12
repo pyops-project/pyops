@@ -11,13 +11,13 @@ const serverUrl = args.find(arg => arg.startsWith('--server='))?.split('=')[1] |
 
 async function main() {
   try {
-    console.log('Starting integration test setup...');
+    console.log('Starting e2e test setup...');
 
     // The folder containing the Extension Manifest package.json
     const extensionDevelopmentPath = path.resolve(__dirname, '../..');
 
     // The path to the test runner script that will run in VS Code environment
-    const extensionTestsPath = path.resolve(extensionDevelopmentPath, 'out/tests/integration/suite/index.js');
+    const extensionTestsPath = path.resolve(extensionDevelopmentPath, 'out/tests/e2e/suite/index.js');
 
     // Create .tmp directory in vsix
     const tmpDir = path.resolve(__dirname, '../../.tmp');
@@ -129,9 +129,9 @@ async function main() {
       },
     });
 
-    console.log('Integration tests completed successfully');
+    console.log('E2E tests completed successfully');
   } catch (err) {
-    console.error('Failed to run integration tests:', err);
+    console.error('Failed to run e2e tests:', err);
     process.exit(1);
   }
 }

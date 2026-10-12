@@ -4,6 +4,7 @@ import * as path from 'path';
 import { TreeDataProvider, TreeItem, EventEmitter } from 'vscode';
 import { inferExt } from './utils';
 import { ApiClient } from './apiClient';
+import { errorText } from './errorText';
 
 interface ScriptletTreeItem extends TreeItem {
     set?: string;
@@ -35,7 +36,13 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
     private _outputChannel: vscode.OutputChannel;
     private _apiClient: ApiClient;
     private _scriptlets: ScriptletInfo[] = [];
+    // The set nodes: every set the server lists (also one without
+    // scriptlets yet) plus the sets of local-only scriptlets.
+    private _sets: string[] = [];
     private _syncStatus: Map<string, boolean> = new Map();
+    // Overlapping refreshes (auto-refresh timer + refresh command) can answer out
+    // of order; only the most recently started one may update the tree.
+    private _refreshSeq: number = 0;
     private _lastScriptletErrorShown: number = 0;
 
     constructor(context: vscode.ExtensionContext, outputChannel: vscode.OutputChannel, apiClient: ApiClient) {
@@ -107,15 +114,14 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
             return [];
         } else {
             // Root: sets only (commands via toolbar)
-            if (this._scriptlets.length === 0 && isValidConfig) {
+            if (this._sets.length === 0 && isValidConfig) {
                 await this.refresh();
             }
-            if (this._scriptlets.length === 0) {
+            if (this._sets.length === 0) {
                 return [new TreeItem('No scriptlets available', vscode.TreeItemCollapsibleState.None)];
             }
 
-            const sets = [...new Set(this._scriptlets.map(s => s.set))].sort();
-            const setItems: TreeItem[] = sets.map(g => {
+            const setItems: TreeItem[] = this._sets.map(g => {
                 const gi = new TreeItem(g, vscode.TreeItemCollapsibleState.Collapsed);
                 gi.contextValue = 'pyopsSet';
                 gi.iconPath = new vscode.ThemeIcon('folder');
@@ -136,12 +142,13 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
                 return Array.isArray(scriptlets) ? scriptlets as ScriptletInfo[] : [];
 
             } else {
+                const message = `Failed to fetch scriptlets: ${await errorText(response)}`;
                 const now = Date.now();
                 if (now - this._lastScriptletErrorShown > 30000) {
-                    vscode.window.showErrorMessage(`Failed to fetch scriptlets: ${response.statusText}`);
+                    vscode.window.showErrorMessage(message);
                     this._lastScriptletErrorShown = now;
                 }
-                this._outputChannel.appendLine(`Failed to fetch scriptlets: ${response.statusText}`);
+                this._outputChannel.appendLine(message);
                 return [];
             }
         } catch (error: unknown) {
@@ -154,6 +161,33 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
             this._outputChannel.appendLine(`Error fetching scriptlets: ${errorMessage}`);
             return [];
         }
+    }
+
+    private async fetchSets(): Promise<string[]> {
+        try {
+            const response = await this._apiClient.fetch('/scriptlet/inventory/sets');
+            if (response.ok) {
+                const body = await response.json() as { sets?: unknown };
+                return Array.isArray(body.sets) ? body.sets as string[] : [];
+            }
+            this.showFetchError(`Failed to fetch sets: ${await errorText(response)}`);
+            return [];
+        } catch (error: unknown) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            this.showFetchError(`Error fetching sets: ${errorMessage}`);
+            return [];
+        }
+    }
+
+    // Shown like a failed scriptlet list: an error message at most every
+    // 30 s (shared with fetchScriptlets), and the output channel.
+    private showFetchError(message: string): void {
+        const now = Date.now();
+        if (now - this._lastScriptletErrorShown > 30000) {
+            vscode.window.showErrorMessage(message);
+            this._lastScriptletErrorShown = now;
+        }
+        this._outputChannel.appendLine(message);
     }
 
     private async downloadScriptlets(scriptlets: ScriptletInfo[]): Promise<void> {
@@ -190,7 +224,7 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
                     this._syncStatus.set(key, isSynced);
                 } else {
                     this._syncStatus.set(key, false);
-                    console.error(`Failed to fetch ${sObj.set}::${sObj.name}: ${response.statusText}`);
+                    console.error(`Failed to fetch ${sObj.set}::${sObj.name}: ${await errorText(response)}`);
                 }
             } catch (error: unknown) {
                 this._syncStatus.set(key, false);
@@ -256,6 +290,24 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
         return vscode.workspace.getConfiguration('pyops').get('excludedSets', []) as string[];
     }
 
+    private getIncludedSets(): string[] {
+        return vscode.workspace.getConfiguration('pyops').get('includedSets', []) as string[];
+    }
+
+    // Whitelist wins: if `includedSets` is non-empty, show only those sets and
+    // ignore `excludedSets`; otherwise fall back to the `excludedSets` blacklist.
+    private isSetShown(set: string): boolean {
+        const includedSets = this.getIncludedSets();
+        if (includedSets.length > 0) {
+            return includedSets.includes(set);
+        }
+        return !this.getExcludedSets().includes(set);
+    }
+
+    private filterSets(scriptlets: ScriptletInfo[]): ScriptletInfo[] {
+        return scriptlets.filter(s => this.isSetShown(s.set));
+    }
+
 
     async downloadScriptlet(scriptletItem: ScriptletTreeItem): Promise<void> {
         if (!scriptletItem.set || !scriptletItem.scriptletName || !scriptletItem.scriptletType) return;
@@ -280,7 +332,7 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
                 this._syncStatus.set(key, true);
             } else {
                 this._syncStatus.set(key, false);
-                console.error(`Failed to fetch ${sObj.set}::${sObj.name}: ${response.statusText}`);
+                console.error(`Failed to fetch ${sObj.set}::${sObj.name}: ${await errorText(response)}`);
             }
         } catch (error: unknown) {
             this._syncStatus.set(key, false);
@@ -290,21 +342,29 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
     }
 
     async refresh(): Promise<void> {
+        const seq = ++this._refreshSeq;
         const isValidConfig = this._apiClient.hasValidConfig();
         if (!isValidConfig) {
             this._scriptlets = [];
+            this._sets = [];
             this._onDidChangeTreeData.fire();
             return;
         }
 
         const remoteScriptlets = await this.fetchScriptlets();
+        const remoteSets = await this.fetchSets();
         const remoteKeys = new Set(remoteScriptlets.map(s => `${s.set}-${s.name}-${s.type}`));
         const localScriptlets = await this.scanLocalScriptlets();
+        if (seq !== this._refreshSeq) {
+            return;
+        }
         const localOnlyScriptlets = localScriptlets.filter(l => !remoteKeys.has(`${l.set}-${l.name}-${l.type}`));
-        let allScriptlets = [...remoteScriptlets, ...localOnlyScriptlets];
-        const excludedSets = this.getExcludedSets();
-        allScriptlets = allScriptlets.filter(s => !excludedSets.includes(s.set));
+        const allScriptlets = this.filterSets([...remoteScriptlets, ...localOnlyScriptlets]);
         this._scriptlets = allScriptlets;
+        this._sets = [...new Set([
+            ...remoteSets.filter(set => this.isSetShown(set)),
+            ...allScriptlets.map(s => s.set),
+        ])].sort();
         this._syncStatus.clear();
         const remoteOnly = allScriptlets.filter(s => !s.isLocalOnly);
         if (remoteOnly.length > 0) {

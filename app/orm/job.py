@@ -18,3 +18,8 @@ class Job(Base):
     overrides = Column(String, default=None)
     start = Column(DateTime, index=True)
     end = Column(DateTime, index=True)
+    schedule_id = Column(Integer, index=True)
+    # When the runner started terminating the job (cancel or shutdown);
+    # NULL while it has not. A completion the job reports decides the state
+    # only if the job finished before this time (see runner.finishJob).
+    term_start = Column(DateTime)

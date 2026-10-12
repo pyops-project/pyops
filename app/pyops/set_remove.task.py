@@ -17,6 +17,7 @@ import shutil
 def main():
     if not name:
         raise ValueError("name is required")
+    validate_set_name(name)
     if name == "pyops":
         raise ValueError("'pyops' is pyops-managed and cannot be removed")
 

@@ -296,3 +296,102 @@ class TestSeedTestModules:
             assert "consumer_tests" in sys.modules
         finally:
             sys.modules.pop("consumer_tests", None)
+
+
+class TestScanClassesEntries:
+    def test_non_python_entries_skipped(self, lib):
+        """Only *.py sources are parsed — a __pycache__ dir left by an earlier
+        run or a stray text file in the library tree is ignored."""
+        test_src = lib["_test_src"]
+        os.mkdir(os.path.join(test_src, "__pycache__"))
+        with open(os.path.join(test_src, "notes.txt"), "w") as f:
+            f.write("class TestNotes:\n    def test_x(self): pass\n")
+        with open(os.path.join(test_src, "unit_tests.py"), "w") as f:
+            f.write("class TestWork:\n    def test_x(self): pass\n")
+        assert set(lib["_scan_classes"]()) == {"TestWork"}
+
+
+class TestPytestRun:
+    """pytest_run as a task's __test__ block calls it (exec'd code whose
+    globals are the task namespace), with pytest.main and the per-venv
+    .pth writer stubbed."""
+
+    STEM = "pyops_run_probe_tests"
+
+    @pytest.fixture
+    def probe(self, lib, monkeypatch):
+        """A materialised test library plus recorders for pytest.main (returns
+        probe["exit_code"]) and the .pth writer; the test module seeded into
+        sys.modules is removed afterwards."""
+        import sys
+        import pytest as pytest_module
+        with open(os.path.join(lib["_test_src"], f"{self.STEM}.py"), "w") as f:
+            f.write("class TestProbe:\n    def test_ok(self):\n        assert seeded_value == 42\n")
+        state = {"exit_code": 0, "args": None, "pth_calls": 0}
+
+        def fake_main(args):
+            state["args"] = list(args)
+            return state["exit_code"]
+
+        def fake_pth():
+            state["pth_calls"] += 1
+
+        monkeypatch.setattr(pytest_module, "main", fake_main)
+        monkeypatch.setitem(lib, "_subprocess_coverage_pth", fake_pth)
+        # pytest_run sets COVERAGE_PROCESS_START; setenv records the original
+        # state so teardown restores it (delenv of an absent variable records
+        # nothing).
+        monkeypatch.setenv("COVERAGE_PROCESS_START", "")
+        monkeypatch.delenv("COVERAGE_PROCESS_START")
+        sys.modules.pop(self.STEM, None)
+        yield state
+        sys.modules.pop(self.STEM, None)
+
+    def _run_from_task(self, lib, call):
+        exec(call, {"pytest_run": lib["pytest_run"], "seeded_value": 42})
+
+    def _lib_file(self):
+        return os.path.join(".test", "src", "myset", "library", f"{self.STEM}.py")
+
+    def test_runs_resolved_tests_with_coverage(self, lib, probe):
+        import sys
+        self._run_from_task(lib, "pytest_run(['TestProbe::test_ok'], args=['-q'])")
+
+        assert probe["args"] == [
+            f"{self._lib_file()}::TestProbe::test_ok", "-p", "no:cacheprovider", "--no-header",
+            "--cov=.test/src/myset", "--cov-config=.test/.coveragerc", "--cov-report=term-missing",
+            "--cov-report=html:htmlcov", "--cov-report=xml:coverage.xml", "-q",
+        ]
+        with open(os.path.join(".test", ".coveragerc")) as f:
+            assert "[paths]" in f.read()
+        assert os.environ["COVERAGE_PROCESS_START"] == os.path.abspath(os.path.join(".test", ".coveragerc"))
+        assert probe["pth_calls"] == 1
+        # The test module was seeded with the calling task's namespace.
+        assert sys.modules[self.STEM].seeded_value == 42
+
+    @pytest.mark.parametrize("args, hide_pytest_cov", [(["--no-cov"], False), (None, True)],
+                             ids=["no_cov_arg", "pytest_cov_missing"])
+    def test_runs_without_coverage(self, lib, probe, monkeypatch, args, hide_pytest_cov):
+        import sys
+        if hide_pytest_cov:
+            monkeypatch.setitem(sys.modules, "pytest_cov", None)
+        self._run_from_task(lib, f"pytest_run(['TestProbe'], args={args!r})")
+
+        assert probe["args"] == [f"{self._lib_file()}::TestProbe", "-p", "no:cacheprovider", "--no-header",
+                                 *(args or [])]
+        assert not os.path.exists(os.path.join(".test", ".coveragerc"))
+        assert "COVERAGE_PROCESS_START" not in os.environ
+        assert probe["pth_calls"] == 0
+
+    def test_failing_tests_exit_with_pytest_code(self, lib, probe):
+        probe["exit_code"] = 1
+        with pytest.raises(SystemExit) as exc:
+            self._run_from_task(lib, "pytest_run(['TestProbe'], args=['--no-cov'])")
+        assert exc.value.code == 1
+
+    def test_task_without_libraries_names_no_known_classes(self, lib, monkeypatch):
+        """No library materialised for the set (the task imports none):
+        the requested class is reported as not found, with no known classes."""
+        monkeypatch.setitem(lib, "setname", "nolibs")
+        with pytest.raises(ValueError, match=r"Test class 'TestProbe' not found in any imported library\. Known classes: \[\]"):
+            self._run_from_task(lib, "pytest_run(['TestProbe'])")

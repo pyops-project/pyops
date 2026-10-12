@@ -28,7 +28,7 @@ Stored in `etc/pyops.json` (override path via `PYOPS_CONFIG` env var):
 - `web`: `{"bind": "127.0.0.1:8000", "worker": 8, "timeout": 300, "expanded_sets": []}`
 - `brand` *(optional, per-instance branding for the operator UI)*: `{"title": "PyOps", "icon": "miscellaneous_services", "favicon": null}` — `title` lands in the browser tab and the sidebar header; `icon` is either a material-icons-round glyph name (default) or a path to a PNG/SVG/etc. served via `/brand/icon`; `favicon` is an optional path served at `/favicon.ico`. Paths may be absolute or relative to the project root. Defaults reproduce the bundled pyops look.
 - `data`: `{"jobs": "data/jobs", "git": "data/git", "db": "data/app.db"}`
-- `runner`: `{"venv": "data/venv", "pkg": "data/pkg", "git_pull_interval": 60, "drop_done_delay_seconds": 60}`
+- `runner`: `{"venv": "data/venv", "pkg": "data/pkg", "git_pull_interval": 60, "drop_done_delay_seconds": 60, "shutdown_timeout_seconds": 30}`
 - `log`: `{"loglevel": "debug"}`
 
 ## Features
@@ -85,8 +85,9 @@ services:
     # Clean shutdown chain on `docker compose down`:
     #   docker SIGTERM → gunicorn master → workers drain (graceful_timeout=120s
     #   in app/gunicorn.py) → on_exit() SIGTERMs the runner subprocess →
-    #   runner runs _shutdown_job_processes (15s timeout). Total worst-case
-    #   ≈ 135s. Docker's default stop_grace_period of 10s SIGKILLs the
+    #   runner runs _shutdown_job_processes (runner.shutdown_timeout_seconds,
+    #   default 30s). Total worst-case ≈ 150s. Docker's default
+    #   stop_grace_period of 10s SIGKILLs the
     #   container before that chain finishes, which leaves service rows in
     #   "running" state on disk; the next start then marks them failed
     #   with detail "incomplete execution detected on startup".

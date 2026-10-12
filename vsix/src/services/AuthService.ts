@@ -1,9 +1,20 @@
 import * as vscode from 'vscode';
 
+import { resolveConnectivity, usesPromptPassword } from '../connectivity';
+
 export class AuthService {
     static async setupAuth(context: vscode.ExtensionContext, outputChannel: vscode.OutputChannel): Promise<void> {
-        const pyopsConfig = vscode.workspace.getConfiguration('pyops');
-        const username = pyopsConfig.get('username') as string;
+        const c = resolveConnectivity();
+        if (c.authMode === 'x-user') {
+            outputChannel.appendLine('Auth mode: X-User (direct); no password required');
+            return;
+        }
+        if (!usesPromptPassword(c)) {
+            // Basic Auth password comes from the profile's api_key — nothing to prompt.
+            outputChannel.appendLine(`Auth: using api_key from profile '${c.profileName}'`);
+            return;
+        }
+        const username = c.username;
         let password = await context.secrets.get('pyops.password');
         if (username && !password) {
             password = await vscode.window.showInputBox({

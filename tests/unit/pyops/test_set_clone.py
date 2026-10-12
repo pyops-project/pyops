@@ -2,11 +2,12 @@
 in particular.
 
 The task normally runs inside the pyops runner with `appspace`,
-`config`, and the param-injected globals (`url`, `username`,
-`password`, `git_name`, `git_email`); `#!{::set}` adds set.library's
-symbols to the exec namespace. The fixture below mirrors that setup
-and replaces `run_cmd` + the file-write side-effect so the credential
-rewrite logic can be inspected in isolation."""
+`config`, `validate_set_name` (runner-injected for the pyops set) and the
+param-injected globals (`url`, `username`, `password`, `git_name`,
+`git_email`); `#!{::set}` adds set.library's symbols to the exec
+namespace. The fixture below mirrors that setup and replaces `run_cmd` +
+the file-write side-effect so the credential rewrite logic can be
+inspected in isolation."""
 
 import os
 
@@ -20,6 +21,7 @@ PYOPS_SET_DIR = os.path.normpath(os.path.join(
 
 @pytest.fixture
 def task(tmp_path, monkeypatch):
+    from app.lib.git import validate_set_name
     git_base = tmp_path / "data" / "git"
     git_base.mkdir(parents=True)
 
@@ -33,6 +35,7 @@ def task(tmp_path, monkeypatch):
                 "pkg": str(tmp_path / "data" / "pkg"),
             },
         },
+        "validate_set_name": validate_set_name,
         "name": None,
     }
     (tmp_path / "app").mkdir(exist_ok=True)
@@ -140,3 +143,50 @@ class TestSetCloneCredentialRewrite:
         cred_file = target / ".git" / "credentials"
         assert cred_file.is_file()
         assert cred_file.read_text().strip() == "https://bot:t0k@example.com"
+
+
+class TestSetCloneValidation:
+    """Input checks before anything is cloned, and the optional git identity."""
+
+    _run_clone = TestSetCloneCredentialRewrite._run_clone
+
+    @pytest.mark.parametrize("url, message", [
+        ("", "url is required"),
+        ("https://example.com", "Cannot determine repo name from URL: https://example.com"),
+        ("https://example.com/g/.git", "Empty repo name inferred from URL: https://example.com/g/.git"),
+        ("https://example.com/g/pyops.git", "'pyops' is reserved for pyops-managed scriptlets"),
+    ], ids=["missing", "no_path", "empty_name", "reserved"])
+    def test_invalid_url_rejected(self, task, url, message):
+        calls = _install_recording_run_cmd(task)
+        with pytest.raises(ValueError) as exc:
+            self._run_clone(task, url=url)
+        assert str(exc.value) == message
+        assert calls == []
+
+    @pytest.mark.parametrize("url", [
+        "https://example.com/g/..",
+        "https://example.com/g/..git",
+    ], ids=["dotdot", "dot"])
+    def test_invalid_derived_set_name_rejected(self, task, url):
+        """The URL's last segment names the set directory; one that is not
+        a single directory name under the git base ('..' is its parent,
+        '.' the base itself) is refused before anything is touched."""
+        from app.lib.git import InvalidSetNameError
+        calls = _install_recording_run_cmd(task)
+        with pytest.raises(InvalidSetNameError):
+            self._run_clone(task, url=url)
+        assert calls == []
+
+    def test_existing_set_rejected(self, task):
+        (task["_git_base_path"] / "r").mkdir()
+        calls = _install_recording_run_cmd(task)
+        with pytest.raises(ValueError, match="Set 'r' already exists."):
+            self._run_clone(task, url="https://example.com/g/r.git")
+        assert calls == []
+
+    def test_git_identity_configured_in_clone(self, task):
+        calls = _install_recording_run_cmd(task)
+        self._run_clone(task, url="https://example.com/g/r.git", git_name="Ops Bot", git_email="ops@example.com")
+        target = str(task["_git_base_path"] / "r")
+        assert {"cmd": ["git", "config", "user.name", "Ops Bot"], "cwd": target} in calls
+        assert {"cmd": ["git", "config", "user.email", "ops@example.com"], "cwd": target} in calls

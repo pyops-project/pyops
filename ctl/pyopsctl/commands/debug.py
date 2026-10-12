@@ -269,16 +269,19 @@ def _attach(args) -> int:
 def _stop(args) -> int:
     profile = load(args)
     with Client(profile, timeout=args.timeout) as c:
-        c.get("/scriptlet/job/cancel", params={"id": args.job_id})
-        # Release the port lease so the pool reclaims it for the next
-        # `debug start` against this profile.
-        released = ports.release_for_job(profile.name, args.job_id)
-        emit(args, {"job_id": args.job_id, "state": "cancel",
-                    "released_port": released if released > 0 else None},
-             id_field="job_id",
-             human=f"debug job {args.job_id} cancel requested" + (
-                 f"; released port {released}" if released > 0 else ""))
-        return 0
+        cancelled = c.cancel_job(args.job_id)
+    # The job is cancelled, or had already finished (409): either way its
+    # port is free — release the lease so the pool reclaims it for the
+    # next `debug start` against this profile. On any other error the
+    # cancel raised above and the lease stays (the job may still run).
+    released = ports.release_for_job(profile.name, args.job_id)
+    emit(args, {"job_id": args.job_id, "state": "cancel" if cancelled else "finished",
+                "released_port": released if released > 0 else None},
+         id_field="job_id",
+         human=f"debug job {args.job_id} "
+               + ("cancel requested" if cancelled else "already finished")
+               + (f"; released port {released}" if released > 0 else ""))
+    return 0
 
 
 # ---------------------------------------------------------------------------

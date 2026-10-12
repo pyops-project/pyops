@@ -55,10 +55,10 @@ class TestSetupJobGlobals:
 
 
 class TestPyopsSetExtraGlobals:
-    """Scriptlets in the pyops-managed `pyops` set get two extra globals
-    so they can introspect the running pyops install without importing from
-    `app.*` (forbidden — scriptlets stay self-contained, interfacing with
-    pyops only via control/listener/globals)."""
+    """Scriptlets in the pyops-managed `pyops` set get extra globals so
+    they can introspect and act on the running pyops install without
+    importing from `app.*` (forbidden — scriptlets stay self-contained,
+    interfacing with pyops only via control/listener/globals)."""
 
     def _call(self, setname):
         from app import job_runner
@@ -79,10 +79,25 @@ class TestPyopsSetExtraGlobals:
                 name="set_clone",
             )
 
-    def test_user_set_does_not_have_appspace_or_config(self):
+    def test_user_set_does_not_have_pyops_set_globals(self):
         glob = self._call("myops")
-        assert "appspace" not in glob
-        assert "config" not in glob
+        for key in ("appspace", "config", "validate_set_name", "CORE_DEPS"):
+            assert key not in glob
+
+    def test_pyops_set_exposes_set_name_check(self):
+        """The sets data service and the set_* tasks validate set names
+        with the same check the scriptlet routes apply — handed over by
+        the runner instead of imported from app.lib.git."""
+        from app.lib import git
+        glob = self._call("pyops")
+        assert glob["validate_set_name"] is git.validate_set_name
+
+    def test_pyops_set_exposes_core_deps(self):
+        """set_update_deps upgrades the very list every set venv is
+        created with (single source: app.lib.sets.CORE_DEPS)."""
+        from app.lib import sets
+        glob = self._call("pyops")
+        assert glob["CORE_DEPS"] is sets.CORE_DEPS
 
     def test_pyops_set_exposes_appspace(self):
         glob = self._call("pyops")

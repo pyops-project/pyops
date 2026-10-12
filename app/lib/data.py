@@ -13,6 +13,12 @@ mirroring the pattern in `lib/git.py:repo_lock` and
 `lib/sets.py:set_install_lock`. Different data files in the same set use
 different lock files so unrelated I/O does not serialise.
 
+Names: a data name follows the rule of every scriptlet name,
+`[A-Za-z0-9_-]+` (`app.lib.git.validate_scriptlet_name`), so whatever a
+job writes is listed and editable through the inventory API and the
+Manager; any other name raises `InvalidScriptletNameError` (a
+`ValueError`).
+
 Name uniqueness: a `name` is unique within a set's `data/` regardless of
 format. `config.yaml` and `config.json` cannot coexist; the second
 create raises `FileExistsError`. This matches operator expectations
@@ -31,6 +37,8 @@ import json
 import os
 from contextlib import contextmanager
 from typing import Any, ContextManager, Iterator
+
+from .git import is_valid_name, validate_scriptlet_name
 
 # `yaml` is imported lazily inside `_deserialise` / `_serialise` so that
 # scriptlets in sets that don't carry yaml/json data files don't pay the
@@ -58,15 +66,15 @@ class SetData:
     # ------------------------------------------------------------------ public API
 
     def list(self) -> list[str]:
-        """Return the names (no extension) of every data file in the set."""
+        """Return the names (no extension) of every data file in the set
+        — the files `read` accepts: a file whose name is not a valid data
+        name is not listed (as in the inventory listing)."""
         if not os.path.isdir(self._dir):
             return []
         names = []
         for filename in os.listdir(self._dir):
-            if filename.startswith("."):
-                continue
             base, ext = os.path.splitext(filename)
-            if ext.lstrip(".").lower() in _SUPPORTED_EXTS:
+            if ext.lstrip(".").lower() in _SUPPORTED_EXTS and is_valid_name(base):
                 names.append(base)
         return sorted(names)
 
@@ -127,12 +135,9 @@ class SetData:
     # ------------------------------------------------------------------ internals
 
     def _validate_name(self, name: str) -> None:
-        if not name or not isinstance(name, str):
-            raise ValueError("data name must be a non-empty string")
-        if any(c in name for c in ("/", "\\")) or ".." in name:
-            raise ValueError(f"invalid data name (no path separators or '..'): {name!r}")
-        if name.startswith("."):
-            raise ValueError(f"data name must not start with '.': {name!r}")
+        """The scriptlet name rule (see module docstring); raises
+        InvalidScriptletNameError."""
+        validate_scriptlet_name(name)
 
     def _ensure_dirs(self) -> None:
         os.makedirs(self._dir, exist_ok=True)

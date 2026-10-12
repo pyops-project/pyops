@@ -6,18 +6,22 @@ PyOps is an execution platform for Python operations scriptlets, licensed under 
 
 ### VSIX Installation and Configuration
 
-- **Install**: In VSCode, go to Extensions view > ... > Install from VSIX > select `vsix/pyops.vsix`.
+- **Install**: In VSCode, go to Extensions view > ... > Install from VSIX > select `vsix/pyops-<VERSION>.vsix` (built by `vsix/build.sh`).
 - **Configure** workspace settings (Ctrl+, > Workspace tab, or `Preferences: Open Workspace Settings (JSON)`):
   ```json
   {
+    "pyops.profile": "",            // Client-config profile to inherit connectivity from (empty → the file's default_profile)
     "pyops.serverUrl": "http://localhost:8000",
     "pyops.localPyopsDir": "pyops",
     "pyops.autoRefreshInterval": 10,
-    "pyops.username": "anonymous",  // Optional for Basic Auth (X-User header; password prompted & stored securely in workspace state)
-    "pyops.excludedSets": []        // Sets to hide from the manager tree view
+    "pyops.authMode": "basic",      // "basic" (Basic Auth, via an auth proxy) or "x-user" (send X-User directly, no password)
+    "pyops.username": "anonymous",  // Basic Auth username, or the X-User identity in x-user mode
+    "pyops.excludedSets": [],       // Sets to hide from the manager tree view (blacklist)
+    "pyops.includedSets": []        // If non-empty, only these sets are shown and excludedSets is ignored (whitelist)
   }
   ```
-- **Auth**: Set `pyops.username`; extension prompts for password on first API call (stored securely in workspace state).
+- **Connectivity profile**: if the shared PyOps client config `~/.config/pyops/config.toml` exists (the file `pyopsctl` reads, see *pyopsctl → Configure* below; override via `PYOPSCTL_CONFIG`), the extension takes `serverUrl`, `username`, auth and `debugPorts` from the profile named by `pyops.profile` (empty → the file's `default_profile`). Any of those `pyops.*` settings you set explicitly overrides the profile's value; without the file (or a matching profile) the settings are used as-is. The set black/whitelist and the other settings are always VSCode-only.
+- **Auth**: `basic` — set `pyops.username`; the extension prompts for the password on first API call (stored securely in workspace state). With a profile, its `api_key` is used as the password with no prompt — unless `pyops.username` remaps a different user onto the profile, which brings the prompt back. `x-user` — the extension sends `X-User: <username or "vsix">` with no password, for direct connections to a server that trusts the header (dev / no auth proxy). `pyops.authMode` defaults to `basic`, also with a profile; set it to `x-user` for a profile without `api_key` that connects directly.
 - **Status**: Status bar shows connection (requires valid `pyops.serverUrl`).
 
 VSIX provides pyops-container in sidebar/activitybar:
@@ -48,16 +52,18 @@ Cline outputs full file content; paste/replace in editor, then save via VSIX. It
 
 ## VSIX Workflow
 
-- **Create Scriptlet**: pyops-manager titlebar > Create Scriptlet (prompts for set/type/name); opens local `pyops/{set}/{type}/{name}.{ext}` (.py for task/service/library/controller, .html for view, .md for markdown, .js for jslibrary, .yaml for data). The server stores markdown as `docs/{name}.md` (or `README.md` if name=README) and data as `data/{name}.{yaml,json}`; the per-type subdir layout is a client-side convention.
+- **Create Scriptlet**: pyops-manager titlebar > Create Scriptlet (prompts for set/type/name; every set on the server is offered, also one without scriptlets yet); opens local `pyops/{set}/{type}/{name}.{ext}` (.py for task/service/library/controller, .html for view, .md for markdown, .js for jslibrary, .yaml for data). The server stores markdown as `docs/{name}.md` (or `README.md` if name=README) and data as `data/{name}.{yaml,json}`; the per-type subdir layout is a client-side convention.
 - **Edit/Generate**: Use VSCode/Cline to code. Edit local file.
 - **Sync**: Right-click > Reset Local from Remote (download draft), Write Local to Remote Draft (upload — unstaged). To commit + push, open the Sets view and click "Commit drafts" on the set; a modal previews the porcelain status and accepts an optional commit message.
 - **Diff**: Right-click > Diff Local Remote.
 - **Debug**: Right-click task(-local) > Start/Stop Debug Job.
 - **Delete**: Right-click > Delete Scriptlet (remote; local-only ok).
-- **Enqueue/Monitor**: pyops-monitor right-click jobs; titlebar bulk ops.
+- **Enqueue/Monitor**: pyops-monitor right-click jobs; titlebar bulk ops. "Cancel All Jobs" counts a job that finished meanwhile as already finished, not as failed.
+- The pyops-manager tree shows every set on the server (filtered by `pyops.includedSets` / `pyops.excludedSets`), also one without scriptlets yet, plus the sets of local-only scriptlets.
 - No auto-sync: Manual control.
 
-Manager view (`/scriptlet/manager.html`) also carries a per-task
+Manager view (`/scriptlet/manager.html`) shows a section per set — also
+for a set without scriptlets yet — and carries a per-task
 **Run Draft** action (`play_arrow` icon, green) that enqueues a
 `kind=draft` job against the working-tree version of the scriptlet
 with no `param`. Skips the editor entirely; view output in the Jobs
@@ -192,9 +198,44 @@ with data.write("state") as st:         # exclusive lock — blocks readers and 
 data.list()                              # ['config', 'state']
 ```
 
-Format is detected by file extension. On first create, `data.write("name", format="yaml")` or `format="json"` is required. Existing files keep their format; a name is unique across formats (`config.yaml` and `config.json` can't coexist). Cross-set access raises — there is no API surface that accepts another set name.
+Format is detected by file extension. On first create, `data.write("name", format="yaml")` or `format="json"` is required. Existing files keep their format; a name is unique across formats (`config.yaml` and `config.json` can't coexist). A data name follows the rule of every scriptlet name (see "Names"): any other name raises `InvalidScriptletNameError` (a `ValueError`), and `data.list()` skips a file named otherwise. Cross-set access raises — there is no API surface that accepts another set name.
 
 Files are versioned alongside scriptlets; runtime writes show as unstaged changes foldable into the standard draft-commit flow. Per-file flocks live alongside the data files under `data/.{name}.lock` and are gitignored automatically.
+
+## Schedules
+
+Scriptlets create schedules with `control.schedule.create(set, name, drop_done, schedule, param, max_retries=0, keep_n=0, max_fail_n=3)`, which returns the schedule id. Over REST, `PUT /scriptlet/schedule/item` takes the same fields as JSON (plus `id` to update an existing schedule — an update sets every field, omitted ones take their defaults); `GET /scriptlet/schedule/list` and `GET /scriptlet/schedule/item?id=…` return them.
+
+- `schedule`: a five-field cron expression; an empty string runs the task as a long-lived service.
+- `drop_done`: a job that ends `done` is removed together with its logs/data after `runner.drop_done_delay_seconds` (a service right away). Failed jobs are not dropped (see `max_fail_n`).
+- `keep_n` (0-100, default 0; other values → 422): with `drop_done` on a cron schedule, the newest `keep_n` done jobs started by this schedule (by the scheduler or "run now") are kept; older ones are removed as usual. No effect on services or without `drop_done`.
+- `max_fail_n` (1-100, default 3; other values → 422): on a cron schedule, only the newest `max_fail_n` failed jobs started by this schedule are kept; older ones are removed with their logs/data right away, with or without `drop_done`. On a service, the service is not restarted once `max_fail_n` of its jobs have failed; delete failed jobs in the Monitor to restart it.
+- A service schedule starts its service only while none of its jobs is active, cancelled or done. A cancelled service stays stopped (the operator's cancel is a decision), and so does one that ended `done` without `drop_done`. To start it again — e.g. to deploy new code — delete that job (Monitor, `pyopsctl job delete`); the next scheduler pass starts the service.
+
+A schedule whose set or task name is outside the name charset (see "Names") cannot run: the runner skips it, and the Web UI Scheduler marks it with a warning.
+
+## Names
+
+Set names and scriptlet names — tasks, libraries, controllers, views, JS libraries, markdown pages and data files — use only letters, digits, `_` and `-` (at least one character), the grammar of the `#!{set::name}` directive. The API answers 400 for any other name (`Invalid set name '<name>': use only letters, digits, '_' and '-' (at least one character)`, likewise `Invalid scriptlet name ...`). A directory or file whose name is outside this charset is no set or scriptlet: it is not listed and cannot be opened, imported or run.
+
+The owner of a job or schedule is the `X-User` header (set by the auth proxy, or sent directly by pyopsctl and the VSIX): its part before the first `/`, with every character other than letters, digits, `_`, `-`, `.` and `@` replaced by `_` (`anonymous` when the header is missing). Two identities that differ only in replaced characters are therefore the same owner — e.g. `user+1`, `user 1` and `user_1` all become `user_1` and share their jobs, schedules and debug ports.
+
+## API Errors
+
+The scriptlet API (`/scriptlet/...`, `/repo/status`, `/files/...`) answers errors as `{"detail": "<message>"}`:
+
+| Status | When |
+|--------|------|
+| 400 | an invalid set or scriptlet name; a write to the bundled set `pyops`; `GET /repo/status?set=pyops`; creating a scriptlet in a set that does not exist; an invalid cron expression; a completion cursor outside the code |
+| 404 | an unknown set, scriptlet, job or schedule; a name that exists only as another type (e.g. a library given to `GET /scriptlet/jslib/...`); the download of a job without a workspace (not started yet, or dropped); a `/files/` path that is not a file under the static files |
+| 409 | a scriptlet name already taken in the set; discarding the draft of a scriptlet that was never committed; cancelling a job that already finished (`done`/`failed`) or is being deleted; deleting a job that is not `todo`/`cancelled`/`failed`/`done` |
+| 422 | an invalid request body, e.g. a negative `max_retries`, `keep_n`/`max_fail_n` out of range |
+| 500 | a server fault (logged with its traceback) |
+| 503 | pyops is shutting down; no job was enqueued |
+
+Cancelling a job that is already cancelled (or being cancelled) answers 200 and leaves it as it is.
+
+A controller's proxied requests (`/controller/{set}/{name}/{path}`) answer with the service's status and body unchanged: `listener.response({"error": "..."}, 400)` reaches the client as 400 `{"error": "..."}`. The proxy's own errors carry their message in `error` too: 503 when no matching service is running, 504 when the service does not answer within `web.timeout`, 400/404 for an invalid or unknown set or controller, and 200 `{"error": "Controller execution failed: ..."}` when the controller's code fails to execute. See the view `apiCall` sample in the scriptlet rules.
 
 ## Full Workflow Example
 
@@ -278,8 +319,11 @@ locally (rare; CI does this for releases): `./ctl/build.sh` (needs
 
 ### Configure
 
-`pyopsctl` reads `~/.config/pyops/config.toml`. The file must be mode
-0600 — `pyopsctl` refuses to load otherwise (it holds API keys).
+`pyopsctl` reads `~/.config/pyops/config.toml` — the shared PyOps client
+config, whose connectivity profiles are read by every PyOps client (the
+CLI here, and the VSIX extension via its `pyops.profile` setting). The
+file must be mode 0600 — `pyopsctl` refuses to load otherwise (it holds
+API keys).
 
 ```toml
 default_profile = "aiops"
@@ -353,10 +397,10 @@ Every command accepts the global flags: `--profile NAME`, `--server URL`,
 - `pyopsctl job list [--state S] [--owner U] [--set X] [--name Y]`
 - `pyopsctl job view ID [--follow] [--stream stdout|stderr|both]`
 - `pyopsctl job run SET NAME [--kind task|service|debug|draft|test] [--param TEXT | --param-file PATH] [--drop-done] [--max-retries N]`
-- `pyopsctl job cancel ID`
+- `pyopsctl job cancel ID` (a job that already finished or is being deleted answers 409, exit 4)
 - `pyopsctl job delete ID`
 - `pyopsctl job download ID [--out PATH]`
-- `pyopsctl job cancel-all [--owner U] [--set X]`
+- `pyopsctl job cancel-all [--owner U] [--set X]` (skips a job that finished since the listing and reports it as already finished)
 - `pyopsctl job clean --state done|failed [--owner U]`
 
 > **`--param` is a Python code snippet, not a JSON/argument payload.**
@@ -405,7 +449,9 @@ Lifecycle:
   subsequent inspect/control verbs route through it via a per-job
   Unix-domain socket.
 - `pyopsctl debug stop JOBID` — cancels the job and releases the port
-  lease for the next `debug start` against this profile.
+  lease for the next `debug start` against this profile. A debug job
+  that already finished (the debuggee exited) is reported as such, and
+  its lease is released too.
 
 Inspect (daemon-routed):
 
@@ -572,6 +618,10 @@ The Sets view is itself a pyops scriptlet — a controller backed by the `pyops:
 - Actions: pull (sync repos), switch (local branches), remove (confirm), update dependencies.
 
 Safe Git ops with per-set locks; errors and progress shown in the live job modal.
+
+Set names follow the name charset (see "Names"); an action on a set with another name fails its job with `InvalidSetNameError`. A clone takes its set name from the URL's last path segment without `.git`; if that name is invalid, the clone job fails. A `set_*` task started directly (e.g. `pyopsctl job run pyops set_remove --param 'name = "<set>"'`) fails with `InvalidSetNameError` before it touches anything. The scriptlet API routes reject such a set name with 400 as well.
+
+A set directory without `.git` under the git base (not initialised, e.g. created by hand) is listed as "not initialised"; only Remove is enabled for it, and it removes the directory like any set.
 
 ## Sidebar — collapsed-by-default user sets
 

@@ -9,6 +9,7 @@ The `overrides` key is only included when --overrides-dir is given and
 the kind permits it (debug | test) — see `pyopsctl.overrides` and the
 server-side acceptance contract in `app/routers/scriptlet/job.py`.
 """
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -198,3 +199,65 @@ def test_view_renders_kind_and_param(capsys):
     assert "set/name: reporting::export_report" in out
     assert "kind:     draft" in out
     assert "customer = '000000_sysup'" in out
+
+
+def _cancel_all(cancel_errors, json_mode=True):
+    """Run `pyopsctl job cancel-all [--json]` against a job list of three
+    running jobs J1..J3; cancelling job J answers 200, or raises
+    `cancel_errors[J]` (an HTTPError) as `Client.request` does for an error
+    status. Returns (exit code, client mock)."""
+    from pyopsctl import __main__ as cli
+    from pyopsctl.client import Client
+    from pyopsctl.config import Profile
+
+    profile = Profile(name="t", url="http://server", user="ralph", api_key="", debug_ports=())
+    rows = [{"id": jid, "state": "running", "owner": "ralph", "set": "s"} for jid in ("J1", "J2", "J3")]
+
+    def get(path, params=None):
+        if path == "/scriptlet/job/list":
+            return rows
+        error = cancel_errors.get(params["id"])
+        if error:
+            raise error
+        return {"id": params["id"], "state": "cancel"}
+
+    client_mock = MagicMock()
+    client_mock.__enter__ = MagicMock(return_value=client_mock)
+    client_mock.__exit__ = MagicMock(return_value=False)
+    client_mock.get.side_effect = get
+    client_mock.cancel_job.side_effect = lambda jid: Client.cancel_job(client_mock, jid)
+    with patch("pyopsctl.commands.job.load", return_value=profile), \
+         patch("pyopsctl.commands.job.Client", return_value=client_mock):
+        rc = cli.main(["job", "cancel-all"] + (["--json"] if json_mode else []))
+    return rc, client_mock
+
+
+def test_cancel_all_skips_job_finished_since_listing(capsys):
+    """A job that finished between the listing and its cancel answers 409:
+    nothing to cancel, so it is skipped and the jobs after it are still
+    cancelled."""
+    from pyopsctl.client import HTTPError
+    rc, c = _cancel_all({"J2": HTTPError(409, "GET /scriptlet/job/cancel: Job J2 is already done")})
+    assert rc in (0, None)  # `_cancel_all` returns implicitly
+    cancels = [call.kwargs["params"]["id"] for call in c.get.call_args_list
+               if call.args[0] == "/scriptlet/job/cancel"]
+    assert cancels == ["J1", "J2", "J3"]
+    assert json.loads(capsys.readouterr().out) == ["J1", "J3"]
+
+
+def test_cancel_all_reports_finished_jobs(capsys):
+    from pyopsctl.client import HTTPError
+    rc, _c = _cancel_all({"J1": HTTPError(409, "GET /scriptlet/job/cancel: Job J1 is already failed")},
+                         json_mode=False)
+    assert rc in (0, None)
+    assert capsys.readouterr().out == "cancelled 2 job(s); 1 already finished\n"
+
+
+def test_cancel_all_stops_at_other_errors():
+    """Any other error is a failure of the command (exit 5 for a 5xx)."""
+    from pyopsctl.client import HTTPError
+    rc, c = _cancel_all({"J2": HTTPError(500, "GET /scriptlet/job/cancel: boom")})
+    assert rc == 5
+    cancels = [call.kwargs["params"]["id"] for call in c.get.call_args_list
+               if call.args[0] == "/scriptlet/job/cancel"]
+    assert cancels == ["J1", "J2"]

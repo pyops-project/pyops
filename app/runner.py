@@ -11,7 +11,7 @@ from typing import Any
 import zmq, msgpack
 import psutil
 
-from sqlalchemy import null, select, delete, and_, or_, case
+from sqlalchemy import null, select, delete, and_, or_, case, func
 from sqlalchemy.orm import Session
 import sqlalchemy.exc
 
@@ -44,8 +44,8 @@ from app.lib import job as job_lib
 
 
 # Persistent services that run without a `Schedule` row. The schedule loop
-# re-enqueues each entry whenever it isn't already running, gated by the
-# same `<3 failed` rule used for service-with-empty-schedule. The operator
+# re-enqueues each entry whenever it isn't already running, gated by a
+# fixed `<3 failed` rule (schedule services use their `max_fail_n`). The operator
 # unblocks a stuck essential service by deleting its failed records from
 # the Monitor (which removes them from `find(..., "service", ["failed"])`).
 PYOPS_ESSENTIAL_SERVICES = [
@@ -80,7 +80,10 @@ class GracefulKiller:
         self.kill_now = True
 
 
-def _shutdown_job_processes(processes: dict[int, subprocess.Popen], timeout: float = 15.0,
+SHUTDOWN_SIGKILL_DETAIL = "did not respond to shutdown SIGTERM"
+
+
+def _shutdown_job_processes(processes: dict[int, subprocess.Popen], timeout: float,
                              runner_socket=None, runner_poller=None):
     """Bring all running job subprocesses to a stop, synchronously.
 
@@ -92,11 +95,15 @@ def _shutdown_job_processes(processes: dict[int, subprocess.Popen], timeout: flo
     `job_lib.send_completion`, and that completion arrives over ZMQ
     here — finishJob updates the DB to 'done'/'failed' on its own.
 
-    Only processes still alive past `timeout` are SIGKILL'd; those
-    couldn't shut down on their own, so we explicitly mark them
-    'cancelled' with detail='killed during shutdown'. Same for any
-    process whose kind has no completion path (tasks under default
-    Python SIGTERM termination get no completion sent).
+    Every live process the runner started is stopped, whether or not a
+    job row still names it by pid: a job whose cancel is in flight (its
+    row's pid is cleared, and the termination thread dies with the
+    runner) or whose row is gone must not outlive the runner. Rows are
+    updated only for the processes a row names.
+
+    The processes still alive past `timeout` (runner.shutdown_timeout_seconds)
+    are SIGKILL'd together; a row of such a process is marked 'failed'
+    (see the final sweep below).
 
     Note on zombies: psutil.Process.is_running() returns True for
     zombie processes — we use the subprocess.Popen object's poll()
@@ -109,22 +116,32 @@ def _shutdown_job_processes(processes: dict[int, subprocess.Popen], timeout: flo
     if not processes:
         return
 
-    # Snapshot the live targets — no DB writes here, just identification.
-    targets: dict[int, str] = {}
+    # Snapshot the live processes and the job rows naming them — no DB
+    # writes here, just identification. A live process without such a row
+    # (None) is stopped all the same.
+    live: dict[int, str | None] = {}
     with Session(get_db_engine()) as session:
         for pid, p in list(processes.items()):
             if p.poll() is not None:
                 continue
             job = session.query(Job).filter_by(pid=pid).first()
             if job is None:
-                logger.debug("shutdown: pid %d has no DB job row, skipping", pid)
-                continue
-            targets[pid] = job.id
+                logger.info("shutdown: pid %d has no job row naming it; stopped without a row update", pid)
+            live[pid] = job.id if job is not None else None
+    targets: dict[int, str] = {pid: job_id for pid, job_id in live.items() if job_id is not None}
 
-    if not targets:
+    if not live:
         return
 
-    for pid, job_id in targets.items():
+    # Termination starts now: a completion a job reports from here on
+    # cannot override a cancel committed on its row (see finishJob).
+    if targets:
+        with Session(get_db_engine()) as session:
+            session.query(Job).filter(Job.id.in_(list(targets.values()))).update(
+                {Job.term_start: datetime.now()}, synchronize_session=False)
+            commit_with_retry(session)
+
+    for pid, job_id in live.items():
         logger.info("shutdown: SIGTERM group of job %s pid %d", job_id, pid)
         try:
             job_lib.kill_proc_group(pid, signal.SIGTERM)
@@ -132,7 +149,7 @@ def _shutdown_job_processes(processes: dict[int, subprocess.Popen], timeout: flo
             logger.warning("shutdown: SIGTERM failed for %s (pid %d): %s", job_id, pid, e)
 
     deadline = time.time() + timeout
-    still_alive: dict[int, str] = dict(targets)
+    still_alive: dict[int, str | None] = dict(live)
     while still_alive and time.time() < deadline:
         if runner_socket is not None and runner_poller is not None:
             events = runner_poller.poll(0)
@@ -149,7 +166,7 @@ def _shutdown_job_processes(processes: dict[int, subprocess.Popen], timeout: flo
         # (cheap, reaps zombies) and the group as a whole (catches
         # any subprocess the user's `param` spawned which we don't
         # have a Popen handle for, e.g. a debugpy adapter).
-        survivors: dict[int, str] = {}
+        survivors: dict[int, str | None] = {}
         for pid, job_id in still_alive.items():
             p = processes.get(pid)
             leader_dead = (p is not None and p.poll() is not None)
@@ -172,7 +189,7 @@ def _shutdown_job_processes(processes: dict[int, subprocess.Popen], timeout: flo
 
         sigkill_deadline = time.time() + 2.0
         while still_alive and time.time() < sigkill_deadline:
-            leftover: dict[int, str] = {}
+            leftover: dict[int, str | None] = {}
             for pid, job_id in still_alive.items():
                 p = processes.get(pid)
                 leader_dead = (p is not None and p.poll() is not None)
@@ -186,7 +203,8 @@ def _shutdown_job_processes(processes: dict[int, subprocess.Popen], timeout: flo
     # Final sweep — drives each row to the right state for the next boot:
     #   • SIGKILL'd: the service didn't respond to SIGTERM. Mark `failed`
     #     so it's visible in the monitor and counts toward the per-service
-    #     <3-failed gate.
+    #     failed-count gate. A job that had already reported `failed` keeps
+    #     its message; the kill is appended to it.
     #   • `cancel` / `cancelling`: an operator cancel was mid-flight when
     #     shutdown started. Finalise to `cancelled` so the next-start
     #     gate honours the operator intent (cancelled blocks restart).
@@ -202,9 +220,16 @@ def _shutdown_job_processes(processes: dict[int, subprocess.Popen], timeout: flo
             job = session.get(Job, job_id)
             if job is None:
                 continue
-            if pid in sigkilled:
+            if pid in sigkilled and job.state == "failed":
+                # Its failure was already reported: keep that outcome and
+                # its message, note the kill below it.
+                session.query(Job).filter(Job.id == job_id).update({
+                    Job.detail: appended_detail(SHUTDOWN_SIGKILL_DETAIL),
+                    Job.pid: None,
+                }, synchronize_session=False)
+            elif pid in sigkilled:
                 job.state = "failed"
-                job.detail = "did not respond to shutdown SIGTERM"
+                job.detail = SHUTDOWN_SIGKILL_DETAIL
                 job.end = datetime.now()
                 job.pid = None
             elif job.state in ("cancel", "cancelling"):
@@ -283,7 +308,8 @@ def receive_and_process(socket):
         if msg.get("state") == "running":
             markRunning(msg["id"])
         else:
-            finishJob(msg["id"], msg["state"], msg["detail"])
+            finishJob(msg["id"], msg["state"], msg["detail"],
+                      finished=datetime.fromtimestamp(msg["time"]))
     except Exception as e:
         logger.exception("Failed to process completion for job %s: %s", msg.get("id"), e)
     # Send REP
@@ -294,18 +320,28 @@ def receive_and_process(socket):
 INCOMPLETE_ON_STARTUP_DETAIL = "incomplete execution detected on startup"
 
 
+class JobStateChanged(Exception):
+    """The claimed job left `dequeued` before it was loaded — a cancel or remove
+    landed in between. Not an error: the job is not spawned and keeps its state
+    and detail; the cancel path (getNextToTerm) finalises it."""
+
+
 def handleOddJobs():
     """Reconcile non-terminal rows left behind by a previous unclean run.
 
     Transient states (`dequeued`, `loading`) get reset to `todo` so the
-    new runner can pick them up. `running` gets marked `failed` with a
-    sentinel detail (`INCOMPLETE_ON_STARTUP_DETAIL`). `cancel`/`cancelling`
+    new runner can pick them up. A `running` job that wrote its result file
+    (`result.json`, see app.lib.job.send_completion) finished but was never
+    recorded: it gets that result (state, detail, end). Any other `running`
+    job gets marked `failed` with a sentinel detail
+    (`INCOMPLETE_ON_STARTUP_DETAIL`) and `end` set to the detection time,
+    so it ranks as the newest failure. `cancel`/`cancelling`
     get finalised to `cancelled` — the daemon-thread terminate from a
     cancel HTTP got killed by an immediately-following shutdown, or the
     previous run crashed mid-terminate; the process is gone by the time
     we see this on startup.
 
-    To keep the per-service `<3 failed` gate from accumulating ghosts
+    To keep the per-service failed-count gate from accumulating ghosts
     across repeated unclean container restarts (docker stop_grace_period
     exhausted before the runner could clean up), we deduplicate after
     the sweep: at most ONE row with the incomplete-on-startup detail
@@ -314,7 +350,7 @@ def handleOddJobs():
 
     Terminal states (`done`, `failed`-with-other-detail, `cancelled`,
     `remove`, `removed`) are NOT touched — they're either history we
-    want to preserve (for `<3 failed` and cancelled-blocks-restart) or
+    want to preserve (for the failed-count gate and cancelled-blocks-restart) or
     transient cleanup states that purgeLeftoverServiceJobs handles.
     """
     new_incomplete = []  # (id, set, name, owner, kind) of rows we just marked incomplete
@@ -334,8 +370,16 @@ def handleOddJobs():
                 job.state = "cancelled"
                 job.detail = (job.detail or "") + " (orphan cancel cleaned on startup)"
             else:  # running
+                result = job_lib.read_result(os.path.join(files.conf_data()["jobs"], job.set, job.id))
+                if result is not None:
+                    # The job finished; the previous runner never recorded it.
+                    job.state = result["state"]
+                    job.detail = result["detail"]
+                    job.end = datetime.fromtimestamp(result["time"])
+                    continue
                 job.state = "failed"
                 job.detail = INCOMPLETE_ON_STARTUP_DETAIL
+                job.end = datetime.now()
                 new_incomplete.append((job.id, job.set, job.name, job.owner, job.kind))
         commit_with_retry(session)
 
@@ -369,7 +413,7 @@ def purgeLeftoverServiceJobs():
     re-enqueueing the service. This sweep finishes that cleanup.
 
     Terminal `failed` / `done` / `cancelled` rows are preserved — the
-    schedule-loop's `<3 failed` gate and the cancelled-blocks-restart
+    schedule-loop's failed-count gate and the cancelled-blocks-restart
     rule both rely on those rows surviving across restarts.
     """
     with Session(get_db_engine()) as session:
@@ -471,9 +515,7 @@ def loadJob(job_id: str):
         if job is None:
             raise Exception(f"Job {job_id} not existing")
         if job.state != "dequeued":
-            logger.info(f"Skipping loadJob {job_id}: state={job.state}")
-            finishJob(job_id, job.state, "state no longer dequeued")
-            raise Exception(f"Job {job_id} state changed to {job.state}")
+            raise JobStateChanged(f"Job {job_id} state changed to {job.state} before loadJob")
         # Snapshot fields needed for the return tuple — read before we release the
         # ORM identity for this session via the conditional UPDATE.
         owner, setname, name, kind, param, overrides, max_retries = (
@@ -499,14 +541,8 @@ def loadJob(job_id: str):
         if override_code is not None:
             code = override_code
         else:
-            logger.debug(f"loadJob: checking repo '{repo}' for files starting with '{name}.' ending '.py'")
-            files_list = [f for f in os.listdir(repo) if f.startswith(f"{name}.") and f.endswith('.py')]
-            logger.debug(f"loadJob: files_list in '{repo}': {files_list}")
-            if not files_list:
-                raise Exception(f"Scriptlet {setname}::{name} not existing")
-            filename = files_list[0]
-            type_ = git.infer_type_from_filename(filename)
-            code = git.read_content(repo, name, type_, committed=committed)
+            git.resolve_scriptlet(repo, name, "task")
+            code = git.read_content(repo, name, "task", committed=committed)
 
         logger.debug(f"loadJob: before CAS commit for {job_id} at {datetime.now()}")
         affected = session.query(Job).filter(
@@ -523,8 +559,7 @@ def loadJob(job_id: str):
             session.expire_all()
             current = session.get(Job, job_id)
             current_state = current.state if current else "<missing>"
-            logger.info(f"loadJob: CAS lost — {job_id} state is now '{current_state}', aborting spawn")
-            raise Exception(f"Job {job_id} state changed to {current_state} during loadJob")
+            raise JobStateChanged(f"Job {job_id} state changed to {current_state} during loadJob")
 
         return owner, setname, name, kind, param, code, overrides, max_retries
 
@@ -534,12 +569,21 @@ def cleanup_drop_done_jobs():
     delay_seconds = files.conf_runner()["drop_done_delay_seconds"]
     cutoff = now - timedelta(seconds=delay_seconds)
 
+    # keep_n: a cron schedule with drop_done keeps its newest keep_n done jobs.
+    newest = func.row_number().over(partition_by=Job.schedule_id, order_by=Job.end.desc()).label("newest")
+    ranked = select(Job.id, newest, Schedule.keep_n) \
+        .join(Schedule, Schedule.id == Job.schedule_id) \
+        .where(Job.state == "done", Schedule.schedule != "", Schedule.drop_done == True, Schedule.keep_n > 0) \
+        .subquery()
+    kept = select(ranked.c.id).where(ranked.c.newest <= ranked.c.keep_n)
+
     with Session(get_db_engine()) as session:
         logger.debug(f"cleanup_drop_done_jobs: session ID {id(session)} at {now}, delay={delay_seconds}s")
         stmt = select(Job).where(
             Job.state == "done",
             Job.drop_done == True,
-            Job.end < cutoff
+            Job.end < cutoff,
+            Job.id.not_in(kept)
         )
 
         jobs_to_remove = session.scalars(stmt).all()
@@ -555,8 +599,67 @@ def cleanup_drop_done_jobs():
         else:
             logger.debug("cleanup_drop_done_jobs: no jobs to clean up")
 
-def finishJob(job_id: str, state: str, detail: str):
-    logger.debug(f"finishJob(job_id='{job_id}', state='{state}', detail='{detail}')")
+def cleanup_failed_jobs():
+    # max_fail_n: a cron schedule keeps only its newest max_fail_n failed jobs.
+    newest = func.row_number().over(partition_by=Job.schedule_id, order_by=Job.end.desc()).label("newest")
+    ranked = select(Job.id, newest, Schedule.max_fail_n) \
+        .join(Schedule, Schedule.id == Job.schedule_id) \
+        .where(Job.state == "failed", Schedule.schedule != "") \
+        .subquery()
+    surplus = select(ranked.c.id).where(ranked.c.newest > ranked.c.max_fail_n)
+
+    with Session(get_db_engine()) as session:
+        jobs_to_remove = session.scalars(select(Job).where(Job.id.in_(surplus))).all()
+
+        for job in jobs_to_remove:
+            logger.debug(f"cleanup_failed_jobs: marking job {job.id} for removal")
+            job.state = "remove"
+
+        if jobs_to_remove:
+            commit_with_retry(session)
+
+# States a runner transition never overwrites: an outcome already recorded,
+# or a cancel/remove the operator committed.
+KEPT_STATES = ("cancel", "cancelling", "cancelled", "done", "failed", "remove", "removed")
+
+
+def appended_detail(message: str | None):
+    """SQL value for `Job.detail` with `message` appended — used wherever a
+    row keeps its state, so the message recorded with that state (e.g. the
+    operator's cancel reason, the first traceback) is never overwritten.
+    An empty message, or one identical to the current detail, leaves it as is."""
+    if not message:
+        return Job.detail
+    return case(
+        (or_(Job.detail.is_(None), Job.detail == ""), message),
+        (Job.detail == message, Job.detail),
+        else_=Job.detail + "\n" + message,
+    )
+
+
+def finishJob(job_id: str, state: str, detail: str | None, finished: datetime | None = None):
+    """Record a job's outcome in one atomic UPDATE.
+
+    `finished` is the job's own finish time (stamped by send_completion) and
+    is given for a completion the job process reports; it is None for the
+    runner's own transitions (stale pid, launch/load failure, `cancelling`).
+
+    Which state the row ends in:
+      • already done/failed/remove/removed: kept — the first outcome stands.
+      • a completion while the cancel is still only requested (`cancel`, the
+        runner has not started terminating, term_start NULL): the completion
+        decides — the job finished before the cancel took effect.
+      • a completion once the runner started terminating (term_start set):
+        it decides only if the job finished before term_start; otherwise the
+        row stays cancel/cancelling/cancelled.
+      • a runner transition never overwrites cancel/cancelling/cancelled.
+    When the state is applied, detail and end are written — end is the job's
+    own finish time for a completion it reported, the runner's time for its
+    own transitions. When the state is kept, end stays and the detail is
+    appended (see appended_detail).
+    `cancelling` (the runner starting to terminate the job) records term_start.
+    """
+    logger.debug(f"finishJob(job_id='{job_id}', state='{state}', detail='{detail}', finished={finished})")
 
     with Session(get_db_engine()) as session:
         logger.debug(f"finishJob: session ID {id(session)} at {datetime.now()}")
@@ -566,8 +669,8 @@ def finishJob(job_id: str, state: str, detail: str):
 
         old_state = job.state
         # Compute the candidate terminal state from the snapshot. The atomic CASE
-        # below preserves cancel/cancelling regardless of when the cancel commit
-        # lands relative to this function.
+        # below decides against the row as it is at UPDATE time, so a cancel
+        # committed after this read is honoured.
         if job.kind == "service" and state == "done" and job.drop_done:
             candidate = "remove"  # Immediately remove done services
         elif old_state == "running" and state == "done" and job.drop_done and not job.kind == "debug":
@@ -582,24 +685,29 @@ def finishJob(job_id: str, state: str, detail: str):
         kind = job.kind
         owner = job.owner
 
-        # Atomic UPDATE with CASE: once a row reaches a terminal state we
-        # never re-write it. Two completions arriving for the same job
-        # (e.g. exec() returned "done" + a finally-block close() raised
-        # and run_*_job's outer except sent "failed") must not demote
-        # the already-committed terminal state. Same protection for an
-        # operator cancel that committed under us.
-        session.query(Job).filter(Job.id == job_id).update({
-            Job.state: case(
-                (Job.state.in_((
-                    "cancel", "cancelling", "cancelled",
-                    "done", "failed", "remove", "removed",
-                )), Job.state),
-                else_=candidate,
-            ),
-            Job.end: datetime.now(),
-            Job.detail: detail,
+        # Atomic UPDATE with CASE: a recorded outcome is never re-written —
+        # two completions arriving for the same job (e.g. exec() returned
+        # "done" + a finally-block close() raised and run_*_job's outer
+        # except sent "failed") must not demote the committed state; the
+        # later message is appended. A cancel is replaced only by the
+        # report of a job that finished before the cancel took effect.
+        now = datetime.now()
+        applies = Job.state.not_in(KEPT_STATES)
+        if finished is not None:
+            applies = or_(
+                applies,
+                and_(Job.state == "cancel", Job.term_start.is_(None)),
+                and_(Job.state.in_(("cancel", "cancelling", "cancelled")), Job.term_start > finished),
+            )
+        values = {
+            Job.state: case((applies, candidate), else_=Job.state),
+            Job.end: case((applies, finished if finished is not None else now), else_=Job.end),
+            Job.detail: case((applies, detail), else_=appended_detail(detail)),
             Job.pid: None,
-        }, synchronize_session=False)
+        }
+        if state == "cancelling":
+            values[Job.term_start] = now
+        session.query(Job).filter(Job.id == job_id).update(values, synchronize_session=False)
         logger.debug(f"finishJob({job_id}): before commit, session ID {id(session)}, candidate '{candidate}' from old '{old_state}' at {datetime.now()}")
         commit_with_retry(session)
         session.expire_all()
@@ -652,15 +760,24 @@ def postTerm(job_id: str, killed: bool = False):
                 logger.debug(f"postTerm: before delete, session ID {id(session)}, deleting {job_id} (state '{old_state}') at {datetime.now()}")
                 session.delete(job)
                 lib_runner.drop(job_id, job.set)
+                commit_with_retry(session)
             else:
-                job.end = datetime.now()
-
-                job.pid = None
-                if job.state != "done" and job.state != "failed":
-                    job.state = "cancelled"
-                logger.info("postTerm called %s old_state=%s → new=%s caller=%s", job_id, old_state, job.state, traceback.format_stack(limit=5)[-1])
-                logger.debug(f"postTerm: before commit, session ID {id(session)}, setting {job_id} to '{job.state}' from '{old_state}' at {datetime.now()}")
-            commit_with_retry(session)
+                # A done/failed row was decided by the job's own completion
+                # (it finished before the termination started, see finishJob):
+                # it keeps that outcome and its finish time, only the pid is
+                # cleared. Decided in the UPDATE itself, so a completion
+                # recorded after the read above is honoured too.
+                decided = Job.state.in_(("done", "failed"))
+                session.query(Job).filter(Job.id == job_id).update({
+                    Job.state: case((decided, Job.state), else_="cancelled"),
+                    Job.end: case((decided, Job.end), else_=datetime.now()),
+                    Job.pid: None,
+                }, synchronize_session=False)
+                commit_with_retry(session)
+                session.expire_all()
+                committed = session.get(Job, job_id)
+                logger.info("postTerm called %s old_state=%s → new=%s caller=%s", job_id, old_state,
+                            committed.state if committed else "<missing>", traceback.format_stack(limit=5)[-1])
             logger.debug(f"postTerm: after commit, session ID {id(session)}, committed for {job_id} at {datetime.now()}")
 
 def schedule():
@@ -676,12 +793,18 @@ def schedule():
                       Schedule.active,
                       Schedule.drop_done,
                       Schedule.max_retries,
+                      Schedule.max_fail_n,
                       Schedule.schedule,
                       Schedule.param,
                       Schedule.last)
         schedules = session.execute(stmt)
 
         for s in schedules:
+            # A schedule whose set or task name is outside the name charset
+            # cannot run; it is skipped (the Scheduler page flags it).
+            if not (git.is_valid_name(s.set) and git.is_valid_name(s.name)):
+                logger.debug("schedule: skipping %s, invalid name %r::%r", s.id, s.set, s.name)
+                continue
             if s.active:
                 if s.schedule:
                     # Check if there was a scheduled run between s.last and now
@@ -693,7 +816,7 @@ def schedule():
                         if not running_jobs:
                             logger.debug(f"schedule: enqueuing task {s.set}::{s.name} (cron {s.schedule}) at {next_run}")
                             try:
-                                lib_runner.enqueue(s.set, s.name, s.owner, "task", s.drop_done, s.param, s.max_retries, None)
+                                lib_runner.enqueue(s.set, s.name, s.owner, "task", s.drop_done, s.param, s.max_retries, None, schedule_id=s.id)
                             except lib_runner.ShutdownPending:
                                 logger.info("schedule: shutdown pending — skipping task enqueue for %s::%s", s.set, s.name)
                                 return
@@ -706,10 +829,10 @@ def schedule():
                 elif not lib_runner.find(s.owner, s.set, s.name, "service",
                          ["todo", "dequeued", "loading", "running",
                           "cancel", "cancelling", "cancelled", "done"]) and \
-                     len(lib_runner.find(s.owner, s.set, s.name, "service", ["failed"])) < 3:
+                     len(lib_runner.find(s.owner, s.set, s.name, "service", ["failed"], schedule_id=s.id)) < s.max_fail_n:
                     logger.debug(f"schedule: enqueuing service {s.set}::{s.name} at {now}")
                     try:
-                        lib_runner.enqueue(s.set, s.name, s.owner, "service", s.drop_done, s.param, s.max_retries, None)
+                        lib_runner.enqueue(s.set, s.name, s.owner, "service", s.drop_done, s.param, s.max_retries, None, schedule_id=s.id)
                     except lib_runner.ShutdownPending:
                         logger.info("schedule: shutdown pending — skipping service enqueue for %s::%s", s.set, s.name)
                         return
@@ -721,8 +844,9 @@ def schedule():
                     logger.debug(f"schedule: after commit, session ID {id(session)}, committed last={now} for service {s.id} at {datetime.now()}")
 
     # Essential services without a Schedule row — same gating as the
-    # service-with-empty-schedule branch above. A user-initiated cancel
-    # (`cancel` → `cancelling` → `cancelled`) is a hard stop: the operator
+    # service-with-empty-schedule branch above, with a fixed failure limit
+    # of 3 in place of max_fail_n. A user-initiated cancel
+    # (`cancel`, then `cancelled` once terminated) is a hard stop: the operator
     # has deliberately taken the service down and must remove the row
     # before it comes back. Three failures in a row is also a stop until
     # the operator clears them.
@@ -793,6 +917,7 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
 
     # clean up drop_done jobs that have been done for 60+ seconds
     cleanup_drop_done_jobs()
+    cleanup_failed_jobs()
 
     processes: dict[int, subprocess.Popen] = {}
 
@@ -819,11 +944,11 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
             # install phase) would otherwise leave a `loading` row with a
             # dead pid forever.
             with Session(get_db_engine()) as session:
-                stmt = select(Job.id, Job.pid).where(
+                stmt = select(Job.id, Job.pid, Job.set).where(
                     Job.state.in_(("loading", "running")),
                     Job.pid.isnot(None),
                 )
-                for job_id, pid in session.execute(stmt).all():
+                for job_id, pid, set_ in session.execute(stmt).all():
                     try:
                         if psutil.Process(pid).is_running():
                             continue
@@ -836,7 +961,15 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
                         logger.warning("Stale PID %s for job %s: AccessDenied", pid, job_id)
                         pass
 
-                    finishJob(job_id, "failed", f"stale process pid={pid}")
+                    # The process is gone: the job's result file holds its
+                    # result if it finished but its report never arrived;
+                    # without one the job died ("dead").
+                    result = job_lib.read_result(os.path.join(files.conf_data()["jobs"], set_, job_id))
+                    if result is not None:
+                        finishJob(job_id, result["state"], result["detail"],
+                                  finished=datetime.fromtimestamp(result["time"]))
+                    else:
+                        finishJob(job_id, "failed", f"dead (pid={pid})")
                         
 
             # terminate "remove" or "cancel" jobs
@@ -848,10 +981,7 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
                 if job is not None:
                     if job["pid"] in processes:
                         logger.debug(f"Trying to term job {job}")
-                        with Session(get_db_engine()) as session:
-                            job_obj = session.get(Job, job["id"])
-                            detail = job_obj.detail if job_obj else None
-                        finishJob(job["id"], "cancelling", detail)
+                        finishJob(job["id"], "cancelling", None)
                     else:
                         postTerm(job["id"])
             except Exception as e:
@@ -865,6 +995,7 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
 
             # clean up drop_done jobs that have been done for delay+ seconds
             cleanup_drop_done_jobs()
+            cleanup_failed_jobs()
 
             # Once shutdown has been signalled, stop claiming new jobs.
             # In-flight terminations and ZMQ completions above still run so
@@ -961,6 +1092,8 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
                         processes[p.pid] = p
                         logger.debug(f"main: started process for {job_id}, pid {p.pid}")
 
+                    except JobStateChanged as e:
+                        logger.info("main: not spawning: %s", e)
                     except Exception as e:
                         logger.debug(f"main: exception loading/running {job_id}: {e}")
                         logger.exception("Error loading/running job %s: %s", job_id, e)
@@ -979,14 +1112,15 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
             logger.exception("Critical error in main loop iteration %d, continuing: %s", loop_count, e)
             time.sleep(1)  # Brief pause before retry to avoid tight loops on persistent errors
 
-    # Synchronously SIGTERM all live job trees, wait up to 15s, SIGKILL
-    # stragglers, then postTerm. Old code spawned daemon threads here, which
+    # Synchronously SIGTERM all live job trees, wait up to
+    # runner.shutdown_timeout_seconds, SIGKILL the stragglers together, then
+    # sweep the rows. Old code spawned daemon threads here, which
     # got killed the moment main() returned — leaving service subprocesses
     # orphaned in the pgid until the outer test harness SIGKILL'd them after
     # its 120s graceful wait. Pass the runner socket so we drain completion
     # ACKs during the wait — without it every service ends up SIGKILL'd
     # because its send_completion REQ blocks for the full timeout.
-    _shutdown_job_processes(processes, timeout=15.0,
+    _shutdown_job_processes(processes, timeout=files.conf_runner()["shutdown_timeout_seconds"],
                              runner_socket=runner_socket, runner_poller=runner_poller)
 
     # Drain any completion ZMQ events the dying subprocesses managed to send.

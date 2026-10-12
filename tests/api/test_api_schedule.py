@@ -329,8 +329,8 @@ def test_schedule_unauthorized(mock_client, mock_db, mock_git_ops, test_temp_dir
 def test_schedule_create_parametrized(mock_client, mock_db, mock_git_ops, mock_croniter, test_temp_dir, patch_tempfile, mock_datetime):
     # Test with different cron patterns
     crons = ["* * * * *", "0 0 * * *", "*/5 * * * *"]
-    for cron in crons:
-        name = f"param_{cron.replace(' ', '_')}"
+    for i, cron in enumerate(crons):
+        name = f"param_{i}"
         # First enqueue job
         with patch("subprocess.check_output", return_value=b"pass\n"):
             enqueue_resp = mock_client.put(

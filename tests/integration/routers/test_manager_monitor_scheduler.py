@@ -54,3 +54,22 @@ class TestUIRouters:
             response = mock_client.get("/scriptlet/scheduler")
             assert response.status_code == 500
             assert "site error" in response.json()["detail"]
+
+    @pytest.mark.parametrize("path", [
+        "/", "/scriptlet/manager", "/scriptlet/monitor", "/scriptlet/scheduler",
+        "/scriptlet/editor_task", "/scriptlet/editor_library", "/scriptlet/editor_view",
+        "/scriptlet/editor_md", "/scriptlet/editor_data", "/scriptlet/editor_jslibrary",
+    ])
+    def test_page_fault_answered_and_logged_once(self, mock_client, caplog, path):
+        """A page that fails is a server fault: the central handler answers
+        500 `{"detail": message}` and logs it once, with its traceback —
+        the pages carry no catch-all of their own."""
+        import logging
+        with patch("app.lib.sites.get", side_effect=OSError("site error")), \
+             caplog.at_level(logging.DEBUG):
+            response = mock_client.get(path)
+        assert (response.status_code, response.json()) == (500, {"detail": "site error"})
+        logged = [r for r in caplog.records if r.levelno >= logging.ERROR]
+        assert len(logged) == 1
+        assert logged[0].getMessage() == f"Error in GET {path}: site error"
+        assert logged[0].exc_info[0] is OSError

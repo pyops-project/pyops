@@ -291,6 +291,21 @@ class TestWebUIWorkflow:
         pyops_server.assert_no_unexpected_errors()
         pyops_server.assert_no_unexpected_errors()
 
+    def test_manager_shows_set_without_scriptlets(self, e2e_page, api, pyops_server, set_factory):
+        """A set without scriptlets keeps its section in the Manager (count
+        0) — e.g. after its last scriptlet was deleted."""
+        set_factory("ui_empty_set")
+        r = api.delete("/scriptlet/inventory/item", params={"set": "ui_empty_set", "name": "README"})
+        assert r.status_code == 200, r.text
+        assert [s for s in api.get("/scriptlet/inventory/list").json() if s["set"] == "ui_empty_set"] == []
+
+        e2e_page.locator('[data-testid="menu-link-scriptlet_manager"]').click()
+        frame = e2e_page.frame_locator('[data-testid="content-frame"]')
+        section = frame.locator('[data-testid="manager-set-ui_empty_set"]')
+        section.wait_for(state="visible", timeout=10_000)
+        assert section.locator("[data-set-count]").inner_text() == "0"
+        pyops_server.assert_no_unexpected_errors()
+
     def test_create_scriptlet_via_manager_ui(self, e2e_page, api, pyops_server, set_factory):
         """Create a scriptlet through the Manager create modal and verify it appears."""
         # Set must exist before the modal can select it.

@@ -28,6 +28,7 @@
         <script src="/files/js/jquery.min.js"></script>
         <script src="/files/js/js.cookie.min.js"></script>
         <script src="/files/js/bootstrap/bootstrap.bundle.min.js"></script>
+        <script src="/files/js/pyops-alert.js"></script>
         <script src="/files/js/ace/ace.js"></script>
         <script src="/files/js/ace/mode-python.js"></script>
         <script src="/files/js/ace/theme-twilight.js"></script>
@@ -99,6 +100,7 @@
             function populateSets() {
                 fetch("/scriptlet/inventory/sets").then(async (r)=>{
                     if(r.ok) {
+                        pyopsAlert.loaded("Set list");
                         const d = await r.json();
                         const sel = $("#createModal-set");
                         const cur = sel.val();
@@ -106,8 +108,8 @@
                         for(const s of d.sets) sel.append(`<option value="${s}">${s}</option>`);
                         if(cur) sel.val(cur);
                     } else
-                        console.error("GET", "/scriptlet/inventory/sets", r.statusText);
-                }).catch((e)=>console.error("GET", "/scriptlet/inventory/sets", e.toString()));
+                        await pyopsAlert.loadFailed("Set list", r);
+                }).catch((e)=>pyopsAlert.loadError("Set list", e));
             }
 
             function populateNames(set) {
@@ -116,14 +118,15 @@
                 if(!set) return;
                 fetch("/scriptlet/inventory/list").then(async (r)=>{
                     if(r.ok) {
+                        pyopsAlert.loaded("Scriptlet list");
                         const d = await r.json();
                         const names = d.filter(i => i.set === set && i.type === "task")
                                        .map(i => i.name).sort();
                         for(const n of names) sel.append(`<option value="${n}">${n}</option>`);
                         sel.prop("disabled", names.length === 0);
                     } else
-                        console.error("GET", "/scriptlet/inventory/list", r.statusText);
-                }).catch((e)=>console.error("GET", "/scriptlet/inventory/list", e.toString()));
+                        await pyopsAlert.loadFailed("Scriptlet list", r);
+                }).catch((e)=>pyopsAlert.loadError("Scriptlet list", e));
             }
 
             function genActions(s) {
@@ -146,17 +149,25 @@
                 `
             }
 
+            // Set and task names are made of letters, digits, '_' and '-'; the
+            // runner skips a schedule whose names are not, so it is flagged.
+            const NAME_RE = /^[A-Za-z0-9_-]+$/;
+
+            function genNameWarning(s) {
+                if (NAME_RE.test(s.set) && NAME_RE.test(s.name)) return '';
+                return ` <span class="material-icons-round text-warning align-middle" title="Invalid set or task name (allowed: letters, digits, '_' and '-'): this schedule is skipped" data-testid="schedule-invalid-name-${s.id}">warning</span>`;
+            }
+
             function genScheduleRowContent(s) {
                 // Set is now the collapsible group header — dropped from the row.
                 return `
                     <th scope="row">${s.id}</th>
-                    <th scope="row">${s.name}</th>
+                    <th scope="row">${s.name}${genNameWarning(s)}</th>
                     <th scope="row">${s.drop_done ? '<span class="material-icons-round text-success align-middle" title="drops logs/data on success" data-testid="schedule-drops-' + s.id + '" data-drops="true">check</span>' : '<span data-testid="schedule-drops-' + s.id + '" data-drops="false"></span>'}</th>
                     <td>${s.max_retries}</td>
                     <td>${s.schedule}</td>
                     <td>${s.last}</td>
                     <td>${genActions(s)}</td>
-                    <td id="param_${s.id}" style="display:none;">${s.param}</td>
                 `;
             }
 
@@ -193,7 +204,6 @@
                                             <th scope="col">Schedule</th>
                                             <th scope="col">Last</th>
                                             <th scope="col">Actions</th>
-                                            <th style="display:none;"></th>
                                         </tr>
                                     </thead>
                                     <tbody data-set-body="${set}"></tbody>
@@ -220,9 +230,12 @@
                 return container.children(`[data-set="${set}"]`);
             }
 
+            // Schedule params by schedule id, for copyParam: a param is copied
+            // as it is, never parsed as HTML.
+            const params = new Map();
+
             function copyParam(id) {
-                const param = $(`#param_${id}`).text();
-                navigator.clipboard.writeText(param);
+                navigator.clipboard.writeText(params.get(String(id)) ?? "");
             }
 
             function refreshList() {
@@ -230,6 +243,7 @@
                 fetch("/scriptlet/schedule/list").then(async (r)=>{
                     console.debug("GET", "/scriptlet/schedule/list", r)
                     if(r.ok) {
+                        pyopsAlert.loaded("Schedule list");
                         const d = await r.json();
                         console.debug("schedules", d);
 
@@ -237,6 +251,8 @@
                         // the (numeric) schedule id.
                         const bySet = {};
                         for(const i of d) (bySet[i.set] = bySet[i.set] || []).push(i);
+                        params.clear();
+                        for(const i of d) params.set(String(i.id), i.param);
 
                         for(const set of Object.keys(bySet)) {
                             const card = ensureSetSection(set);
@@ -281,8 +297,14 @@
 
                         window.scrollTo(0, scrollY);
                     } else
-                        console.error("GET", "/scriptlet/schedule/list", r.statusText);
-                }).catch((e)=>console.error("GET", "/scriptlet/schedule/list", e.toString()));
+                        await pyopsAlert.loadFailed("Schedule list", r);
+                }).catch((e)=>pyopsAlert.loadError("Schedule list", e));
+            }
+
+            // keep_n only applies to a cron schedule that drops done jobs.
+            function updateKeepN(modal) {
+                const active = $(`#${modal}-dropDone`).is(':checked') && $(`#${modal}-schedule`).val() !== "";
+                $(`#${modal}-keepN`).prop("disabled", !active);
             }
 
             function clearCreateModal() {
@@ -291,8 +313,11 @@
                 $("#createModal-name").empty().append('<option value="">Select a scriptlet</option>').prop("disabled", true);
                 $("#createModal-dropDone").prop( "checked", false);
                 $("#createModal-maxRetries").val("0");
+                $("#createModal-keepN").val("0");
+                $("#createModal-maxFailN").val("3");
                 $("#createModal-schedule-preset").val("__custom__");
                 $("#createModal-schedule").val("");
+                updateKeepN("createModal");
                 if(createParamEditor) createParamEditor.setValue("", -1);
             }
 
@@ -303,6 +328,8 @@
                 const name = $("#createModal-name").val();
                 const drop_done = $("#createModal-dropDone").is(':checked');
                 const max_retries = parseInt($("#createModal-maxRetries").val()) || 0;
+                const keep_n = parseInt($("#createModal-keepN").val()) || 0;
+                const max_fail_n = parseInt($("#createModal-maxFailN").val());
                 const schedule = $("#createModal-schedule").val();
                 const param = createParamEditor ? createParamEditor.getValue() : "";
 
@@ -311,6 +338,8 @@
                     "name": name,
                     "drop_done": drop_done,
                     "max_retries": max_retries,
+                    "keep_n": keep_n,
+                    "max_fail_n": max_fail_n,
                     "schedule": schedule,
                     "param": param
                 }
@@ -330,7 +359,7 @@
                         refreshList();
                     } else {
                         const d = await r.json();
-                        $("#createModal-error").text(d.detail);
+                        $("#createModal-error").text(Array.isArray(d.detail) ? d.detail.map(e => e.msg).join("; ") : d.detail);
                     }
                 }).catch((e)=>$("#createModal-error").text(e.toString()));
             }
@@ -347,8 +376,8 @@
                         if(r.ok)
                             refreshList();
                         else
-                            console.error("DELETE", `/scriptlet/schedule/item?id=${id}`, r.statusText);
-                    }).catch((e)=>console.error("DELETE", `/scriptlet/schedule/item?id=${id}`, e.toString()));
+                            await pyopsAlert.failed(`Delete schedule ${id}`, r);
+                    }).catch((e)=>pyopsAlert.error(`Delete schedule ${id}`, e));
                 }
             }
 
@@ -362,8 +391,8 @@
 
                         alert(`Executed as job '${d.job}'`)
                     } else
-                        console.error(await r.text());
-                }).catch((e)=>console.error(e.toString()));
+                        await pyopsAlert.failed(`Run schedule ${id}`, r);
+                }).catch((e)=>pyopsAlert.error(`Run schedule ${id}`, e));
             }
 
             function activate(id) {
@@ -376,8 +405,8 @@
 
                         refreshList();
                     } else
-                        console.error(await r.text());
-                }).catch((e)=>console.error(e.toString()));
+                        await pyopsAlert.failed(`Activate schedule ${id}`, r);
+                }).catch((e)=>pyopsAlert.error(`Activate schedule ${id}`, e));
             }
 
             function deactivate(id) {
@@ -390,8 +419,8 @@
 
                         refreshList();
                     } else
-                        console.error(await r.text());
-                }).catch((e)=>console.error(e.toString()));
+                        await pyopsAlert.failed(`Deactivate schedule ${id}`, r);
+                }).catch((e)=>pyopsAlert.error(`Deactivate schedule ${id}`, e));
             }
 
             function edit(id) {
@@ -407,7 +436,10 @@
                         $("#editModal-name").val(s.name);
                         $("#editModal-dropDone").prop("checked", s.drop_done);
                         $("#editModal-maxRetries").val(s.max_retries);
+                        $("#editModal-keepN").val(s.keep_n);
+                        $("#editModal-maxFailN").val(s.max_fail_n);
                         $("#editModal-schedule").val(s.schedule);
+                        updateKeepN("editModal");
                         // Reflect the current cron in the preset selector if it
                         // matches a known preset (empty → "run as service"),
                         // otherwise fall back to "Custom".
@@ -419,8 +451,8 @@
 
                         $("#editModal").modal('show');
                     } else
-                        console.error(await r.text());
-                }).catch((e)=>console.error(e.toString()));
+                        await pyopsAlert.failed(`Edit schedule ${id}`, r);
+                }).catch((e)=>pyopsAlert.error(`Edit schedule ${id}`, e));
             }
 
             function clearEditModal() {
@@ -430,8 +462,11 @@
                 $("#editModal-name").val("");
                 $("#editModal-dropDone").prop("checked", false);
                 $("#editModal-maxRetries").val("0");
+                $("#editModal-keepN").val("0");
+                $("#editModal-maxFailN").val("3");
                 $("#editModal-schedule-preset").val("__custom__");
                 $("#editModal-schedule").val("");
+                updateKeepN("editModal");
                 if(editParamEditor) editParamEditor.setValue("", -1);
             }
 
@@ -443,6 +478,8 @@
                 const name = $("#editModal-name").val();
                 const drop_done = $("#editModal-dropDone").is(':checked');
                 const max_retries = parseInt($("#editModal-maxRetries").val()) || 0;
+                const keep_n = parseInt($("#editModal-keepN").val()) || 0;
+                const max_fail_n = parseInt($("#editModal-maxFailN").val());
                 const schedule = $("#editModal-schedule").val();
                 const param = editParamEditor ? editParamEditor.getValue() : "";
 
@@ -452,6 +489,8 @@
                     "name": name,
                     "drop_done": drop_done,
                     "max_retries": max_retries,
+                    "keep_n": keep_n,
+                    "max_fail_n": max_fail_n,
                     "schedule": schedule,
                     "param": param
                 }
@@ -471,7 +510,7 @@
                         refreshList();
                     } else {
                         const d = await r.json();
-                        $("#editModal-error").text(d.detail);
+                        $("#editModal-error").text(Array.isArray(d.detail) ? d.detail.map(e => e.msg).join("; ") : d.detail);
                     }
                 }).catch((e)=>$("#editModal-error").text(e.toString()));
             }
@@ -498,13 +537,20 @@
                     const v = $(this).val();
                     if(v === "__custom__") return;
                     $("#createModal-schedule").val(v);
+                    updateKeepN("createModal");
                 });
 
                 $("#editModal-schedule-preset").on('change', function () {
                     const v = $(this).val();
                     if(v === "__custom__") return;
                     $("#editModal-schedule").val(v);
+                    updateKeepN("editModal");
                 });
+
+                for(const modal of ["createModal", "editModal"]) {
+                    $(`#${modal}-dropDone`).on('change', () => updateKeepN(modal));
+                    $(`#${modal}-schedule`).on('input', () => updateKeepN(modal));
+                }
 
                 // Edit modal: the param editor needs a resize once visible.
                 $("#editModal").on('shown.bs.modal', function () {
@@ -531,7 +577,7 @@
                             </button>
                         </li>
 
-                        <li class="nav-item mx-auto"></li>
+                        <li class="nav-item mx-auto"><span id="pyops-load-status" class="navbar-text text-warning" data-testid="pyops-load-status" hidden></span></li>
 
                         <li class="nav-item m-1">
                             <button type="button" class="btn btn-success" onclick="refreshList()" title="Reload the schedule list" data-testid="scheduler-refresh">
@@ -569,8 +615,18 @@
                             <input id="createModal-dropDone" class="form-check-input" type="checkbox" value="" data-testid="scheduler-create-drop-done">
                         </div>
                         <div class="mb-3">
+                            <label for="createModal-keepN" class="col-form-label">Keep last N successful runs:</label>
+                            <input id="createModal-keepN" type="number" min="0" max="100" value="0" class="form-control" data-testid="scheduler-create-keep-n" disabled>
+                            <div class="form-text">Only with "Drop logs/data" and a cron schedule: the newest N done jobs are not dropped.</div>
+                        </div>
+                        <div class="mb-3">
                             <label for="createModal-maxRetries" class="col-form-label">Max Retries:</label>
                             <input id="createModal-maxRetries" type="number" min="0" value="0" class="form-control" data-testid="scheduler-create-max-retries">
+                        </div>
+                        <div class="mb-3">
+                            <label for="createModal-maxFailN" class="col-form-label">Max failed runs:</label>
+                            <input id="createModal-maxFailN" type="number" min="1" max="100" value="3" class="form-control" data-testid="scheduler-create-max-fail-n">
+                            <div class="form-text">Cron schedule: only the newest N failed jobs are kept. Service: not restarted once N runs have failed.</div>
                         </div>
                         <div class="mb-3">
                             <label for="createModal-schedule" class="col-form-label">Schedule:</label>
@@ -625,8 +681,18 @@
                             <input id="editModal-dropDone" class="form-check-input" type="checkbox" value="" data-testid="scheduler-edit-drop-done">
                         </div>
                         <div class="mb-3">
+                            <label for="editModal-keepN" class="col-form-label">Keep last N successful runs:</label>
+                            <input id="editModal-keepN" type="number" min="0" max="100" value="0" class="form-control" data-testid="scheduler-edit-keep-n" disabled>
+                            <div class="form-text">Only with "Drop logs/data" and a cron schedule: the newest N done jobs are not dropped.</div>
+                        </div>
+                        <div class="mb-3">
                             <label for="editModal-maxRetries" class="col-form-label">Max Retries:</label>
                             <input id="editModal-maxRetries" type="number" min="0" value="0" class="form-control" data-testid="scheduler-edit-max-retries">
+                        </div>
+                        <div class="mb-3">
+                            <label for="editModal-maxFailN" class="col-form-label">Max failed runs:</label>
+                            <input id="editModal-maxFailN" type="number" min="1" max="100" value="3" class="form-control" data-testid="scheduler-edit-max-fail-n">
+                            <div class="form-text">Cron schedule: only the newest N failed jobs are kept. Service: not restarted once N runs have failed.</div>
                         </div>
                         <div class="mb-3">
                             <label for="editModal-schedule" class="col-form-label">Schedule:</label>

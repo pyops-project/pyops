@@ -19,6 +19,17 @@ import requests
 from pyopsctl.config import Profile, DEFAULT_X_USER
 
 
+def _error_message(body: Any) -> str:
+    """The message of an error body: `detail`, or `error` (the controller
+    proxy's). A validation error (422) has a list as its `detail`: one
+    `<field>: <msg>` per entry."""
+    detail = body.get("detail")
+    if isinstance(detail, list):
+        return "; ".join(f"{'.'.join(str(p) for p in e['loc'][1:]) or e['loc'][0]}: {e['msg']}"
+                         for e in detail)
+    return detail or body.get("error")
+
+
 class HTTPError(Exception):
     """Server returned a non-2xx response. status maps to CLI exit code
     in __main__.main: 4xx → 4, 5xx → 5."""
@@ -84,7 +95,7 @@ class Client:
             body: Any = None
             try:
                 body = resp.json()
-                message = body.get("detail") or body.get("error") or resp.text
+                message = _error_message(body) or resp.text
             except ValueError:
                 message = resp.text or resp.reason
             raise HTTPError(resp.status_code, f"{method} {path}: {message}", body=body)
@@ -105,6 +116,20 @@ class Client:
     def delete(self, path: str, **kw) -> Any:
         resp = self.request("DELETE", path, **kw)
         return _decode(resp)
+
+    def cancel_job(self, job_id: str) -> bool:
+        """`GET /scriptlet/job/cancel` for `job_id`. True when the job is
+        cancelled (or was being cancelled already); False when it had
+        already finished or is being deleted — the server's 409, which
+        leaves the job unchanged and is a no-op for a caller that only
+        wants the job to stop. Any other error raises HTTPError."""
+        try:
+            self.get("/scriptlet/job/cancel", params={"id": job_id})
+        except HTTPError as ex:
+            if ex.status == 409:
+                return False
+            raise
+        return True
 
     def get_bytes(self, path: str, **kw) -> bytes:
         resp = self.request("GET", path, stream=True, **kw)

@@ -1,13 +1,15 @@
 """Unit tests for app/pyops/set_update_deps.task.py — directive parsing,
 conflict resolution, and the per-set filesystem scan.
 
-The task script normally runs inside the pyops runner with `appspace` and
-`config` injected as job globals (see job_runner.setup_job_globals for the
-`setname == "pyops"` branch) and with set.library.py's symbols added
-via the `#!{::set}` directive. The fixture below mirrors that setup by
-exec'ing both files into one shared namespace, so each pure function
-(`_parse_directives`, `_resolve`, `_scan`) is callable directly without
-spinning up the runner.
+The task script normally runs inside the pyops runner with `appspace`,
+`config`, `validate_set_name` and `CORE_DEPS` injected as job globals (see
+job_runner.setup_job_globals for the `setname == "pyops"` branch) and with
+set.library.py's symbols added via the `#!{::set}` directive. The fixture
+below mirrors that setup by exec'ing both files into one shared namespace,
+so each pure function (`_parse_directives`, `_resolve`, `_scan`) is
+callable directly without spinning up the runner. The injected `CORE_DEPS`
+is a stand-in list, so a test can tell it apart from any list the task
+might carry or derive itself.
 
 End-to-end behaviour (pip subprocess, lock acquisition, .update_warnings.json
 write) is covered by tests/e2e/test_sets_via_controller.py — only the
@@ -22,10 +24,14 @@ import pytest
 PYOPS_SET_DIR = os.path.normpath(os.path.join(
     os.path.dirname(__file__), "..", "..", "..", "app", "pyops"
 ))
+# Stand-in for the runner-injected CORE_DEPS (app.lib.sets.CORE_DEPS at
+# runtime — asserted in tests/unit/runner/test_job_globals.py).
+INJECTED_CORE_DEPS = ("core-dep-a", "core-dep-b")
 
 
 @pytest.fixture
 def task(tmp_path):
+    from app.lib.git import validate_set_name
     glob = {
         "__name__": "set_update_deps_loaded",
         "appspace": str(tmp_path / "app"),
@@ -36,6 +42,8 @@ def task(tmp_path):
                 "pkg": str(tmp_path / "data" / "pkg"),
             },
         },
+        "validate_set_name": validate_set_name,
+        "CORE_DEPS": INJECTED_CORE_DEPS,
         "name": None,
     }
     (tmp_path / "app").mkdir(exist_ok=True)
@@ -111,6 +119,11 @@ class TestParseDirectives:
 
     def test_namespaced_library_skipped(self, task):
         assert task["_parse_directives"]("#!otherset::shared_lib\n") == []
+
+    def test_requirements_file_directive_skipped(self, task):
+        """`#!-r requirements.txt` names no package to aggregate (and its
+        path is relative to a job workspace): Update Dependencies skips it."""
+        assert task["_parse_directives"]("#!-r requirements.txt\n") == []
 
     def test_blank_and_garbage_lines_ignored(self, task):
         text = (
@@ -358,6 +371,33 @@ class TestScanTransitiveLibraryIncludes:
         pkgs = {d["pkg"] for d in pip}
         assert pkgs == {"requests"}, pkgs
 
+    def test_include_from_missing_set_skipped(self, task):
+        """An include of a set that does not exist (not cloned here) is
+        skipped like a missing library; the rest of the set is updated."""
+        tmp = task["_tmp_path"]
+        myset_dir = tmp / "data" / "git" / "myset"
+        myset_dir.mkdir(parents=True)
+        (myset_dir / "t.task.py").write_text("#!{nosuchset::lib}\n#!requests\n")
+
+        pip, git = task["_scan"]("myset")
+        assert [d["pkg"] for d in pip] == ["requests"]
+        assert git == []
+
+    def test_diamond_include_walked_once(self, task):
+        """t includes b and c, both include d: d's directives count once."""
+        tmp = task["_tmp_path"]
+        other_dir = tmp / "data" / "git" / "other"
+        myset_dir = tmp / "data" / "git" / "myset"
+        other_dir.mkdir(parents=True)
+        myset_dir.mkdir(parents=True)
+        (myset_dir / "t.task.py").write_text("#!{other::b}\n#!{other::c}\n")
+        (other_dir / "b.library.py").write_text("#!{::d}\n#!pkg-b\n")
+        (other_dir / "c.library.py").write_text("#!{::d}\n#!pkg-c\n")
+        (other_dir / "d.library.py").write_text("#!pkg-d\n")
+
+        pip, _git = task["_scan"]("myset")
+        assert sorted(d["pkg"] for d in pip) == ["pkg-b", "pkg-c", "pkg-d"]
+
     def test_transitive_chain_two_hops(self, task):
         """Cross-set chain A -> B -> C is fully walked."""
         tmp = task["_tmp_path"]
@@ -459,3 +499,130 @@ class TestInstallGitFetchBeforeCheckout:
         assert not any(c[:2] == ("git", "fetch") for c in calls), (
             f"git fetch must not run on initial clone: {calls}"
         )
+
+
+class TestMain:
+    """main(): the whole Update Dependencies run with run_cmd recorded
+    (no pip / git subprocesses)."""
+
+    @staticmethod
+    def _record_commands(task):
+        """Replace run_cmd with a recorder that also notes whether the set's
+        install lock is held while each command runs."""
+        import fcntl
+        lock_path = os.path.join(task["_venv_base"](), ".locks", "myset.lock")
+        calls, lock_held = [], []
+
+        def fake_run_cmd(cmd, cwd=None, check=True):
+            calls.append(list(cmd))
+            with open(lock_path, "a") as fd:
+                try:
+                    fcntl.flock(fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    lock_held.append(True)
+                else:
+                    fcntl.flock(fd.fileno(), fcntl.LOCK_UN)
+                    lock_held.append(False)
+
+        task["run_cmd"] = fake_run_cmd
+        return calls, lock_held
+
+    @pytest.mark.parametrize("name, message", [
+        (None, "name is required"),
+        ("pyops", "'pyops' is pyops-managed"),
+        ("ghost", "Set 'ghost' not found."),
+    ], ids=["missing", "pyops", "unknown"])
+    def test_rejects_invalid_set(self, task, name, message):
+        calls, _ = self._record_commands(task)
+        task["name"] = name
+        with pytest.raises(ValueError, match=message):
+            task["main"]()
+        assert calls == []
+
+    @pytest.mark.parametrize("venv_exists", [False, True], ids=["new_venv", "existing_venv"])
+    def test_upgrades_set_and_writes_warnings(self, task, capsys, venv_exists):
+        """Ensures the venv (created only if missing), upgrades pip and the
+        core deps — exactly the CORE_DEPS the runner injects, the list a set
+        venv is created with — installs the newest-mtime winners of
+        conflicting pip pins and git branches, all under the set's install
+        lock, and writes the conflict summary /health reads."""
+        import json
+        import sys
+        tmp = task["_tmp_path"]
+        set_dir = tmp / "data" / "git" / "myset"
+        set_dir.mkdir(parents=True)
+        (set_dir / "old.task.py").write_text("#!requests==2.0\n#!https://h.example/g/tool.git main\n")
+        (set_dir / "new.task.py").write_text("#!requests==2.1\n#!https://h.example/g/tool.git dev\n")
+        os.utime(set_dir / "old.task.py", (1000, 1000))
+        os.utime(set_dir / "new.task.py", (2000, 2000))
+        venv = tmp / "data" / "venv" / "myset"
+        pkg = tmp / "data" / "pkg" / "myset"
+        if venv_exists:
+            (venv / "bin").mkdir(parents=True)
+            (venv / "bin" / "python").touch()
+        calls, lock_held = self._record_commands(task)
+        task["name"] = "myset"
+
+        task["main"]()
+
+        pip = str(venv / "bin" / "pip")
+        core_deps = list(INJECTED_CORE_DEPS)
+        assert calls == ([] if venv_exists else [[sys.executable, "-m", "venv", str(venv)]]) + [
+            [pip, "install", *core_deps],
+            [pip, "install", "--upgrade", "pip", "setuptools<82", "wheel"],
+            [pip, "install", "--upgrade", *core_deps],
+            [pip, "install", "--no-cache-dir", "--upgrade", "--upgrade-strategy", "eager", "requests==2.1"],
+            ["git", "clone", "--branch", "dev", "https://h.example/g/tool.git", str(pkg / "tool")],
+            [pip, "install", "--no-cache-dir", "--upgrade", "-e", str(pkg / "tool")],
+        ]
+        assert lock_held == [True] * len(calls)
+        with open(venv / ".update_warnings.json") as f:
+            summary = json.load(f)
+        assert summary == {
+            "set": "myset",
+            "conflicts": {
+                "pip": [{
+                    "pkg": "requests",
+                    "winner": {"source": "new.task.py", "mtime": 2000.0, "spec": "==2.1"},
+                    "losers": [{"source": "old.task.py", "mtime": 1000.0, "spec": "==2.0"}],
+                }],
+                "git": [{
+                    "url": "https://h.example/g/tool.git",
+                    "winner": {"source": "new.task.py", "mtime": 2000.0, "branch": "dev"},
+                    "losers": [{"source": "old.task.py", "mtime": 1000.0, "branch": "main"}],
+                }],
+            },
+            "installed": {
+                "pip": [{"pkg": "requests", "spec": "==2.1", "source": "new.task.py"}],
+                "git": [{"url": "https://h.example/g/tool.git", "branch": "dev", "source": "new.task.py"}],
+            },
+        }
+        out = capsys.readouterr().out
+        assert "pip conflict: requests → chose ==2.1 from new.task.py" in out
+        assert "git conflict: https://h.example/g/tool.git → chose branch=dev from new.task.py" in out
+        assert "Update completed for 'myset' — 2 conflict(s)." in out
+
+
+class TestLibraryIncludeResolution:
+    """`#!{set::name}` resolves to the scriptlet file `name.<type>.py` —
+    never to another scriptlet whose name merely starts with `name.`
+    (e.g. `causal.x.task.py` from a cloned repository), whatever order the
+    directory lists in."""
+
+    def test_exact_file_resolved_whatever_the_listing_order(self, task, monkeypatch):
+        tmp = task["_tmp_path"]
+        system = tmp / "data" / "git" / "system"
+        system.mkdir(parents=True)
+        (system / "causal.library.py").write_text("#!https://h.example/g/causal.git\n")
+        (system / "causal.x.task.py").write_text("#!unrelated\n")
+        cami = tmp / "data" / "git" / "cami"
+        cami.mkdir(parents=True)
+        (cami / "main.task.py").write_text("#!{system::causal}\n")
+        real_listdir = os.listdir
+        # The clashing file first, as an unsorted listing may return it.
+        monkeypatch.setattr(os, "listdir", lambda path: sorted(real_listdir(path), reverse=True))
+
+        pips, gits = task["_scan"]("cami")
+
+        assert pips == []
+        assert [(g["url"], g["source"]) for g in gits] == [("https://h.example/g/causal.git", "causal.library.py")]

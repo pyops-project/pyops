@@ -231,6 +231,10 @@ def test_get_job_download(mock_client, mock_db, mock_git_ops, mock_enqueue, test
             headers={"X-User": "testuser"}
         )
         job_id = enqueue_resp.json()["job"]
+        # The job ran: its workspace exists (a job without one answers 404).
+        import os
+        from app.lib import files
+        os.makedirs(os.path.join(files.conf_data()["jobs"], "downloadset", job_id))
         response = mock_client.get(f"/scriptlet/job/download?id={job_id}", headers={"X-User": "testuser"})
         assert response.status_code == 200
         assert response.headers["content-type"] == "application/x-zip-compressed"

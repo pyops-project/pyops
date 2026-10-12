@@ -7,8 +7,10 @@ import logging
 import json
 
 from fastapi import FastAPI, Request, HTTPException, Query
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import HTMLResponse, JSONResponse, Response
-from starlette.status import HTTP_200_OK, HTTP_404_NOT_FOUND, HTTP_405_METHOD_NOT_ALLOWED, HTTP_500_INTERNAL_SERVER_ERROR
+from fastapi.utils import is_body_allowed_for_status_code
+from starlette.status import HTTP_200_OK, HTTP_400_BAD_REQUEST, HTTP_404_NOT_FOUND, HTTP_405_METHOD_NOT_ALLOWED, HTTP_500_INTERNAL_SERVER_ERROR
 
 from .routers.scriptlet import job
 from .routers.scriptlet import schedule
@@ -23,6 +25,7 @@ from .routers import monitoring
 from .lib import sites, files, pyops, git, runner
 from .lib.async_utils import run_in_executor
 from .lib.auth import sanitize_owner
+from .lib.errors import PyopsError, ServiceTimeout
 
 from sqlalchemy import select, and_
 from sqlalchemy.orm import Session
@@ -38,6 +41,54 @@ if __name__ == "__main__":
     Config.init(default_path)
 
 app = FastAPI(docs_url=None)
+
+@app.exception_handler(PyopsError)
+async def _pyops_error(request: Request, exc: PyopsError) -> JSONResponse:
+    """The one mapping of the lib layer's typed errors to HTTP: each class
+    carries its status (400 invalid name or bundled set, 404 unknown set/scriptlet,
+    409 state conflict, 503 shutdown pending, 504 service timeout). The
+    body has the shape of FastAPI's HTTPException, `{"detail": message}`.
+    These are answers, not faults: logged without a traceback."""
+    level = logging.WARNING if exc.status_code >= 500 else logging.DEBUG
+    logger.log(level, "%s %s -> %d %s: %s", request.method, request.url.path,
+               exc.status_code, type(exc).__name__, exc)
+    return JSONResponse(status_code=exc.status_code, content={"detail": str(exc)})
+
+
+class _ServerFaultMiddleware:
+    """Answers an exception no handler maps — a real server fault — with
+    500 `{"detail": message}` and logs it with its traceback. Routes carry
+    no catch-all of their own: typed errors are answered by `_pyops_error`
+    and HTTPException by FastAPI before they get here. A fault after the
+    response started (a streamed body) cannot change the status and is
+    re-raised."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        started = False
+
+        async def tracking_send(message):
+            nonlocal started
+            if message["type"] == "http.response.start":
+                started = True
+            await send(message)
+
+        try:
+            await self.app(scope, receive, tracking_send)
+        except Exception as ex:
+            if started:
+                raise
+            logger.exception("Error in %s %s: %s", scope.get("method"), scope.get("path"), ex)
+            response = JSONResponse(status_code=HTTP_500_INTERNAL_SERVER_ERROR, content={"detail": str(ex)})
+            await response(scope, receive, send)
+
+
+app.add_middleware(_ServerFaultMiddleware)
 
 app.include_router(inventory.router)
 app.include_router(job.router)
@@ -117,15 +168,11 @@ def _brand_icon_html() -> str:
 
 @app.get("/")
 async def root():
-    try:
-        title = _html_escape(str(files.conf_brand().get("title") or "PyOps"))
-        body = (sites.get("root/root")
-                .replace("{{BRAND_TITLE}}", title)
-                .replace("{{BRAND_ICON}}", _brand_icon_html()))
-        return HTMLResponse(content=body, status_code=HTTP_200_OK)
-    except Exception as ex:
-        logger.exception("Error in root: %s", ex)
-        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail=str(ex))
+    title = _html_escape(str(files.conf_brand().get("title") or "PyOps"))
+    body = (sites.get("root/root")
+            .replace("{{BRAND_TITLE}}", title)
+            .replace("{{BRAND_ICON}}", _brand_icon_html()))
+    return HTMLResponse(content=body, status_code=HTTP_200_OK)
 
 
 @app.get("/favicon.ico")
@@ -134,29 +181,25 @@ async def favicon():
     an override file. Media type is inferred from extension so PNG / SVG
     work alongside `.ico`. A missing override falls back to the bundled
     icon and logs a warning rather than failing the request."""
-    try:
-        override = str(files.conf_brand().get("favicon") or "").strip()
-        if override:
-            path = _resolve_brand_path(override)
-            try:
-                with open(path, "rb") as f:
-                    content = f.read()
-                media_type, _ = mimetypes.guess_type(path)
-                return Response(
-                    content=content,
-                    media_type=media_type or "image/x-icon",
-                    status_code=HTTP_200_OK,
-                )
-            except FileNotFoundError:
-                logger.warning("brand.favicon points at %s but the file is missing — serving bundled default", path)
-        return Response(
-            content=files.get("favicon.ico"),
-            media_type="image/x-icon",
-            status_code=HTTP_200_OK,
-        )
-    except Exception as ex:
-        logger.exception("Error in favicon: %s", ex)
-        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail=str(ex))
+    override = str(files.conf_brand().get("favicon") or "").strip()
+    if override:
+        path = _resolve_brand_path(override)
+        try:
+            with open(path, "rb") as f:
+                content = f.read()
+            media_type, _ = mimetypes.guess_type(path)
+            return Response(
+                content=content,
+                media_type=media_type or "image/x-icon",
+                status_code=HTTP_200_OK,
+            )
+        except FileNotFoundError:
+            logger.warning("brand.favicon points at %s but the file is missing — serving bundled default", path)
+    return Response(
+        content=files.get("favicon.ico"),
+        media_type="image/x-icon",
+        status_code=HTTP_200_OK,
+    )
 
 
 @app.get("/brand/icon")
@@ -166,40 +209,39 @@ async def brand_icon():
     config holds a material-icons glyph name (no image to serve) or the
     file is missing — the root HTML only references this endpoint when
     `_brand_icon_html` has already confirmed a usable image."""
+    icon = str(files.conf_brand().get("icon") or "").strip()
+    if not icon or not _is_brand_image(icon):
+        raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="brand.icon is a glyph name, not an image")
+    path = _resolve_brand_path(icon)
     try:
-        icon = str(files.conf_brand().get("icon") or "").strip()
-        if not icon or not _is_brand_image(icon):
-            raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail="brand.icon is a glyph name, not an image")
-        path = _resolve_brand_path(icon)
-        try:
-            with open(path, "rb") as f:
-                content = f.read()
-        except FileNotFoundError:
-            raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail=f"brand.icon file not found: {path}")
-        media_type, _ = mimetypes.guess_type(path)
-        return Response(
-            content=content,
-            media_type=media_type or "application/octet-stream",
-            status_code=HTTP_200_OK,
-        )
-    except HTTPException:
-        raise
-    except Exception as ex:
-        logger.exception("Error in brand_icon: %s", ex)
-        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail=str(ex))
+        with open(path, "rb") as f:
+            content = f.read()
+    except FileNotFoundError:
+        raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail=f"brand.icon file not found: {path}")
+    media_type, _ = mimetypes.guess_type(path)
+    return Response(
+        content=content,
+        media_type=media_type or "application/octet-stream",
+        status_code=HTTP_200_OK,
+    )
 
 @app.get("/files/{path:path}")
 async def file(path: str):
-    try:
-        media_type, _ = mimetypes.guess_type(path)
-        return Response(
-            content=files.get(path),
-            media_type=media_type or "application/octet-stream",
-            status_code=HTTP_200_OK
-        )
-    except Exception as ex:
-        logger.exception("Error in file: %s", ex)
-        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
+    media_type, _ = mimetypes.guess_type(path)
+    return Response(
+        content=files.get(path),
+        media_type=media_type or "application/octet-stream",
+        status_code=HTTP_200_OK
+    )
+
+async def _read_scriptlet(set: str, name: str, type_: str, committed: bool) -> str:
+    """Content of the scriptlet `set::name` of type `type_`: the working
+    tree, or the committed version (strict) when `committed`."""
+    repo = await run_in_executor(git.get_repo_path, set)
+    await run_in_executor(git.resolve_scriptlet, repo, name, type_)
+    if committed:
+        return await run_in_executor(git.read_content, repo, name, type_, committed=True, strict=True)
+    return await run_in_executor(git.read_content, repo, name, type_, committed=False)
 
 async def get_controller_code(set: str, name: str, debug: bool = True) -> str:
     """Loads controller code from Git, preferring unstaged if debug=True (default).
@@ -213,25 +255,15 @@ async def get_controller_code(set: str, name: str, debug: bool = True) -> str:
         str: Executable Python code.
 
     Raises:
-        HTTPException: 404 if not found, 405 if wrong type.
-        FileNotFoundError: No committed version if debug=False.
+        InvalidSetNameError, InvalidScriptletNameError: invalid name (400).
+        SetNotFoundError: Set does not exist (404).
+        ScriptletNotFoundError: No controller of that name (404); a name
+            of another type raises its subclass WrongScriptletTypeError.
+        NoCommittedVersionError: No committed version if debug=False (409).
     """
-    repo = await run_in_executor(git.get_repo_path, set)
-    # Check exists and right type.
-    files_list = [f for f in os.listdir(repo) if f.startswith(f"{name}.") and f.endswith('.py')]
-    if not files_list:
-        raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail=f"Scriptlet {set}::{name} not existing")
-    filename = files_list[0]
-    inferred_type = git.infer_type_from_filename(filename)
-    if inferred_type != "controller":
-        raise HTTPException(status_code=HTTP_405_METHOD_NOT_ALLOWED, detail=f"Scriptlet {set}::{name} is not a controller.")
-    # Load based on debug.
-    if debug:
-        return await run_in_executor(git.read_content, repo, name, inferred_type, committed=False)
-    else:
-        return await run_in_executor(git.read_content, repo, name, inferred_type, committed=True, strict=True)
+    return await _read_scriptlet(set, name, "controller", committed=not debug)
 
-async def get_view_content(set: str, name: str, debug: bool = False) -> str:  # Renamed/Updated: Raw HTML, no exec
+async def get_view_content(set: str, name: str, debug: bool = False) -> str:
     """Loads view content from Git (.html), preferring unstaged if debug=True.
 
     Args:
@@ -243,23 +275,9 @@ async def get_view_content(set: str, name: str, debug: bool = False) -> str:  # 
         str: Raw HTML content.
 
     Raises:
-        HTTPException: 404 if not found, 405 if wrong type.
-        FileNotFoundError: No committed version if debug=False.
+        Same as `get_controller_code`, for a view.
     """
-    repo = await run_in_executor(git.get_repo_path, set)
-    # Check exists and right type.
-    files_list = [f for f in os.listdir(repo) if f.startswith(f"{name}.") and f.endswith('.html')]
-    if not files_list:
-        raise HTTPException(status_code=HTTP_404_NOT_FOUND, detail=f"Scriptlet {set}::{name} not existing")
-    filename = files_list[0]
-    inferred_type = git.infer_type_from_filename(filename)
-    if inferred_type != "view":
-        raise HTTPException(status_code=HTTP_405_METHOD_NOT_ALLOWED, detail=f"Scriptlet {set}::{name} is not a view.")
-    # Load based on debug.
-    if debug:
-        return await run_in_executor(git.read_content, repo, name, inferred_type, committed=False)
-    else:
-        return await run_in_executor(git.read_content, repo, name, inferred_type, committed=True, strict=True)
+    return await _read_scriptlet(set, name, "view", committed=not debug)
 
 @app.get("/controller/{set}/{name}")
 async def controller(set: str, name: str):
@@ -403,13 +421,34 @@ async def controller(set: str, name: str):
    .replace("{{DISPLAY_NAME}}", display_name),
                 status_code=HTTP_200_OK
             )
-    except HTTPException:
+    except git.InvalidSetNameError as ex:
+        return _controller_error_page(set, name, str(ex), HTTP_400_BAD_REQUEST)
+    except git.SetNotFoundError as ex:
+        return _controller_error_page(set, name, str(ex), HTTP_404_NOT_FOUND)
+    except git.NoCommittedVersionError as ex:
+        return _controller_draft_failed(set, name, ex)
+    except PyopsError:
         raise
     except Exception as ex:
-        logger.exception("Controller draft execution failed: %s", ex)
-        error_detail = str(ex)
-        return HTMLResponse(
-            content=f"""
+        return _controller_draft_failed(set, name, ex)
+
+
+def _controller_draft_failed(set: str, name: str, ex: Exception) -> HTMLResponse:
+    logger.exception("Controller draft execution failed: %s", ex)
+    return _controller_error_page(set, name, str(ex), HTTP_200_OK)
+
+
+def _controller_error_page(set: str, name: str, error_detail: str, status_code: int) -> HTMLResponse:
+    """The "Controller Draft Error" page the controller route answers with
+    when it cannot render: 400 for an invalid set name, 404 for an unknown
+    set, 200 when the controller code itself fails.
+
+    `set` and `name` come from the request URL and `error_detail` can quote
+    them, so all three are HTML-escaped: they show as text, never as markup
+    (no reflected XSS)."""
+    set, name, error_detail = _html_escape(set), _html_escape(name), _html_escape(error_detail)
+    return HTMLResponse(
+        content=f"""
 <html>
     <head>
         <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
@@ -432,9 +471,9 @@ async def controller(set: str, name: str):
     </body>
 </html>
             """,
-            status_code=HTTP_200_OK
-        )
-    
+        status_code=status_code,
+    )
+
 @app.api_route("/controller/{set}/{name}/{rest:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"])
 async def controller_proxy(set: str, name: str, rest: str, request: Request):
     try:
@@ -472,7 +511,6 @@ async def controller_proxy(set: str, name: str, rest: str, request: Request):
                 content={"error": f"No running {kind}: {glob['set']}::{glob['service']}"},
             )
         job_id = jobs[0]
-        s = pyops.ServiceClient(job_id)
 
         params = dict(request.query_params)
         params["type"] = request.method
@@ -506,12 +544,34 @@ async def controller_proxy(set: str, name: str, rest: str, request: Request):
             params["data"] = None
             params["data_type"] = "none"
 
-        status, data = s.request(params)
-        if status != 200:
-            raise HTTPException(status_code=status, detail=data)
-        return data
+        # Caller-owned ZMQ lifecycle: bound the recv to the web worker's
+        # request timeout and always close() so the client's context (and
+        # its background thread pair) is reclaimed per request rather than
+        # leaked for the worker's lifetime.
+        web_timeout = int(files.conf_web().get("timeout", 300) or 300)
+        s = pyops.ServiceClient(job_id, recv_timeout_ms=web_timeout * 1000)
+        try:
+            status, data = s.request(params)
+        finally:
+            s.close()
+        # The service's answer is the response: status and body as sent.
+        if not is_body_allowed_for_status_code(status):
+            return Response(status_code=status)
+        return JSONResponse(status_code=status, content=jsonable_encoder(data))
     except HTTPException:
         raise
+    # The proxy's own error answers carry the message in `error`, like a
+    # service's answers do, so a view reads one field.
+    except git.InvalidSetNameError as ex:
+        return JSONResponse(status_code=HTTP_400_BAD_REQUEST, content={"error": f"Controller execution failed: {ex}"})
+    except git.SetNotFoundError as ex:
+        return JSONResponse(status_code=HTTP_404_NOT_FOUND, content={"error": f"Controller execution failed: {ex}"})
+    except ServiceTimeout as ex:
+        logger.warning("Controller proxy %s::%s: %s", set, name, ex)
+        return JSONResponse(status_code=ex.status_code, content={"error": str(ex)})
+    except PyopsError as ex:
+        logger.debug("Controller proxy %s::%s -> %d %s: %s", set, name, ex.status_code, type(ex).__name__, ex)
+        return JSONResponse(status_code=ex.status_code, content={"error": str(ex)})
     except Exception as ex:
         logger.exception("Controller proxy failed: %s", ex)
         return {"error": f"Controller execution failed: {str(ex)}"}
@@ -527,96 +587,92 @@ async def menu():
     can be force-expanded via the `web.expanded_sets` config list (an array
     of set names whose section should open by default).
     """
-    try:
-        web_conf = files.conf_web()
-        expanded_sets = web_conf.get("expanded_sets") or []
+    web_conf = files.conf_web()
+    expanded_sets = web_conf.get("expanded_sets") or []
 
-        content = [{
-            "id": "scriptlet",
-            "name": "Scriptlet",
-            "expanded": True,
-            "items": [
-                {
-                    "id": "scriptlet_manager",
-                    "name": "Manager",
-                    "path": "/scriptlet/manager",
-                    "default": False
-                },
-                {
-                    "id": "scriptlet_scheduler",
-                    "name": "Scheduler",
-                    "path": "/scriptlet/scheduler",
-                    "default": False
-                },
-                {
-                    "id": "scriptlet_monitor",
-                    "name": "Monitor",
-                    "path": "/scriptlet/monitor",
-                    "default": True
-                },
-                {
-                    "id": "scriptlet_sets",
-                    "name": "Sets",
-                    "path": "/controller/pyops/sets",
-                    "default": False
-                },
-            ]
-        }]
-        failures = []
+    content = [{
+        "id": "scriptlet",
+        "name": "Scriptlet",
+        "expanded": True,
+        "items": [
+            {
+                "id": "scriptlet_manager",
+                "name": "Manager",
+                "path": "/scriptlet/manager",
+                "default": False
+            },
+            {
+                "id": "scriptlet_scheduler",
+                "name": "Scheduler",
+                "path": "/scriptlet/scheduler",
+                "default": False
+            },
+            {
+                "id": "scriptlet_monitor",
+                "name": "Monitor",
+                "path": "/scriptlet/monitor",
+                "default": True
+            },
+            {
+                "id": "scriptlet_sets",
+                "name": "Sets",
+                "path": "/controller/pyops/sets",
+                "default": False
+            },
+        ]
+    }]
+    failures = []
 
-        # Scan Git for controllers.
-        scriptlets = await run_in_executor(git.list_scriptlets)
-        sets = sorted(set(s["set"] for s in scriptlets if s["type"] == "controller"))
+    # Scan Git for controllers.
+    scriptlets = await run_in_executor(git.list_scriptlets)
+    sets = sorted(set(s["set"] for s in scriptlets if s["type"] == "controller"))
 
-        for g in sets:
-            m = {
-                "id": g,
-                "name": g,
-                "expanded": g in expanded_sets,
-                "items": []
-            }
-            ctrl_scriptlets = [s for s in scriptlets if s["set"] == g and s["type"] == "controller"]
-            for s in sorted(ctrl_scriptlets, key=lambda x: x["name"]):
-                name = s["name"]
-                repo = await run_in_executor(git.get_repo_path, g)
-                try:
-                    code = await get_controller_code(g, name)
-                    glob = {}
-                    exec(code, glob)
-                    display_name = glob.get("name", name)
-                    sm = {
-                        "id": f"{g}_{name}",
-                        "name": display_name,
-                        "path": f"/controller/{g}/{name}",
-                        "default": False
-                    }
-                except FileNotFoundError:
-                    sm = {
-                        "id": f"{g}_{name}",
-                        "name": f"No committed: {name}",
-                        "path": f"/controller/{g}/{name}",
-                        "default": False
-                    }
-                except Exception as e:
-                    logger.warning(f"Exec failed for draft {g}::{name}: {e}")
-                    failures.append({
-                        "set": g,
-                        "name": name,
-                        "error": str(e)
-                    })
-                    sm = {
-                        "id": f"{g}_{name}",
-                        "name": f"Draft error: {name}",
-                        "path": f"/controller/{g}/{name}",
-                        "default": False
-                    }
-                m["items"].append(sm)
-            
-            if m["items"]:
-                content.append(m)
-        
-        response = {"menu": content, "failures": failures}
-        return response
-    except Exception as ex:
-        logger.exception("Error in menu: %s", ex)
-        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail= str(ex))
+    for g in sets:
+        m = {
+            "id": g,
+            "name": g,
+            "expanded": g in expanded_sets,
+            "items": []
+        }
+        ctrl_scriptlets = [s for s in scriptlets if s["set"] == g and s["type"] == "controller"]
+        for s in sorted(ctrl_scriptlets, key=lambda x: x["name"]):
+            name = s["name"]
+            repo = await run_in_executor(git.get_repo_path, g)
+            try:
+                code = await get_controller_code(g, name)
+                glob = {}
+                exec(code, glob)
+                display_name = glob.get("name", name)
+                sm = {
+                    "id": f"{g}_{name}",
+                    "name": display_name,
+                    "path": f"/controller/{g}/{name}",
+                    "default": False
+                }
+            except git.NoCommittedVersionError:
+                sm = {
+                    "id": f"{g}_{name}",
+                    "name": f"No committed: {name}",
+                    "path": f"/controller/{g}/{name}",
+                    "default": False
+                }
+            except Exception as e:
+                logger.warning(f"Exec failed for draft {g}::{name}: {e}")
+                failures.append({
+                    "set": g,
+                    "name": name,
+                    "error": str(e)
+                })
+                sm = {
+                    "id": f"{g}_{name}",
+                    "name": f"Draft error: {name}",
+                    "path": f"/controller/{g}/{name}",
+                    "default": False
+                }
+            m["items"].append(sm)
+
+        if m["items"]:
+            content.append(m)
+
+    response = {"menu": content, "failures": failures}
+    return response

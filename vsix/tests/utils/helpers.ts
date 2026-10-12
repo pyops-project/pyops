@@ -10,6 +10,21 @@ declare namespace jest {
 
 import type { ExtensionContext } from 'vscode';
 
+// Schema defaults from package.json, returned by inspect().defaultValue for
+// keys the test didn't explicitly set (mirrors real VSCode behaviour).
+const SCHEMA_DEFAULTS: Record<string, any> = {
+  profile: '',
+  serverUrl: 'http://localhost:8000',
+  authMode: 'basic',
+  timeout: 30,
+  useRemoteLinter: true,
+  localPyopsDir: 'pyops',
+  autoRefreshInterval: 10,
+  excludedSets: [],
+  includedSets: [],
+  debugPorts: [5678],
+};
+
 export function setupConfigMock(options: Record<string, any> = {}) {
   const pyopsConfig = {
     localPyopsDir: 'pyops',
@@ -28,11 +43,23 @@ export function setupConfigMock(options: Record<string, any> = {}) {
     }
     return defaultValue !== undefined ? defaultValue : '';
   });
+  // inspect() lets the connectivity resolver tell an explicit override from a
+  // schema default: any key present in the test's config object is reported as
+  // an explicit workspaceValue; everything else is default-only.
+  const pyopsMockInspect = jest.fn((key: string) => ({
+    key: `pyops.${key}`,
+    defaultValue: SCHEMA_DEFAULTS[key],
+    globalValue: undefined,
+    workspaceValue: Object.prototype.hasOwnProperty.call(pyopsConfig, key)
+      ? (pyopsConfig as any)[key]
+      : undefined,
+    workspaceFolderValue: undefined,
+  }));
   (require('vscode').workspace.getConfiguration as jest.Mock).mockImplementation((section?: string) => {
     if (section === 'pyops' || section === undefined || section === '') {
-      return { get: pyopsMockGet };
+      return { get: pyopsMockGet, inspect: pyopsMockInspect };
     }
-    return { get: jest.fn((_k: string, d?: any) => d) };
+    return { get: jest.fn((_k: string, d?: any) => d), inspect: jest.fn(() => undefined) };
   });
 }
 
@@ -122,3 +149,45 @@ export const pathMockFactory = () => ({
   basename: jest.fn(),
   relative: jest.fn(),
 });
+
+// --- PyOps client-config profile fixtures -------------------------------------------
+// ProfileService reads a real TOML file via fs + process.env.PYOPSCTL_CONFIG.
+// These helpers write a temp fixture under tests/.cache and point the loader
+// at it, isolating unit tests from the host's real ~/.config/pyops/config.toml.
+
+const nodeFs = require('fs');
+const nodeOs = require('os');
+const nodePath = require('path');
+
+// Guaranteed-absent path used as the default so a test that never sets a
+// fixture resolves no profile (legacy VSCode-only connectivity).
+export const NONEXISTENT_CONFIG = nodePath.join(nodeOs.tmpdir(), 'pyops-vsix-tests-no-such-config.toml');
+
+// Test runtime files live in .cache/ (project rule). Resolved on use: some
+// suites mock 'path', and they load this module too.
+export function testCacheDir(): string {
+  const dir = nodePath.resolve(__dirname, '../../.cache/tests');
+  nodeFs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+// The profile dirs setProfileConfig() creates are removed again by clearProfileConfig().
+const profileDirs: string[] = [];
+
+export function setProfileConfig(toml: string): string {
+  const dir = nodeFs.mkdtempSync(nodePath.join(testCacheDir(), 'cfg-'));
+  profileDirs.push(dir);
+  const file = nodePath.join(dir, 'config.toml');
+  nodeFs.writeFileSync(file, toml);
+  process.env.PYOPSCTL_CONFIG = file;
+  require('../../src/services/ProfileService')._clearProfileCache();
+  return file;
+}
+
+export function clearProfileConfig() {
+  process.env.PYOPSCTL_CONFIG = NONEXISTENT_CONFIG;
+  require('../../src/services/ProfileService')._clearProfileCache();
+  for (const dir of profileDirs.splice(0)) {
+    nodeFs.rmSync(dir, { recursive: true, force: true });
+  }
+}

@@ -333,17 +333,11 @@ class TestSetsCloneViaController:
     def test_clone_invalid_url_fails(self, api, pyops_server):
         _service_ready(api)
         # Empty URL — service rejects synchronously with 400 before any job
-        # spawns; controller_proxy re-raises that as an HTTPException, so the
-        # client sees a real 400 status (not a 200 with an error payload).
+        # spawns; controller_proxy passes the service's status and body
+        # through, so the client sees a real 400 with {"error": ...}.
         r = api.post("/controller/pyops/sets/clone", json={"url": ""})
         assert r.status_code == 400, r.text
-        # FastAPI wraps HTTPException.detail under {"detail": ...}; the
-        # detail here carries the service's {"error": "url is required"} dict.
-        detail = r.json()["detail"]
-        if isinstance(detail, dict):
-            assert "url" in detail.get("error", "").lower()
-        else:
-            assert "url" in str(detail).lower()
+        assert r.json() == {"error": "url is required"}
 
     def test_clone_duplicate_name_fails(self, api, pyops_server, bare_remote, set_factory):
         _service_ready(api)
@@ -705,6 +699,14 @@ class TestSetsListReportsHasDrafts:
         row = next(r for r in rows if r["name"] == "hd_clean")
         assert row.get("has_drafts") is False
 
+    def test_uninitialised_set_listed(self, api, pyops_server, e2e_env):
+        """A set directory without `.git` is listed as not initialised."""
+        _service_ready(api)
+        (Path(e2e_env["data_dir"]) / "git" / "hd_plain").mkdir(parents=True)
+        rows = api.get("/controller/pyops/sets/list").json()["sets"]
+        row = next(r for r in rows if r["name"] == "hd_plain")
+        assert row == {"name": "hd_plain", "branch": None, "has_drafts": False, "initialized": False}
+
     def test_dirty_set_reports_drafts(self, api, pyops_server, set_factory, e2e_env):
         _service_ready(api)
         set_factory("hd_dirty")
@@ -993,4 +995,30 @@ class TestSetActionsUI:
 
         # Row disappears after refresh.
         frame.locator('[data-testid="set-row-rm_ui"]').wait_for(state="hidden", timeout=15_000)
+        pyops_server.assert_no_unexpected_errors()
+
+    def test_uninitialised_set_offers_only_remove_and_is_removed(self, e2e_page, api_anon, pyops_server, e2e_env):
+        """A set directory without `.git` shows as not initialised; every
+        git action is disabled, Remove removes the directory."""
+        _service_ready(api_anon)
+        plain = Path(e2e_env["data_dir"]) / "git" / "rm_plain"
+        plain.mkdir(parents=True)
+        (plain / "leftover.txt").write_text("not initialised\n")
+        frame = _nav_sets(e2e_page)
+        frame.locator('[data-testid="sets-refresh"]').click()
+        row = frame.locator('[data-testid="set-row-rm_plain"]')
+        row.wait_for(state="visible", timeout=10_000)
+        assert "not initialised" in row.inner_text()
+        for action in ("pull", "commit-drafts", "discard-drafts", "update-deps", "switch"):
+            assert frame.locator(f'[data-testid="set-{action}-rm_plain"]').is_disabled(), action
+        assert frame.locator('[data-testid="set-remove-rm_plain"]').is_enabled()
+
+        frame.locator('[data-testid="set-remove-rm_plain"]').click()
+        frame.locator('[data-testid="sets-remove-submit"]').click()
+        frame.locator('[data-testid="sets-job-modal"]').wait_for(state="visible", timeout=10_000)
+        assert _await_modal_done(frame) == "done"
+        frame.locator('[data-testid="sets-job-close"]').click()
+
+        row.wait_for(state="hidden", timeout=15_000)
+        assert not plain.exists()
         pyops_server.assert_no_unexpected_errors()

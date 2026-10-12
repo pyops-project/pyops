@@ -183,6 +183,26 @@ class TestJobSetupExecution:
         # File handle's name (str path) ends with stdout.log under the workspace
         assert passed_stdout_paths[0].endswith("stdout.log")
 
+    def test_setup_error_before_install_exits_1(self, setup_kwargs, tmp_path):
+        """Run as the runner runs it (kwargs on stdin): an error before the
+        install phase — here the workspace cannot be created — is printed
+        to stderr and exits 1 (the runner then reaps the job via its
+        stale-PID check)."""
+        import subprocess
+        import sys
+        from app import job_setup
+        blocker = tmp_path / "afile"
+        blocker.write_text("")
+        kwargs = json.loads(setup_kwargs)
+        kwargs["conf_data"]["jobs"] = str(blocker / "jobs")
+        kwargs["runner_sock_path"] = str(tmp_path / "runner.sock")
+
+        result = subprocess.run([sys.executable, job_setup.__file__], input=json.dumps(kwargs),
+                                capture_output=True, text=True, cwd=tmp_path, timeout=120)
+
+        assert result.returncode == 1
+        assert "Unhandled error in job_setup.py: [Errno 20] Not a directory" in result.stderr
+
 
 class TestLogFilePreservation:
     def test_job_runner_appends_to_setup_logs(self, tmp_path, monkeypatch):

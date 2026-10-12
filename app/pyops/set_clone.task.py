@@ -5,7 +5,9 @@
 # task with drop_done=True; param injected the variables we consume here.
 #
 # Params (param-injected globals):
-#   url:       repo URL (required)
+#   url:       repo URL (required); its last path segment (minus ".git")
+#              names the set and must pass the injected
+#              `validate_set_name` before anything is touched
 #   username:  optional, embedded in HTTPS credentials
 #   password:  optional, embedded in HTTPS credentials
 #   git_name:  optional, set as local user.name
@@ -32,6 +34,7 @@ def main():
         name = name[:-4]
     if not name:
         raise ValueError(f"Empty repo name inferred from URL: {url}")
+    validate_set_name(name)
     if name == "pyops":
         raise ValueError("'pyops' is reserved for pyops-managed scriptlets")
 

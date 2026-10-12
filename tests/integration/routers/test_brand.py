@@ -111,6 +111,15 @@ class TestBrandImageIcon:
         assert r.headers["content-type"] == "image/png"
         assert r.content == b"\x89PNG\r\n\x1a\nfake-image-bytes"
 
+    def test_brand_icon_route_404_when_image_file_missing(self, client, mock_db, monkeypatch, tmp_path):
+        # The root page falls back to the glyph (next test); the image
+        # route itself answers 404 instead of a server error.
+        missing = tmp_path / "logo.png"
+        _set_brand(monkeypatch, {"icon": str(missing)})
+        r = client.get("/brand/icon")
+        assert r.status_code == 404
+        assert r.json()["detail"] == f"brand.icon file not found: {missing}"
+
     def test_missing_image_file_falls_back_to_default_glyph(self, client, mock_db, monkeypatch):
         _set_brand(monkeypatch, {"icon": "/tmp/does-not-exist-pyops-test.png"})
         r = client.get("/")

@@ -114,13 +114,10 @@ class TestJobCancel:
         assert resp.status_code == 404
         pyops_server.assert_no_unexpected_errors()
 
-    def test_cancel_terminal_job_flips_state_to_cancelled(self, api, pyops_server, set_factory, commit_set):
-        """runner.cancel() unconditionally marks state='cancel'; the runner loop
-        then finalises it to 'cancelled' regardless of the previous terminal
-        state. This is observed behaviour — it loses the original 'done'/'failed'
-        information and is surprising, but encoding it as a test locks the
-        contract until a deliberate change.
-        """
+    def test_cancel_terminal_job_conflicts_and_keeps_its_outcome(self, api, pyops_server, set_factory, commit_set):
+        """Cancelling a job that already finished (a client acting on a stale
+        list) is a conflict: 409, and the job keeps its 'done' outcome and
+        end time — the runner never rewrites it to 'cancelled'."""
         _setup(api, SET + "_done", "quick", 'print("done")\n', set_factory, commit_set)
         job_id = _enqueue(api, SET + "_done", "quick")
 
@@ -128,9 +125,11 @@ class TestJobCancel:
         assert done["state"] == "done"
 
         resp = api.get(f"/scriptlet/job/cancel?id={job_id}")
-        assert resp.status_code == 200
+        assert resp.status_code == 409
+        assert resp.json()["detail"] == f"Job {job_id} is already done"
 
-        # Runner picks up 'cancel' → finalises to 'cancelled'.
-        final = _wait_for_state(api, job_id, "cancelled", timeout=10)
-        assert final["state"] == "cancelled"
-        pyops_server.assert_no_unexpected_errors(allow=["cancel"])
+        # Give the runner loop time to act on a cancel, had one been written.
+        time.sleep(2)
+        final = api.get(f"/scriptlet/job/item?id={job_id}").json()
+        assert (final["state"], final["end"]) == ("done", done["end"])
+        pyops_server.assert_no_unexpected_errors()

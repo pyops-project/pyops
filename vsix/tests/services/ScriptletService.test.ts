@@ -78,12 +78,14 @@ describe('ScriptletService', () => {
 
       (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
         ok: false,
+        status: 404,
         statusText: 'Not Found',
+        json: () => Promise.reject(new SyntaxError('not JSON')),
       } as Response);
 
       await service.resetLocalFromRemote(treeItem);
 
-      expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith('Failed to fetch remote: Not Found');
+      expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith('Failed to fetch remote: 404 Not Found');
     });
   });
 
@@ -232,12 +234,14 @@ describe('ScriptletService', () => {
 
       (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
         ok: false,
+        status: 404,
         statusText: 'Not Found',
+        json: () => Promise.resolve({ detail: "Set 'testSet' does not exist" }),
       } as Response);
 
       await service.resetLocalFromRemote(treeItem);
 
-      expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith('Failed to fetch remote: Not Found');
+      expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith("Failed to fetch remote: 404 Set 'testSet' does not exist");
     });
   });
 
@@ -270,12 +274,14 @@ describe('ScriptletService', () => {
         .mockResolvedValueOnce({ ok: true } as Response)  // check exists
         .mockResolvedValueOnce({
           ok: false,
-          statusText: 'Server Error',
+          status: 400,
+          statusText: 'Bad Request',
+          json: () => Promise.resolve({ detail: "Invalid scriptlet name 'my.script': use only letters, digits, '_' and '-' (at least one character)" }),
         } as Response); // draft non-ok
 
       await service.writeLocalToRemoteDraft(treeItem);
 
-      expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith('Failed to write draft: Server Error');
+      expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith("Failed to write draft: 400 Invalid scriptlet name 'my.script': use only letters, digits, '_' and '-' (at least one character)");
     });
   });
 
@@ -303,12 +309,14 @@ describe('ScriptletService', () => {
 
       (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
         ok: false,
+        status: 404,
         statusText: 'Not Found',
+        json: () => Promise.resolve({ detail: 'Scriptlet testSet::testName not existing' }),
       } as Response);
 
       await service.diffLocalRemote(treeItem);
 
-      expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith('Failed to fetch remote for diff: Not Found');
+      expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith('Failed to fetch remote for diff: 404 Scriptlet testSet::testName not existing');
     });
   });
 
@@ -341,12 +349,14 @@ describe('ScriptletService', () => {
       (mockApiClient.fetch as jest.Mock)
         .mockResolvedValueOnce({
           ok: false,
-          text: () => Promise.resolve('Delete failed'),
+          status: 400,
+          statusText: 'Bad Request',
+          json: () => Promise.resolve({ detail: "Invalid scriptlet name 'test.name': use only letters, digits, '_' and '-' (at least one character)" }),
         } as Response);
 
       await service.deleteScriptlet(treeItem);
 
-      expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith('Failed to delete remote: Delete failed');
+      expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith("Failed to delete remote: 400 Invalid scriptlet name 'test.name': use only letters, digits, '_' and '-' (at least one character)");
     });
   });
 
@@ -493,11 +503,12 @@ describe('ScriptletService', () => {
         ok: false,
         status: 500,
         statusText: 'Internal Server Error',
+        json: () => Promise.reject(new SyntaxError('not JSON')),
       } as Response);
 
       await service.writeLocalToRemoteDraft(treeItem);
 
-      expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith('Failed to check remote existence: Internal Server Error');
+      expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith('Failed to check remote existence: 500 Internal Server Error');
     });
 
     it('handles auto-create failure', async () => {
@@ -508,11 +519,12 @@ describe('ScriptletService', () => {
 
       (mockApiClient.fetch as jest.Mock)
         .mockResolvedValueOnce({ status: 404, ok: false } as Response) // check 404
-        .mockResolvedValueOnce({ ok: false, statusText: 'Conflict' } as Response); // create fail
+        .mockResolvedValueOnce({ ok: false, status: 409, statusText: 'Conflict',
+          json: () => Promise.resolve({ detail: 'Scriptlet testSet::testName already exists' }) } as Response); // create fail
 
       await service.writeLocalToRemoteDraft(treeItem);
 
-      expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith('Failed to auto-create remote scriptlet testName: Conflict');
+      expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith('Failed to auto-create remote scriptlet testName: 409 Scriptlet testSet::testName already exists');
     });
 
     it('handles auto-create network error', async () => {

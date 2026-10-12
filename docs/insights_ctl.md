@@ -111,6 +111,13 @@ chain:
 The config file path is `~/.config/pyops/config.toml` by default,
 overridable via `PYOPSCTL_CONFIG` env var (used by tests).
 
+The file is the **shared PyOps client config**: the VSIX reads the same
+profiles (`url`, `user`, `api_key`, `debug_ports`), the same
+`default_profile` / `PYOPSCTL_PROFILE` selection and the same
+`PYOPSCTL_CONFIG` override through its own parser
+(`vsix/src/services/ProfileService.ts`, see `insights_vsix.md`), so
+schema changes here must stay compatible with it.
+
 **Mode enforcement.** `config.py` `_ensure_mode_0600` rejects files
 with any group/other bits set. The file holds API keys; permissive
 modes get a `ConfigError` with the corrective `chmod 600` command in
@@ -161,6 +168,8 @@ client will still send Basic Auth — pathway is determined by the
 - All requests carry the resolved auth headers.
 - `request()` normalizes responses: 2xx → returns the underlying
   `Response`; non-2xx → raises `HTTPError(status, message, body)`.
+  The message is the body's `detail` or `error`; a validation error's
+  (422) list prints as `<field>: <msg>; …`.
   Timeout and connection errors raise `HTTPError(status=0, …)` so
   callers have a single exception type to handle.
 - `get_bytes()` and `get_text()` for binary payloads (job workspace
@@ -265,7 +274,10 @@ to isolate per-tmp_path stores.
 
 `debug stop` calls `ports.release_for_job(profile, job_id)` so the
 pool reclaims the port immediately rather than waiting for stale
-sweep on the next lease.
+sweep on the next lease — after the job is cancelled, and also when it
+had already finished (the cancel's 409: exit 0, JSON
+`"state": "finished"`). On any other cancel error the job may still be
+running on the port, so the lease stays and the command fails.
 
 ## Endpoint coverage
 
@@ -292,6 +304,17 @@ with `--kind test|debug`; the CLI then calls the shared
 `pyopsctl.overrides.build_overrides()` and ships the resulting
 `{set::name: body}` map in the `overrides` JSON key, letting the
 operator iterate on local edits without committing first.
+`GET /scriptlet/job/cancel` answers 409 for a job that already
+finished (`done`/`failed`) or is being deleted, so `job cancel` exits
+4 for it. `Client.cancel_job(job_id)` is the cancel of the commands
+that only want a job to stop: True when the job is cancelled, False
+for the 409 (the job already finished — nothing to stop), HTTPError
+for any other error. `job cancel-all` cancels the non-terminal jobs of
+the list it fetched first; a job that finishes in between answers 409
+and is skipped (`cancelled N job(s); M already finished`, the JSON list
+holds the cancelled ids); any other error stops the command.
+Set and scriptlet names are letters, digits, `_` and `-` only; the
+server answers 400 for any other name.
 
 **debug** — `PUT /scriptlet/job/item` (with `kind` in `{"debug", "testdebug"}`, selected via `debug start --kind {debug,testdebug}`; default is `debug`), plus the
 job list/item/cancel endpoints above. The debug session runs
@@ -357,6 +380,13 @@ e2e/
   test_debug_interactive_session.py
 ```
 
+`pyops_server_for_ctl` stops its server's process group on teardown and
+then waits up to `SHUTDOWN_TIMEOUT` for the runner to have stopped the
+server's job processes (job processes run in their own session, so only
+the runner's shutdown reaches them). A job process still alive then —
+its command line names a workspace below the test's data dir — fails
+the test, and is killed so later tests start clean.
+
 The shared server fixture starts a fresh pyops in a new process group
 (mirrors `tests/e2e/conftest.py`) on port `18322` so it can run
 alongside the main e2e suite without colliding. The fixture also
@@ -378,7 +408,7 @@ The `test:pyopsctl` stage in `.gitlab-ci.yml` runs after `test:`,
 installs distribution `python3-requests` (matching the operator's
 environment — no pip-installed `requests` for the CLI), and runs
 `pytest tests/pyopsctl -v`. The other test stages (`test:`,
-`test:e2e`, `test:vsix*`, `test:image_build:`) are untouched.
+`test:e2e`, `test:vsix*`) are untouched.
 
 ## Interactive debug — session daemon
 

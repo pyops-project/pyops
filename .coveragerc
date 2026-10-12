@@ -1,3 +1,21 @@
 [run]
+# Measure the processes the tests start, not only the pytest process:
+# the pyopsctl integration tests boot a real gunicorn server whose
+# forked runner daemon (multiprocessing, exits via os._exit) spawns
+# job_setup.py, which os.execv's into job_runner.py. `subprocess`
+# starts coverage in every child Python (via coverage's .pth and
+# COVERAGE_PROCESS_CONFIG); `fork` gives forked children their own
+# data file; `_exit` and `execv` save the data before the process
+# image ends. pytest-cov combines the per-process files at session end.
+# Gunicorn's uvicorn workers are not measured: uvicorn re-raises
+# SIGTERM with the default handler, so they end without saving (the
+# web code is measured in-process through TestClient).
+patch =
+    subprocess
+    execv
+    fork
+    _exit
+# `*/` anchors the pattern for subprocesses whose cwd is a job
+# workspace (a relative pattern is resolved against the cwd).
 omit =
-    app/gunicorn.py
+    */app/gunicorn.py

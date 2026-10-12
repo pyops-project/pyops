@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 
 import { AuthService } from './services/AuthService';
 import { ApiClient } from './apiClient';
+import { resolveConnectivity, usesPromptPassword } from './connectivity';
 
 export class ConnectionStatusManager {
     private statusBarItem: vscode.StatusBarItem | undefined;
@@ -36,7 +37,9 @@ export class ConnectionStatusManager {
                     isValid = true;
                     this.outputChannel.appendLine(`Status: Connected to ${serverUrl}`);
                 } else {
-                    if (response.status === 401) {
+                    // Only clear+reprompt when the password was actually prompted for.
+                    // A bad profile api_key (or x-user) is not fixed by re-entry.
+                    if (response.status === 401 && usesPromptPassword(resolveConnectivity())) {
                         this.outputChannel.appendLine('[AUTH] Invalid credentials (401), clearing stored password and prompting for new one.');
                         await this.context.secrets.delete('pyops.password');
                         await AuthService.setupAuth(this.context, this.outputChannel);

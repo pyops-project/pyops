@@ -59,7 +59,7 @@ def test_post_completion_invalid_input(mock_client, mock_db, test_temp_dir, patc
         },
         headers={"X-User": "testuser"}
     )
-    assert response.status_code == 500
+    assert response.status_code == 400  # line 0 is outside the code: a client error
 
 def test_post_completion_jedi_error(mock_client, mock_git_ops, mock_db, test_temp_dir, patch_tempfile, mock_datetime):
     # Jedi error

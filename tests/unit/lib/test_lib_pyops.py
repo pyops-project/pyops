@@ -46,6 +46,17 @@ class TestControlRequest:
         with pytest.raises(Exception, match="GET /test: 500 Internal Server Error"):
             mock_control_request.handle_response("GET /test", mock_response)
 
+    @pytest.mark.parametrize("status", [400, 404, 409, 503])
+    def test_handle_response_error_carries_status(self, mock_control_request, status):
+        """A refused call raises ControlRequestError with the HTTP status, so
+        a service can relay it (e.g. 503 while pyops shuts down) instead of
+        answering 500."""
+        from app.lib.pyops import ControlRequestError
+        mock_response = Mock(status_code=status, content=b'{"detail": "x"}', reason="R")
+        with pytest.raises(ControlRequestError) as info:
+            mock_control_request.handle_response("PUT scriptlet/job/item", mock_response)
+        assert info.value.status_code == status
+
     @patch('requests.get')
     def test_get_success(self, mock_get, mock_control_request):
         mock_response = Mock()
@@ -223,6 +234,25 @@ class TestScheduleControl:
             "name": "test_name",
             "drop_done": True,
             "max_retries": 0,
+            "keep_n": 0,
+            "max_fail_n": 3,
+            "schedule": "* * * * *",
+            "param": "param"
+        })
+
+    def test_create_keep_n_max_fail_n(self, mock_control_request):
+        from app.lib import pyops
+        mock_rq = Mock()
+        mock_rq.put.return_value = {"schedule": 1}
+        schedule_control = pyops.ScheduleControl(mock_rq)
+        assert schedule_control.create("test_set", "test_name", True, "* * * * *", "param", max_retries=2, keep_n=5, max_fail_n=7) == 1
+        mock_rq.put.assert_called_once_with("scriptlet/schedule/item", json={
+            "set": "test_set",
+            "name": "test_name",
+            "drop_done": True,
+            "max_retries": 2,
+            "keep_n": 5,
+            "max_fail_n": 7,
             "schedule": "* * * * *",
             "param": "param"
         })
@@ -627,6 +657,28 @@ class TestServiceListener:
         listener.close()
 
 class TestServiceClient:
+    def test_silent_service_raises_service_timeout(self, tmp_path):
+        """A service that never answers: request() raises the typed
+        ServiceTimeout (mapped to 504), not a bare zmq.Again."""
+        from app.lib import pyops
+        from app.lib.errors import ServiceTimeout
+        (tmp_path / "pyops").mkdir()
+        ctx = zmq.Context()
+        silent = ctx.socket(zmq.ROUTER)
+        silent.bind(f"ipc://{tmp_path}/pyops/j1.sock")
+        try:
+            with patch("tempfile.gettempdir", return_value=str(tmp_path)):
+                client = pyops.ServiceClient("j1", recv_timeout_ms=200)
+            try:
+                with pytest.raises(ServiceTimeout, match="Service job j1 did not answer within 0.2s") as info:
+                    client.request({"type": "GET", "path": "/"})
+                assert info.value.status_code == 504
+            finally:
+                client.close()
+        finally:
+            silent.close(linger=0)
+            ctx.term()
+
     @patch('zmq.Context')
     @patch('os.path.join')
     def test_init_success(self, mock_join, mock_context):
@@ -686,5 +738,69 @@ class TestServiceClient:
         mock_packb.assert_called_once_with({"cmd": "test"})
         client.socket.send.assert_called_once_with(b'test_packed')
         client.socket.recv.assert_called_once()
+
+    @patch('atexit.register')
+    @patch('zmq.Context')
+    def test_init_does_not_register_atexit(self, mock_context, mock_register):
+        """Regression (ZMQ thread leak): the per-request ServiceClient must
+        NOT defer teardown to atexit. That deferral pinned every context —
+        and its ZMQbg IO/reaper thread pair — for the whole worker lifetime,
+        the KernelStack/thread creep. Teardown is caller-owned via close()."""
+        from app.lib import pyops
+        client = pyops.ServiceClient("123")
+        mock_register.assert_not_called()
+        client.close()
+
+    @patch('zmq.Context')
+    def test_init_sets_linger_always_and_rcvtimeo_when_given(self, mock_context):
+        from app.lib import pyops
+        # No timeout supplied: LINGER 0 set, RCVTIMEO left unset (legacy
+        # infinite block preserved for in-process callers).
+        sock1 = Mock()
+        mock_context.return_value.socket.return_value = sock1
+        c1 = pyops.ServiceClient("j1")
+        sock1.setsockopt.assert_any_call(zmq.LINGER, 0)
+        assert not any(call.args and call.args[0] == zmq.RCVTIMEO
+                       for call in sock1.setsockopt.call_args_list)
+        c1.close()
+        # Timeout supplied: RCVTIMEO bound to the given ms.
+        sock2 = Mock()
+        mock_context.return_value.socket.return_value = sock2
+        c2 = pyops.ServiceClient("j2", recv_timeout_ms=5000)
+        sock2.setsockopt.assert_any_call(zmq.RCVTIMEO, 5000)
+        c2.close()
+
+    @patch('zmq.Context')
+    def test_close_terms_context_and_second_close_raises(self, mock_context):
+        """close() reaps the socket + context; closing a second time is a
+        caller bug and raises instead of passing silently."""
+        from app.lib import pyops
+        sock = Mock()
+        mock_context.return_value.socket.return_value = sock
+        client = pyops.ServiceClient("123")
+        client.close()
+        sock.close.assert_called_once()
+        mock_context.return_value.term.assert_called_once()
+        with pytest.raises(RuntimeError, match="ServiceClient for job 123 is already closed"):
+            client.close()
+        sock.close.assert_called_once()
+
+    @patch('zmq.Context')
+    def test_close_errors_surface(self, mock_context):
+        from app.lib import pyops
+        mock_context.return_value.term.side_effect = zmq.ZMQError("term failed")
+        client = pyops.ServiceClient("123")
+        with pytest.raises(zmq.ZMQError, match="term failed"):
+            client.close()
+
+    @patch('zmq.Context')
+    def test_context_manager_closes_on_exit(self, mock_context):
+        from app.lib import pyops
+        sock = Mock()
+        mock_context.return_value.socket.return_value = sock
+        with pyops.ServiceClient("123") as c:
+            assert c.job_id == "123"
+        sock.close.assert_called_once()
+        mock_context.return_value.term.assert_called_once()
 
 # Edges: ZMQ timeouts/retries not explicit in code, but mock poll/recv fails; HTTP 500/409 via handle_response; no jobs exception covered.

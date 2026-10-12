@@ -101,6 +101,11 @@ def install_git_repo(pip_path: str, repo_dir: str, stdout_file, stderr_file, upg
     )
     return result
 
+# The Python scriptlet types a `#!{set::name}` directive can include, in
+# the order a name is resolved when a (cloned) set carries several.
+LIBRARY_SOURCE_TYPES = ("library", "task", "controller")
+
+
 def loadLib(set: str, name: str, kind: str, git_module):
     """Loads library code from Git (unstaged for the iterate-on-local-code
     kinds — debug, draft, test, testdebug — else committed).
@@ -114,13 +119,9 @@ def loadLib(set: str, name: str, kind: str, git_module):
     test)."""
     logger.debug(f"loadLib(set={set}, name={name}, kind={kind})")
     repo = git_module.get_repo_path(set)
-    files_list = [f for f in os.listdir(repo) if f.startswith(f"{name}.") and f.endswith('.py')]
-    if not files_list:
-        raise Exception(f"Scriptlet {set}::{name} not existing")
-    filename = files_list[0]
-    type_ = git_module.infer_type_from_filename(filename)
+    scriptlet = git_module.resolve_scriptlet(repo, name, LIBRARY_SOURCE_TYPES)
     committed = kind not in ("debug", "draft", "test", "testdebug")
-    code = git_module.read_content(repo, name, type_, committed=committed)
+    code = git_module.read_content(repo, name, scriptlet.type, committed=committed)
     return code
 
 def process_imports(text: str, current_set: str, kind: str, libs: list, overrides_dict: dict = None, seen_libs: set = None, depth: int = 0, git_module = None) -> str:
@@ -321,19 +322,81 @@ def process_code_installs(param: str, code: str, libs: list, venv_path: str, pkg
 
     return param, code, libs
 
-def send_completion(runner_sock_path: str, msg: dict):
+# A job writes its final result (done/failed) to `result.json` in its
+# workspace before it reports it to the runner, so the runner still finds
+# the result when the report never arrived — a running job whose process
+# is gone (runner.main) or that a restarted runner finds (handleOddJobs).
+RESULT_FILENAME = "result.json"
+FINAL_STATES = ("done", "failed")
+
+
+def result_file(workspace: str) -> str:
+    """The result file of the job whose workspace is `workspace`."""
+    return os.path.join(workspace, RESULT_FILENAME)
+
+
+def _write_result(path: str, msg: dict) -> None:
+    """Writes `{state, detail, time}` of a final completion to `path` — via
+    a temporary file and a rename, so a reader never sees a partial file."""
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump({"state": msg["state"], "detail": msg["detail"], "time": msg["time"]}, f)
+    os.replace(tmp, path)
+
+
+def read_result(workspace: str) -> dict | None:
+    """The result a job wrote to `<workspace>/result.json` —
+    `{"state", "detail", "time"}` — or None when it wrote none."""
+    path = result_file(workspace)
+    if not os.path.exists(path):
+        return None
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+# Upper bound on how long send_completion waits for the runner's ACK.
+# The runner ACKs as soon as it processes the completion (runner.py
+# receive_and_process), so on the happy path this never elapses. It caps
+# the pathological case — runner busy/restarting/gone — so the ACK wait
+# can't block the job subprocess (and orphan its ZMQ context) forever.
+ACK_TIMEOUT_MS = 30000
+
+def send_completion(runner_sock_path: str, msg: dict, result_file: str | None = None):
     """Send job completion message to runner via ZMQ REQ/REP.
 
-    Blocks until ACK received. No retry - IPC in same container is reliable.
+    The message is stamped with the job's own time (`time`, epoch seconds)
+    before it is sent — for done/failed that is the job's finish time. The
+    runner compares it with the time it started terminating the job, so a
+    job that finished before a cancel took effect keeps its outcome even
+    when the report is processed later (see runner.finishJob).
+
+    A final completion (done/failed) is first written to `result_file` (the
+    job's `<workspace>/result.json`, given by the job processes), so the
+    runner finds the result even when this report does not reach it.
+
+    Blocks until the runner ACKs or ACK_TIMEOUT_MS elapses. No retry — IPC
+    in the same container is reliable; a missed ACK means the runner is
+    busy/restarting: a warning is logged and the job ends. A runner that
+    never processed the report takes the result from the result file.
     """
+    msg = {**msg, "time": time.time()}
+    if result_file is not None and msg["state"] in FINAL_STATES:
+        _write_result(result_file, msg)
     context = zmq.Context()
     socket = context.socket(zmq.REQ)
+    socket.setsockopt(zmq.LINGER, 0)
+    socket.setsockopt(zmq.RCVTIMEO, ACK_TIMEOUT_MS)
     socket.connect(f"ipc://{runner_sock_path}")
     try:
         packed = msgpack.packb(msg)
         socket.send(packed)
-        socket.recv()  # Wait for ACK - blocks until received
+        socket.recv()  # Wait for ACK - bounded by RCVTIMEO
         logger.debug(f"Sent completion for job {msg['id']}")
+    except zmq.Again:
+        logger.warning(
+            f"No ACK for job {msg['id']} completion within {ACK_TIMEOUT_MS}ms; "
+            "proceeding (runner busy/restarting?)"
+        )
     except zmq.ZMQError as e:
         logger.error(f"Failed to send completion for job {msg['id']}: {e}")
     finally:

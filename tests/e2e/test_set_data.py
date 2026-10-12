@@ -168,5 +168,5 @@ class TestDataRuntime:
                           "max_retries": 0, "param": "", "kind": "task"})
         job = _wait_for_job(api, r.json()["job"])
         assert job["state"] == "failed"
-        assert "ValueError" in (job.get("detail") or "") or "path separators" in (job.get("detail") or "")
-        pyops_server.assert_no_unexpected_errors(allow=["ValueError"])
+        assert "InvalidScriptletNameError: Invalid scriptlet name '../other/x'" in (job.get("detail") or "")
+        pyops_server.assert_no_unexpected_errors(allow=["InvalidScriptletNameError"])

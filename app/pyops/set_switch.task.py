@@ -21,6 +21,7 @@ def _check(cmd, cwd):
 def main():
     if not name:
         raise ValueError("name is required")
+    validate_set_name(name)
     if not branch:
         raise ValueError("branch is required")
     if name == "pyops":

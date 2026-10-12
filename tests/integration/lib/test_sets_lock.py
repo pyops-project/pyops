@@ -87,3 +87,19 @@ def test_ensure_set_environment_serializes_concurrent_callers(lock_env, monkeypa
         assert e2 >= x1 - 1e-3, f"step starting at {e2} overlapped previous one ending at {x1}"
 
 
+
+
+def test_ensure_set_environment_refuses_empty_set_name(mock_conf, tmp_path, monkeypatch):
+    """A set-less job (debug/test kind enqueued with set "" and a VSIX
+    override for "::name", so loadJob needs no scriptlet file) reaches
+    `ensure_set_environment("")` in the runner: it fails with a clear
+    error instead of turning the venv base directory itself into a venv."""
+    from app.lib import sets
+    commands = []
+    monkeypatch.setattr(sets.subprocess, "check_call", lambda cmd, **kwargs: commands.append(cmd))
+
+    with pytest.raises(ValueError, match="Set name cannot be empty"):
+        sets.ensure_set_environment("")
+
+    assert commands == []
+    assert not (tmp_path / "data" / "venv").exists()

@@ -9,6 +9,15 @@ jest.mock('path', () => require('../utils/helpers').pathMockFactory());
 
 
 describe('CreateScriptletCommand', () => {
+  // GET /scriptlet/inventory/sets answers `sets`, GET /scriptlet/inventory/list
+  // answers `scriptlets`.
+  const mockInventory = (sets: string[], scriptlets: any[]) => {
+    mockApiClient.fetch.mockImplementation(async (url: string) => ({
+      ok: true,
+      json: jest.fn().mockResolvedValue(url === '/scriptlet/inventory/sets' ? { sets } : scriptlets),
+    }));
+  };
+
   let mockShowQuickPick: jest.Mock;
   let mockShowInputBox: jest.Mock;
   let mockShowErrorMessage: jest.Mock;
@@ -78,15 +87,13 @@ describe('CreateScriptletCommand', () => {
       .mockResolvedValueOnce({ label: 'Task' })
       .mockResolvedValueOnce({ label: 'set1' });
     mockShowInputBox.mockResolvedValue('script1');
-    mockApiClient.fetch.mockResolvedValueOnce({
-      ok: true,
-      json: jest.fn().mockResolvedValue([{ set: 'set1', name: 'existing', type: 'task' }]),
-    });
+    mockInventory(['set1'], [{ set: 'set1', name: 'existing', type: 'task' }]);
 
     await CreateScriptletCommand.execute(mockApiClient, outputChannel, managerTreeProvider);
 
 
-    expect(mockApiClient.fetch).toHaveBeenCalledTimes(1);
+    expect(mockApiClient.fetch).toHaveBeenCalledTimes(2);
+    expect(mockApiClient.fetch).toHaveBeenCalledWith('/scriptlet/inventory/sets');
     expect(mockApiClient.fetch).toHaveBeenCalledWith('/scriptlet/inventory/list');
     expect(mockFsMkdirSync).toHaveBeenCalledWith(dirPath, { recursive: true });
     expect(mockFsWriteFileSync).toHaveBeenCalledWith(localPath, 'pass');
@@ -111,10 +118,7 @@ describe('CreateScriptletCommand', () => {
     mockShowInputBox
       .mockResolvedValueOnce('existing') // dup remote
       .mockResolvedValueOnce('script1'); // good
-    mockApiClient.fetch.mockResolvedValueOnce({
-      ok: true,
-      json: jest.fn().mockResolvedValue([{ set: 'set1', name: 'existing', type: 'task' }]),
-    });
+    mockInventory(['set1'], [{ set: 'set1', name: 'existing', type: 'task' }]);
 
     await CreateScriptletCommand.execute(mockApiClient, outputChannel, managerTreeProvider);
 
@@ -143,10 +147,7 @@ describe('CreateScriptletCommand', () => {
     mockShowInputBox
       .mockResolvedValueOnce('dup') // local dup
       .mockResolvedValueOnce('script1'); // good
-    mockApiClient.fetch.mockResolvedValueOnce({
-      ok: true,
-      json: jest.fn().mockResolvedValue([{ set: 'set1', name: 'other', type: 'task' }]),
-    });
+    mockInventory(['set1'], [{ set: 'set1', name: 'other', type: 'task' }]);
 
 
     await CreateScriptletCommand.execute(mockApiClient, outputChannel, managerTreeProvider);
@@ -158,10 +159,7 @@ describe('CreateScriptletCommand', () => {
 
   it('should handle no sets available', async () => {
     mockShowQuickPick.mockResolvedValueOnce({ label: 'Task' });
-    mockApiClient.fetch.mockResolvedValueOnce({
-      ok: true,
-      json: jest.fn().mockResolvedValue([]),
-    });
+    mockInventory([], []);
 
 
     await CreateScriptletCommand.execute(mockApiClient, outputChannel, managerTreeProvider);
@@ -179,10 +177,7 @@ describe('CreateScriptletCommand', () => {
       .mockResolvedValueOnce({ label: 'Markdown' })
       .mockResolvedValueOnce({ label: 'set1' });
     mockShowInputBox.mockResolvedValue('intro');
-    mockApiClient.fetch.mockResolvedValueOnce({
-      ok: true,
-      json: jest.fn().mockResolvedValue([{ set: 'set1', name: 'other', type: 'task' }]),
-    });
+    mockInventory(['set1'], [{ set: 'set1', name: 'other', type: 'task' }]);
 
     await CreateScriptletCommand.execute(mockApiClient, outputChannel, managerTreeProvider);
 
@@ -197,10 +192,7 @@ describe('CreateScriptletCommand', () => {
       .mockResolvedValueOnce({ label: 'Data' })
       .mockResolvedValueOnce({ label: 'set1' });
     mockShowInputBox.mockResolvedValue('cfg');
-    mockApiClient.fetch.mockResolvedValueOnce({
-      ok: true,
-      json: jest.fn().mockResolvedValue([{ set: 'set1', name: 'other', type: 'task' }]),
-    });
+    mockInventory(['set1'], [{ set: 'set1', name: 'other', type: 'task' }]);
 
     await CreateScriptletCommand.execute(mockApiClient, outputChannel, managerTreeProvider);
 
@@ -239,10 +231,7 @@ describe('CreateScriptletCommand', () => {
       .mockResolvedValueOnce({ label: 'View' })
       .mockResolvedValueOnce({ label: 'set1' });
     mockShowInputBox.mockResolvedValue('script1');
-    mockApiClient.fetch.mockResolvedValueOnce({
-      ok: true,
-      json: jest.fn().mockResolvedValue([{ set: 'set1', name: 'other', type: 'task' }]),
-    });
+    mockInventory(['set1'], [{ set: 'set1', name: 'other', type: 'task' }]);
 
 
     await CreateScriptletCommand.execute(mockApiClient, outputChannel, managerTreeProvider);
@@ -265,18 +254,39 @@ describe('CreateScriptletCommand', () => {
       .mockResolvedValueOnce({ label: 'JS Library' })
       .mockResolvedValueOnce({ label: 'set1' });
     mockShowInputBox.mockResolvedValue('script1');
-    mockApiClient.fetch.mockResolvedValueOnce({
-      ok: true,
-      json: jest.fn().mockResolvedValue([{ set: 'set1', name: 'existing', type: 'task' }]),
-    });
+    mockInventory(['set1'], [{ set: 'set1', name: 'existing', type: 'task' }]);
 
     await CreateScriptletCommand.execute(mockApiClient, outputChannel, managerTreeProvider);
 
 
-    expect(mockApiClient.fetch).toHaveBeenCalledTimes(1);
+    expect(mockApiClient.fetch).toHaveBeenCalledTimes(2);
     expect(mockFsMkdirSync).toHaveBeenCalledWith(dirPath, { recursive: true });
     expect(mockFsWriteFileSync).toHaveBeenCalledWith(localPath, '');
     expect(managerTreeProvider.refresh).toHaveBeenCalled();
     expect(mockShowInformationMessage).toHaveBeenCalledWith('Created local jslibrary set1::script1');
+  });
+
+  it('offers a set that has no scriptlets yet', async () => {
+    mockShowQuickPick.mockResolvedValueOnce({ label: 'Task' }).mockResolvedValueOnce(undefined);
+    mockInventory(['empty', 'set1'], [{ set: 'set1', name: 'existing', type: 'task' }]);
+
+    await CreateScriptletCommand.execute(mockApiClient, outputChannel, managerTreeProvider);
+
+    const setChoices = mockShowQuickPick.mock.calls[1][0];
+    expect(setChoices).toEqual([{ label: 'empty' }, { label: 'set1' }]);
+  });
+
+  it('shows an error when the scriptlet list cannot be fetched', async () => {
+    mockShowQuickPick
+      .mockResolvedValueOnce({ label: 'Task' })
+      .mockResolvedValueOnce({ label: 'set1' });
+    mockApiClient.fetch.mockImplementation(async (url: string) => url === '/scriptlet/inventory/sets'
+      ? { ok: true, json: jest.fn().mockResolvedValue({ sets: ['set1'] }) }
+      : { ok: false, status: 500, statusText: 'Internal Server Error', json: jest.fn().mockResolvedValue({ detail: 'boom' }) });
+
+    await CreateScriptletCommand.execute(mockApiClient, outputChannel, managerTreeProvider);
+
+    expect(mockShowErrorMessage).toHaveBeenCalledWith('Failed to fetch scriptlets: 500 boom');
+    expect(mockShowInputBox).not.toHaveBeenCalled();
   });
 });

@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { ApiClient } from '../apiClient';
+import { errorText } from '../errorText';
 import { appendIncrementalOutput } from '../utils';
 
 export class DebugOutputMonitor {
@@ -80,13 +81,21 @@ export class DebugOutputMonitor {
         const jobId = active.jobId;
         try {
             const cancelResponse = await this.apiClient.fetch(`/scriptlet/job/cancel?id=${jobId}`);
-            if (cancelResponse.ok) {
+            // 409: the job had already finished (or is being deleted) —
+            // nothing left to stop, so the monitor entry goes either way.
+            const alreadyFinished = cancelResponse.status === 409;
+            if (cancelResponse.ok || alreadyFinished) {
                 if (active.timeout) clearTimeout(active.timeout);
                 this.activeJobs.delete(key);
-                this.outputChannel.appendLine('\n--- Job stopped ---\n');
-                vscode.window.showInformationMessage(`Stopped debug job ${jobId}`);
+                if (alreadyFinished) {
+                    this.outputChannel.appendLine('\n--- Job already finished ---\n');
+                    vscode.window.showInformationMessage(`Debug job ${jobId} already finished`);
+                } else {
+                    this.outputChannel.appendLine('\n--- Job stopped ---\n');
+                    vscode.window.showInformationMessage(`Stopped debug job ${jobId}`);
+                }
             } else {
-                vscode.window.showErrorMessage(`Failed to stop debug: ${cancelResponse.statusText}`);
+                vscode.window.showErrorMessage(`Failed to stop debug: ${await errorText(cancelResponse)}`);
             }
         } catch (error: unknown) {
             const errorMessage = error instanceof Error ? error.message : String(error);

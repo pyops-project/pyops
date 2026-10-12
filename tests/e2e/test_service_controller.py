@@ -854,8 +854,8 @@ class TestControllerProxy:
 
         result = _proxy_get(e2e_page, "nonexistent")
         assert result["status"] == 404
-        detail = result["data"].get("detail", {})
-        assert detail == {"error": "not found"}
+        # The proxy passes the service's status and body through unchanged.
+        assert result["data"] == {"error": "not found"}
 
         _full_cleanup(e2e_page, job_id=job_id, sched_id=sched_id)
         pyops_server.assert_no_unexpected_errors()

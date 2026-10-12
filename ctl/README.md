@@ -65,6 +65,8 @@ To remove (symlink + completion + the zshrc line):
 ## Configure
 
 Drop a `~/.config/pyops/config.toml` with one or more profiles. Mode 0600.
+The VSIX extension reads the same file (its `pyops.profile` setting picks
+the profile), so one profile serves both clients.
 
 ```toml
 default_profile = "aiops"

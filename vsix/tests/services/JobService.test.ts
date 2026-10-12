@@ -69,12 +69,14 @@ describe('JobService', () => {
 
       (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
         ok: false,
+        status: 404,
         statusText: 'Not Found',
+        json: () => Promise.resolve({ detail: 'Job job1 not existing' }),
       } as Response);
 
       await service.cancelJob(treeItem);
 
-      expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith('Failed to cancel job: Not Found');
+      expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith('Failed to cancel job: 404 Job job1 not existing');
     });
   });
 
@@ -197,7 +199,9 @@ describe('JobService', () => {
     it('handles non-ok responses', async () => {
       (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
         ok: false,
+        status: 500,
         statusText: 'Server Error',
+        json: () => Promise.resolve({ detail: 'boom' }),
       } as Response);
 
       const result = await (service as any).fetchJobs();
@@ -224,12 +228,14 @@ describe('JobService', () => {
 
       (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
         ok: false,
+        status: 403,
         statusText: 'Forbidden',
+        json: () => Promise.reject(new SyntaxError('not JSON')),
       } as Response);
 
       await service.cancelJob(treeItem);
 
-      expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith('Failed to cancel job: Forbidden');
+      expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith('Failed to cancel job: 403 Forbidden');
     });
   });
 
@@ -266,12 +272,14 @@ describe('JobService', () => {
 
       (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
         ok: false,
+        status: 404,
         statusText: 'Not Found',
+        json: () => Promise.resolve({ detail: 'Job job1 has no workspace' }),
       } as Response);
 
       await service.downloadJob(treeItem);
 
-      expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith('Failed to download job: Not Found');
+      expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith('Failed to download job: 404 Job job1 has no workspace');
     });
   });
 
@@ -306,12 +314,14 @@ describe('JobService', () => {
       mockVscode.window.showWarningMessage.mockResolvedValue('Delete');
       (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
         ok: false,
-        text: () => Promise.resolve('Delete forbidden'),
+        status: 409,
+        statusText: 'Conflict',
+        json: () => Promise.resolve({ detail: "Job job1 is in state 'running' and cannot be deleted. Allowed states: todo, cancelled, failed, done" }),
       } as Response);
 
       await service.deleteJob(treeItem);
 
-      expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith('Failed to delete job: Delete forbidden');
+      expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith("Failed to delete job: 409 Job job1 is in state 'running' and cannot be deleted. Allowed states: todo, cancelled, failed, done");
     });
   });
 
@@ -530,6 +540,41 @@ describe('JobService', () => {
       await service.cancelAllJobs();
 
       expect(mockVscode.window.showInformationMessage).toHaveBeenCalledWith('Bulk cancel: 1 successful, 1 failed.');
+    });
+
+    it('bulk cancel counts a job finished since the listing (409) as already finished', async () => {
+      const mockVscode = require('vscode');
+
+      jest.spyOn(service as any, 'fetchJobs').mockResolvedValue([
+        { id: 'job1', state: 'running' },
+        { id: 'job2', state: 'running' },
+        { id: 'job3', state: 'running' },
+      ]);
+      mockVscode.window.showWarningMessage.mockResolvedValue('Yes');
+      (mockApiClient.fetch as jest.Mock)
+        .mockResolvedValueOnce({ ok: true } as Response)
+        .mockResolvedValueOnce({ ok: false, status: 409, statusText: 'Conflict' } as Response)
+        .mockResolvedValueOnce({ ok: true } as Response);
+
+      await service.cancelAllJobs();
+
+      expect(mockApiClient.fetch).toHaveBeenCalledWith('/scriptlet/job/cancel?id=job3');
+      expect(mockVscode.window.showInformationMessage).toHaveBeenCalledWith('Bulk cancel: 2 successful, 0 failed, 1 already finished.');
+    });
+
+    it('bulk delete counts a 409 as failed', async () => {
+      const mockVscode = require('vscode');
+
+      jest.spyOn(service as any, 'fetchJobs').mockResolvedValue([
+        { id: 'job1', state: 'done' },
+      ]);
+      mockVscode.window.showWarningMessage.mockResolvedValue('Yes');
+      (mockApiClient.fetch as jest.Mock)
+        .mockResolvedValueOnce({ ok: false, status: 409, statusText: 'Conflict' } as Response);
+
+      await service.deleteAllDone();
+
+      expect(mockVscode.window.showInformationMessage).toHaveBeenCalledWith('Bulk delete: 0 successful, 1 failed.');
     });
   });
 

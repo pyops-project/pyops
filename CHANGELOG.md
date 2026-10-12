@@ -7,6 +7,392 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 from 3.0.0 onward.
 
+## [3.4.0] — 2026-10-10
+
+### Added
+- **Additive database schema sync at start-up.** Besides creating missing
+  tables, start-up now adds missing columns and indexes to existing tables
+  (each logged as `schema sync: …`); renames, type changes and drops are
+  not synced. A new NOT NULL column needs a `server_default`. Before
+  changing an existing database, a backup
+  `<stem>.bck.<VERSION>.<HASH>.<DATETIME>.db` is written next to it
+  (e.g. `data/app.bck.3.4.0.<hash>.<datetime>.db`); an existing backup
+  with the same content hash is reused, so restarting after a failure
+  does not pile up copies. All changes run in one transaction: on failure the
+  database is unchanged and start-up aborts with an error naming the
+  database, the SQLite error, the failing statement and the backup.
+  Recovery: restore the backup, fix the cause, restart pyops.
+- **Jobs record the schedule that started them.** A job started by a
+  schedule — by the scheduler or via "run now" — stores the schedule's id
+  in the new `job.schedule_id` column; all other jobs leave it empty.
+  Existing databases get the column at start-up; older jobs stay empty.
+- **Schedules can keep their last runs despite drop_done.** A new
+  schedule field `keep_n` (0-100, default 0) keeps the newest `keep_n`
+  done jobs of a cron schedule with drop_done; older ones are removed as
+  before. Set it in the Web UI Scheduler, via `PUT /scriptlet/schedule/item`
+  or `control.schedule.create(..., keep_n=…)`; existing schedules read 0.
+- **Schedules limit their failed jobs.** A new schedule field `max_fail_n`
+  (1-100, default 3): a cron schedule keeps only its newest `max_fail_n`
+  failed jobs and removes older ones right away; a service schedule stops
+  restarting once `max_fail_n` of its jobs have failed — the service restart
+  limit, previously a fixed 3, is now per schedule. Set it in the Web UI
+  Scheduler, via `PUT /scriptlet/schedule/item` or
+  `control.schedule.create(..., max_fail_n=…)`; existing schedules read 3.
+- **VSIX: connectivity inherited from the shared PyOps client config.** The
+  extension now reads the PyOps client config (`~/.config/pyops/config.toml`,
+  override via `PYOPSCTL_CONFIG`) — the same connectivity profiles the
+  pyopsctl CLI reads — so all clients share one source of truth for
+  connectivity. A new `pyops.profile` setting names the profile a
+  workspace adopts (empty → the file's `default_profile`); the profile
+  supplies `serverUrl`, `username`, auth (`api_key`) and `debugPorts` as
+  a base layer, and any explicitly-set `pyops.*` setting fully overrides
+  the matching profile field. `pyops.authMode` keeps its default `basic`
+  unless set, whatever the profile. Leaving `pyops.username` unset uses the
+  profile's user; setting it remaps a different user onto that
+  connection, in which case the profile's `api_key` no longer applies and
+  a Basic password is prompted for (when the user is not remapped, the
+  `api_key` is used directly with no prompt). The set black/whitelist
+  (`excludedSets`/`includedSets`) and other client-local settings stay in
+  VSCode settings. When no config file or profile resolves, connectivity
+  comes entirely from `pyops.*` settings as before. A config file that
+  cannot be parsed is shown as an error naming the file, and no
+  connection is made.
+- **VSIX: X-User authentication mode.** A new `pyops.authMode` setting
+  switches between `basic` (HTTP Basic Auth, for deployments where an
+  auth proxy in front of PyOps validates credentials and injects the
+  `X-User` header) and `x-user` (the extension sends `X-User: <username
+  or "vsix">` directly, with no Authorization header and no password).
+  The x-user pathway targets direct connections to a PyOps server that
+  trusts the header (dev / no proxy), mirroring pyopsctl's api-key-absent
+  behaviour. In x-user mode the password prompt is skipped and a 401 is
+  reported as a plain connection failure instead of triggering a
+  password re-prompt.
+- **Sets view: a set directory without `.git` can be removed.** A
+  directory under the git base that holds no git repository (not
+  initialised, e.g. created by hand) is now listed as "not initialised";
+  only Remove is enabled for it, and it removes the directory like any
+  set. `GET /controller/pyops/sets/list` reports `initialized` per set.
+- **VSIX: set whitelist for the Manager tree.** A new `pyops.includedSets`
+  setting complements the existing `pyops.excludedSets` blacklist: when
+  `includedSets` is non-empty the Manager tree shows only those sets and
+  the blacklist is ignored; when it is empty the `excludedSets` blacklist
+  applies as before.
+
+### Changed
+- **The shutdown gives jobs 30 s instead of 15 s, configurable.** At
+  shutdown the runner sends SIGTERM to every job process, waits up to
+  `runner.shutdown_timeout_seconds` (default 30) for them to end, then
+  SIGKILLs the rest together. The worst-case shutdown of the container is
+  now ≈ 150 s; the recommended `stop_grace_period: 180s` still covers it.
+- **Set and scriptlet names use only letters, digits, `_` and `-`.**
+  Every set name and every scriptlet name (tasks, libraries,
+  controllers, views, JS libraries, markdown pages, data files) must
+  match `[A-Za-z0-9_-]+`, the grammar the `#!{set::name}` directive
+  already used. The API answers 400 for any other name (`Invalid set
+  name '<name>': use only letters, digits, '_' and '-' (at least one
+  character)`, likewise `Invalid scriptlet name ...`), and so do the
+  Sets view and the `set_*` tasks. Directories and files with other
+  names are not listed or served. A job's `data` global refuses such a
+  name (`InvalidScriptletNameError`, a `ValueError`; `data.list()` skips
+  such a file). The runner skips a schedule with such a name; the Web UI
+  Scheduler marks it with a warning.
+- **Owners keep only letters, digits, `_`, `-`, `.` and `@`.** The
+  owner taken from the `X-User` header (its part before the first `/`)
+  has every other character replaced by `_`, so it is safe in job ids,
+  paths and URLs. Identities that differ only in replaced characters
+  become one owner (e.g. `user+1` and `user_1`) and share their jobs,
+  schedules and debug ports.
+- **Statuses of the API.** The lib layer raises typed errors
+  (`app/lib/errors.py`) that one handler maps to HTTP; error bodies stay
+  `{"detail": message}`. Changed answers:
+  - a name that exists only as another type: 404 on the controller page
+    and proxy (was 405) and on `GET /scriptlet/jslib/{set}/{name}` (was
+    400);
+  - cancelling a job that already finished (`done`/`failed`) or is being
+    deleted: 409 `Job <id> is already <state>`, the job unchanged (see
+    Fixed); deleting a job that is not `todo`/`cancelled`/`failed`/`done`:
+    409 (was 400). pyopsctl `job cancel-all` and the VSIX "Cancel All
+    Jobs" count such a job as already finished; pyopsctl `debug stop` and
+    the VSIX stop-debug action report it as already finished, and
+    `debug stop` still releases the port lease;
+  - an enqueue while pyops shuts down (`PUT /scriptlet/job/item`,
+    `GET /scriptlet/schedule/run`, the Sets view): 503 (was 500);
+  - `GET /files/{path}` for a missing file or a directory, and
+    `GET /scriptlet/job/download` for a job without a workspace: 404
+    (was 500); `POST /scriptlet/completion` with a cursor outside the
+    code: 400 (was 500);
+  - `GET /repo/status?set=pyops`: 400;
+  - a negative `max_retries` on `PUT /scriptlet/job/item` and
+    `PUT /scriptlet/schedule/item`: 422 (see Fixed).
+- **The controller proxy passes the service's answer through.** A
+  status other than 200 arrived wrapped as `{"detail": <body>}`; the
+  body now arrives exactly as the service sent it, e.g. 400
+  `{"error": "..."}`, so the Sets view shows the service's error instead
+  of `[object Object]`. **Breaking for views** that read a service's
+  error from `.detail` (e.g. `responseJSON.detail.error`): read the body
+  itself (`responseJSON.error`). A status that allows no body (204, 304)
+  arrives without one. A service that does not answer within
+  `web.timeout` answers 504 `{"error": "Service job <id> did not answer
+  within <n>s"}`; 3.3.6 waited until gunicorn killed the worker, so the
+  caller got a dropped connection (a 502 behind nginx).
+- **The controller proxy's own errors carry their message in `error`,**
+  like a service's answers: no running service (503), timeout (504), an
+  invalid (400) or unknown (404) set, an unknown controller or a name of
+  another type (404) and a controller that fails to execute (200). An
+  unknown set, an unknown controller and a name of another type answered
+  `{"detail": ...}` in 3.3.6.
+
+### Removed
+- **`DELETE /scriptlet/inventory/draft` no longer takes a `type_` query
+  parameter** (public API). The type is always inferred from the existing
+  file, so the 400 for a `type_` that did not match is gone. A `type_` a
+  caller still sends is ignored. No bundled client (Web UI, VSIX,
+  pyopsctl) sent it.
+
+### Fixed
+- **Web workers leaked a ZMQ context and two threads per controller
+  request.** `controller_proxy` created a `ServiceClient` for every
+  request and never closed it — teardown was deferred to `atexit`, i.e.
+  to worker exit — so each call to a controller pinned a `zmq.Context`
+  and its `ZMQbg` IO/reaper thread pair for the worker's lifetime. Under
+  service polling this showed as steadily growing kernel stack and
+  shrinking `MemAvailable`, reclaimed only by a worker restart.
+  `controller_proxy` now closes the client after every request (success
+  or error), and the wait for the service's reply is bounded by
+  `web.timeout`.
+- **A busy or restarting runner could hang a job at completion.**
+  `send_completion` waited indefinitely for the runner's ACK; it now
+  gives up after 30 s (logged, not raised) and always tears down its
+  ZMQ context, so the job subprocess can exit.
+- **The runner and the web workers inherited the gunicorn master's open
+  SQLite connection across `fork()`.** SQLite forbids carrying a
+  connection into a child process (latent locking/corruption risk); the
+  master now disposes its engine after the start-up schema sync, so each
+  process opens its own.
+- **The packaged VSIX failed to activate.** `vsix/.vscodeignore` excluded
+  `node_modules/`, so the `.vsix` lacked the runtime dependency `smol-toml`
+  and the extension installed from it failed at `require("smol-toml")`.
+  The `.vsix` now carries the compiled extension and its production
+  dependencies only (no sources, tests or build scripts), and
+  `vsix/build.sh` fails unless every runtime dependency is packaged.
+- **VSIX: Manager and Monitor could show outdated content.** An
+  auto-refresh and a manual refresh that overlapped could answer out of
+  order, and the older one, finishing last, overwrote the newer result —
+  e.g. a just-started job missing from the Monitor until the next
+  auto-refresh. Only the most recently started refresh now updates the
+  tree.
+- **A job cancelled just as the runner picked it up was logged as an
+  error.** The runner treated the cancel as a load failure: an ERROR with
+  a traceback in the server log, and the operator's cancel reason replaced
+  by "state no longer dequeued" or the traceback. The job still ended
+  cancelled. It is now a normal outcome: nothing is spawned, nothing is
+  logged as an error, and the cancel keeps its reason.
+- **A job's result was lost or overwritten around a cancel.** A
+  completion that arrived after a cancel replaced the job's detail (the
+  operator's cancel reason, or an earlier traceback) with the job's
+  message, or with nothing. A job that had already finished when the
+  cancel took effect was still recorded as cancelled. The job now stamps
+  its finish time into its completion, and the runner records when it
+  starts terminating a job, in the new column `job.term_start` (added to
+  existing databases at start-up). If the job finished first, its result
+  decides the state; otherwise the cancel stands. Whenever a job keeps
+  its state (after a cancel, or when a later report arrives for a job
+  that already finished), the new message is appended to the detail
+  instead of replacing it, and the end time is kept. When the job's
+  report decides the state, the job's end time is its own finish time,
+  not the time the runner processed the report or completed the
+  termination it had started for the cancel (`end` orders the
+  `keep_n`/`max_fail_n` retention and starts the drop-done delay).
+- **Unknown sets answered 500 or 200 instead of 404.**
+  `GET /scriptlet/jslib/{set}/{name}`, `PUT /scriptlet/job/item` and
+  `PUT /scriptlet/schedule/item` answered 500 and logged a traceback. The
+  controller page and proxy answered 200 with the "Controller Draft
+  Error" page or the `{"error": ...}` body. All now answer 404 (`Set
+  '<name>' does not exist`); the controller page and proxy keep their
+  page and body.
+- **Discarding the draft of a never-committed scriptlet returned a raw git
+  error.** `DELETE /scriptlet/inventory/draft` failed in `git checkout`,
+  answered 500 with the command's error and logged a traceback. It now
+  answers 409 Conflict `No committed version to revert to` and leaves the
+  draft untouched.
+- **Update Dependencies did not install `pyyaml`.** The task kept its
+  own copy of the core dependency list, and that copy lacked `pyyaml`.
+  The job runner now hands it `CORE_DEPS`, the list every set venv is
+  created with, as a job global for the pyops set.
+- **Cancelling a finished job rewrote its outcome.**
+  `GET /scriptlet/job/cancel` set any job to `cancel`: a `done` or
+  `failed` job then ended `cancelled` with a new end time, and a job
+  being deleted (`remove`) was never deleted. Cancel and delete now
+  change a job only from the states that allow it, in one conditional
+  update; a job already cancelled stays as it is (200).
+- **A finished job could end up as a stale process.** When the runner
+  did not acknowledge a job's report within 30 s (busy or restarting),
+  the job ended anyway and its result was lost: the runner later failed
+  it as `stale process pid=N`, or at start-up as an incomplete execution.
+  A job now writes its final result to `result.json` in its workspace
+  (next to `stdout.log` and `stderr.log`) before it reports it; the
+  runner takes the result from there for a job whose process is gone. A
+  job without a result file died: `failed` with the detail
+  `dead (pid=N)`.
+- **Scriptlets were looked up by filename prefix.** The controller page
+  and proxy, the inventory routes, jslib, job loading, library imports
+  and Update Dependencies took the first file starting with `<name>.`,
+  in directory order, so `c` could resolve to `c.x.task.py` or to a task
+  instead of the controller. `GET /scriptlet/inventory/status` did not
+  find markdown pages under `docs/` or data files, which kept the Revert
+  button of the markdown and data editors disabled. Every lookup now
+  matches the exact filename of each type; `#!{set::name}` prefers a
+  library, then a task, then a controller.
+- **Reading a set changed it.** Any request on a set ran `git init` in a
+  set directory without `.git`, and committed a `.gitignore` (and a
+  `README.md` if missing) into a set that lacked them — e.g. into every
+  cloned set on its first read. Reading a set no longer changes it; a
+  directory without `.git` is an unknown set (404), and the Sets view
+  can remove it (see Added).
+- **The bundled set ran git against the pyops source tree.**
+  `GET /repo/status?set=pyops` reported the branch of the pyops
+  repository (500 in the container image), and the draft status of its
+  scriptlets came from that repository too. `/repo/status` answers 400
+  for it, and its scriptlets never report drafts.
+- **Client errors and a shutdown answered 500 with a traceback.** A
+  missing static file, the download of a job that has not started, a
+  stale editor cursor and an enqueue while pyops shuts down logged an
+  ERROR traceback (the e2e suite fails on those); see Changed for their
+  statuses.
+- **A negative `max_retries` was accepted.** A task runs
+  `max_retries + 1` attempts, so its code never ran and the runner later
+  failed it as dead. The job and schedule APIs now answer 422.
+- **Monitor and Scheduler copied params wrongly.** "Copy param" read the
+  param from a hidden table cell, so a param with markup lost it
+  (`if a<b and c>d` became `if ad`), and a job of an owner with a `.`
+  (e.g. `ralph.bariz`) copied nothing; an owner with an `@` made the
+  Monitor throw. The param is now copied as it is, and the Monitor and
+  the sidebar menu's list of draft errors show job ids, params, details
+  and error texts (e.g. `<string>`) as text.
+- **A set without scriptlets was not shown.** The Web UI Manager, the
+  VSIX Manager tree and the VSIX Create Scriptlet took their sets from
+  the scriptlet list, so a new, empty set had no section, VSCode could
+  not give it its first scriptlet ("No existing sets found"), and a set
+  vanished with its last scriptlet. They now take the sets from
+  `GET /scriptlet/inventory/sets`.
+- **A job being cancelled outlived a shutdown.** Once the runner acted
+  on a cancel, it waited for the job to stop in a background thread
+  (SIGKILL after 15 s), and the shutdown stopped only the jobs whose row
+  still named their process. A shutdown within those 15 s ended the
+  thread and skipped the job: a job that does not end on SIGTERM (a
+  service, debug or draft job not waiting on its listener) kept running
+  without the runner, holding e.g. its debug port. The shutdown now stops
+  every job process the runner started; the job's row keeps its cancel.
+- **Failed actions in the Web UI were not shown.** Manager delete,
+  Monitor cancel and delete (single and bulk), Scheduler delete, run now,
+  activate, deactivate and edit, and the editors' save, revert, run and
+  cancel reported a failure only to the browser console (Manager "run
+  draft"/"run test" in a browser dialog with the raw body). The page now
+  shows `<action>: <status> <message>` with the server's message in an
+  alert at its top. A failed page load or background poll (the lists,
+  the menu, the editors' code, draft status, completion and job output,
+  the Sets view's list) pops up nothing: the page header shows it until
+  the load works again.
+- **The VSIX reported failed requests without the server's message**,
+  only the status text (`Failed to write draft: Bad Request`). It now
+  shows the status and the message, e.g. `Failed to write draft: 400
+  Invalid scriptlet name 'my.script': ...`.
+- **pyopsctl printed a validation error (422) as a raw list.** It now
+  prints `<field>: <msg>` per entry, e.g. `max_retries: Input should be
+  greater than or equal to 0`.
+
+### Security
+- **Invalid set names reached the filesystem.** A set name of `""`, `.`,
+  `..` or one containing a path separator resolved to the git base or its
+  parent (`data/`), which pyops then git-init'ed and committed in. This
+  was reachable via `PUT /scriptlet/job/item`, the inventory routes,
+  `/repo/status`, jslib, `PUT /scriptlet/schedule/item` and
+  `/controller/%2E%2E/...`. Sets management went further: a name like
+  `../x` sent to `DELETE /controller/pyops/sets/remove/...` made
+  `set_remove` delete directories outside the git, venv and pkg bases,
+  and `GET /controller/pyops/sets/status/...` read the git status of a
+  repository outside the git base. The routes above now reject such a
+  name with 400 before touching the filesystem, and so does
+  `GET /controller/pyops/sets/status/<name>`. Every `set_*` task
+  refuses such a name before touching the filesystem, also when started
+  directly via `control.job.create`; `set_clone` checks the name it takes
+  from the URL. A set name containing a NUL byte is rejected with 400 as
+  well; before, it was reported as an unknown set or answered 500.
+- **Reflected XSS on the controller error page.** The "Controller Draft
+  Error" page of `GET /controller/{set}/{name}` embedded the set and name
+  from the URL, and the error text that quotes them, as raw HTML, so a
+  crafted link could inject markup and script into the page. All three
+  are now HTML-escaped.
+- **Scriptlet names reached the filesystem.** Scriptlet names were not
+  checked. `PUT /scriptlet/inventory/item` with a name like `../../x`
+  created a file outside the set, and in a set with a `data/` directory
+  the inventory routes read, overwrote or deleted a `.yaml`/`.json` file
+  outside it (e.g. `etc/pyops.json`) for a name like
+  `../../../../etc/pyops`. Every scriptlet name is now checked against
+  the name charset before a path is built from it (400).
+- **`GET /files/{path}` served files outside `app/files/`.** An encoded
+  traversal (`/files/..%2F..%2Fetc/pyops.json`) or an absolute path read
+  any file the server can read. The path is now confined to
+  `app/files/` (404 otherwise).
+
+### CI
+- **VSIX "integration" suite renamed to the VSIX e2e axis.** It boots a
+  real Electron extension host against a real server, so it is e2e — a
+  peer of `tests/e2e/` (WebUI) and `tests/pyopsctl/e2e/`.
+  `vsix/tests/integration/` → `vsix/tests/e2e/`, npm script
+  `test:integration` → `test:e2e`, CI job `test:vsix_integration` →
+  `test:e2e:vsix`.
+- **The `test` job installs `pytest-playwright`.** `pytest tests/` also
+  collects (and skips) `tests/e2e`, so an e2e module importing Playwright
+  broke collection in CI while passing locally. The unused
+  `PYTHON_VERSION` variable (stale `3.12`) is removed.
+- **pyopsctl test servers must not leave job processes behind.** A test
+  server's `pyops::data` processes were once found running long after
+  their tests. The server fixture now fails a test whose server leaves a
+  job process alive after its shutdown, and kills that process so later
+  tests start clean.
+- **Node-using jobs run on `node:24-trixie-slim`** (Node 24 LTS on Debian
+  trixie) instead of apt-installing trixie's Node 20 — the latest
+  `@vscode/vsce` needs Node >= 22. Applies to `test:e2e`, `test:e2e:vsix`,
+  `test:vsix` and `build`.
+- **The container image is built and pushed on every main pipeline.**
+  `build:image` (multi-arch via `build.sh`) runs automatically on main
+  instead of manually, and logs in to the project registry with
+  `--password-stdin`.
+- **Non-main builds push a multi-arch `:dev` image.** The new
+  `build:image:dev` job runs `./build.sh dev` (only the `:dev` tag, never
+  `:latest` or version tags) — automatically in MR pipelines targeting
+  main, manually on other branches, never on main. It replaces
+  `test:image_build`; `build_dev.sh` is local only.
+- **Python coverage also measures the processes the tests start.**
+  `.coveragerc` sets `[run] patch = subprocess, execv, fork, _exit`: the
+  pyopsctl test server's forked runner, `job_setup.py` → `job_runner.py`
+  of host-venv (bundled `pyops` set) jobs and test-started subprocesses
+  now count; uvicorn workers and per-set venvs do not. The `omit`
+  pattern is anchored (`*/app/gunicorn.py`) so subprocesses running in a
+  job workspace apply it too. An `app/pyops` scriptlet is in the
+  reported total only when a test execs it under its real path; the only
+  one left out is `sets.controller.py` (7 statements). See "Coverage
+  measurement" in `docs/insights_app.md`.
+- **Behaviour tests for the pyops-set scriptlets.** The sets data
+  service and the `set_create`, `set_pull`, `set_switch`,
+  `set_commit_drafts`, `set_discard_drafts` and `set_remove` tasks are
+  tested in-process, as the job runner runs them, against real
+  repositories and bare remotes (`tests/unit/pyops/test_data_service.py`,
+  `test_set_tasks.py`), so their code counts towards the > 90% target.
+
+### Documentation
+- **Agent instructions moved from `CLAUDE.md` to `AGENTS.md`** (read by
+  Claude Code and other coding agents); the unused `.roo/` configuration
+  was removed.
+- **Scriptlet rules (`pyops_rules.md`).** The view `apiCall` sample has
+  an error path (its callback gets `(ok, body, status)`), with a table of
+  the controller proxy's answers; the job globals list `jobsspace`,
+  `gitspace`, `pkgspace`, `data` and `control`; the access model is
+  stated (every user is an administrator and sees every set and job), and
+  that a service schedule does not restart a cancelled service — delete
+  the job to start it again (also in the guide's Schedules).
+
 ## [3.3.6] — 2026-07-01
 
 ### Fixed

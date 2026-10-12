@@ -4,11 +4,13 @@ Editor and JS Library E2E tests.
 Covers:
   - Opening editors from Manager UI (popup windows with Ace Editor)
   - Editing and saving code via the editor UI
+  - A failed save shown in the page alert with the server's message
   - JS library endpoint serving JavaScript with correct content-type
   - HTML views loading JS library scriptlets via <script src="...">
   - Full integration: jslib function callable from view body after loading via head
 """
 
+import shutil
 import time
 
 import pytest
@@ -639,6 +641,25 @@ class TestJsLibEndpoint:
         _full_cleanup(e2e_page, BASIC_NAMES)
         pyops_server.assert_no_unexpected_errors()
 
+    def test_failed_save_shows_server_message(self, e2e_page, api_anon, pyops_server, set_factory, commit_set, e2e_env):
+        """A draft that cannot be saved (its set is gone) shows the server's
+        message in the page alert, not only in the browser console."""
+        _setup_basic(api_anon, set_factory, commit_set)
+        editor_page = e2e_page.context.new_page()
+        editor_page.goto(f"{BASE_URL}/scriptlet/editor_jslibrary?set={SET_NAME}&name={JSLIB_NAME}")
+        editor_page.wait_for_load_state("load")
+        _wait_for_ace(editor_page)
+
+        shutil.rmtree(e2e_env["data_dir"] / "git" / SET_NAME)
+        editor_page.evaluate("(code) => ace.edit('editor').setValue(code)", "changed")
+
+        alert = editor_page.locator('[data-testid="pyops-alert"]')
+        alert.wait_for(state="visible", timeout=5_000)
+        assert alert.inner_text().strip() == f"Save draft {SET_NAME}::{JSLIB_NAME}: 404 Set '{SET_NAME}' does not exist"
+
+        editor_page.close()
+        pyops_server.assert_no_unexpected_errors()
+
     def test_jslib_nonexistent_returns_404(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
         """Requesting a nonexistent JS library returns 404."""
         _setup_basic(api_anon, set_factory, commit_set)
@@ -656,20 +677,22 @@ class TestJsLibEndpoint:
         _full_cleanup(e2e_page, BASIC_NAMES)
         pyops_server.assert_no_unexpected_errors()
 
-    def test_jslib_wrong_type_returns_400(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
-        """Requesting a non-JS scriptlet via jslib endpoint returns 400."""
+    def test_jslib_wrong_type_returns_404(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):
+        """Requesting a non-JS scriptlet via the jslib endpoint returns 404:
+        there is no JS library of that name."""
         _setup_basic(api_anon, set_factory, commit_set)
 
         # TASK_NAME is a task, not jslibrary.
         result = e2e_page.evaluate(
             """async (url) => {
                 const resp = await fetch(url);
-                return { status: resp.status };
+                return { status: resp.status, body: await resp.json() };
             }""",
             f"/scriptlet/jslib/{SET_NAME}/{TASK_NAME}",
         )
 
-        assert result["status"] == 400
+        assert result["status"] == 404
+        assert result["body"]["detail"].endswith(f"::{TASK_NAME} is not a jslibrary")
 
         _full_cleanup(e2e_page, BASIC_NAMES)
         pyops_server.assert_no_unexpected_errors()

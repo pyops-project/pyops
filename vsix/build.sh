@@ -29,6 +29,19 @@ npm install
 echo "Compiling TypeScript..."
 npm run compile
 
+# No bundler: out/src/extension.js require()s its runtime dependencies from
+# node_modules/, so each one must be packaged. `vsce ls` lists the files
+# `vsce package` collects (.vscodeignore applies to dependencies as well).
+echo "Checking that runtime dependencies are packaged..."
+PACKAGED_FILES="$(npx --yes @vscode/vsce ls)"
+RUNTIME_DEPS="$(node -p "Object.keys(require('./package.json').dependencies || {}).join('\n')")"
+for DEP in $RUNTIME_DEPS; do
+    if ! grep -qxF "node_modules/$DEP/package.json" <<< "$PACKAGED_FILES"; then
+        echo "Runtime dependency $DEP would not be packaged (node_modules/$DEP/package.json not listed by 'vsce ls'); check .vscodeignore" >&2
+        exit 1
+    fi
+done
+
 echo "Packaging extension..."
 npx --yes @vscode/vsce package
 

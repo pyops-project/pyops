@@ -248,14 +248,16 @@ describe('JobsTreeDataProvider', () => {
     it('should handle fetch error', async () => {
       const mockResponse = {
         ok: false,
+        status: 500,
         statusText: 'Internal Server Error',
+        json: () => Promise.resolve({ detail: 'database is locked' }),
       };
       mockApiClient.fetch.mockResolvedValue(mockResponse);
 
       const result = await (provider as any).fetchJobs();
 
       expect(result).toEqual([]);
-      expect(require('vscode').window.showErrorMessage).toHaveBeenCalledWith('Failed to fetch jobs: Internal Server Error');
+      expect(require('vscode').window.showErrorMessage).toHaveBeenCalledWith('Failed to fetch jobs: 500 database is locked');
     });
 
     it('should handle network error', async () => {
@@ -324,6 +326,24 @@ describe('JobsTreeDataProvider', () => {
       expect((provider as any)._jobs).toEqual([]);
       expect((provider as any)._loading).toBe(false);
       expect(fireSpy).toHaveBeenCalled();
+    });
+
+    it('keeps the newest of overlapping refreshes when an older one answers last', async () => {
+      const older: Job[] = [{ id: 'old', set: 's', name: 'n', start: '', end: '', kind: '', state: '' }];
+      const newer: Job[] = [...older, { id: 'new', set: 's', name: 'n', start: '', end: '', kind: '', state: '' }];
+      let answerOlder: (response: any) => void = () => {};
+      mockApiClient.fetch
+        .mockImplementationOnce(() => new Promise(resolve => { answerOlder = resolve; }))
+        .mockResolvedValueOnce({ ok: true, json: jest.fn().mockResolvedValue(newer) });
+
+      const first = provider.refresh(); // e.g. the auto-refresh timer, requested before the job existed
+      const second = provider.refresh(); // the refresh command, requested after it
+      await second;
+      answerOlder({ ok: true, json: jest.fn().mockResolvedValue(older) });
+      await first;
+
+      expect((provider as any)._jobs).toEqual(newer);
+      expect((provider as any)._loading).toBe(false);
     });
 
     it('should fetch jobs and update state when config is valid', async () => {

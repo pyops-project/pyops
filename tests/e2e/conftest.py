@@ -376,20 +376,14 @@ def _kill_server(proc, timeout):
         )
 
 
-@pytest.fixture(scope="function")
-def pyops_server(e2e_env):
-    """Start a fresh PyOps server, yield ServerLog, then stop and clean up.
+def _start_server(e2e_env, log_file):
+    """Popen the PyOps server (gunicorn + runner) for e2e_env, logging to log_file.
 
-    The server runs in a new process group so all children (gunicorn workers,
-    runner daemon) can be terminated together.
-    """
-    log_path = str(e2e_env["tmp_path"] / "server.log")
-    log_file = open(log_path, "w")
-
+    It runs in a new process group so all children (gunicorn workers, runner
+    daemon) can be terminated together by _kill_server."""
     env = os.environ.copy()
     env["PYOPS_CONFIG"] = e2e_env["config_path"]
-
-    proc = subprocess.Popen(
+    return subprocess.Popen(
         [
             os.path.join(PROJECT_ROOT, ".venv", "bin", "gunicorn"),
             "-c", "app/gunicorn.py",
@@ -403,6 +397,18 @@ def pyops_server(e2e_env):
         env=env,
         preexec_fn=os.setsid,  # new process group for clean shutdown
     )
+
+
+@pytest.fixture(scope="function")
+def pyops_server(e2e_env):
+    """Start a fresh PyOps server, yield ServerLog, then stop and clean up.
+
+    The server runs in a new process group so all children (gunicorn workers,
+    runner daemon) can be terminated together.
+    """
+    log_path = str(e2e_env["tmp_path"] / "server.log")
+    log_file = open(log_path, "w")
+    proc = _start_server(e2e_env, log_file)
 
     server_log = ServerLog(log_path)
 

@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { ApiClient } from '../apiClient';
+import { errorText } from '../errorText';
 import { JobsTreeDataProvider, JobTreeItem, Job } from '../jobsTreeProvider';
 import { appendIncrementalOutput } from '../utils';
 
@@ -18,7 +19,7 @@ export class JobService {
             if (response.ok) {
                 return await response.json() as Job[];
             } else {
-                vscode.window.showErrorMessage(`Failed to fetch jobs: ${response.statusText}`);
+                vscode.window.showErrorMessage(`Failed to fetch jobs: ${await errorText(response)}`);
                 return [];
             }
         } catch (error: unknown) {
@@ -52,7 +53,7 @@ export class JobService {
                 }
                 vscode.window.showInformationMessage(`Canceled job ${id}`);
             } else {
-                vscode.window.showErrorMessage(`Failed to cancel job: ${response.statusText}`);
+                vscode.window.showErrorMessage(`Failed to cancel job: ${await errorText(response)}`);
             }
         } catch (error: unknown) {
             const errorMessage = error instanceof Error ? error.message : String(error);
@@ -80,7 +81,7 @@ export class JobService {
                     vscode.window.showInformationMessage(`Downloaded workspace for job ${id} to ${uri.fsPath}`);
                 }
             } else {
-                vscode.window.showErrorMessage(`Failed to download job: ${response.statusText}`);
+                vscode.window.showErrorMessage(`Failed to download job: ${await errorText(response)}`);
             }
         } catch (error: unknown) {
             const errorMessage = error instanceof Error ? error.message : String(error);
@@ -110,8 +111,7 @@ export class JobService {
                 }
                 vscode.window.showInformationMessage(`Deleted job ${id}`);
             } else {
-                const err = await response.text();
-                vscode.window.showErrorMessage(`Failed to delete job: ${err}`);
+                vscode.window.showErrorMessage(`Failed to delete job: ${await errorText(response)}`);
             }
         } catch (error: unknown) {
             const errorMessage = error instanceof Error ? error.message : String(error);
@@ -178,6 +178,7 @@ export class JobService {
         if (confirm !== 'Yes') return;
         let successCount = 0;
         let errorCount = 0;
+        let finishedCount = 0;
         for (const job of jobsToAct) {
             try {
                 let response;
@@ -188,6 +189,9 @@ export class JobService {
                 }
                 if (response.ok) {
                     successCount++;
+                } else if (action === 'cancel' && response.status === 409) {
+                    // Finished since the list was fetched: nothing to cancel.
+                    finishedCount++;
                 } else {
                     errorCount++;
                 }
@@ -198,7 +202,8 @@ export class JobService {
         if (this.jobsTreeProvider) {
             this.jobsTreeProvider.refresh();
         }
-        vscode.window.showInformationMessage(`Bulk ${action}: ${successCount} successful, ${errorCount} failed.`);
+        const finished = finishedCount > 0 ? `, ${finishedCount} already finished` : '';
+        vscode.window.showInformationMessage(`Bulk ${action}: ${successCount} successful, ${errorCount} failed${finished}.`);
     }
 
     async cancelAllJobs(): Promise<void> {

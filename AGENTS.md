@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to coding agents when working with code in this repository.
 
 ## Environment
 
@@ -31,14 +31,14 @@ pytest tests/path/to/test_file.py::test_function_name -v
 npm run test --prefix vsix/
 ```
 
-**VSIX integration tests** (requires running PyOps on localhost:8000):
+**VSIX e2e tests** (VSIX client axis: real extension host vs real server; requires running PyOps on localhost:8000):
 ```bash
-npm run test:integration --prefix vsix/
+npm run test:e2e --prefix vsix/
 ```
 
-**E2E tests** (Playwright, starts real server per test):
+**E2E tests** (WebUI + pyopsctl axes; Playwright/CLI start a real server per test):
 ```bash
-pytest tests/e2e/ -v
+pytest tests/e2e/ tests/pyopsctl/e2e/ -v
 ```
 
 ## Architecture

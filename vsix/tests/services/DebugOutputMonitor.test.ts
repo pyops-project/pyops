@@ -234,6 +234,25 @@ describe('DebugOutputMonitor', () => {
       expect(monitor.isMonitoring('key1')).toBe(false);
     });
 
+    it('treats a job that already finished (409) as stopped', async () => {
+      const mockVscode = require('vscode');
+
+      await monitor.startMonitoring('key1', 'job1');
+
+      (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
+        ok: false,
+        status: 409,
+        statusText: 'Conflict',
+      } as Response);
+
+      await monitor.stopMonitoring('key1');
+
+      expect(monitor.isMonitoring('key1')).toBe(false);
+      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith('\n--- Job already finished ---\n');
+      expect(mockVscode.window.showInformationMessage).toHaveBeenCalledWith('Debug job job1 already finished');
+      expect(mockVscode.window.showErrorMessage).not.toHaveBeenCalled();
+    });
+
     it('handles cancel failure', async () => {
       const mockVscode = require('vscode');
 
@@ -241,12 +260,15 @@ describe('DebugOutputMonitor', () => {
 
       (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
         ok: false,
+        status: 404,
         statusText: 'Not Found',
+        json: () => Promise.resolve({ detail: 'Job job1 not existing' }),
       } as Response);
 
       await monitor.stopMonitoring('key1');
 
-      expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith('Failed to stop debug: Not Found');
+      expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith('Failed to stop debug: 404 Job job1 not existing');
+      expect(monitor.isMonitoring('key1')).toBe(true);
     });
 
     it('shows warning if not monitoring', async () => {

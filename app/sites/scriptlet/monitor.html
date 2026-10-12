@@ -26,6 +26,8 @@
         <script src="/files/js/jquery.min.js"></script>
         <script src="/files/js/js.cookie.min.js"></script>
         <script src="/files/js/bootstrap/bootstrap.bundle.min.js"></script>
+        <script src="/files/js/pyops-alert.js"></script>
+        <script src="/files/js/pyops-html.js"></script>
 
         <script>
             const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
@@ -65,6 +67,12 @@
                     return genUndoneActions(j);
             }
 
+            const { esc } = window.pyopsHtml;
+
+            // Job params live here, keyed by job id, for copyParam: they are
+            // never round-tripped through markup (refreshed on every list).
+            const params = new Map();
+
             function genTransActions(j) {
                 return `
                     <button type="button" onclick="copyParam('${j.id}')" class="btn btn-warning p-0" title="Copy this job's param to the clipboard" data-testid="job-copy-${j.id}">
@@ -103,22 +111,21 @@
 
             function genJobRowContent(j) {
                 return `
-                    <th scope="row">${j.id}</th>
-                    <td>${j.start}</td>
-                    <td>${j.end}</td>
-                    <td>${j.kind}</td>
+                    <th scope="row">${esc(j.id)}</th>
+                    <td>${esc(j.start)}</td>
+                    <td>${esc(j.end)}</td>
+                    <td>${esc(j.kind)}</td>
                     <td>
-                        <span class="d-inline-block" tabindex="0" data-toggle="tooltip" title='${j.detail ? j.detail.replace(/'/g, "&#39;") : ""}'>
-                            ${j.state}
+                        <span class="d-inline-block" tabindex="0" data-toggle="tooltip" title="${j.detail ? esc(j.detail) : ""}">
+                            ${esc(j.state)}
                         </span>
                     </td>
                     <td>${genActions(j)}</td>
-                    <td id="param_${j.id}" style="display:none;">${j.param}</td>
                 `;
             }
 
             function genJobItem(j) {
-                return `<tr data-id="${j.id}" data-testid="job-row-${j.id}">${genJobRowContent(j)}</tr>`;
+                return `<tr data-id="${esc(j.id)}" data-testid="job-row-${esc(j.id)}">${genJobRowContent(j)}</tr>`;
             }
 
             // One collapsible Bootstrap card per set, collapsed by default.
@@ -149,7 +156,6 @@
                                             <th scope="col">Kind</th>
                                             <th scope="col">State</th>
                                             <th scope="col">Actions</th>
-                                            <th style="display:none;"></th>
                                         </tr>
                                     </thead>
                                     <tbody data-set-body="${set}"></tbody>
@@ -177,8 +183,7 @@
             }
 
             function copyParam(id) {
-                const param = $(`#param_${id}`).text();
-                navigator.clipboard.writeText(param);
+                navigator.clipboard.writeText(params.get(id) ?? "");
             }
 
             function refreshList() {
@@ -186,6 +191,7 @@
                 fetch("/scriptlet/job/list").then(async (r)=>{
                     console.debug("GET", "/scriptlet/job/list", r)
                     if(r.ok) {
+                        pyopsAlert.loaded("Job list");
                         const d = await r.json();
                         console.debug("jobs", d);
 
@@ -193,6 +199,9 @@
                         // job id. `/scriptlet/job/list` always returns `set`.
                         const bySet = {};
                         for(const i of d) (bySet[i.set] = bySet[i.set] || []).push(i);
+
+                        params.clear();
+                        for(const i of d) params.set(i.id, i.param);
 
                         for(const set of Object.keys(bySet)) {
                             const card = ensureSetSection(set);
@@ -237,8 +246,8 @@
 
                         window.scrollTo(0, scrollY);
                     } else
-                        console.error("GET", "/scriptlet/job/list", r.statusText);
-                }).catch((e)=>console.error("GET", "/scriptlet/job/list", e.toString()));
+                        await pyopsAlert.loadFailed("Job list", r);
+                }).catch((e)=>pyopsAlert.loadError("Job list", e));
             }
 
             function enqueueRefreshList() {
@@ -294,12 +303,14 @@
                 console.debug("GET", `/scriptlet/job/cancel?id=${id}`);
 
                 fetch(`/scriptlet/job/cancel?id=${id}`).then(async (r)=>{
-                    if(r.ok) {
+                    // 409: the job finished since the list was shown —
+                    // nothing to cancel; the refresh shows its state.
+                    if(r.ok || r.status === 409) {
                         if(refresh)
                             enqueueRefreshList();
                     } else
-                        console.error("GET", `/scriptlet/job/cancel?id=${id}`, r.statusText);
-                }).catch((e)=>console.error("GET", `/scriptlet/job/cancel?id=${id}`, e.toString()));
+                        await pyopsAlert.failed(`Cancel ${id}`, r);
+                }).catch((e)=>pyopsAlert.error(`Cancel ${id}`, e));
             }
 
             function cancelAll() {
@@ -314,8 +325,8 @@
                             if(!["cancelled", "killed", "failed", "done", "cancel", "dequeued"].includes(i.state))
                                 cancel(i.id, i == d[d.length - 1]);
                     } else
-                        console.error("GET", "/scriptlet/job/list", r.statusText);
-                }).catch((e)=>console.error("GET", "/scriptlet/job/list", e.toString()));
+                        await pyopsAlert.failed("Cancel all", r);
+                }).catch((e)=>pyopsAlert.error("Cancel all", e));
             }
 
             async function del(id, refresh = true) {
@@ -331,9 +342,9 @@
                         if(refresh)
                             enqueueRefreshList();
                     } else
-                        console.error("DELETE", `/scriptlet/job/item?id=${id}`, r.statusText);
+                        await pyopsAlert.failed(`Delete ${id}`, r);
                 } catch(e) {
-                    console.error("DELETE", `/scriptlet/job/item?id=${id}`, e.toString());
+                    pyopsAlert.error(`Delete ${id}`, e);
                 }
             }
 
@@ -352,9 +363,9 @@
                         
                         enqueueRefreshList();
                     } else
-                        console.error("GET", "/scriptlet/job/list", r.statusText);
+                        await pyopsAlert.failed("Delete all", r);
                 } catch(e) {
-                    console.error("GET", "/scriptlet/job/list", e.toString());
+                    pyopsAlert.error("Delete all", e);
                 }
             }
 
@@ -409,7 +420,7 @@
                             </button>
                         </li>
 
-                        <li class="nav-item mx-auto"></li>
+                        <li class="nav-item mx-auto"><span id="pyops-load-status" class="navbar-text text-warning" data-testid="pyops-load-status" hidden></span></li>
 
                         <li class="nav-item m-1">
                             <button type="button" class="btn btn-success" onclick="refreshList()" title="Reload the job list" data-testid="monitor-refresh">
