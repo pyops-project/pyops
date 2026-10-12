@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { ApiClient } from '../apiClient';
+import { errorText } from '../errorText';
 import { appendIncrementalOutput } from '../utils';
 
 export class DebugOutputMonitor {
@@ -94,7 +95,7 @@ export class DebugOutputMonitor {
                     vscode.window.showInformationMessage(`Stopped debug job ${jobId}`);
                 }
             } else {
-                vscode.window.showErrorMessage(`Failed to stop debug: ${cancelResponse.statusText}`);
+                vscode.window.showErrorMessage(`Failed to stop debug: ${await errorText(cancelResponse)}`);
             }
         } catch (error: unknown) {
             const errorMessage = error instanceof Error ? error.message : String(error);

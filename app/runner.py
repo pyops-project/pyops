@@ -83,7 +83,7 @@ class GracefulKiller:
 SHUTDOWN_SIGKILL_DETAIL = "did not respond to shutdown SIGTERM"
 
 
-def _shutdown_job_processes(processes: dict[int, subprocess.Popen], timeout: float = 15.0,
+def _shutdown_job_processes(processes: dict[int, subprocess.Popen], timeout: float,
                              runner_socket=None, runner_poller=None):
     """Bring all running job subprocesses to a stop, synchronously.
 
@@ -95,11 +95,15 @@ def _shutdown_job_processes(processes: dict[int, subprocess.Popen], timeout: flo
     `job_lib.send_completion`, and that completion arrives over ZMQ
     here — finishJob updates the DB to 'done'/'failed' on its own.
 
-    Only processes still alive past `timeout` are SIGKILL'd; those
-    couldn't shut down on their own, so we explicitly mark them
-    'cancelled' with detail='killed during shutdown'. Same for any
-    process whose kind has no completion path (tasks under default
-    Python SIGTERM termination get no completion sent).
+    Every live process the runner started is stopped, whether or not a
+    job row still names it by pid: a job whose cancel is in flight (its
+    row's pid is cleared, and the termination thread dies with the
+    runner) or whose row is gone must not outlive the runner. Rows are
+    updated only for the processes a row names.
+
+    The processes still alive past `timeout` (runner.shutdown_timeout_seconds)
+    are SIGKILL'd together; a row of such a process is marked 'failed'
+    (see the final sweep below).
 
     Note on zombies: psutil.Process.is_running() returns True for
     zombie processes — we use the subprocess.Popen object's poll()
@@ -112,29 +116,32 @@ def _shutdown_job_processes(processes: dict[int, subprocess.Popen], timeout: flo
     if not processes:
         return
 
-    # Snapshot the live targets — no DB writes here, just identification.
-    targets: dict[int, str] = {}
+    # Snapshot the live processes and the job rows naming them — no DB
+    # writes here, just identification. A live process without such a row
+    # (None) is stopped all the same.
+    live: dict[int, str | None] = {}
     with Session(get_db_engine()) as session:
         for pid, p in list(processes.items()):
             if p.poll() is not None:
                 continue
             job = session.query(Job).filter_by(pid=pid).first()
             if job is None:
-                logger.debug("shutdown: pid %d has no DB job row, skipping", pid)
-                continue
-            targets[pid] = job.id
+                logger.info("shutdown: pid %d has no job row naming it; stopped without a row update", pid)
+            live[pid] = job.id if job is not None else None
+    targets: dict[int, str] = {pid: job_id for pid, job_id in live.items() if job_id is not None}
 
-    if not targets:
+    if not live:
         return
 
     # Termination starts now: a completion a job reports from here on
     # cannot override a cancel committed on its row (see finishJob).
-    with Session(get_db_engine()) as session:
-        session.query(Job).filter(Job.id.in_(list(targets.values()))).update(
-            {Job.term_start: datetime.now()}, synchronize_session=False)
-        commit_with_retry(session)
+    if targets:
+        with Session(get_db_engine()) as session:
+            session.query(Job).filter(Job.id.in_(list(targets.values()))).update(
+                {Job.term_start: datetime.now()}, synchronize_session=False)
+            commit_with_retry(session)
 
-    for pid, job_id in targets.items():
+    for pid, job_id in live.items():
         logger.info("shutdown: SIGTERM group of job %s pid %d", job_id, pid)
         try:
             job_lib.kill_proc_group(pid, signal.SIGTERM)
@@ -142,7 +149,7 @@ def _shutdown_job_processes(processes: dict[int, subprocess.Popen], timeout: flo
             logger.warning("shutdown: SIGTERM failed for %s (pid %d): %s", job_id, pid, e)
 
     deadline = time.time() + timeout
-    still_alive: dict[int, str] = dict(targets)
+    still_alive: dict[int, str | None] = dict(live)
     while still_alive and time.time() < deadline:
         if runner_socket is not None and runner_poller is not None:
             events = runner_poller.poll(0)
@@ -159,7 +166,7 @@ def _shutdown_job_processes(processes: dict[int, subprocess.Popen], timeout: flo
         # (cheap, reaps zombies) and the group as a whole (catches
         # any subprocess the user's `param` spawned which we don't
         # have a Popen handle for, e.g. a debugpy adapter).
-        survivors: dict[int, str] = {}
+        survivors: dict[int, str | None] = {}
         for pid, job_id in still_alive.items():
             p = processes.get(pid)
             leader_dead = (p is not None and p.poll() is not None)
@@ -182,7 +189,7 @@ def _shutdown_job_processes(processes: dict[int, subprocess.Popen], timeout: flo
 
         sigkill_deadline = time.time() + 2.0
         while still_alive and time.time() < sigkill_deadline:
-            leftover: dict[int, str] = {}
+            leftover: dict[int, str | None] = {}
             for pid, job_id in still_alive.items():
                 p = processes.get(pid)
                 leader_dead = (p is not None and p.poll() is not None)
@@ -1105,14 +1112,15 @@ def main(data_base: str, web_bind: str, venv_path: str, pkg_path: str, env):
             logger.exception("Critical error in main loop iteration %d, continuing: %s", loop_count, e)
             time.sleep(1)  # Brief pause before retry to avoid tight loops on persistent errors
 
-    # Synchronously SIGTERM all live job trees, wait up to 15s, SIGKILL
-    # stragglers, then postTerm. Old code spawned daemon threads here, which
+    # Synchronously SIGTERM all live job trees, wait up to
+    # runner.shutdown_timeout_seconds, SIGKILL the stragglers together, then
+    # sweep the rows. Old code spawned daemon threads here, which
     # got killed the moment main() returned — leaving service subprocesses
     # orphaned in the pgid until the outer test harness SIGKILL'd them after
     # its 120s graceful wait. Pass the runner socket so we drain completion
     # ACKs during the wait — without it every service ends up SIGKILL'd
     # because its send_completion REQ blocks for the full timeout.
-    _shutdown_job_processes(processes, timeout=15.0,
+    _shutdown_job_processes(processes, timeout=files.conf_runner()["shutdown_timeout_seconds"],
                              runner_socket=runner_socket, runner_poller=runner_poller)
 
     # Drain any completion ZMQ events the dying subprocesses managed to send.

@@ -14,8 +14,9 @@ export type AuthMode = 'basic' | 'x-user';
  *   - `username`   — override `pyops.username` else `profile.user`. When the
  *                    setting is explicitly set, `userOverridden` is true and the
  *                    identity is remapped onto the profile's connection.
- *   - `authMode`   — override `pyops.authMode` else (profile has api_key ? basic
- *                    : x-user) else basic.
+ *   - `authMode`   — override `pyops.authMode` else basic, the setting's
+ *                    default as the settings UI shows it; a profile does not
+ *                    change it.
  *   - `debugPorts` — override `pyops.debugPorts` else `profile.debugPorts` else
  *                    [5678]. Override fully replaces (no union).
  *
@@ -84,14 +85,7 @@ export function resolveConnectivity(): Connectivity {
     const username = userOverridden ? (userOverrideRaw as string) : (profile?.user ?? '');
 
     const modeOverride = explicitOverride<AuthMode>(cfg, 'authMode');
-    let authMode: AuthMode;
-    if (modeOverride === 'basic' || modeOverride === 'x-user') {
-        authMode = modeOverride;
-    } else if (profile) {
-        authMode = profile.apiKey ? 'basic' : 'x-user';
-    } else {
-        authMode = 'basic';
-    }
+    const authMode: AuthMode = modeOverride === 'x-user' ? 'x-user' : 'basic';
 
     const portsOverride = explicitOverride<number[]>(cfg, 'debugPorts');
     let debugPorts: number[];

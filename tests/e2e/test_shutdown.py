@@ -39,8 +39,9 @@ from .conftest import (
 )
 
 
-def _start_server(tmp_path, worker_count: int = 1):
-    """Spawn a fresh gunicorn for this test and return (proc, data_dir)."""
+def _start_server(tmp_path, worker_count: int = 1, runner=None):
+    """Spawn a fresh gunicorn for this test and return (proc, data_dir).
+    `runner` entries are added to the config's runner section."""
     data_dir = tmp_path / "data"
     for sub in ("jobs", "git", "venv", "pkg"):
         (data_dir / sub).mkdir(parents=True)
@@ -56,6 +57,7 @@ def _start_server(tmp_path, worker_count: int = 1):
             "pkg": str(data_dir / "pkg"),
             "git_pull_interval": 9999,
             "drop_done_delay_seconds": 9999,
+            **(runner or {}),
         },
         "log": {"loglevel": "debug"},
         "users": {"anonymous": {"debug_port": 15679}},
@@ -520,8 +522,9 @@ def test_shutdown_signals_pyops_data_service_cleanly(worker_count, tmp_path):
         )
 
         # Exit should be quick (well under docker stop_grace_period). The
-        # runner's own _shutdown_job_processes has a 15s SIGKILL escalation
-        # so worst-case clean shutdown is ~15s; idle-state shutdown is <5s.
+        # runner's own _shutdown_job_processes SIGKILLs after
+        # runner.shutdown_timeout_seconds (default 30s), so a service that
+        # ignored SIGTERM would take ≥30s; idle-state shutdown is <5s.
         assert exit_elapsed < 30, (
             f"Shutdown took {exit_elapsed:.1f}s — cascade is propagating but "
             f"slowly. Server log tail:\n{log_path.read_text()[-3000:]}"
@@ -545,7 +548,8 @@ def test_shutdown_signals_pyops_data_service_cleanly(worker_count, tmp_path):
 # the listener.
 #
 # Regression target: pre-fix, async_poll() did NOT surface kill_now, so
-# SIGTERM never reached the loop and the runner had to SIGKILL after 15 s.
+# SIGTERM never reached the loop and the runner had to SIGKILL after its
+# shutdown timeout.
 # A passing run here proves the (b"", "TERM") sentinel is delivered.
 ASYNC_POLL_SERVICE_CODE = """
 import time
@@ -568,7 +572,8 @@ except Exception as e:
 
 def test_async_poll_service_acks_term_within_grace_window(tmp_path):
     """Regression: services driven by `listener.async_poll()` must honour
-    SIGTERM without falling through to the runner's 15 s SIGKILL escalation.
+    SIGTERM without falling through to the runner's SIGKILL escalation
+    (runner.shutdown_timeout_seconds, default 30 s).
 
     Pre-fix, `ServiceListener.async_poll()` ignored `kill_now`, so causal
     services (like system::os_service on aiops) stayed in their poll loop
@@ -662,11 +667,11 @@ def test_async_poll_service_acks_term_within_grace_window(tmp_path):
 
         # Generous upper bound. The fix turns this into a sub-second exit;
         # the 10 s ceiling exists only to keep the assertion clearly below
-        # the 15 s SIGKILL escalation in _shutdown_job_processes — anything
-        # ≥15 s would mean the test is masking the regression.
+        # the SIGKILL escalation in _shutdown_job_processes (default 30 s) —
+        # anything near it would mean the test is masking the regression.
         assert exit_elapsed < 10, (
             f"async_poll service took {exit_elapsed:.1f}s to honour SIGTERM — "
-            f"close to the 15s SIGKILL escalation. Regression suspected.\n"
+            f"heading for the shutdown SIGKILL escalation. Regression suspected.\n"
             f"Server log tail:\n{log_path.read_text()[-3000:]}"
         )
 
@@ -691,5 +696,108 @@ def test_async_poll_service_acks_term_within_grace_window(tmp_path):
         if proc.poll() is None:
             os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
             proc.wait(timeout=5)
+        if not log_file.closed:
+            log_file.close()
+
+
+# A service that never looks at its listener: the ServiceListener's SIGTERM
+# handler only sets kill_now, so the process keeps running until SIGKILL.
+DEAF_SERVICE_CODE = """
+import time
+print("deaf service started", flush=True)
+while True:
+    time.sleep(0.05)
+"""
+
+
+def test_shutdown_kills_job_whose_cancel_is_in_flight(tmp_path):
+    """Regression: a job whose cancel the runner has acted on (row
+    `cancelled`, pid cleared) while its process still runs — the cancel's
+    SIGKILL escalation lives in a thread that dies with the runner — must
+    not outlive the shutdown. The shutdown stops every process the runner
+    started: SIGTERM, then SIGKILL after runner.shutdown_timeout_seconds.
+    The row keeps the operator's cancel."""
+    import psutil
+
+    def _alive(pid):
+        try:
+            return psutil.Process(pid).status() != psutil.STATUS_ZOMBIE
+        except psutil.NoSuchProcess:
+            return False
+
+    proc, data_dir, log_file, log_path = _start_server(
+        tmp_path, runner={"shutdown_timeout_seconds": 3})
+    job_pid = None
+    try:
+        set_name = "shutdown_cancel"
+        svc_name = "deaf_svc"
+        _setup_set_on_disk(data_dir, set_name)
+        repo = data_dir / "git" / set_name
+        (repo / f"{svc_name}.task.py").write_text(DEAF_SERVICE_CODE)
+        _commit_drafts_on_disk(data_dir, set_name, "add deaf service")
+
+        r = requests.put(
+            f"{BASE_URL}/scriptlet/schedule/item",
+            json={"set": set_name, "name": svc_name, "drop_done": False,
+                  "max_retries": 0, "schedule": "", "param": ""},
+            timeout=10,
+        )
+        assert r.status_code == 200, f"create schedule: {r.status_code} {r.text}"
+        r = requests.get(f"{BASE_URL}/scriptlet/schedule/run?id={r.json()['schedule']}", timeout=10)
+        assert r.status_code == 200, f"run schedule: {r.status_code} {r.text}"
+
+        jobs_dir = data_dir / "jobs" / set_name
+        deadline = time.monotonic() + 30
+        job_id = None
+        while time.monotonic() < deadline and job_id is None:
+            for d in (sorted(jobs_dir.glob(f"anonymous_{set_name}_{svc_name}_*")) if jobs_dir.exists() else []):
+                if (d / "stdout.log").exists() and "deaf service started" in (d / "stdout.log").read_text():
+                    job_id = d.name
+            time.sleep(0.5)
+        assert job_id is not None, (
+            f"deaf service did not start in 30s.\nServer log tail:\n{log_path.read_text()[-2000:]}")
+
+        db_path = data_dir / "app.db"
+        with contextlib.closing(sqlite3.connect(str(db_path))) as conn:
+            job_pid = conn.execute("SELECT pid FROM job WHERE id=?", (job_id,)).fetchone()[0]
+        assert job_pid is not None and _alive(job_pid)
+
+        r = requests.get(f"{BASE_URL}/scriptlet/job/cancel?id={job_id}", timeout=10)
+        assert r.status_code == 200, f"cancel: {r.status_code} {r.text}"
+
+        # The runner acted on the cancel: the row is cancelled while the
+        # process ignores the SIGTERM and waits for the cancel's SIGKILL.
+        deadline = time.monotonic() + 10
+        state = None
+        while time.monotonic() < deadline and state != "cancelled":
+            with contextlib.closing(sqlite3.connect(str(db_path))) as conn:
+                state = conn.execute("SELECT state FROM job WHERE id=?", (job_id,)).fetchone()[0]
+            time.sleep(0.2)
+        assert state == "cancelled", f"cancel not acted on in 10s, state={state!r}"
+        assert _alive(job_pid), "the job ended before the shutdown — nothing left to test"
+
+        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        try:
+            proc.wait(timeout=SERVER_SHUTDOWN_TIMEOUT)
+        finally:
+            log_file.close()
+
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and _alive(job_pid):
+            time.sleep(0.1)
+        assert not _alive(job_pid), (
+            f"job process {job_pid} survived the shutdown.\n"
+            f"Server log tail:\n{log_path.read_text()[-3000:]}")
+
+        with contextlib.closing(sqlite3.connect(str(db_path))) as conn:
+            row = conn.execute("SELECT state FROM job WHERE id=?", (job_id,)).fetchone()
+        assert row == ("cancelled",)
+
+    finally:
+        if proc.poll() is None:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            proc.wait(timeout=5)
+        if job_pid is not None and _alive(job_pid):
+            os.kill(job_pid, signal.SIGKILL)
         if not log_file.closed:
             log_file.close()

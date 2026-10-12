@@ -26,6 +26,7 @@
         <script src="/files/js/jquery.min.js"></script>
         <script src="/files/js/js.cookie.min.js"></script>
         <script src="/files/js/bootstrap/bootstrap.bundle.min.js"></script>
+        <script src="/files/js/pyops-alert.js"></script>
         <script src="/files/js/pyops-html.js"></script>
 
         <script>
@@ -190,6 +191,7 @@
                 fetch("/scriptlet/job/list").then(async (r)=>{
                     console.debug("GET", "/scriptlet/job/list", r)
                     if(r.ok) {
+                        pyopsAlert.loaded("Job list");
                         const d = await r.json();
                         console.debug("jobs", d);
 
@@ -244,8 +246,8 @@
 
                         window.scrollTo(0, scrollY);
                     } else
-                        console.error("GET", "/scriptlet/job/list", r.statusText);
-                }).catch((e)=>console.error("GET", "/scriptlet/job/list", e.toString()));
+                        await pyopsAlert.loadFailed("Job list", r);
+                }).catch((e)=>pyopsAlert.loadError("Job list", e));
             }
 
             function enqueueRefreshList() {
@@ -307,8 +309,8 @@
                         if(refresh)
                             enqueueRefreshList();
                     } else
-                        console.error("GET", `/scriptlet/job/cancel?id=${id}`, r.statusText);
-                }).catch((e)=>console.error("GET", `/scriptlet/job/cancel?id=${id}`, e.toString()));
+                        await pyopsAlert.failed(`Cancel ${id}`, r);
+                }).catch((e)=>pyopsAlert.error(`Cancel ${id}`, e));
             }
 
             function cancelAll() {
@@ -323,8 +325,8 @@
                             if(!["cancelled", "killed", "failed", "done", "cancel", "dequeued"].includes(i.state))
                                 cancel(i.id, i == d[d.length - 1]);
                     } else
-                        console.error("GET", "/scriptlet/job/list", r.statusText);
-                }).catch((e)=>console.error("GET", "/scriptlet/job/list", e.toString()));
+                        await pyopsAlert.failed("Cancel all", r);
+                }).catch((e)=>pyopsAlert.error("Cancel all", e));
             }
 
             async function del(id, refresh = true) {
@@ -340,9 +342,9 @@
                         if(refresh)
                             enqueueRefreshList();
                     } else
-                        console.error("DELETE", `/scriptlet/job/item?id=${id}`, r.statusText);
+                        await pyopsAlert.failed(`Delete ${id}`, r);
                 } catch(e) {
-                    console.error("DELETE", `/scriptlet/job/item?id=${id}`, e.toString());
+                    pyopsAlert.error(`Delete ${id}`, e);
                 }
             }
 
@@ -361,9 +363,9 @@
                         
                         enqueueRefreshList();
                     } else
-                        console.error("GET", "/scriptlet/job/list", r.statusText);
+                        await pyopsAlert.failed("Delete all", r);
                 } catch(e) {
-                    console.error("GET", "/scriptlet/job/list", e.toString());
+                    pyopsAlert.error("Delete all", e);
                 }
             }
 
@@ -418,7 +420,7 @@
                             </button>
                         </li>
 
-                        <li class="nav-item mx-auto"></li>
+                        <li class="nav-item mx-auto"><span id="pyops-load-status" class="navbar-text text-warning" data-testid="pyops-load-status" hidden></span></li>
 
                         <li class="nav-item m-1">
                             <button type="button" class="btn btn-success" onclick="refreshList()" title="Reload the job list" data-testid="monitor-refresh">

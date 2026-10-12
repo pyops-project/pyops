@@ -282,11 +282,11 @@ describe('CreateScriptletCommand', () => {
       .mockResolvedValueOnce({ label: 'set1' });
     mockApiClient.fetch.mockImplementation(async (url: string) => url === '/scriptlet/inventory/sets'
       ? { ok: true, json: jest.fn().mockResolvedValue({ sets: ['set1'] }) }
-      : { ok: false, statusText: 'Server Error', json: jest.fn() });
+      : { ok: false, status: 500, statusText: 'Internal Server Error', json: jest.fn().mockResolvedValue({ detail: 'boom' }) });
 
     await CreateScriptletCommand.execute(mockApiClient, outputChannel, managerTreeProvider);
 
-    expect(mockShowErrorMessage).toHaveBeenCalledWith('Failed to fetch scriptlets: Server Error');
+    expect(mockShowErrorMessage).toHaveBeenCalledWith('Failed to fetch scriptlets: 500 boom');
     expect(mockShowInputBox).not.toHaveBeenCalled();
   });
 });

@@ -1,4 +1,5 @@
 <script src="/scriptlet/jslib/pyops/sets_job"></script>
+<script src="/files/js/pyops-alert.js"></script>
 <script>
     // REST helper to the data service via the controller proxy.
     // path is appended after /controller/{{SET}}/{{NAME}}/
@@ -16,11 +17,12 @@
     }
 
     function refreshList() {
-        apiCall("GET", "list", null, function(ok, body) {
+        apiCall("GET", "list", null, function(ok, body, status) {
             if (!ok) {
-                console.error("list failed", body);
+                pyopsAlert.loadError("Set list", status ? `${status} ${body.error || ""}` : body.error);
                 return;
             }
+            pyopsAlert.loaded("Set list");
             const tbody = document.getElementById("sets");
             const existing = {};
             tbody.querySelectorAll("tr").forEach((tr) => {

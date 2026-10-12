@@ -109,7 +109,7 @@ class Config:
             if self._raw_conf is None:
                 raise ValueError("Config not initialized. Call Config.init(conf_path) first.")
             # Add runner section with defaults
-            runner = {"git_pull_interval": 60, "drop_done_delay_seconds": 60}
+            runner = {"git_pull_interval": 60, "drop_done_delay_seconds": 60, "shutdown_timeout_seconds": 30}
             if "runner" in self._raw_conf:
                 runner.update(self._raw_conf["runner"])
             logger.debug("Conf runner accessed successfully")

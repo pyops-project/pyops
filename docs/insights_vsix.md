@@ -29,6 +29,7 @@ flowchart TD
 | `src/extension.ts` | Main activation: initializes all services, registers providers/commands, handles deactivation |
 | `src/apiClient.ts` | Shared HTTP client: `fetch(path, init?)`, `fetchJson<T>(path, init?)`, `getServerUrl()`, `getHeaders()`, `hasValidConfig()` |
 | `src/utils.ts` | `inferExt(type)`: maps scriptlet type → file extension |
+| `src/errorText.ts` | `errorText(response)`: the text every failed request is reported with — `<status> <message>`, the message from the body's `detail` (a 422's list as `<field>: <msg>; …`) or `error`, else the status text; e.g. `Failed to write draft: 400 Invalid scriptlet name 'a.b': …` |
 | `src/ConnectionStatusManager.ts` | Status bar item showing server connectivity |
 | `src/managerTreeProvider.ts` | `ManagerTreeDataProvider`: sets → scriptlets hierarchy, sync status, local-only discovery |
 | `src/jobsTreeProvider.ts` | `JobsTreeDataProvider`: jobs grouped by state, sorted by start time |
@@ -52,7 +53,7 @@ flowchart TD
 | `profile` | string | `""` | Name of the PyOps client-config connectivity profile this workspace adopts. Empty → the config's `default_profile`. Supplies the **connectivity base layer** (see below) |
 | `serverUrl` | string | `http://localhost:8000` | PyOps server base URL. Overrides the profile's `url` when explicitly set |
 | `username` | string | — | Basic Auth username / X-User identity. Unset with a profile → the profile's `user`; set → **remaps** a different user onto the profile connection (see username rule) |
-| `authMode` | enum `basic`\|`x-user` | `basic` | Auth pathway. Unset with a profile → derived from the profile (`api_key` present → basic, absent → x-user). `basic` → `Authorization: Basic base64(username:password)`; `x-user` → `X-User: <username or "vsix">` sent directly |
+| `authMode` | enum `basic`\|`x-user` | `basic` | Auth pathway; unset → `basic`, also with a profile. `basic` → `Authorization: Basic base64(username:password)`; `x-user` → `X-User: <username or "vsix">` sent directly |
 | `timeout` | number | 30 | HTTP request timeout in seconds (VSCode-only) |
 | `useRemoteLinter` | boolean | true | Enable Jedi completion via server (VSCode-only) |
 | `localPyopsDir` | string | `pyops` | Workspace-relative path to local scriptlet directory (VSCode-only) |
@@ -66,7 +67,7 @@ flowchart TD
 The **PyOps client config** (`~/.config/pyops/config.toml`, path override via `PYOPSCTL_CONFIG`) is the shared connectivity source of truth read by every PyOps client — the pyopsctl CLI and this extension both consume the same profiles. Connectivity (`serverUrl`, `username`, auth, `debugPorts`) is layered: a **client-config profile** is the base, and each explicitly-set `pyops.*` setting **fully overrides** the corresponding profile field. VSCode-only keys (`timeout`, `useRemoteLinter`, `localPyopsDir`, `autoRefreshInterval`, `excludedSets`, `includedSets`) never participate — the set black/whitelist always lives in VSCode settings.
 
 - `src/services/ProfileService.ts` — parses the TOML (via the `smol-toml` runtime dependency, VSIX's first) into `ResolvedProfile { name, url, user, apiKey, debugPorts }`. Profile selection is the same across all clients: `pyops.profile` > `PYOPSCTL_PROFILE` env > config `default_profile`. Parse is cached by file mtime. Missing file / unknown profile → `null` (legacy VSCode-only connectivity). A config file that cannot be parsed raises `ProfileConfigError` (`Cannot parse PyOps client config <path>: <reason>`); `resolveConnectivity` shows it as an error message — once per distinct error, again after the file was valid in between — and lets it propagate, so no connection is made with a fallback.
-- `src/connectivity.ts` — `resolveConnectivity()` returns the effective `Connectivity { serverUrl, username, userOverridden, authMode, profileApiKey?, debugPorts, profileName? }`. Per field: **explicit VSCode override** (detected via `config.inspect()`, so a schema default is *not* an override) `??` **profile value** `??` **hard default**. All connectivity consumers (`ApiClient`, `AuthService`, `ConnectionStatusManager`, `DebugService`) route through it — none read raw settings for connectivity.
+- `src/connectivity.ts` — `resolveConnectivity()` returns the effective `Connectivity { serverUrl, username, userOverridden, authMode, profileApiKey?, debugPorts, profileName? }`. Per field: **explicit VSCode override** (detected via `config.inspect()`, so a schema default is *not* an override) `??` **profile value** `??` **hard default**; `authMode` has no profile value — unset it is `basic`, the setting's default. All connectivity consumers (`ApiClient`, `AuthService`, `ConnectionStatusManager`, `DebugService`) route through it — none read raw settings for connectivity.
 
 **Username rule.** With a profile resolved and `pyops.username` unset, the effective identity is the profile's `user` (`userOverridden=false`). Setting `pyops.username` remaps another user onto that profile's connection (`userOverridden=true`). Without a config file there is no profile to map onto, so `username` is just the raw legacy value.
 

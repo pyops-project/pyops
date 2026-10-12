@@ -260,8 +260,8 @@ class ServiceClient:
     the process. The web worker creates one per controller-proxy request;
     at that rate a missing close() is a steady KernelStack/thread leak
     (~2 threads/request) that only a worker restart reclaims. `close()`
-    is therefore deterministic and idempotent, and there is deliberately
-    no `atexit` fallback (that was the leak-enabler: it deferred every
+    is therefore deterministic — a second close() is a caller bug and
+    raises — and there is deliberately no `atexit` fallback (that was the leak-enabler: it deferred every
     per-request context's teardown to process exit).
     """
 

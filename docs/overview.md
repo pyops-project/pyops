@@ -101,7 +101,7 @@ graph TD
 
 - `web`: `{"bind": "127.0.0.1:8000", "worker": 8, "timeout": 300}`
 - `data`: `{"jobs": "data/jobs", "git": "data/git", "db": "data/app.db"}`
-- `runner`: `{"venv": "data/venv", "pkg": "data/pkg", "git_pull_interval": 60, "drop_done_delay_seconds": 60}`
+- `runner`: `{"venv": "data/venv", "pkg": "data/pkg", "git_pull_interval": 60, "drop_done_delay_seconds": 60, "shutdown_timeout_seconds": 30}`
 - `log`: `{"loglevel": "debug"}`
 - `users`: per-owner table; pyops itself does not read any keys inside the owner objects.
 

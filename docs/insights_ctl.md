@@ -168,6 +168,8 @@ client will still send Basic Auth — pathway is determined by the
 - All requests carry the resolved auth headers.
 - `request()` normalizes responses: 2xx → returns the underlying
   `Response`; non-2xx → raises `HTTPError(status, message, body)`.
+  The message is the body's `detail` or `error`; a validation error's
+  (422) list prints as `<field>: <msg>; …`.
   Timeout and connection errors raise `HTTPError(status=0, …)` so
   callers have a single exception type to handle.
 - `get_bytes()` and `get_text()` for binary payloads (job workspace

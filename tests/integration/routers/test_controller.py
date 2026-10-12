@@ -340,14 +340,15 @@ class TestControllerRealSet:
     """/controller and /menu against a real git set repo (no git mocks)."""
 
     def test_task_is_not_a_controller_404(self, client, set_repo):
-        """No controller of that name: 404, for the page and the proxy alike."""
+        """No controller of that name: 404, for the page and the proxy alike;
+        the proxy's own errors carry the message in `error`."""
         set_repo("s1", committed={"job.task.py": "pass\n"})
         response = client.get("/controller/s1/job")
         assert response.status_code == 404
         assert response.json() == {"detail": "Scriptlet s1::job is not a controller"}
         response = client.get("/controller/s1/job/x")
         assert response.status_code == 404
-        assert response.json() == {"detail": "Scriptlet s1::job is not a controller"}
+        assert response.json() == {"error": "Scriptlet s1::job is not a controller"}
 
     def test_controller_beside_a_prefix_clash(self, client, set_repo):
         """`panel.x.task.py` (another, invalid name) never answers for the

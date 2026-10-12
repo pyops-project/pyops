@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 
 import { resolveConnectivity } from './connectivity';
+import { errorText } from './errorText';
 
 // Fallback X-User value when authMode is 'x-user' and no username is set,
 // mirroring pyopsctl's DEFAULT_X_USER ('pyopsctl').
@@ -42,7 +43,7 @@ export class ApiClient {
 
     async fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
         const response = await this.fetch(path, init);
-        if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+        if (!response.ok) throw new Error(await errorText(response));
         return response.json() as Promise<T>;
     }
 

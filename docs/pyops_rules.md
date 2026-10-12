@@ -12,6 +12,7 @@
 - **Markdown**: Documentation files in sets.
 - **JS Libraries**: JavaScript modules for client-side code.
 - **Names**: set and scriptlet names use only letters, digits, `_` and `-` (`[A-Za-z0-9_-]+`); the server answers 400 for any other name, and files with other names are not scriptlets (not listed, not importable).
+- **Users**: every pyops user is an administrator. There is no per-user isolation: every user sees and can act on every set, scriptlet, schedule and job, and every job's workspace is readable by every job. A view that browses `jobsspace` or `setspace` shows all users' job output to every visitor — by design, not a leak to guard against.
 - **Execution Model**: Jobs execute in isolated per-set venv subprocesses with global dict (`glob`) containing:
   - `control`: Pyops.Control for API calls (e.g., `control.job.list()` returns dict of jobs).
   - `listener`: ServiceListener for inbound requests (services only; see Services).
@@ -45,6 +46,11 @@ Execution environment provides these globals:
 - `kind`: this job's execution kind (`task`/`service`/`draft`/`debug`/`test`/`testdebug`). `control.job.create(...)` reads it to default a spawned child's kind: a working-tree parent (`draft`/`debug`/`test`/`testdebug`) yields a `draft` child, anything else a `task`. Pass `kind=` to `create` to override.
 - `setspace`: `data/jobs/{setname}/` (set's jobs root; shared across all users)
 - `workspace`: `data/jobs/{setname}/{id}/` (this job's workspace)
+- `jobsspace`: `data/jobs/` (jobs root of all sets; every job's workspace is `{jobsspace}/{set}/{id}/`)
+- `gitspace`: `data/git/` (the sets' working trees, `{gitspace}/{set}/`)
+- `pkgspace`: `data/pkg/` (git-installed packages of `#!<git-url>` directives, `{pkgspace}/{set}/{repo}/`)
+- `data`: set-scoped YAML/JSON files under `data/git/{setname}/data/` with shared/exclusive locks (`data.read(name)`, `data.write(name)`, `data.list()`; see "Set-Scoped Data" in the pyops guide)
+- `control`: `pyops.Control` for API calls (see Core Concepts)
 - `listener`: ServiceListener for inbound ZMQ IPC (services, debug, and draft jobs). `listener.listen()` blocking; `listener.poll()` non-blocking (None/"TERM"/msg); `listener.async_poll()` returns list of pending messages; `response(dict)` or `async_response(identity, dict)`.
 
 ## Scriptlet Types
@@ -91,6 +97,8 @@ if __name__ == "__main__":
 Service Tasks (kind="service" jobs) loop with listener for inbound requests.
 Use: Handle requests from controllers/API via REST-style endpoints.
 
+A service schedule (empty cron string) starts its service only while none of its jobs is active, cancelled or done. A cancelled service therefore stays stopped — the operator's cancel is a decision, not a crash — and so does one that ended `done` without `drop_done`. To start it again, e.g. to deploy new code, delete that job (Monitor, `pyopsctl job delete`); the next scheduler pass starts the service. A failed service is restarted until `max_fail_n` of its jobs have failed (see "Schedules" in the pyops guide).
+
 Request: `listener.listen()` returns dict with:
 - `"type"`: HTTP method (`"GET"`, `"POST"`, `"PUT"`, `"DELETE"`, `"PATCH"`, etc.)
 - `"path"`: URL path after `/controller/{set}/{name}/` (e.g., `"/fetch"`, `"/api/models"`, `"/q"` for legacy)
@@ -114,7 +122,7 @@ handler flips `kill_now`. `async_poll()` then returns a single
 `[(b"", "TERM")]` sentinel on the next call, matching `listen()`'s
 `"TERM"` return. Causal-style tick loops must check for `msg == "TERM"`
 in their poll result and exit promptly; otherwise the runner SIGKILLs
-the process after the 15s `_shutdown_job_processes` grace window and
+the process after `runner.shutdown_timeout_seconds` (default 30 s) and
 the row is marked `failed` with `"did not respond to shutdown SIGTERM"`.
 
 Template (`service/{name}.py`):
@@ -417,25 +425,41 @@ Styles/scripts only.
   .custom-head { color: blue; }
 </style>
 <script>
-  // Utility apiCall for REST-style AJAX requests
-  function apiCall(type, path, params, callback) {
-    var url = "/controller/{{SET}}/{{NAME}}/" + path;
-    if (type === "GET") {
-      $.get(url, params, callback);
-    } else {
-      $.ajax({
-        url: url,
-        type: type,
-        data: JSON.stringify(params),
-        contentType: "application/json",
-        success: callback
-      });
+  // REST call to the service via the controller proxy. The callback always
+  // runs, with (ok, body, status): ok is false for an error answer (status
+  // not 2xx, or a body carrying `error`) and for a network failure (status 0).
+  function apiCall(method, path, params, callback) {
+    const opts = { method, headers: {} };
+    if (method !== "GET" && params != null) {
+      opts.headers["Content-Type"] = "application/json";
+      opts.body = JSON.stringify(params);
     }
+    fetch("/controller/{{SET}}/{{NAME}}/" + path, opts)
+      .then(async (r) => {
+        const body = await r.json().catch(() => ({}));
+        callback(r.ok && !body.error, body, r.status);
+      })
+      .catch((e) => callback(false, { error: e.toString() }, 0));
   }
-  // Usage: apiCall("GET", "items", {limit: 10}, function(resp) { ... });
-  // Usage: apiCall("POST", "items", {name: "new"}, function(resp) { ... });
+  // Usage: apiCall("GET", "items?limit=10", null, (ok, body, status) => {
+  //   if (!ok) { showError(body.error || `HTTP ${status}`); return; }
+  //   ...
+  // });
 </script>
 ```
+
+Answers a view's call can get:
+
+| Status | Body | When |
+|---|---|---|
+| the service's | the service's, unchanged | the service answered (`listener.response(body, status)`) |
+| 503 | `{"error": "No running service: <set>::<service>"}` (`preview` for `debug = True`) | the service is not running (starting up, cancelled, failed) |
+| 504 | `{"error": "Service job <id> did not answer within <n>s"}` | the service did not answer within `web.timeout` |
+| 400 / 404 | `{"error": "..."}` | invalid or unknown set or controller name |
+| 200 | `{"error": "Controller execution failed: ..."}` | the controller's code failed to execute |
+| 0 (network) | — | the request did not reach pyops |
+
+Every error answer of the proxy carries its message in `error`, so a view shows `body.error`. Give the service's own error answers an `error` field too.
 
 #### Available Resources
 
@@ -518,14 +542,20 @@ Content with buttons/modals.
     </div>
   </div>
 </div>
+<div id="action-error" class="alert alert-danger" hidden></div>
 <script>
+  function showError(message) {
+    $("#action-error").text(message).prop("hidden", false);
+  }
   $("#action-btn").click(function() {
-    apiCall("POST", "action", {key: "value"}, function(resp) {
-      alert("Response: " + JSON.stringify(resp));
+    apiCall("POST", "action", {key: "value"}, function(ok, body, status) {
+      if (!ok) { showError(body.error || `HTTP ${status}`); return; }
+      $("#action-error").prop("hidden", true);
+      alert("Response: " + JSON.stringify(body));
     });
   });
   function submitAction() {
-    // e.g., apiCall("POST", "submit", {field: "value"}, callback);
+    // e.g., apiCall("POST", "submit", {field: "value"}, (ok, body, status) => { ... });
   }
 </script>
 ```
@@ -536,7 +566,7 @@ Content with buttons/modals.
 - **Error Handling**: Services return appropriate HTTP status codes via `listener.response(result, status)` — use 400 for bad input, 404 for unknown routes, 500 for internal errors. Tasks use `logger.error()` for errors. Prefer `logging` over `print` for production code to enable level-based filtering and better error tracking.
 - **Security**: Sanitize untrusted params/cmds in services.
 - **Performance**: Efficient service loops (listener polls ~1s); keep tasks short.
-- **Views**: Rely on Bootstrap defaults; dynamic {{SET}}/{{NAME}}; JS in head only; use REST-style endpoints (path-based routing) for service calls.
+- **Views**: Rely on Bootstrap defaults; dynamic {{SET}}/{{NAME}}; JS in head only; use REST-style endpoints (path-based routing) for service calls; show every failed call to the user (the `apiCall` callback's error branch) — the browser console is not a place users look.
 
 ### Local Testing with Pytest
 

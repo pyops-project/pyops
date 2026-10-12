@@ -7,6 +7,7 @@ Covers the UI workflows not exercised by test_schedule_api.py:
   - Create modal Cancel button
   - keep-n input enabled only with drop-done and a cron schedule (create and edit modal); max-fail-n always enabled
   - 422 validation errors shown as their messages
+  - A failed list load shown in the header status until the list loads again
 """
 
 import time
@@ -393,6 +394,23 @@ class TestSchedulerUI:
 
         resp = api_anon.get(f"/scriptlet/schedule/item?id={sched_id}")
         assert resp.status_code == 404
+        pyops_server.assert_no_unexpected_errors()
+
+    def test_failed_list_load_shows_in_header_until_it_loads_again(self, e2e_page, pyops_server):
+        """A failed list load pops up nothing: it shows in the header status
+        and goes as soon as the list loads again."""
+        frame = _nav_scheduler(e2e_page)
+        status = frame.locator('[data-testid="pyops-load-status"]')
+        e2e_page.route("**/scriptlet/schedule/list",
+                       lambda route: route.fulfill(status=503, json={"detail": "PyOps is shutting down"}))
+        frame.locator('[data-testid="scheduler-refresh"]').click()
+        status.wait_for(state="visible", timeout=5_000)
+        assert status.inner_text() == "Schedule list: 503 PyOps is shutting down"
+        assert frame.locator('[data-testid="pyops-alert"]').count() == 0
+
+        e2e_page.unroute("**/scriptlet/schedule/list")
+        frame.locator('[data-testid="scheduler-refresh"]').click()
+        status.wait_for(state="hidden", timeout=5_000)
         pyops_server.assert_no_unexpected_errors()
 
     def test_drops_checkmark_and_edit_cron_preset(self, e2e_page, api_anon, pyops_server, set_factory, commit_set):

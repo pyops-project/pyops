@@ -21,7 +21,7 @@ PyOps is an execution platform for Python operations scriptlets, licensed under 
   }
   ```
 - **Connectivity profile**: if the shared PyOps client config `~/.config/pyops/config.toml` exists (the file `pyopsctl` reads, see *pyopsctl → Configure* below; override via `PYOPSCTL_CONFIG`), the extension takes `serverUrl`, `username`, auth and `debugPorts` from the profile named by `pyops.profile` (empty → the file's `default_profile`). Any of those `pyops.*` settings you set explicitly overrides the profile's value; without the file (or a matching profile) the settings are used as-is. The set black/whitelist and the other settings are always VSCode-only.
-- **Auth**: `basic` — set `pyops.username`; the extension prompts for the password on first API call (stored securely in workspace state). With a profile, its `api_key` is used as the password with no prompt — unless `pyops.username` remaps a different user onto the profile, which brings the prompt back. `x-user` — the extension sends `X-User: <username or "vsix">` with no password, for direct connections to a server that trusts the header (dev / no auth proxy). `pyops.authMode` defaults to `basic`; with a profile and no explicit `authMode`, a profile with an `api_key` means `basic`, one without means `x-user`.
+- **Auth**: `basic` — set `pyops.username`; the extension prompts for the password on first API call (stored securely in workspace state). With a profile, its `api_key` is used as the password with no prompt — unless `pyops.username` remaps a different user onto the profile, which brings the prompt back. `x-user` — the extension sends `X-User: <username or "vsix">` with no password, for direct connections to a server that trusts the header (dev / no auth proxy). `pyops.authMode` defaults to `basic`, also with a profile; set it to `x-user` for a profile without `api_key` that connects directly.
 - **Status**: Status bar shows connection (requires valid `pyops.serverUrl`).
 
 VSIX provides pyops-container in sidebar/activitybar:
@@ -210,6 +210,7 @@ Scriptlets create schedules with `control.schedule.create(set, name, drop_done, 
 - `drop_done`: a job that ends `done` is removed together with its logs/data after `runner.drop_done_delay_seconds` (a service right away). Failed jobs are not dropped (see `max_fail_n`).
 - `keep_n` (0-100, default 0; other values → 422): with `drop_done` on a cron schedule, the newest `keep_n` done jobs started by this schedule (by the scheduler or "run now") are kept; older ones are removed as usual. No effect on services or without `drop_done`.
 - `max_fail_n` (1-100, default 3; other values → 422): on a cron schedule, only the newest `max_fail_n` failed jobs started by this schedule are kept; older ones are removed with their logs/data right away, with or without `drop_done`. On a service, the service is not restarted once `max_fail_n` of its jobs have failed; delete failed jobs in the Monitor to restart it.
+- A service schedule starts its service only while none of its jobs is active, cancelled or done. A cancelled service stays stopped (the operator's cancel is a decision), and so does one that ended `done` without `drop_done`. To start it again — e.g. to deploy new code — delete that job (Monitor, `pyopsctl job delete`); the next scheduler pass starts the service.
 
 A schedule whose set or task name is outside the name charset (see "Names") cannot run: the runner skips it, and the Web UI Scheduler marks it with a warning.
 
@@ -234,7 +235,7 @@ The scriptlet API (`/scriptlet/...`, `/repo/status`, `/files/...`) answers error
 
 Cancelling a job that is already cancelled (or being cancelled) answers 200 and leaves it as it is.
 
-A controller's proxied requests (`/controller/{set}/{name}/{path}`) answer with the service's status and body unchanged: `listener.response({"error": "..."}, 400)` reaches the client as 400 `{"error": "..."}`. The proxy answers 503 when no matching service is running and 504 when the service does not answer within `web.timeout`.
+A controller's proxied requests (`/controller/{set}/{name}/{path}`) answer with the service's status and body unchanged: `listener.response({"error": "..."}, 400)` reaches the client as 400 `{"error": "..."}`. The proxy's own errors carry their message in `error` too: 503 when no matching service is running, 504 when the service does not answer within `web.timeout`, 400/404 for an invalid or unknown set or controller, and 200 `{"error": "Controller execution failed: ..."}` when the controller's code fails to execute. See the view `apiCall` sample in the scriptlet rules.
 
 ## Full Workflow Example
 

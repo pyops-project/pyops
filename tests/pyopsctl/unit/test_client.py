@@ -63,6 +63,30 @@ def test_http_4xx_raises_httperror_with_status_4xx():
             assert "not found" in exc.value.message
 
 
+def test_http_422_prints_each_validation_message():
+    """A validation error's detail is a list: printed as '<field>: <msg>'."""
+    from pyopsctl.client import Client, HTTPError
+
+    p = _make_profile()
+    with Client(p, timeout=1.0) as c:
+        fake = MagicMock()
+        fake.ok = False
+        fake.status_code = 422
+        fake.json.return_value = {"detail": [
+            {"type": "greater_than_equal", "loc": ["body", "max_retries"],
+             "msg": "Input should be greater than or equal to 0", "input": -1, "ctx": {"ge": 0}},
+            {"type": "missing", "loc": ["body"], "msg": "Field required", "input": None},
+        ]}
+        fake.text = ""
+        fake.headers = {}
+        with patch.object(c.session, "request", return_value=fake):
+            with pytest.raises(HTTPError) as exc:
+                c.put("/scriptlet/job/item", json_body={})
+            assert exc.value.status == 422
+            assert exc.value.message == ("PUT /scriptlet/job/item: max_retries: Input should be greater "
+                                         "than or equal to 0; body: Field required")
+
+
 def test_http_5xx_raises_httperror_with_status_5xx():
     from pyopsctl.client import Client, HTTPError
 

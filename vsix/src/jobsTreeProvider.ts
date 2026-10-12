@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { TreeDataProvider, TreeItem, TreeItemCollapsibleState, EventEmitter, ThemeIcon } from 'vscode';
 import { ApiClient } from './apiClient';
+import { errorText } from './errorText';
 
 
 
@@ -126,7 +127,7 @@ class JobsTreeDataProvider implements TreeDataProvider<JobTreeItem> {
             } else {
                 const now = Date.now();
                 if (now - this._lastJobsErrorShown > 30000) {
-                    vscode.window.showErrorMessage(`Failed to fetch jobs: ${response.statusText}`);
+                    vscode.window.showErrorMessage(`Failed to fetch jobs: ${await errorText(response)}`);
                     this._lastJobsErrorShown = now;
                 }
                 return [];

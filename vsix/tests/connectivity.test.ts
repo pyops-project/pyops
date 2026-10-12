@@ -68,12 +68,17 @@ describe('resolveConnectivity', () => {
       expect(c.profileName).toBe('dev');
     });
 
-    it('a keyless profile resolves to x-user mode', () => {
+    it('a keyless profile keeps the default basic mode', () => {
       setupConfigMock({ serverUrl: undefined, username: undefined, profile: 'direct' });
       const c = resolveConnectivity();
-      expect(c.authMode).toBe('x-user');
+      expect(c.authMode).toBe('basic');
       expect(c.username).toBe('directuser');
       expect(c.profileApiKey).toBeUndefined();
+    });
+
+    it('x-user only when pyops.authMode says so', () => {
+      setupConfigMock({ serverUrl: undefined, username: undefined, profile: 'direct', authMode: 'x-user' });
+      expect(resolveConnectivity().authMode).toBe('x-user');
     });
 
     it('a profile without debug_ports falls back to the default port pool', () => {

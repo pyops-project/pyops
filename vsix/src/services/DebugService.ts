@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import { ApiClient } from '../apiClient';
+import { errorText } from '../errorText';
 import { resolveConnectivity } from '../connectivity';
 
 /**
@@ -223,9 +224,8 @@ export class DebugService {
                 body: JSON.stringify(data),
             });
             if (!response.ok) {
-                const errorText = await response.text();
                 this.outputChannel.appendLine(
-                    `[DEBUG enqueueDebugJob] server returned ${response.status}: ${errorText}`,
+                    `[DEBUG enqueueDebugJob] server returned ${await errorText(response)}`,
                 );
                 this.releasePort(lease.port);
                 return {};

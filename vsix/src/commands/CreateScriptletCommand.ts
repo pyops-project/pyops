@@ -6,6 +6,7 @@ import { Uri } from 'vscode';
 import { ManagerTreeDataProvider } from '../managerTreeProvider';
 import { inferExt } from '../utils';
 import { ApiClient } from '../apiClient';
+import { errorText } from '../errorText';
 
 export class CreateScriptletCommand {
     static async execute(apiClient: ApiClient, outputChannel: vscode.OutputChannel, managerTreeProvider: ManagerTreeDataProvider) {
@@ -50,7 +51,7 @@ export class CreateScriptletCommand {
                 // Fetch scriptlets for selected set to check names
                 const listResponse = await apiClient.fetch('/scriptlet/inventory/list');
                 if (!listResponse.ok) {
-                    const errorMsg = `Failed to fetch scriptlets: ${listResponse.statusText}`;
+                    const errorMsg = `Failed to fetch scriptlets: ${await errorText(listResponse)}`;
                     vscode.window.showErrorMessage(errorMsg);
                     outputChannel.appendLine(`[Create Scriptlet] Scriptlets fetch failed: ${errorMsg}`);
                     return;
@@ -111,7 +112,7 @@ export class CreateScriptletCommand {
                 await vscode.workspace.openTextDocument(localUri).then(doc => vscode.window.showTextDocument(doc));
 
             } else {
-                const errorMsg = `Failed to fetch sets: ${response.statusText}`;
+                const errorMsg = `Failed to fetch sets: ${await errorText(response)}`;
                 vscode.window.showErrorMessage(errorMsg);
                 outputChannel.appendLine(`[Create Scriptlet] Sets fetch failed: ${errorMsg}`);
             }

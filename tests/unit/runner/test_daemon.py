@@ -939,18 +939,60 @@ class TestDaemon:
             row = session.get(Job, "exited_job")
             assert row.state == "done"  # untouched
 
-    def test_shutdown_job_processes_skips_live_pid_without_row(self, mock_db):
-        """A live tracked process whose job row is gone gets no signal —
-        only processes the DB still knows as jobs are shut down."""
+    def test_shutdown_job_processes_stops_live_pid_without_row(self, mock_db):
+        """A live tracked process whose job row is gone is stopped all the
+        same — the runner stops every process it started."""
+        import signal
         from app.runner import _shutdown_job_processes
 
         mock_p = Mock()
-        mock_p.poll.return_value = None  # alive
-        with patch('app.runner.job_lib.kill_proc_group') as mock_kill:
+        mock_p.poll.side_effect = [None, 0, 0]  # alive at the snapshot, gone after SIGTERM
+        poller = Mock(**{"poll.return_value": []})
+        with patch('app.runner.job_lib.kill_proc_group') as mock_kill, \
+             patch('app.runner.job_lib.proc_group_alive', return_value=False):
             _shutdown_job_processes({7001: mock_p}, timeout=2.0,
-                                    runner_socket=Mock(), runner_poller=Mock())
+                                    runner_socket=Mock(), runner_poller=poller)
 
-        mock_kill.assert_not_called()
+        mock_kill.assert_called_once_with(7001, signal.SIGTERM)
+
+    def test_shutdown_job_processes_kills_job_whose_cancel_is_in_flight(self, mock_db):
+        """Real process group that ignores SIGTERM, cancel acted on (its row
+        keeps the cancel, pid cleared, term_start set — the termination
+        thread dies with the runner): the shutdown SIGKILLs it after the
+        timeout and leaves the row to the cancel."""
+        import signal
+        import sys
+        from app.runner import _shutdown_job_processes
+        from app.orm.database import get_db_engine
+        from app.orm.job import Job
+
+        script = ("import signal, time\n"
+                  "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+                  "print('ready', flush=True)\n"
+                  "time.sleep(60)\n")
+        term_start = datetime(2026, 1, 1, 12, 0, 0)
+        with subprocess.Popen([sys.executable, "-c", script], stdout=subprocess.PIPE,
+                              text=True, start_new_session=True) as p:
+            try:
+                assert p.stdout.readline().strip() == "ready"
+                with Session(get_db_engine()) as session:
+                    session.add(Job(id="cancelling_dbg", set="s", name="n", owner="o",
+                                    kind="debug", state="cancel", pid=None, term_start=term_start,
+                                    detail="cancel requested", drop_done=False))
+                    session.commit()
+
+                _shutdown_job_processes({p.pid: p}, timeout=0.2)
+                returncode = p.poll()
+            finally:
+                if p.poll() is None:
+                    p.kill()
+                    p.wait()
+
+        assert returncode == -signal.SIGKILL
+        with Session(get_db_engine()) as session:
+            row = session.get(Job, "cancelling_dbg")
+            assert (row.state, row.pid, row.term_start, row.detail, row.end) == \
+                ("cancel", None, term_start, "cancel requested", None)
 
     def test_shutdown_job_processes_keeps_row_failed_during_drain(self, mock_db):
         """A service whose drained completion reports `failed` keeps its
@@ -2047,6 +2089,19 @@ class TestMainLoop:
         assert (row.state, row.pid) == ("loading", 99002)
         assert row.detail is None
         assert applied["_shutdown_job_processes"].call_args.args[0] == {99002: proc}
+
+    def test_shutdown_waits_the_configured_timeout(self, run_main):
+        """The shutdown gives the job processes runner.shutdown_timeout_seconds
+        before it SIGKILLs them."""
+        from app.lib import files
+        killer = _Killer()
+        conf = dict(files.conf_runner(), shutdown_timeout_seconds=7)
+
+        applied = run_main(killer, getNextToDo=Mock(side_effect=lambda: killer.stop()),
+                           _shutdown_job_processes=Mock(),
+                           **{"files.conf_runner": Mock(return_value=conf)})
+
+        assert applied["_shutdown_job_processes"].call_args.kwargs["timeout"] == 7
 
     def test_cancel_before_load_is_not_an_error(self, run_main, caplog):
         """A cancel that lands between the claim and loadJob is a normal

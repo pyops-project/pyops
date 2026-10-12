@@ -7,7 +7,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 from 3.0.0 onward.
 
-## [3.3.7] — 2026-10-10
+## [3.4.0] — 2026-10-10
 
 ### Added
 - **Additive database schema sync at start-up.** Besides creating missing
@@ -16,7 +16,7 @@ from 3.0.0 onward.
   not synced. A new NOT NULL column needs a `server_default`. Before
   changing an existing database, a backup
   `<stem>.bck.<VERSION>.<HASH>.<DATETIME>.db` is written next to it
-  (e.g. `data/app.bck.3.3.7.<hash>.<datetime>.db`); an existing backup
+  (e.g. `data/app.bck.3.4.0.<hash>.<datetime>.db`); an existing backup
   with the same content hash is reused, so restarting after a failure
   does not pile up copies. All changes run in one transaction: on failure the
   database is unchanged and start-up aborts with an error naming the
@@ -46,9 +46,8 @@ from 3.0.0 onward.
   workspace adopts (empty → the file's `default_profile`); the profile
   supplies `serverUrl`, `username`, auth (`api_key`) and `debugPorts` as
   a base layer, and any explicitly-set `pyops.*` setting fully overrides
-  the matching profile field. With `pyops.authMode` unset, the profile
-  also decides the auth mode: `api_key` present → `basic`, absent →
-  `x-user`. Leaving `pyops.username` unset uses the
+  the matching profile field. `pyops.authMode` keeps its default `basic`
+  unless set, whatever the profile. Leaving `pyops.username` unset uses the
   profile's user; setting it remaps a different user onto that
   connection, in which case the profile's `api_key` no longer applies and
   a Basic password is prompted for (when the user is not remapped, the
@@ -80,6 +79,11 @@ from 3.0.0 onward.
   applies as before.
 
 ### Changed
+- **The shutdown gives jobs 30 s instead of 15 s, configurable.** At
+  shutdown the runner sends SIGTERM to every job process, waits up to
+  `runner.shutdown_timeout_seconds` (default 30) for them to end, then
+  SIGKILLs the rest together. The worst-case shutdown of the container is
+  now ≈ 150 s; the recommended `stop_grace_period: 180s` still covers it.
 - **Set and scriptlet names use only letters, digits, `_` and `-`.**
   Every set name and every scriptlet name (tasks, libraries,
   controllers, views, JS libraries, markdown pages, data files) must
@@ -124,9 +128,19 @@ from 3.0.0 onward.
   status other than 200 arrived wrapped as `{"detail": <body>}`; the
   body now arrives exactly as the service sent it, e.g. 400
   `{"error": "..."}`, so the Sets view shows the service's error instead
-  of `[object Object]`. A status that allows no body (204, 304) arrives
-  without one. A service that does not answer within `web.timeout`
-  answers 504 (was 200 `{"error": ...}`).
+  of `[object Object]`. **Breaking for views** that read a service's
+  error from `.detail` (e.g. `responseJSON.detail.error`): read the body
+  itself (`responseJSON.error`). A status that allows no body (204, 304)
+  arrives without one. A service that does not answer within
+  `web.timeout` answers 504 `{"error": "Service job <id> did not answer
+  within <n>s"}`; 3.3.6 waited until gunicorn killed the worker, so the
+  caller got a dropped connection (a 502 behind nginx).
+- **The controller proxy's own errors carry their message in `error`,**
+  like a service's answers: no running service (503), timeout (504), an
+  invalid (400) or unknown (404) set, an unknown controller or a name of
+  another type (404) and a controller that fails to execute (200). An
+  unknown set, an unknown controller and a name of another type answered
+  `{"detail": ...}` in 3.3.6.
 
 ### Removed
 - **`DELETE /scriptlet/inventory/draft` no longer takes a `type_` query
@@ -261,6 +275,31 @@ from 3.0.0 onward.
   not give it its first scriptlet ("No existing sets found"), and a set
   vanished with its last scriptlet. They now take the sets from
   `GET /scriptlet/inventory/sets`.
+- **A job being cancelled outlived a shutdown.** Once the runner acted
+  on a cancel, it waited for the job to stop in a background thread
+  (SIGKILL after 15 s), and the shutdown stopped only the jobs whose row
+  still named their process. A shutdown within those 15 s ended the
+  thread and skipped the job: a job that does not end on SIGTERM (a
+  service, debug or draft job not waiting on its listener) kept running
+  without the runner, holding e.g. its debug port. The shutdown now stops
+  every job process the runner started; the job's row keeps its cancel.
+- **Failed actions in the Web UI were not shown.** Manager delete,
+  Monitor cancel and delete (single and bulk), Scheduler delete, run now,
+  activate, deactivate and edit, and the editors' save, revert, run and
+  cancel reported a failure only to the browser console (Manager "run
+  draft"/"run test" in a browser dialog with the raw body). The page now
+  shows `<action>: <status> <message>` with the server's message in an
+  alert at its top. A failed page load or background poll (the lists,
+  the menu, the editors' code, draft status, completion and job output,
+  the Sets view's list) pops up nothing: the page header shows it until
+  the load works again.
+- **The VSIX reported failed requests without the server's message**,
+  only the status text (`Failed to write draft: Bad Request`). It now
+  shows the status and the message, e.g. `Failed to write draft: 400
+  Invalid scriptlet name 'my.script': ...`.
+- **pyopsctl printed a validation error (422) as a raw list.** It now
+  prints `<field>: <msg>` per entry, e.g. `max_retries: Input should be
+  greater than or equal to 0`.
 
 ### Security
 - **Invalid set names reached the filesystem.** A set name of `""`, `.`,
@@ -346,6 +385,13 @@ from 3.0.0 onward.
 - **Agent instructions moved from `CLAUDE.md` to `AGENTS.md`** (read by
   Claude Code and other coding agents); the unused `.roo/` configuration
   was removed.
+- **Scriptlet rules (`pyops_rules.md`).** The view `apiCall` sample has
+  an error path (its callback gets `(ok, body, status)`), with a table of
+  the controller proxy's answers; the job globals list `jobsspace`,
+  `gitspace`, `pkgspace`, `data` and `control`; the access model is
+  stated (every user is an administrator and sees every set and job), and
+  that a service schedule does not restart a cancelled service — delete
+  the job to start it again (also in the guide's Schedules).
 
 ## [3.3.6] — 2026-07-01
 

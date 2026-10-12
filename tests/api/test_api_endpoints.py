@@ -286,7 +286,7 @@ def test_controller_q_http_exception(mock_client, mock_git_ops):
     with patch("app.web.get_controller_code", side_effect=ScriptletNotFoundError("Not found")):
         response = mock_client.get("/controller/nonexistent/missing/q", headers={"X-User": "testuser"})
         assert response.status_code == 404
-        assert "Not found" in response.json()["detail"]
+        assert response.json() == {"error": "Not found"}
 
 @pytest.mark.parametrize("method", ["post", "put", "delete"])
 def test_controller_q_exec_fail_other_methods(mock_client, mock_controller_glob, method):

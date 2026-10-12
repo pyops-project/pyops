@@ -260,12 +260,14 @@ describe('DebugOutputMonitor', () => {
 
       (mockApiClient.fetch as jest.Mock).mockResolvedValueOnce({
         ok: false,
+        status: 404,
         statusText: 'Not Found',
+        json: () => Promise.resolve({ detail: 'Job job1 not existing' }),
       } as Response);
 
       await monitor.stopMonitoring('key1');
 
-      expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith('Failed to stop debug: Not Found');
+      expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith('Failed to stop debug: 404 Job job1 not existing');
       expect(monitor.isMonitoring('key1')).toBe(true);
     });
 

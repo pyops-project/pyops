@@ -560,6 +560,8 @@ async def controller_proxy(set: str, name: str, rest: str, request: Request):
         return JSONResponse(status_code=status, content=jsonable_encoder(data))
     except HTTPException:
         raise
+    # The proxy's own error answers carry the message in `error`, like a
+    # service's answers do, so a view reads one field.
     except git.InvalidSetNameError as ex:
         return JSONResponse(status_code=HTTP_400_BAD_REQUEST, content={"error": f"Controller execution failed: {ex}"})
     except git.SetNotFoundError as ex:
@@ -567,8 +569,9 @@ async def controller_proxy(set: str, name: str, rest: str, request: Request):
     except ServiceTimeout as ex:
         logger.warning("Controller proxy %s::%s: %s", set, name, ex)
         return JSONResponse(status_code=ex.status_code, content={"error": str(ex)})
-    except PyopsError:
-        raise
+    except PyopsError as ex:
+        logger.debug("Controller proxy %s::%s -> %d %s: %s", set, name, ex.status_code, type(ex).__name__, ex)
+        return JSONResponse(status_code=ex.status_code, content={"error": str(ex)})
     except Exception as ex:
         logger.exception("Controller proxy failed: %s", ex)
         return {"error": f"Controller execution failed: {str(ex)}"}

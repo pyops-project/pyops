@@ -182,7 +182,9 @@ describe('ManagerTreeDataProvider', () => {
       require('./utils/helpers').setupConfigMock();
       mockApiClient.fetch.mockResolvedValue({
         ok: false,
-        statusText: 'Error',
+        status: 500,
+        statusText: 'Internal Server Error',
+        json: () => Promise.resolve({ detail: 'boom' }),
       });
       const result = await (provider as any).fetchScriptlets();
       expect(result).toEqual([]);
@@ -261,7 +263,9 @@ describe('ManagerTreeDataProvider', () => {
       require('./utils/helpers').setupConfigMock();
       mockApiClient.fetch.mockResolvedValue({
         ok: false,
-        statusText: 'Server Error',
+        status: 500,
+        statusText: 'Internal Server Error',
+        json: () => Promise.resolve({ detail: 'boom' }),
       });
       const result = await (provider as any).fetchScriptlets();
       expect(result).toEqual([]);
@@ -286,13 +290,15 @@ describe('ManagerTreeDataProvider', () => {
       require('./utils/helpers').setupConfigMock();
       mockApiClient.fetch.mockResolvedValue({
         ok: false,
+        status: 404,
         statusText: 'Not Found',
+        json: () => Promise.resolve({ detail: 'Scriptlet set1::script1 not existing' }),
       });
       (require('fs').existsSync as jest.Mock).mockReturnValue(false);
 
       await (provider as any).downloadScriptlets([{ set: 'set1', name: 'script1', type: 'task' }]);
 
-      expect(consoleErrorSpy).toHaveBeenCalledWith('Failed to fetch set1::script1: Not Found');
+      expect(consoleErrorSpy).toHaveBeenCalledWith('Failed to fetch set1::script1: 404 Scriptlet set1::script1 not existing');
       consoleErrorSpy.mockRestore();
     });
 
@@ -452,7 +458,9 @@ describe('ManagerTreeDataProvider', () => {
     const mockInventory = (scriptlets: any[], sets: string[], setsOk = true) => {
       mockApiClient.fetch.mockImplementation(async (url: string) => {
         if (url === '/scriptlet/inventory/sets') {
-          return { ok: setsOk, statusText: setsOk ? 'OK' : 'Server Error', json: jest.fn().mockResolvedValue({ sets }) };
+          return setsOk
+            ? { ok: true, status: 200, statusText: 'OK', json: jest.fn().mockResolvedValue({ sets }) }
+            : { ok: false, status: 500, statusText: 'Internal Server Error', json: jest.fn().mockRejectedValue(new SyntaxError('not JSON')) };
         }
         return { ok: true, json: jest.fn().mockResolvedValue(url === '/scriptlet/inventory/list' ? scriptlets : { code: 'pass' }) };
       });
@@ -487,8 +495,8 @@ describe('ManagerTreeDataProvider', () => {
       await provider.refresh();
       const roots = await provider.getChildren();
       expect(roots.map(r => r.label)).toEqual(['set1']);
-      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith('Failed to fetch sets: Server Error');
-      expect(require('vscode').window.showErrorMessage).toHaveBeenCalledWith('Failed to fetch sets: Server Error');
+      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith('Failed to fetch sets: 500 Internal Server Error');
+      expect(require('vscode').window.showErrorMessage).toHaveBeenCalledWith('Failed to fetch sets: 500 Internal Server Error');
     });
 
     it('shows an error when the set list cannot be fetched', async () => {
@@ -548,12 +556,14 @@ describe('ManagerTreeDataProvider', () => {
       mockContext.workspaceState.get.mockReturnValue('password');
       mockApiClient.fetch.mockResolvedValue({
         ok: false,
-        statusText: 'Server Error',
+        status: 500,
+        statusText: 'Internal Server Error',
+        json: () => Promise.resolve({ detail: 'boom' }),
       });
 
       // First call should show error message
       await (provider as any).fetchScriptlets();
-      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith('Failed to fetch scriptlets: Server Error');
+      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith('Failed to fetch scriptlets: 500 boom');
 
       // Reset mocks
       jest.clearAllMocks();
@@ -562,7 +572,7 @@ describe('ManagerTreeDataProvider', () => {
       // Second call within 30 seconds should not show error message again
       await (provider as any).fetchScriptlets();
       expect(require('vscode').window.showErrorMessage).toHaveBeenCalledTimes(0);
-      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith('Failed to fetch scriptlets: Server Error');
+      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith('Failed to fetch scriptlets: 500 boom');
     });
 
     it('should throttle error messages for exceptions', async () => {
@@ -806,13 +816,15 @@ describe('ManagerTreeDataProvider', () => {
       const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation();
       mockApiClient.fetch.mockResolvedValueOnce({
         ok: false,
+        status: 404,
         statusText: 'Not Found',
+        json: () => Promise.resolve({ detail: 'Scriptlet set1::script1 not existing' }),
       });
 
       const treeItem = { set: 'set1', scriptletName: 'script1', scriptletType: 'task' } as any;
       await provider.downloadScriptlet(treeItem);
 
-      expect(consoleErrorSpy).toHaveBeenCalledWith('Failed to fetch set1::script1: Not Found');
+      expect(consoleErrorSpy).toHaveBeenCalledWith('Failed to fetch set1::script1: 404 Scriptlet set1::script1 not existing');
       consoleErrorSpy.mockRestore();
     });
   });
@@ -859,12 +871,14 @@ describe('ManagerTreeDataProvider', () => {
       mockContext.workspaceState.get.mockReturnValue('password');
       mockApiClient.fetch.mockResolvedValue({
         ok: false,
-        statusText: 'Server Error',
+        status: 500,
+        statusText: 'Internal Server Error',
+        json: () => Promise.resolve({ detail: 'boom' }),
       });
 
       // First call should show error message
       await (provider as any).fetchScriptlets();
-      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith('Failed to fetch scriptlets: Server Error');
+      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith('Failed to fetch scriptlets: 500 boom');
 
       // Reset mocks
       jest.clearAllMocks();

@@ -84,6 +84,7 @@ graph TD
 | `app/routers/scriptlet/` | REST API routers |
 | `app/sites/` | Static HTML templates: `root/root.html`, `scriptlet/` views |
 | `app/files/js/pyops-html.js` | `window.pyopsHtml.esc`: HTML-escapes free text (job ids, params, details, error texts) where the Monitor and the menu put it into markup |
+| `app/files/js/pyops-alert.js` | `window.pyopsAlert.failed(action, response)` / `.error(action, e)`: a failed user action of the Manager, Monitor, Scheduler and the editors shows `<action>: <status> <message>` (body `detail` — a 422's list as `<field>: <msg>` — or `error`, else the status text) in one dismissible alert fixed at the top of the page, and logs it to the console. `.loadFailed(load, response)` / `.loadError(load, e)` / `.loaded(load)`: a failed page load or background poll (lists, the menu, the editors' code, draft status, completion and job output, the Sets view's list) pops up nothing — it shows in the page header's `#pyops-load-status` until the same load succeeds again |
 
 ---
 
@@ -96,14 +97,14 @@ graph TD
 - `web`: `{"bind": "127.0.0.1:8000", "worker": 8, "timeout": 300, "expanded_sets": []}`
 - `brand` *(optional)*: `{"title": "PyOps", "icon": "miscellaneous_services", "favicon": null}` — operator-facing chrome. `title` → `<title>` + sidebar/topbar header; `icon` → material-icons-round glyph name OR image path served via `/brand/icon`; `favicon` → optional image served at `/favicon.ico`. Paths can be absolute or project-root-relative. Defaults reproduce the bundled look so existing deployments don't need to opt in.
 - `data`: `{"jobs": "data/jobs", "git": "data/git", "db": "data/app.db"}`
-- `runner`: `{"venv": "data/venv", "pkg": "data/pkg", "git_pull_interval": 60, "drop_done_delay_seconds": 60}`
+- `runner`: `{"venv": "data/venv", "pkg": "data/pkg", "git_pull_interval": 60, "drop_done_delay_seconds": 60, "shutdown_timeout_seconds": 30}`
 - `log`: `{"loglevel": "debug"}`
 - `users`: per-owner table; pyops itself reads nothing more than the keys to identify owners. Any client-side debug-port pool, credentials, etc. live in client configs (VSIX workspace settings, and the shared PyOps client config `~/.config/pyops/config.toml` read by all clients), not here.
 
 ### Access Methods
 
 - `conf_data()`: data section (jobs, git, db)
-- `conf_runner()`: runner section (venv, pkg, git_pull_interval, drop_done_delay_seconds)
+- `conf_runner()`: runner section (venv, pkg, git_pull_interval, drop_done_delay_seconds, shutdown_timeout_seconds)
 - `conf_web()`: web section (bind)
 - `conf_log()`: log section (loglevel)
 - `conf_users()`: users section (per-owner table; pyops reads owners only)
@@ -122,8 +123,8 @@ SQLite file-based DB in `data/app.db`, thread-safe WAL mode.
 The gunicorn master's `on_starting` runs `init_db()` once, before the runner and the workers start. It compares the live DB with the models and applies only additive changes: missing tables are created, missing columns added (`ALTER TABLE … ADD COLUMN`), missing indexes created; each is logged as `schema sync: …`, and a current schema changes nothing. Renames, type changes and drops are not synced.
 
 - **Rule**: a new NOT NULL column needs a `server_default` (existing rows read it; an ORM `default=` does not count). CI guards this: `test_models_upgrade_populated_baseline_db` upgrades a populated DB of every schema baseline with the current models.
-- **Schema baselines** (`SCHEMA_BASELINES` in `tests/conftest.py`, currently 3.3.6): frozen, populated schemas of released versions. Before a change alters the models, freeze the last release's schema from its tag as a new baseline — unless it equals the newest baseline — so the upgrade is tested from every released schema (e.g. 3.3.6→3.3.8 and 3.3.7→3.3.8, not only 3.3.7→3.3.8). A release that did not change the schema gets no baseline; existing baselines are never regenerated.
-- **Backup**: before changing a DB that already has tables, `VACUUM INTO` writes a consistent copy next to it, `<stem>.bck.<VERSION>.<HASH>.<YYYYmmddTHHMMSS>.db` (`app.bck.3.3.7.<sha256[:12]>.<datetime>.db` for `data/app.db`). `VACUUM` rebuilds the file from the content, so equal content hashes equally: if a backup with the same hash exists (e.g. on every restart after a failed, rolled-back sync) it is reused and no new copy is kept.
+- **Schema baselines** (`SCHEMA_BASELINES` in `tests/conftest.py`, currently 3.3.6): frozen, populated schemas of released versions. Before a change alters the models, freeze the last release's schema from its tag as a new baseline — unless it equals the newest baseline — so the upgrade is tested from every released schema (e.g. 3.3.6→3.4.1 and 3.4.0→3.4.1, not only 3.4.0→3.4.1). A release that did not change the schema gets no baseline; existing baselines are never regenerated.
+- **Backup**: before changing a DB that already has tables, `VACUUM INTO` writes a consistent copy next to it, `<stem>.bck.<VERSION>.<HASH>.<YYYYmmddTHHMMSS>.db` (`app.bck.3.4.0.<sha256[:12]>.<datetime>.db` for `data/app.db`). `VACUUM` rebuilds the file from the content, so equal content hashes equally: if a backup with the same hash exists (e.g. on every restart after a failed, rolled-back sync) it is reused and no new copy is kept.
 - **Failure**: all changes run in one transaction (`BEGIN IMMEDIATE`), so a failure leaves the DB unchanged. gunicorn prints `Error: …` naming the DB file, the SQLite error, the failing statement and the backup, and exits 1 before the runner starts. Recovery: restore the backup, fix the cause, restart pyops (the sync runs again).
 - **Connections**: `init_db()` disposes the engine (`destroy_db()`), so no open SQLite connection is inherited across `fork()` by the runner or the workers; they open their own via `get_db_engine()`.
 
@@ -396,16 +397,16 @@ When SIGTERM/SIGINT lands, `GracefulKiller.exit_gracefully`:
 1. Writes `/tmp/pyops/shutdown.flag` (cross-process gate, see below).
 2. Flips `kill_now = True`.
 
-The main loop's `while not killer.kill_now` exits at the next iteration boundary; before reaching `getNextToDo`/`schedule()` the loop also checks `if killer.kill_now: continue` so no new jobs are claimed mid-iteration. Then `_shutdown_job_processes(processes, timeout=15.0, runner_socket=…, runner_poller=…)` runs *synchronously* in the main thread:
+The main loop's `while not killer.kill_now` exits at the next iteration boundary; before reaching `getNextToDo`/`schedule()` the loop also checks `if killer.kill_now: continue` so no new jobs are claimed mid-iteration. Then `_shutdown_job_processes(processes, timeout=runner.shutdown_timeout_seconds (default 30), runner_socket=…, runner_poller=…)` runs *synchronously* in the main thread:
 
-1. Snapshot live targets — `pid → job_id` for every Popen in `processes` whose `poll()` is still `None` and whose pid is on a job row.
+1. Snapshot every live process — each Popen in `processes` whose `poll()` is still `None` — and the job row naming its pid (the targets). A live process without such a row is stopped all the same, without a row update: a job whose cancel is in flight (`finishJob(…, "cancelling")` cleared the pid; the cancel's SIGKILL escalation runs in a daemon thread that dies with the runner) or whose row is gone.
 2. Set `term_start` on all target rows: termination starts now. A completion the job reports from here on can no longer override a cancel on its row (see `finishJob`). As a result, a cancel still pending at shutdown ends `cancelled` even if the job reports done/failed during the drain; the job's message is appended to the detail.
-3. SIGTERM each process group (`job_lib.kill_proc_group(pid, SIGTERM)`).
+3. SIGTERM every live process group (`job_lib.kill_proc_group(pid, SIGTERM)`).
 4. Wait loop until `timeout` or all exited. Each pass:
    - **Drain the runner ZMQ socket** — services that handle SIGTERM via their `ServiceListener` loop out of `listen()`, run through `job_runner`'s wrap-up, call `job_lib.send_completion(...)` and block on the REQ recv() for the ACK (bounded by `ACK_TIMEOUT_MS`, 30 s — see Runner Completion IPC). Without this drain they sit there until the timeout and always get SIGKILL'd. With it, the runner ACKs and `finishJob` records the completion (for a `running` service: the reported state, typically `done`), and the service exits within milliseconds.
    - Reap exited subprocesses via `subprocess.Popen.poll()`, **not** `psutil.Process.is_running()` — psutil reports zombies as still alive, which made the prior implementation always wait out the full timeout. A group counts as gone only when `proc_group_alive(pid)` is false too.
-5. SIGKILL any surviving groups (`kill_proc_group(pid, SIGKILL)`), wait briefly for them to die.
-6. Final sweep, per target row (first match wins):
+5. SIGKILL all surviving groups together (`kill_proc_group(pid, SIGKILL)`), wait briefly for them to die.
+6. Final sweep, per target row (first match wins; processes without a row are not swept):
    - SIGKILL'd and already `failed` (it reported its failure): keeps state and detail, with `"did not respond to shutdown SIGTERM"` appended.
    - Other SIGKILL'd rows: `failed` with detail `"did not respond to shutdown SIGTERM"`, so they are visible in the monitor and count toward the per-service failed-count gate.
    - `cancel`/`cancelling`: finalised to `cancelled`, so the next start honours the operator's cancel (cancelled blocks restart).
@@ -749,7 +750,7 @@ sequenceDiagram
 - `listen()`: blocks until message received or SIGTERM (returns `"TERM"`); polls with 1000ms timeout
 - `poll()`: non-blocking (timeout=0); returns message dict, `None`, or `"TERM"`
 - `response(msg, status=200)`: sends reply to last received identity
-- `async_poll()`: returns list of all pending `(identity, message)` tuples; when `kill_now` is set, returns the single sentinel `[(b"", "TERM")]` instead — same shutdown contract as `listen()`'s `"TERM"` return, so non-blocking callers (causal tick loops) honour SIGTERM within one poll cycle instead of falling through to the runner's 15s SIGKILL escalation
+- `async_poll()`: returns list of all pending `(identity, message)` tuples; when `kill_now` is set, returns the single sentinel `[(b"", "TERM")]` instead — same shutdown contract as `listen()`'s `"TERM"` return, so non-blocking callers (causal tick loops) honour SIGTERM within one poll cycle instead of falling through to the runner's shutdown SIGKILL escalation
 - `async_response(identity, msg, status=200)`: sends reply to specific client identity
 
 ### Control API (scriptlet-side)
@@ -794,7 +795,7 @@ The classes also derive from the matching builtin exception (`ValueError`, `File
   - The "Controller Draft Error" HTML page (`_controller_error_page`) answers an invalid set name (400), an unknown set (404) and a controller whose code fails to execute or whose view is not committed (200). An unknown controller or view, or a name that exists only as another type, answers JSON 404 `{"detail": ...}`; an invalid scriptlet name JSON 400. The set and name come from the request URL and the error text can quote them, so all three are HTML-escaped with `_html_escape` (`&`, `<`, `>`, `"`) and show as text, never as markup. It is the only HTML error page in `app/web.py`.
 - `ANY /controller/{set}/{name}/{rest:path}` → `controller_proxy`: executes controller to find running service/debug job, forwards via `ServiceClient.request()`
   - The service's answer is the response: its status and body, unchanged (no body for a status that allows none, e.g. 204).
-  - The proxy's own answers: `{"error": "Controller execution failed: ..."}` for an invalid set name (400), an unknown set (404) and any other execution failure (200); `{"error": "Service job <id> did not answer within <n>s"}` 504 when the service does not answer within `web.timeout` (logged as a warning); JSON `{"detail": ...}` 404 for an unknown controller or a name of another type.
+  - The proxy's own answers carry their message in `error`, like a service's: `{"error": "Controller execution failed: ..."}` for an invalid set name (400), an unknown set (404) and any other execution failure (200); `{"error": "Service job <id> did not answer within <n>s"}` 504 when the service does not answer within `web.timeout` (logged as a warning); `{"error": ...}` 404 for an unknown controller or a name of another type, 400 for an invalid controller name (the page route answers these with `{"detail": ...}`); `{"error": "No running ..."}` 503 (see Controller Proxy Detail).
 - `GET /menu` → `{"menu": [...], "failures": [...]}` — hardcoded Scriptlet group (Manager, Scheduler, Monitor, Sets — the Sets entry now points at `/controller/pyops/sets`) + dynamic per-set controller groups from Git; exec failures collected rather than raised
 
 ### Controller Proxy Detail
@@ -973,8 +974,9 @@ docker  ── SIGTERM ──▶  gunicorn master (PID 1)
                        ▼
                   runner subprocess
                        │   GracefulKiller flips kill_now; main loop exits; runs
-                       │   _shutdown_job_processes (timeout=15.0 — SIGTERM all
-                       │   live job trees, drain ZMQ completions, Popen.poll reap,
+                       │   _shutdown_job_processes (runner.shutdown_timeout_seconds,
+                       │   default 30 — SIGTERM all live job trees, drain ZMQ
+                       │   completions, Popen.poll reap,
                        │   SIGKILL stragglers, final sweep of the job rows — see
                        │   Shutdown)
                        │
@@ -982,7 +984,7 @@ docker  ── SIGTERM ──▶  gunicorn master (PID 1)
                   gunicorn master exits
 ```
 
-Worst-case clock: 120s (workers) + 15s (runner) ≈ **135s**. Docker's default `stop_grace_period` is **10s** — that's nowhere near enough; docker SIGKILLs the container before the runner ever gets its SIGTERM, leaving any then-running service rows in state `running`. The next start's `handleOddJobs` marks those as `failed` with the sentinel detail `"incomplete execution detected on startup"` (deduplicated per identity so the per-service failed-count gate never accumulates across repeated unclean restarts).
+Worst-case clock: 120s (workers) + 30s (runner, `shutdown_timeout_seconds` default) ≈ **150s**. Docker's default `stop_grace_period` is **10s** — that's nowhere near enough; docker SIGKILLs the container before the runner ever gets its SIGTERM, leaving any then-running service rows in state `running`. The next start's `handleOddJobs` marks those as `failed` with the sentinel detail `"incomplete execution detected on startup"` (deduplicated per identity so the per-service failed-count gate never accumulates across repeated unclean restarts).
 
 **Compose deployments must set `stop_grace_period: 180s`** (or higher) on the pyops service so the chain has room to finish. See the example in the project README.
 

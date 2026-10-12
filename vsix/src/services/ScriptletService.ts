@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import { ApiClient } from '../apiClient';
+import { errorText } from '../errorText';
 import { ManagerTreeDataProvider, ScriptletTreeItem } from '../managerTreeProvider';
 import { RemoteContentProvider } from '../providers/RemoteContentProvider';
 import { inferExt } from '../utils';
@@ -47,7 +48,7 @@ export class ScriptletService {
                 vscode.window.showInformationMessage(`Reset local ${name}.${inferExt(treeItem.scriptletType!)} from remote`);
                 this.managerTreeProvider.refresh();
             } else {
-                vscode.window.showErrorMessage(`Failed to fetch remote: ${response.statusText}`);
+                vscode.window.showErrorMessage(`Failed to fetch remote: ${await errorText(response)}`);
             }
         } catch (error: unknown) {
             const errorMessage = error instanceof Error ? error.message : String(error);
@@ -101,7 +102,7 @@ export class ScriptletService {
                     body: JSON.stringify(createData)
                 });
                 if (!createResponse.ok) {
-                    vscode.window.showErrorMessage(`Failed to auto-create remote scriptlet ${name}: ${createResponse.statusText}`);
+                    vscode.window.showErrorMessage(`Failed to auto-create remote scriptlet ${name}: ${await errorText(createResponse)}`);
                     return;
                 }
                 vscode.window.showInformationMessage(`Auto-created remote ${name}; writing draft.`);
@@ -111,7 +112,7 @@ export class ScriptletService {
                 return;
             }
         } else if (!checkResponse.ok) {
-            vscode.window.showErrorMessage(`Failed to check remote existence: ${checkResponse.statusText}`);
+            vscode.window.showErrorMessage(`Failed to check remote existence: ${await errorText(checkResponse)}`);
             return;
         }
 
@@ -126,7 +127,7 @@ export class ScriptletService {
                 vscode.window.showInformationMessage(`Wrote local changes to remote draft for ${name}`);
                 this.managerTreeProvider.refresh();
             } else {
-                vscode.window.showErrorMessage(`Failed to write draft: ${response.statusText}`);
+                vscode.window.showErrorMessage(`Failed to write draft: ${await errorText(response)}`);
             }
         } catch (error: unknown) {
             const errorMessage = error instanceof Error ? error.message : String(error);
@@ -171,7 +172,7 @@ export class ScriptletService {
                 const localUri = vscode.Uri.file(localPath);
                 await vscode.commands.executeCommand('vscode.diff', remoteUri, localUri, 'Remote vs Local');
             } else {
-                vscode.window.showErrorMessage(`Failed to fetch remote for diff: ${response.statusText}`);
+                vscode.window.showErrorMessage(`Failed to fetch remote for diff: ${await errorText(response)}`);
             }
         } catch (error: unknown) {
             const errorMessage = error instanceof Error ? error.message : String(error);
@@ -229,8 +230,7 @@ export class ScriptletService {
                 this.managerTreeProvider.refresh();
                 vscode.window.showInformationMessage(`Deleted local ${set}::${name} (${type})`);
             } else {
-                const err = await response.text();
-                vscode.window.showErrorMessage(`Failed to delete remote: ${err}`);
+                vscode.window.showErrorMessage(`Failed to delete remote: ${await errorText(response)}`);
             }
         } catch (error: unknown) {
             const errorMessage = error instanceof Error ? error.message : String(error);

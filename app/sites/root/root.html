@@ -13,6 +13,7 @@
         <script src="/files/js/js.cookie.min.js"></script>
         <script src="/files/js/bootstrap/bootstrap.bundle.min.js"></script>
         <script src="/files/js/pyops-html.js"></script>
+        <script src="/files/js/pyops-alert.js"></script>
 
         <style>
             html, body { height: 100%; margin: 0; }
@@ -251,9 +252,10 @@
                 const gotoFromUrl = goto;
                 fetch("/menu").then(async (r) => {
                     if (!r.ok) {
-                        console.error("GET", "/menu", r.statusText);
+                        await pyopsAlert.loadFailed("Menu", r);
                         return;
                     }
+                    pyopsAlert.loaded("Menu");
                     const d = await r.json();
                     const menu = document.getElementById('menu');
                     for (const section of d.menu) {
@@ -271,7 +273,7 @@
                     if (gotoFromUrl && document.getElementById('btn_' + gotoFromUrl)) {
                         document.getElementById('btn_' + gotoFromUrl).click();
                     }
-                }).catch((e) => console.error("GET", "/menu", e.toString()));
+                }).catch((e) => pyopsAlert.loadError("Menu", e));
             });
         </script>
     </head>
@@ -309,6 +311,7 @@
                                 title="Close the sidebar" aria-label="Close"></button>
                     </div>
                 </div>
+                <div id="pyops-load-status" class="text-warning small px-3" data-testid="pyops-load-status" hidden></div>
                 <nav id="menu" class="flex-grow-1"
                      data-testid="sidebar-menu" aria-label="Main navigation"></nav>
             </aside>

@@ -92,14 +92,14 @@ api_key = "profkey"
         expect(context.secrets.get).not.toHaveBeenCalled();
       });
 
-      it('sends X-User from a keyless profile and never reads secrets', async () => {
+      it('sends X-User from a keyless profile in x-user mode and never reads secrets', async () => {
         setProfileConfig(`
 default_profile = "direct"
 [profiles.direct]
 url = "https://direct.example"
 user = "directuser"
 `);
-        require('./utils/helpers').setupConfigMock({serverUrl: undefined, username: undefined});
+        require('./utils/helpers').setupConfigMock({serverUrl: undefined, username: undefined, authMode: 'x-user'});
         const headers = await apiClient.getHeaders();
         expect(headers).toEqual({ 'X-User': 'directuser' });
         expect(context.secrets.get).not.toHaveBeenCalled();

@@ -4,6 +4,7 @@ import * as path from 'path';
 import { TreeDataProvider, TreeItem, EventEmitter } from 'vscode';
 import { inferExt } from './utils';
 import { ApiClient } from './apiClient';
+import { errorText } from './errorText';
 
 interface ScriptletTreeItem extends TreeItem {
     set?: string;
@@ -141,12 +142,13 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
                 return Array.isArray(scriptlets) ? scriptlets as ScriptletInfo[] : [];
 
             } else {
+                const message = `Failed to fetch scriptlets: ${await errorText(response)}`;
                 const now = Date.now();
                 if (now - this._lastScriptletErrorShown > 30000) {
-                    vscode.window.showErrorMessage(`Failed to fetch scriptlets: ${response.statusText}`);
+                    vscode.window.showErrorMessage(message);
                     this._lastScriptletErrorShown = now;
                 }
-                this._outputChannel.appendLine(`Failed to fetch scriptlets: ${response.statusText}`);
+                this._outputChannel.appendLine(message);
                 return [];
             }
         } catch (error: unknown) {
@@ -168,7 +170,7 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
                 const body = await response.json() as { sets?: unknown };
                 return Array.isArray(body.sets) ? body.sets as string[] : [];
             }
-            this.showFetchError(`Failed to fetch sets: ${response.statusText}`);
+            this.showFetchError(`Failed to fetch sets: ${await errorText(response)}`);
             return [];
         } catch (error: unknown) {
             const errorMessage = error instanceof Error ? error.message : String(error);
@@ -222,7 +224,7 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
                     this._syncStatus.set(key, isSynced);
                 } else {
                     this._syncStatus.set(key, false);
-                    console.error(`Failed to fetch ${sObj.set}::${sObj.name}: ${response.statusText}`);
+                    console.error(`Failed to fetch ${sObj.set}::${sObj.name}: ${await errorText(response)}`);
                 }
             } catch (error: unknown) {
                 this._syncStatus.set(key, false);
@@ -330,7 +332,7 @@ class ManagerTreeDataProvider implements TreeDataProvider<TreeItem> {
                 this._syncStatus.set(key, true);
             } else {
                 this._syncStatus.set(key, false);
-                console.error(`Failed to fetch ${sObj.set}::${sObj.name}: ${response.statusText}`);
+                console.error(`Failed to fetch ${sObj.set}::${sObj.name}: ${await errorText(response)}`);
             }
         } catch (error: unknown) {
             this._syncStatus.set(key, false);

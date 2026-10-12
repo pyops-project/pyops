@@ -248,14 +248,16 @@ describe('JobsTreeDataProvider', () => {
     it('should handle fetch error', async () => {
       const mockResponse = {
         ok: false,
+        status: 500,
         statusText: 'Internal Server Error',
+        json: () => Promise.resolve({ detail: 'database is locked' }),
       };
       mockApiClient.fetch.mockResolvedValue(mockResponse);
 
       const result = await (provider as any).fetchJobs();
 
       expect(result).toEqual([]);
-      expect(require('vscode').window.showErrorMessage).toHaveBeenCalledWith('Failed to fetch jobs: Internal Server Error');
+      expect(require('vscode').window.showErrorMessage).toHaveBeenCalledWith('Failed to fetch jobs: 500 database is locked');
     });
 
     it('should handle network error', async () => {

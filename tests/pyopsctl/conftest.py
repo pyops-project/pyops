@@ -117,6 +117,9 @@ def pyopsctl_env(tmp_path, monkeypatch):
             "pkg": str(data / "pkg"),
             "git_pull_interval": 9999,
             "drop_done_delay_seconds": 9999,
+            # below SHUTDOWN_TIMEOUT, so the runner's SIGKILL escalation
+            # finishes before the fixture gives up on the server
+            "shutdown_timeout_seconds": 10,
         },
         "log": {"loglevel": "debug"},
         # pyops itself no longer reads anything inside owner entries; the
