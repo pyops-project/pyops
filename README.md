@@ -51,7 +51,7 @@ Job kinds: `task | service | debug | draft | test`.
 ## Setup
 ### Direct
 ```
-git clone https://git.ralph.or.at/pyops/pyops.git
+git clone https://github.com/pyops-project/pyops.git
 cd pyops
 ./run.sh
 ```
@@ -80,7 +80,7 @@ networks:
 services:
   app:
     container_name: pyops_app.SOMEDOMAIN
-    image: 'registry.ralph.or.at/pyops/pyops:latest'
+    image: 'ghcr.io/pyops-project/pyops:latest'
     restart: unless-stopped
     # Clean shutdown chain on `docker compose down`:
     #   docker SIGTERM → gunicorn master → workers drain (graceful_timeout=120s
@@ -235,6 +235,6 @@ location ~ ^/(health|metrics) {
 }
 ```
 
-Or scrape the upstream container directly on the compose-internal port (preferred when the monitoring host is on the same LAN), which is how this repo is deployed at `aiops_app.ralph.or.at:1080`.
+Or scrape the upstream container directly on the compose-internal port (preferred when the monitoring host is on the same LAN).
 
 See `docs/insights_app.md` § "Monitoring Router" for the full metric list, GPU status taxonomy, and the ulimit threshold semantics.
