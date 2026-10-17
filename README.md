@@ -107,7 +107,6 @@ services:
     volumes:
       - './volumes/app/data:/opt/pyops/data'
       - './volumes/app/etc:/opt/pyops/etc'
-      - './volumes/app/venv:/opt/pyops/venv'
       # Optional: route every pip invocation inside the container
       # (bootstrap pip in ensure_set_environment + every #!pip
       # directive in every per-set venv) through a single host-managed
@@ -148,8 +147,8 @@ services:
         "db": "data/app.db"
     },
     "runner": {
-        "venv": "venv",
-        "pkg": "pkg",
+        "venv": "data/venv",
+        "pkg": "data/pkg",
         "git_pull_interval": 60,
         "drop_done_delay_seconds": 60
     },
